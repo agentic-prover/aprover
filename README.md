@@ -102,25 +102,44 @@ The `examples/` directory contains synthetic targets used to validate the pipeli
 
 ## Preliminary evaluation: VibeOS
 
-AMC was run against [VibeOS](https://github.com/kaansenol5/VibeOS), a bare-metal ARM64 hobby OS written with LLM assistance (about 8k LoC, 95% C). Five kernel modules were verified under `examples/vibeos/`.
+AMC was run against [VibeOS](https://github.com/kaansenol5/VibeOS), a bare-metal ARM64 hobby OS written with LLM assistance (about 8k LoC, 95% C). Two evaluation modes were exercised.
 
-**41 findings total** across those modules, none of which appear in the VibeOS public issue tracker as of the evaluation date.
+### Wrapper mode — 70 findings across 7 modules
 
-| Module | Findings |
-|---|---|
-| `vfs.c` | 18 |
-| `string.c` | 16 |
-| `dtb.c` | 4 |
-| `printf.c` | 3 |
-| `klog.c` | 0 |
+Hand-crafted per-module wrappers inline cross-file includes and stub external dependencies. Seven kernel modules were verified under `examples/vibeos/`.
 
-**How to read these numbers.** The 41 count is the tool's classifier output, not an externally audited ground truth. Of the 41:
+| Module | Findings | Notes |
+|---|---|---|
+| `vibeos_vfs.c` | 18 | Unbounded loops in path and string traversal |
+| `vibeos_string.c` | 16 | Unbounded loops in string functions |
+| `vibeos_net.c` | 16 | TCP/UDP/DNS parsing bugs |
+| `vibeos_elf.c` | 13 | ELF segment offset arithmetic |
+| `vibeos_dtb.c` | 4 | Untrusted DTB input; null dereference |
+| `vibeos_printf.c` | 3 | `INT64_MIN` signed overflow; two unbounded loops |
+| `vibeos_klog.c` | 0 | Ring-buffer logic verified |
 
-- 40 are unbounded-loop findings in string- and path-processing functions. Concrete witnesses confirm they are reproducible — e.g., passing a non-null-terminated buffer causes the function to read past the end indefinitely. Whether each of these 40 is a latent vulnerability or a caller-side precondition violation depends on the caller's trust context. For parser code receiving untrusted input (the DTB case), the latent-vulnerability reading clearly applies.
-- 1 is an unambiguous memory-safety bug: `print_signed` computes `num = -num` on `INT64_MIN`, which is signed integer overflow (undefined behavior in C). Triggered directly by `printf("%ld", (long)INT64_MIN)`.
-- AMC also independently reproduced a `calloc` integer-overflow issue in the memory allocator that is filed in the VibeOS issue tracker. This cross-validation is a small but useful positive signal.
+### Raw-source mode — 45 findings across 12 files (partial run)
 
-A manual audit of a sampled subset of the 41 findings, plus baseline comparisons, is planned next.
+In raw-source mode AMC preprocesses the unmodified kernel source directly using `cc -E` and verifies each file without any manual wrapper preparation. A partial run (12 of 35 kernel files) confirmed 45 bugs, including HAL-layer findings in the SD card driver and interrupt controller that are the kinds of defect most likely to cause hardware hangs.
+
+```bash
+amc verify-dir \
+  --source-dir examples/vibeos/repo/kernel \
+  --driver vibeos_full \
+  --output artifacts/vibeos_full \
+  --include-dir examples/vibeos/repo/kernel
+```
+
+**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. The one remaining caveat is that callee stubs are currently generated without postcondition constraints (see Limitations below), which means a witness may rely on a callee returning a value that the real callee would never return. A manual audit of a sampled subset and the `FilteringOnlyBaseline` comparison are the next steps.
+
+AMC independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating at least one finding against an independent source.
+
+### Limitations
+
+- **Callee stub soundness.** Callee stubs currently return unconstrained non-deterministic values; they do not enforce the callee's postcondition via `__CPROVER_assume`. A counterexample may therefore rely on a callee return value that the real callee would never produce. Fixing this requires translating callee postconditions into assume-constraints on their stubs (assume-guarantee composition).
+- **No baseline comparisons reported yet.** The three ablation baselines are implemented but not yet exercised on VibeOS.
+- **Raw-source run is partial.** 23 of 35 kernel files remain.
+- **Single-system evaluation.** Generalization beyond VibeOS is not yet demonstrated.
 
 ## Running tests
 
@@ -128,6 +147,21 @@ A manual audit of a sampled subset of the 41 findings, plus baseline comparisons
 uv run pytest tests/ -q
 # 111 passed, 1 skipped
 ```
+
+## Usage — whole-codebase mode
+
+To verify an entire C source directory without manual wrapper preparation:
+
+```bash
+# Preprocess and verify every .c file in the kernel directory
+uv run amc verify-dir \
+  --source-dir path/to/kernel \
+  --driver my_project \
+  --output artifacts/ \
+  --include-dir path/to/kernel
+```
+
+AMC expands all `#include` references via `cc -E`, strips GCC and ARM64 extensions, and feeds each file to the parser and harness generator. The `-I` paths are forwarded to the BMC solver so residual local headers resolve correctly.
 
 ## Project structure
 
@@ -150,8 +184,9 @@ tests/                  Unit and integration tests
 
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking.
-- **Planned:** Mutation testing and other Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
+- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`).
+- **Partial:** Multi-callee stubs are independent and non-communicating; callee postconditions are not yet used to constrain stub return values.
+- **Planned:** Callee stub postcondition constraints (assume-guarantee composition); mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
 
 ## License
 
