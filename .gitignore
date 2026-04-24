@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+.uv/
+
+# Artifacts (CBMC runs, bug reports, harnesses)
+artifacts/
+
+# Proposals and reports (kept locally)
+PROPOSAL.md
+PROPOSAL_v2.md
+PROPOSAL_AMC.md
+PROPOSAL_AMC_v3.md
+REPORT_AMC.md
+
+# Test/editor noise
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+amc.log
+
+# Env
+.env

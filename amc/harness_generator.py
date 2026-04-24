@@ -1,0 +1,748 @@
+"""
+CBMC harness generator for GRACE Phase 2.
+
+For each function F, generates a self-contained C file that:
+  1. Declares all structs/typedefs from the original source.
+  2. Provides stubs for each callee of F.
+  3. Creates nondeterministic inputs constrained by F's precondition.
+  4. Calls F and asserts F's postcondition at all exit points.
+"""
+
+from __future__ import annotations
+
+import re
+import textwrap
+from pathlib import Path
+from typing import Optional
+
+from amc.config import Config
+from amc.dsl_to_cbmc import postcond_to_assert, precond_to_assume
+from amc.parser import FunctionInfo, ParsedCFile
+from amc.spec import Spec
+
+
+# ---------------------------------------------------------------------------
+# Helpers: extract non-function declarations from a source file
+# ---------------------------------------------------------------------------
+
+
+def _extract_type_declarations(source_text: str, parsed_file: Optional["ParsedCFile"] = None) -> str:
+    """
+    Return only non-function-definition portions of a C source file.
+
+    When *parsed_file* is supplied we use the already-extracted function bodies
+    to locate (and excise) each function definition precisely.  This handles
+    both K&R brace-on-same-line and ANSI brace-on-next-line styles.
+
+    Without *parsed_file* we fall back to a conservative line-by-line scan.
+    """
+    if parsed_file is not None and parsed_file.function_bodies:
+        return _extract_type_decls_using_bodies(source_text, parsed_file)
+    return _extract_type_decls_heuristic(source_text)
+
+
+def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile") -> str:
+    """
+    Exclude function definitions from *source_text* by locating each function
+    body, then scanning backward to include the return-type line(s).
+    """
+    exclude: list[tuple[int, int]] = []  # (start, end) char offsets to drop
+
+    for func_name, body_text in parsed_file.function_bodies.items():
+        if not body_text:
+            continue
+        body_start = source_text.find(body_text)
+        if body_start == -1:
+            continue
+        body_end = body_start + len(body_text)
+
+        # Walk backward from body_start over whitespace to reach the ')'
+        j = body_start - 1
+        while j >= 0 and source_text[j] in " \t\n\r":
+            j -= 1
+
+        # If we land on ')' find its matching '(' (end of parameter list)
+        if j >= 0 and source_text[j] == ")":
+            depth = 0
+            while j >= 0:
+                if source_text[j] == ")":
+                    depth += 1
+                elif source_text[j] == "(":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j -= 1
+
+        # Walk backward to the start of the line that begins the signature
+        # (the return-type line).
+        while j > 0 and source_text[j - 1] != "\n":
+            j -= 1
+        sig_start = j
+
+        exclude.append((sig_start, body_end))
+
+    if not exclude:
+        return source_text.strip()
+
+    # Merge overlapping spans, sort, then build output
+    exclude.sort()
+    merged: list[tuple[int, int]] = []
+    for span in exclude:
+        if merged and span[0] <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], span[1]))
+        else:
+            merged.append(list(span))  # type: ignore[arg-type]
+
+    parts: list[str] = []
+    pos = 0
+    for start, end in merged:
+        if pos < start:
+            parts.append(source_text[pos:start])
+        pos = end
+    if pos < len(source_text):
+        parts.append(source_text[pos:])
+
+    return "".join(parts).strip()
+
+
+def _extract_type_decls_heuristic(source_text: str) -> str:
+    """
+    Fallback: collect non-function lines using a brace-depth state machine.
+    Handles both same-line and next-line opening braces.
+    """
+    lines = source_text.splitlines(keepends=True)
+    result_lines: list[str] = []
+    brace_depth = 0
+    in_function = False
+    # Lines that might be a function signature (buffered until we know)
+    sig_buffer: list[str] = []
+    saw_parens = False  # saw '(' ... ')' at depth 0
+
+    for line in lines:
+        stripped = line.strip()
+        opens = line.count("{")
+        closes = line.count("}")
+
+        if in_function:
+            brace_depth += opens - closes
+            if brace_depth <= 0:
+                in_function = False
+                brace_depth = 0
+                sig_buffer = []
+                saw_parens = False
+            continue
+
+        # At top level.
+        if "(" in line and ")" in line and not stripped.endswith(";"):
+            # Might be the start of a function signature
+            if not re.match(r"^\s*(struct|union|enum|typedef)\b", line):
+                saw_parens = True
+
+        if opens > 0 and brace_depth == 0:
+            new_depth = opens - closes
+            is_struct = re.match(r"^\s*(struct|union|enum|typedef)\b", line)
+            if saw_parens and not is_struct:
+                # Opening brace of a function definition — drop sig_buffer + this line
+                in_function = True
+                brace_depth = new_depth
+                sig_buffer = []
+                saw_parens = False
+                continue
+            else:
+                # Struct/union/enum/typedef — flush buffer and keep this line
+                result_lines.extend(sig_buffer)
+                sig_buffer = []
+                saw_parens = False
+                result_lines.append(line)
+                brace_depth += new_depth
+                continue
+
+        if saw_parens:
+            # Buffering potential signature lines
+            sig_buffer.append(line)
+        else:
+            result_lines.extend(sig_buffer)
+            sig_buffer = []
+            result_lines.append(line)
+
+    # Flush any remaining buffered lines
+    result_lines.extend(sig_buffer)
+    return "".join(result_lines).rstrip()
+
+
+# ---------------------------------------------------------------------------
+# Helpers: generate stub for a callee
+# ---------------------------------------------------------------------------
+
+
+def _c_default_value(ret_type: str) -> str:
+    """Return a sensible C default / nondeterministic value for a return type."""
+    rt = ret_type.strip().lower().rstrip("*").strip()
+    if "*" in ret_type:
+        return "NULL"
+    if rt in ("void",):
+        return ""
+    if rt in ("int", "long", "short", "char", "signed", "unsigned",
+              "size_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+              "int8_t", "int16_t", "int32_t", "int64_t", "ssize_t"):
+        return "0"
+    if rt in ("float", "double"):
+        return "0.0"
+    return "0"
+
+
+def _params_str(params: list[tuple[str, str]]) -> str:
+    """Build a C parameter list string, handling variadic '...' correctly."""
+    if not params:
+        return "void"
+    parts = []
+    for ptype, pname in params:
+        if ptype == "...":
+            parts.append("...")
+        elif pname:
+            parts.append(f"{ptype} {pname}")
+        else:
+            parts.append(ptype)
+    return ", ".join(parts)
+
+
+def _generate_stub(
+    callee_name: str,
+    callee_spec: Optional[Spec],
+    parsed_file: ParsedCFile,
+) -> str:
+    """Generate a C stub function for a callee."""
+    sig = parsed_file.functions.get(callee_name)
+    if sig is None:
+        # Unknown external function — generate a generic stub
+        return (
+            f"/* Stub for unknown external callee: {callee_name} */\n"
+            f"/* (no signature available; skipping stub) */"
+        )
+
+    ret_type = sig.return_type.strip()
+    params = sig.parameters
+    params_str = _params_str(params)
+
+    stub_name = f"{callee_name}_stub"
+
+    lines: list[str] = [
+        f"/* Stub for callee: {callee_name} */",
+        f"{ret_type} {stub_name}({params_str}) {{",
+    ]
+
+    # Assert callee precondition (to catch violations)
+    if callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
+        param_names = [pname for _, pname in params]
+        assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
+        if assume_stmts:
+            lines.append("    /* Assert callee precondition */")
+            for stmt in assume_stmts:
+                lines.append(f"    {stmt}")
+
+    if ret_type.strip() == "void":
+        lines.append("    /* void return — nothing to havoc */")
+    else:
+        # Havoc the return value: declare it, constrain by postcondition
+        lines.append(f"    {ret_type} result;")
+        if callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
+            param_names = [pname for _, pname in params]
+            assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
+            if assert_stmts:
+                lines.append("    /* Havoc return value subject to postcondition */")
+                for stmt in assert_stmts:
+                    # In stub context, use __CPROVER_assume instead of assert
+                    stmt = stmt.replace("assert(", "__CPROVER_assume(")
+                    lines.append(f"    {stmt}")
+        lines.append("    return result;")
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Helpers: substitute callee calls with stubs in a function body
+# ---------------------------------------------------------------------------
+
+
+def _substitute_callee_calls(body: str, callees: set[str]) -> str:
+    """
+    Replace callee calls in *body* with stub calls.
+
+    For each callee name C that is known to the parser, replace ``C(`` with
+    ``C_stub(``.  We use a word-boundary regex to avoid partial matches.
+    """
+    result = body
+    for callee in sorted(callees):  # deterministic order
+        # Match the function name as a whole word followed by '('
+        result = re.sub(
+            r"\b" + re.escape(callee) + r"\s*\(",
+            f"{callee}_stub(",
+            result,
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Helpers: generate nondeterministic variable declarations
+# ---------------------------------------------------------------------------
+
+
+def _generate_nd_decls(func: FunctionInfo) -> list[str]:
+    """
+    Generate nondeterministic variable declarations for each parameter.
+
+    For pointer parameters, we allocate a local struct/array on the stack and
+    point to it. This is intentionally conservative — just enough to let CBMC
+    reason about the structure.
+    """
+    lines: list[str] = []
+    for ptype, pname in func.signature.parameters:
+        if not pname:
+            continue
+        ptype_stripped = ptype.strip()
+
+        if ptype_stripped.endswith("*") or "*" in pname:
+            # Pointer parameter: declare a local value and point to it
+            base_type = ptype_stripped.rstrip("*").strip()
+            local_name = f"_{pname}_val"
+            # Avoid redeclaring void *
+            if base_type.lower() in ("void", "const void"):
+                lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
+                lines.append(f"    {ptype_stripped} {pname} = NULL;")
+            elif "const" in ptype_stripped.lower():
+                clean_base = re.sub(r"\bconst\b", "", base_type).strip()
+                lines.append(f"    {clean_base} {local_name};")
+                lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
+            else:
+                lines.append(f"    {base_type} {local_name};")
+                lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
+        else:
+            # Value parameter
+            lines.append(f"    {ptype_stripped} {pname};")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Main harness generator
+# ---------------------------------------------------------------------------
+
+
+class HarnessGenerator:
+    """Generates CBMC harnesses for individual C functions."""
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    def generate_reachability_harness(
+        self,
+        caller: "FunctionInfo",
+        callee_name: str,
+        counterexample: "Counterexample",
+        caller_spec: Spec,
+        parsed_file: ParsedCFile,
+    ) -> str:
+        """
+        Generate a CBMC harness to check whether ``caller`` can produce the
+        state described by ``counterexample`` at its call site to ``callee_name``.
+
+        Strategy:
+        - Run the caller body with all callees stubbed.
+        - The stub for ``callee_name`` uses ``__CPROVER_assume`` to constrain
+          its arguments to match the counterexample variable assignments.
+        - After calling the caller, emit ``assert(0)`` — CBMC will always find
+          a "counterexample" path, but only if the __CPROVER_assume constraints
+          inside the stub are consistent. If CBMC returns a CEX → reachable.
+
+        Returns the harness as a C source string.
+        """
+        from amc.cbmc import Counterexample  # local import to avoid circular
+
+        fn_name = caller.name
+        sig = caller.signature
+
+        # --- 1. Collect type declarations from the source ---
+        source_text = _read_source(caller.source_file)
+        type_decls = _extract_type_declarations(source_text, parsed_file)
+
+        # --- 2. Identify callees that are defined in the parsed file ---
+        defined_callees = caller.callees & set(parsed_file.functions.keys())
+
+        # --- 3. Generate stubs for each callee ---
+        # The reachability stub for ``callee_name`` constrains state via __CPROVER_assume.
+        # All other callees get normal stubs.
+        stub_sections: list[str] = []
+        for cname in sorted(defined_callees):
+            if cname == callee_name:
+                stub_src = self._generate_reachability_stub(
+                    cname, counterexample, parsed_file
+                )
+            else:
+                stub_src = _generate_stub(cname, None, parsed_file)
+            stub_sections.append(stub_src)
+
+        # --- 4. Build the function body with callee calls substituted ---
+        body_with_stubs = _substitute_callee_calls(caller.body, defined_callees)
+
+        # Reconstruct the full function definition
+        params_str = _params_str(sig.parameters)
+        func_def = f"{sig.return_type} {fn_name}({params_str})\n{body_with_stubs}"
+
+        # --- 5. Generate nondeterministic input declarations ---
+        nd_decls = _generate_nd_decls(caller)
+
+        # --- 6. Precondition assumptions ---
+        param_names = [pname for _, pname in sig.parameters if pname]
+        assume_stmts = precond_to_assume(caller_spec.precondition, param_names)
+
+        # --- 7. Call arguments ---
+        call_args = ", ".join(
+            (pname if pname else "_") for _, pname in sig.parameters
+        )
+        ret_type = sig.return_type.strip()
+
+        # --- 8. Assemble the harness ---
+        sections: list[str] = []
+
+        sections.append(
+            f"/* Reachability harness: can '{fn_name}' produce state\n"
+            f"   {counterexample.variable_assignments}\n"
+            f"   at call to '{callee_name}'? */\n"
+            f"/* Generated by AMC Phase 3                            */"
+        )
+
+        _stdlib_fns2 = {"malloc", "free", "calloc", "realloc", "abort", "exit"}
+        _stdio_fns2  = {"printf", "fprintf", "sprintf", "snprintf", "puts", "putchar"}
+        _string_fns2 = {"memcpy", "memset", "memmove", "memcmp", "strlen", "strcpy", "strcmp"}
+        _def2 = set(parsed_file.functions.keys())
+        inc2 = ["#include <assert.h>"]
+        if not (_def2 & _stdlib_fns2):
+            inc2.append("#include <stdlib.h>")
+        if not (_def2 & _stdio_fns2):
+            inc2.append("#include <stdio.h>")
+        if not (_def2 & _string_fns2):
+            inc2.append("#include <string.h>")
+        inc2 += ["#include <stddef.h>", "#include <stdint.h>"]
+        sections.append("\n".join(inc2))
+
+        if type_decls.strip():
+            sections.append(
+                "/* --- Type declarations from source file --- */\n"
+                + type_decls
+            )
+
+        if stub_sections:
+            sections.append("/* --- Callee stubs (with reachability stub for target) --- */")
+            sections.extend(stub_sections)
+
+        sections.append(
+            f"/* --- Caller function under analysis: {fn_name} --- */\n"
+            + func_def
+        )
+
+        # Harness main
+        harness_body_lines: list[str] = []
+        harness_body_lines.append("    /* Step 1: nondeterministic inputs for caller */")
+        harness_body_lines.extend(nd_decls)
+        harness_body_lines.append("")
+        harness_body_lines.append("    /* Step 2: assume caller's precondition */")
+        for stmt in assume_stmts:
+            for sub_line in stmt.splitlines():
+                harness_body_lines.append(f"    {sub_line}")
+        harness_body_lines.append("")
+        harness_body_lines.append(
+            f"    /* Step 3: call {fn_name} — reachability stub constrains state */"
+        )
+        if ret_type == "void":
+            harness_body_lines.append(f"    {fn_name}({call_args});")
+        else:
+            harness_body_lines.append(f"    {ret_type} _caller_result = {fn_name}({call_args});")
+            harness_body_lines.append(f"    (void)_caller_result;")
+        harness_body_lines.append("")
+        harness_body_lines.append(
+            "    /* Step 4: reachability verdict is determined by assert(0) inside\n"
+            "       the reachability stub — if CBMC finds a CEx there, the callee\n"
+            "       state is reachable from this caller. */"
+        )
+
+        harness_main = (
+            "void main(void) {\n"
+            + "\n".join(harness_body_lines)
+            + "\n}"
+        )
+        sections.append(
+            f"/* --- Reachability harness entry point --- */\n"
+            + harness_main
+        )
+
+        return "\n\n".join(sections) + "\n"
+
+    def _generate_reachability_stub(
+        self,
+        callee_name: str,
+        counterexample: "Counterexample",
+        parsed_file: ParsedCFile,
+    ) -> str:
+        """
+        Generate a stub for ``callee_name`` that uses ``__CPROVER_assume`` to
+        constrain its arguments to match the counterexample state.
+        """
+        sig = parsed_file.functions.get(callee_name)
+        if sig is None:
+            return (
+                f"/* Reachability stub for unknown callee: {callee_name} */\n"
+                f"/* (no signature available; skipping stub) */"
+            )
+
+        ret_type = sig.return_type.strip()
+        params = sig.parameters
+        params_str = _params_str(params)
+
+        stub_name = f"{callee_name}_stub"
+
+        lines: list[str] = [
+            f"/* Reachability stub for: {callee_name} */",
+            f"/* Constrains arguments to match counterexample state */",
+            f"{ret_type} {stub_name}({params_str}) {{",
+        ]
+
+        # Emit __CPROVER_assume for each relevant variable in the counterexample.
+        # Only emit assumes for variables that are actual C identifiers accessible
+        # in the stub context (i.e. parameters or their struct fields).
+        # Skip CBMC-internal variables (__CPROVER_*, _name*, name$N).
+        lines.append("    /* Counterexample state constraints */")
+        param_names = {pname for _, pname in params if pname}
+        for var_name, var_value in counterexample.variable_assignments.items():
+            clean_var = var_name.strip()
+            clean_val = var_value.strip()
+
+            # --- Filter out CBMC-internal variable names ---
+            # 1. CBMC builtins: __CPROVER_*
+            if clean_var.startswith("__CPROVER_"):
+                lines.append(f"    /* cex (cbmc-internal): {clean_var} = {clean_val} */")
+                continue
+            # 2. CBMC-internal allocation names: _varname (underscore + varname)
+            if clean_var.startswith("_"):
+                lines.append(f"    /* cex (cbmc-internal): {clean_var} = {clean_val} */")
+                continue
+            # 3. CBMC SSA / object-validity variables: contain '$'
+            if "$" in clean_var:
+                lines.append(f"    /* cex (cbmc-internal): {clean_var} = {clean_val} */")
+                continue
+            # 4. Must reference a known parameter (directly or via -> / .)
+            base_name = clean_var.split("->")[0].split(".")[0]
+            if base_name not in param_names:
+                lines.append(f"    /* cex (not a param): {clean_var} = {clean_val} */")
+                continue
+
+            # Only emit assumes for simple numeric/NULL values
+            if _is_simple_value(clean_val):
+                lines.append(
+                    f"    __CPROVER_assume({clean_var} == {clean_val}); "
+                    f"/* cex: {clean_var} = {clean_val} */"
+                )
+            else:
+                lines.append(
+                    f"    /* cex: {clean_var} = {clean_val} (complex — skipped) */"
+                )
+
+        # assert(0) fires iff the __CPROVER_assume constraints above were
+        # satisfiable and this stub was actually called.  CBMC reports a CEx
+        # iff such a path exists, confirming the callee state is reachable.
+        lines.append("    assert(0); /* reachability witness */")
+
+        if ret_type == "void":
+            lines.append("    /* void return */")
+        else:
+            lines.append(f"    {ret_type} result;")
+            lines.append("    return result;")
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    def generate_harness(
+        self,
+        func: FunctionInfo,
+        spec: Spec,
+        parsed_file: ParsedCFile,
+    ) -> str:
+        """
+        Generate a CBMC harness for *func* against *spec*.
+
+        Returns the harness as a C source string.
+        """
+        fn_name = func.name
+        sig = func.signature
+
+        # --- 1. Collect type declarations from the source ---
+        source_text = _read_source(func.source_file)
+        type_decls = _extract_type_declarations(source_text, parsed_file)
+
+        # --- 2. Identify callees that are defined in the parsed file ---
+        defined_callees = func.callees & set(parsed_file.functions.keys())
+
+        # --- 3. Generate stubs for each callee ---
+        stub_sections: list[str] = []
+        for callee_name in sorted(defined_callees):
+            callee_spec = spec.callee_specs.get(callee_name)
+            stub_src = _generate_stub(callee_name, callee_spec, parsed_file)
+            stub_sections.append(stub_src)
+
+        # --- 4. Build the function body with callee calls substituted ---
+        body_with_stubs = _substitute_callee_calls(func.body, defined_callees)
+
+        # Reconstruct the full function definition (with original signature)
+        params_str = _params_str(sig.parameters)
+        func_def = f"{sig.return_type} {fn_name}({params_str})\n{body_with_stubs}"
+
+        # --- 5. Generate nondeterministic input declarations ---
+        nd_decls = _generate_nd_decls(func)
+
+        # --- 6. Precondition assumptions ---
+        param_names = [pname for _, pname in sig.parameters if pname]
+        assume_stmts = precond_to_assume(spec.precondition, param_names)
+
+        # --- 7. Function call and postcondition assertions ---
+        call_args = ", ".join(
+            (pname if pname else "_") for _, pname in sig.parameters
+        )
+        ret_type = sig.return_type.strip()
+        # Replace callee function names with their _stub variants so that the
+        # postcondition assertion compiles (the original functions are not
+        # defined in the harness, only their stubs are).
+        postcond_for_assert = spec.postcondition
+        for _callee in sorted(defined_callees):
+            postcond_for_assert = re.sub(
+                rf'\b{re.escape(_callee)}\s*\(',
+                f'{_callee}_stub(',
+                postcond_for_assert,
+            )
+        assert_stmts = postcond_to_assert(postcond_for_assert, param_names)
+
+        # --- 8. Assemble the harness ---
+        sections: list[str] = []
+
+        # Header comment
+        sections.append(
+            f"/* Auto-generated CBMC harness for function: {fn_name} */\n"
+            f"/* Generated by AMC Phase 2                            */"
+        )
+
+        # Standard includes — omit headers whose functions are redefined in source
+        _stdlib_fns  = {"malloc", "free", "calloc", "realloc", "abort", "exit"}
+        _stdio_fns   = {"printf", "fprintf", "sprintf", "snprintf", "puts", "putchar"}
+        _string_fns  = {"memcpy", "memset", "memmove", "memcmp", "strlen", "strcpy", "strcmp"}
+        _defined = set(parsed_file.functions.keys())
+        inc_lines = ["#include <assert.h>"]
+        if not (_defined & _stdlib_fns):
+            inc_lines.append("#include <stdlib.h>")
+        if not (_defined & _stdio_fns):
+            inc_lines.append("#include <stdio.h>")
+        if not (_defined & _string_fns):
+            inc_lines.append("#include <string.h>")
+        inc_lines += ["#include <stddef.h>", "#include <stdint.h>"]
+        sections.append("\n".join(inc_lines))
+
+        # Type declarations extracted from source
+        if type_decls.strip():
+            sections.append(
+                "/* --- Type declarations from source file --- */\n"
+                + type_decls
+            )
+
+        # Callee stubs
+        if stub_sections:
+            sections.append("/* --- Callee stubs --- */")
+            sections.extend(stub_sections)
+
+        # Original function (with stubs substituted for callee calls)
+        sections.append(
+            f"/* --- Function under test: {fn_name} --- */\n"
+            + func_def
+        )
+
+        # Harness main
+        harness_body_lines: list[str] = []
+
+        # Step 1: declare nondeterministic inputs
+        harness_body_lines.append("    /* Step 1: nondeterministic inputs */")
+        harness_body_lines.extend(nd_decls)
+
+        # Step 2: constrain by precondition
+        harness_body_lines.append("")
+        harness_body_lines.append(
+            "    /* Step 2: assume precondition */"
+        )
+        for stmt in assume_stmts:
+            for sub_line in stmt.splitlines():
+                harness_body_lines.append(f"    {sub_line}")
+
+        # Step 3: call the function under test
+        harness_body_lines.append("")
+        harness_body_lines.append("    /* Step 3: call the function under test */")
+        if ret_type == "void":
+            harness_body_lines.append(f"    {fn_name}({call_args});")
+        else:
+            harness_body_lines.append(f"    {ret_type} result = {fn_name}({call_args});")
+            harness_body_lines.append(f"    (void)result;  /* suppress unused-variable warning */")
+
+        # Step 4: assert postcondition
+        harness_body_lines.append("")
+        harness_body_lines.append(
+            "    /* Step 4: assert postcondition */\n"
+            "    /* (CBMC also checks OOB, null deref, overflow automatically) */"
+        )
+        for stmt in assert_stmts:
+            for sub_line in stmt.splitlines():
+                harness_body_lines.append(f"    {sub_line}")
+
+        harness_main = (
+            "void main(void) {\n"
+            + "\n".join(harness_body_lines)
+            + "\n}"
+        )
+        sections.append(
+            f"/* --- Harness entry point --- */\n"
+            + harness_main
+        )
+
+        return "\n\n".join(sections) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Utility: read source file text
+# ---------------------------------------------------------------------------
+
+
+def _read_source(source_file: str) -> str:
+    """Read a source file, returning empty string if not found."""
+    try:
+        return Path(source_file).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _is_simple_value(val: str) -> bool:
+    """Return True if *val* is a simple numeric or NULL literal usable in __CPROVER_assume."""
+    val = val.strip()
+    if val in ("NULL", "true", "false"):
+        return True
+    # Integers (possibly negative)
+    try:
+        int(val)
+        return True
+    except ValueError:
+        pass
+    # Hex
+    try:
+        int(val, 16)
+        return True
+    except ValueError:
+        pass
+    # Simple float
+    try:
+        float(val)
+        return True
+    except ValueError:
+        pass
+    return False

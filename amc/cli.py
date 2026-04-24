@@ -1,0 +1,411 @@
+"""
+AMC command-line interface.
+
+Usage:
+    uv run amc generate --source examples/simple_driver.c --driver mydriver --output artifacts/
+    uv run amc check   --driver mydriver --function rb_write
+    uv run amc verify  --source examples/simple_driver.c --driver mydriver
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def _cmd_generate(args: argparse.Namespace) -> int:
+    """Phase 1: Generate specs for all functions in a C source file."""
+    from amc.artifacts import ArtifactStore
+    from amc.config import Config
+    from amc.llm import LLMClient
+    from amc.spec_generator import SpecGenerator
+
+    config = Config.from_env()
+    if args.output:
+        config.artifact_dir = args.output
+
+    store = ArtifactStore(config.artifact_dir)
+    llm = LLMClient(config)
+    generator = SpecGenerator(config, llm, store)
+
+    domain_knowledge = ""
+    if args.domain_knowledge:
+        dk_path = Path(args.domain_knowledge)
+        if dk_path.exists():
+            domain_knowledge = dk_path.read_text(encoding="utf-8")
+        else:
+            domain_knowledge = args.domain_knowledge
+
+    print(f"Generating specs for: {args.source}")
+    print(f"Driver name: {args.driver}")
+    print(f"Output directory: {config.artifact_dir}")
+
+    specs = generator.generate_specs(
+        source_file=args.source,
+        driver_name=args.driver,
+        domain_knowledge=domain_knowledge,
+    )
+
+    print(f"\nGenerated {len(specs)} specs:")
+    for fn_name, spec in sorted(specs.items()):
+        fallback = spec.__dict__.get("fallback", False)
+        tag = " [FALLBACK]" if fallback else ""
+        print(f"  {fn_name}{tag}")
+        print(f"    pre:  {spec.precondition[:80]}")
+        print(f"    post: {spec.postcondition[:80]}")
+
+    return 0
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    """Phase 2: Run BMC on previously generated specs."""
+    from amc.artifacts import ArtifactStore
+    from amc.bmc_engine import BMCEngine
+    from amc.config import Config
+    from amc.parser import parse_c_file
+
+    config = Config.from_env()
+    if hasattr(args, "output") and args.output:
+        config.artifact_dir = args.output
+
+    store = ArtifactStore(config.artifact_dir)
+    engine = BMCEngine(config, store)
+
+    # Load the source file (required for harness generation)
+    source_file = args.source
+    print(f"Checking driver:  {args.driver}")
+    print(f"Source file:      {source_file}")
+    print(f"Artifact dir:     {config.artifact_dir}")
+
+    parsed = parse_c_file(source_file)
+
+    # Load specs from disk
+    driver_name = args.driver
+    specs: dict = {}
+    target_func = getattr(args, "function", "") or ""
+    functions_to_check = list(parsed.functions.keys())
+    if target_func:
+        if target_func not in parsed.functions:
+            print(f"Error: function '{target_func}' not found in {source_file}", file=sys.stderr)
+            return 1
+        functions_to_check = [target_func]
+
+    for fn_name in functions_to_check:
+        spec = store.load_spec(driver_name, fn_name)
+        if spec is not None:
+            specs[fn_name] = spec
+        else:
+            print(f"  Warning: no spec found for '{fn_name}' — skipping")
+
+    if not specs:
+        print("No specs to check. Run 'amc generate' first.")
+        return 1
+
+    funcs = {
+        name: parsed.get_function_info(name)
+        for name in specs
+        if parsed.get_function_info(name) is not None
+    }
+
+    print(f"\nRunning BMC on {len(funcs)} function(s)...")
+    verdicts = engine.check_all(funcs, specs, parsed, driver_name)
+
+    # Print summary
+    print(f"\nResults:")
+    verified_count = 0
+    failed_count = 0
+    error_count = 0
+    for fn_name, verdict in sorted(verdicts.items()):
+        if verdict.error and "not found" in verdict.error.lower():
+            status = "SKIPPED (cbmc not installed)"
+            error_count += 1
+        elif verdict.error:
+            status = f"ERROR: {verdict.error}"
+            error_count += 1
+        elif verdict.verified:
+            status = "VERIFIED"
+            verified_count += 1
+        else:
+            status = f"FAILED ({len(verdict.counterexamples)} counterexample(s))"
+            failed_count += 1
+        print(f"  {fn_name:30s}  {status}")
+
+    print(f"\nSummary: {verified_count} verified, {failed_count} failed, {error_count} errors/skipped")
+    return 0
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    """Phase 4: Run AMC and baselines on a corpus of C programs."""
+    from amc.config import Config
+    from amc.evaluation.corpus import Corpus
+    from amc.evaluation.runner import EvaluationRunner
+
+    config = Config.from_env()
+    corpus = Corpus(args.corpus)
+    runner = EvaluationRunner(config)
+
+    print(f"Running evaluation on corpus: {args.corpus}")
+    print(f"Output directory: {args.output}")
+    print(f"Run baselines: {args.baselines}")
+
+    summary = runner.run_corpus(
+        corpus=corpus,
+        output_dir=args.output,
+        run_baselines=args.baselines,
+    )
+
+    print(f"\n=== Evaluation Summary ===")
+    print(f"  Total drivers:      {summary.total_drivers}")
+    print(f"  Total functions:    {summary.total_functions}")
+    print(f"  Total bugs found:   {summary.total_bugs_found}")
+    print(f"  Avg spec coverage:  {summary.avg_spec_coverage * 100:.1f}%")
+    print(f"  Avg FP rate:        {summary.avg_false_positive_rate * 100:.1f}%")
+    print(f"\nReports saved to: {args.output}")
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    """Phase 4: Generate a summary report from evaluation artifacts."""
+    import json
+    from amc.artifacts import ArtifactStore
+    from amc.evaluation.metrics import DriverMetrics, EvaluationSummary
+    from amc.evaluation.report import ReportGenerator
+
+    eval_dir = Path(args.eval_dir)
+    summary_json = eval_dir / "eval_summary.json"
+
+    if not summary_json.exists():
+        print(
+            f"Error: no eval_summary.json found in {args.eval_dir}. "
+            "Run 'amc eval' first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    with summary_json.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    # Reconstruct summary
+    per_driver = [
+        DriverMetrics(
+            driver_name=d["driver_name"],
+            total_functions=d["total_functions"],
+            functions_specified=d["functions_specified"],
+            functions_checked=d["functions_checked"],
+            functions_verified=d["functions_verified"],
+            counterexamples_found=d["counterexamples_found"],
+            real_bugs_confirmed=d["real_bugs_confirmed"],
+            spurious_cex_count=d["spurious_cex_count"],
+            false_positive_rate=d["false_positive_rate"],
+            refinement_iterations=[],
+            avg_refinement_iters=d["avg_refinement_iters"],
+            spec_coverage=d["spec_coverage"],
+            runtime_seconds=d["runtime_seconds"],
+            token_cost=d["token_cost"],
+            bugs_by_type=d["bugs_by_type"],
+        )
+        for d in data.get("per_driver", [])
+    ]
+    summary = EvaluationSummary(
+        total_drivers=data["total_drivers"],
+        total_functions=data["total_functions"],
+        total_bugs_found=data["total_bugs_found"],
+        avg_false_positive_rate=data["avg_false_positive_rate"],
+        avg_spec_coverage=data["avg_spec_coverage"],
+        avg_refinement_iters=data["avg_refinement_iters"],
+        total_token_cost=data["total_token_cost"],
+        bugs_by_type=data.get("bugs_by_type", {}),
+        per_driver=per_driver,
+        amc_unique_bugs=data.get("amc_unique_bugs", 0),
+        baseline_unique_bugs=data.get("baseline_unique_bugs", {}),
+    )
+
+    from amc.artifacts import ArtifactStore
+
+    store = ArtifactStore(str(eval_dir))
+    gen = ReportGenerator(store)
+    md = gen.generate_summary_report(summary)
+
+    output = args.output
+    if output:
+        Path(output).write_text(md, encoding="utf-8")
+        print(f"Report written to: {output}")
+    else:
+        print(md)
+
+    return 0
+
+
+def _cmd_corpus_generate(args: argparse.Namespace) -> int:
+    """Phase 4: Use LLM to generate synthetic C programs for the corpus."""
+    from amc.config import Config
+    from amc.evaluation.corpus import Corpus
+    from amc.llm import LLMClient
+
+    config = Config.from_env()
+    llm = LLMClient(config)
+    corpus = Corpus(args.output)
+
+    print(f"Generating {args.count} synthetic corpus entries into: {args.output}")
+    entries = corpus.generate_synthetic_corpus(
+        output_dir=args.output,
+        llm=llm,
+        count=args.count,
+    )
+    print(f"Generated {len(entries)} entries:")
+    for e in entries:
+        print(f"  {e.name} ({e.driver_type}): {len(e.ground_truth_bugs)} known bug(s)")
+    return 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    """Full pipeline: generate specs + run BMC + validate counterexamples (Phase 3)."""
+    from amc.config import Config
+    from amc.pipeline import AMCPipeline
+
+    config = Config.from_env()
+    if hasattr(args, "output") and args.output:
+        config.artifact_dir = args.output
+
+    domain_knowledge = ""
+    if hasattr(args, "domain_knowledge") and args.domain_knowledge:
+        dk_path = Path(args.domain_knowledge)
+        if dk_path.exists():
+            domain_knowledge = dk_path.read_text(encoding="utf-8")
+        else:
+            domain_knowledge = args.domain_knowledge
+
+    print(f"Full verification pipeline for: {args.source}")
+    print(f"Driver: {args.driver}")
+    print(f"Artifact dir: {config.artifact_dir}")
+
+    pipeline = AMCPipeline(config)
+    bug_reports = pipeline.run(
+        source_file=args.source,
+        driver_name=args.driver,
+        domain_knowledge=domain_knowledge,
+    )
+
+    print(f"\n=== Results ===")
+    if not bug_reports:
+        print("No bugs confirmed.")
+    else:
+        print(f"Confirmed bugs: {len(bug_reports)}")
+        for report in bug_reports:
+            print(f"\n  [{report.bug_type.upper()}] {report.function_name}")
+            print(f"    Property: {report.violated_property}")
+            print(f"    Confidence: {report.confidence}")
+            if report.call_chain:
+                print(f"    Call chain: {' → '.join(report.call_chain)}")
+
+    # Print summary from reporter
+    summary = pipeline.reporter.generate_summary(args.driver)
+    print(f"\n{summary}")
+
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="amc",
+        description="AMC: Agentic Model Checking for C programs",
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+    subparsers.required = True
+
+    # --- generate ---
+    gen = subparsers.add_parser(
+        "generate",
+        help="Generate specs for all functions in a C source file (Phase 1)",
+    )
+    gen.add_argument("--source", required=True, help="Path to C source file")
+    gen.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
+    gen.add_argument("--output", default="artifacts", help="Artifact output directory")
+    gen.add_argument(
+        "--domain-knowledge",
+        default="",
+        metavar="TEXT_OR_FILE",
+        help="Domain knowledge string or path to a file containing domain knowledge",
+    )
+    gen.set_defaults(func=_cmd_generate)
+
+    # --- check ---
+    chk = subparsers.add_parser(
+        "check",
+        help="Run BMC on previously generated specs (Phase 2)",
+    )
+    chk.add_argument("--source", required=True, help="Path to C source file")
+    chk.add_argument("--driver", required=True, help="Driver name")
+    chk.add_argument("--output", default="artifacts", help="Artifact directory")
+    chk.add_argument("--function", default="", help="Specific function to check (optional)")
+    chk.set_defaults(func=_cmd_check)
+
+    # --- verify ---
+    ver = subparsers.add_parser(
+        "verify",
+        help="Run full pipeline: generate + check + validate (Phase 3)",
+    )
+    ver.add_argument("--source", required=True, help="Path to C source file")
+    ver.add_argument("--driver", required=True, help="Driver name")
+    ver.add_argument("--output", default="artifacts", help="Artifact directory")
+    ver.add_argument(
+        "--domain-knowledge",
+        default="",
+        metavar="TEXT_OR_FILE",
+        help="Domain knowledge string or path to a file containing domain knowledge",
+    )
+    ver.set_defaults(func=_cmd_verify)
+
+    # --- eval ---
+    ev = subparsers.add_parser(
+        "eval",
+        help="Run AMC + baselines on a corpus of C programs (Phase 4)",
+    )
+    ev.add_argument("--corpus", required=True, help="Path to corpus directory")
+    ev.add_argument("--output", default="artifacts/eval", help="Output directory for results")
+    ev.add_argument(
+        "--baselines",
+        action="store_true",
+        default=False,
+        help="Also run CBMC-alone and AMC-ablation baselines",
+    )
+    ev.set_defaults(func=_cmd_eval)
+
+    # --- report ---
+    rpt = subparsers.add_parser(
+        "report",
+        help="Generate a summary report from evaluation artifacts (Phase 4)",
+    )
+    rpt.add_argument("--eval-dir", required=True, help="Directory produced by 'amc eval'")
+    rpt.add_argument("--output", default="", help="Output file path (default: stdout)")
+    rpt.set_defaults(func=_cmd_report)
+
+    # --- corpus ---
+    corpus_p = subparsers.add_parser(
+        "corpus",
+        help="Corpus management commands (Phase 4)",
+    )
+    corpus_sub = corpus_p.add_subparsers(dest="corpus_command", metavar="SUBCOMMAND")
+    corpus_sub.required = True
+
+    cg = corpus_sub.add_parser(
+        "generate",
+        help="Use LLM to generate synthetic C programs",
+    )
+    cg.add_argument("--output", required=True, help="Output directory for generated corpus")
+    cg.add_argument("--count", type=int, default=5, help="Number of programs to generate")
+    cg.set_defaults(func=_cmd_corpus_generate)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
