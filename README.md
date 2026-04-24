@@ -1,6 +1,6 @@
 # AMC — Agentic Model Checking
 
-AMC is a compositional bounded model checker for C programs. It pairs **CBMC** as a sound BMC backend with an LLM agent that generates function specifications, classifies counterexamples, and refines preconditions.
+AMC is a prototype implementation of agentic model checking: an architecture that combines an LLM agent for specification generation, counterexample classification, and spec refinement with CBMC as a sound bounded model checking backend. The agent handles tasks where natural-language reasoning is appropriate (generating specifications from code, classifying counterexamples, proposing refinements); CBMC handles verification itself, preserving formal guarantees within the unwinding bound.
 
 Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated specifications. CBMC then checks the function against its spec and those stubs. This makes verification tractable on real codebases without manual annotations.
 
