@@ -43,6 +43,10 @@ class PropagationEvent:
     outcome_changes: dict[str, tuple[str, str]] = field(default_factory=dict)
     # caller → ("unverified", "verified") when recheck resolved the alarm
     bugs_found_via_propagation: list[str] = field(default_factory=list)
+    # Only bugs in callers that were VERIFIED in Phase 2 — bugs that became
+    # reachable only after the refined stub constrained callee behaviour.
+    # Callers already unverified in Phase 2 are excluded (their bugs were
+    # reachable with the original loose stub too).
 
 
 class AMCPipeline:
@@ -386,7 +390,12 @@ class AMCPipeline:
                         after = "verified" if rechk.verified else "unverified"
                         if before != after:
                             outcome_changes[caller] = (before, after)
-                    bugs_via.extend(phase3b_bugs_by_fn.get(caller, []))
+                    # Only count bugs that are genuinely new to propagation:
+                    # the caller must have been verified (no bugs) in Phase 2.
+                    # A caller already unverified in Phase 2 had its bugs
+                    # reachable without the refined stub — not a propagation discovery.
+                    if orig is not None and orig.verified:
+                        bugs_via.extend(phase3b_bugs_by_fn.get(caller, []))
 
                 event = PropagationEvent(
                     refined_function=rf,

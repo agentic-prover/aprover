@@ -20,6 +20,7 @@ PROPOSAL_v2.md
 PROPOSAL_AMC.md
 PROPOSAL_AMC_v3.md
 REPORT_AMC.md
+REPORT_AMC_with_figure.md
 
 # Test/editor noise
 .pytest_cache/
@@ -38,3 +39,4 @@ amc.log
 
 # Env
 .env
+examples/vibeos/repo/

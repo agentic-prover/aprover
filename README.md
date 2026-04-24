@@ -2,7 +2,7 @@
 
 AMC is a prototype implementation of agentic model checking: an architecture that combines an LLM agent for specification generation, counterexample classification, and spec refinement with a sound bounded model checking backend. The agent handles tasks where natural-language reasoning is appropriate (generating specifications from code, classifying counterexamples, proposing refinements); the BMC backend handles verification itself, preserving formal guarantees within the unwinding bound.
 
-The architecture is backend-agnostic by design: AMC defines a `BMCBackend` abstraction that any BMC tool can implement. The current working backend targets C programs via CBMC; a Rust/Kani backend is scaffolded. The agentic layer — spec generation, counterexample classification, refinement — is independent of which solver is underneath.
+The architecture is backend-agnostic by design: AMC defines a `BMCBackend` abstraction that any BMC tool can implement. The agentic layer — spec generation, counterexample classification, refinement — is independent of which solver is underneath.
 
 Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated specifications. The BMC backend then checks the function against its spec and those stubs. This makes verification tractable on real codebases without manual annotations.
 
@@ -16,15 +16,14 @@ AMC **is** a research prototype that:
 
 AMC **is not** (yet):
 - Production-ready. Expect rough edges, failed harnesses on trivial functions, and spec-quality issues that the LLM sometimes introduces.
-- Fully backend-agnostic in practice yet. The `BMCBackend` abstraction is in place and C + CBMC is working; the Rust + Kani backend is scaffolded but not yet functional.
 - A replacement for full formal verification. Soundness is bounded by the unwinding depth and by spec correctness, neither of which AMC proves.
-- Evaluated against other tools yet. Comparisons against FM-Agent, Preguss, CBMC-alone, and static analyzers are planned but not yet reported.
+- Evaluated against baselines yet. Baseline comparisons are implemented but not yet reported.
 
 ## How it works
 
 ```
 Phase 1   Spec Generator      [AGENTIC]      LLM generates pre/postconditions per function
-Phase 2   BMC Engine          [CONVENTIONAL] CBMC checks each function against its spec
+Phase 2   BMC Engine          [CONVENTIONAL] Checks each function against its spec
 Phase 3   CEx Confirmation    [AGENTIC]      LLM classifies: REAL_BUG / SPURIOUS / UNRESOLVED
           Spec Refiner        [AGENTIC]      Refines preconditions on spurious counterexamples
 Phase 3b  Propagation         [CONVENTIONAL] Re-verifies callers after spec refinement
@@ -38,7 +37,7 @@ The agentic components handle semantic reasoning; the conventional BMC engine pr
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- [CBMC](https://www.cprover.org/cbmc/) on `PATH`
+- A BMC solver on `PATH` (the C backend uses the solver specified by `AMC_BMC_PATH`)
 - An Anthropic API key
 
 ## Installation
@@ -66,7 +65,7 @@ uv run amc generate --source examples/simple_driver.c --driver simple_driver
 uv run amc eval --corpus path/to/corpus.json --output artifacts/
 ```
 
-Artifacts — generated specs, CBMC harnesses, raw CBMC output, counterexample classifications, and bug reports — are written under `--output` and are intended to be inspected or diffed.
+Artifacts — generated specs, BMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and are intended to be inspected or diffed.
 
 ## Configuration
 
@@ -74,10 +73,10 @@ All settings can be overridden via environment variables or as `Config` dataclas
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AMC_LLM_MODEL` | `claude-sonnet-4-6` | LLM backend |
-| `AMC_CBMC_PATH` | `cbmc` | Path to CBMC binary |
+| `AMC_LLM_MODEL` | `claude-sonnet-4-6` | LLM model |
+| `AMC_CBMC_PATH` | `cbmc` | Path to BMC solver binary |
 | `AMC_CBMC_UNWIND` | `4` | Loop unwinding bound |
-| `AMC_CBMC_TIMEOUT` | `120` | CBMC timeout per function (seconds) |
+| `AMC_CBMC_TIMEOUT` | `120` | Solver timeout per function (seconds) |
 | `AMC_MAX_REFINEMENT_ITERS` | `5` | Maximum CEGAR iterations |
 | `AMC_ENABLE_DUAL_SPEC` | `true` | Generate each spec twice, flag disagreements |
 | `AMC_ENABLE_SPEC_QUALITY` | `false` | Run Phase 4 spec-quality checks |
@@ -117,11 +116,11 @@ AMC was run against [VibeOS](https://github.com/kaansenol5/VibeOS), a bare-metal
 
 **How to read these numbers.** The 41 count is the tool's classifier output, not an externally audited ground truth. Of the 41:
 
-- 40 are unbounded-loop findings in string- and path-processing functions. Concrete witnesses confirm they are reproducible — e.g., passing a non-null-terminated buffer causes the function to read past the end indefinitely. Whether each of these 40 is best characterized as a latent vulnerability (the function should defend itself against malformed input) or as a caller-side precondition violation depends on the caller's trust context. For parser code receiving untrusted input (the DTB case), the latent-vulnerability reading clearly applies. For internal helpers with trusted callers, the picture is less clear.
+- 40 are unbounded-loop findings in string- and path-processing functions. Concrete witnesses confirm they are reproducible — e.g., passing a non-null-terminated buffer causes the function to read past the end indefinitely. Whether each of these 40 is a latent vulnerability or a caller-side precondition violation depends on the caller's trust context. For parser code receiving untrusted input (the DTB case), the latent-vulnerability reading clearly applies.
 - 1 is an unambiguous memory-safety bug: `print_signed` computes `num = -num` on `INT64_MIN`, which is signed integer overflow (undefined behavior in C). Triggered directly by `printf("%ld", (long)INT64_MIN)`.
-- AMC also independently reproduced a `calloc` integer-overflow issue in the memory allocator that is filed as issue #26 in the VibeOS tracker. This cross-validation — independent discovery by the tool of a bug reported via a different mechanism — is a small but useful positive signal.
+- AMC also independently reproduced a `calloc` integer-overflow issue in the memory allocator that is filed in the VibeOS issue tracker. This cross-validation is a small but useful positive signal.
 
-A manual audit of a sampled subset of the 41 findings, plus comparison against `CBMCAloneBaseline` and `FilteringOnlyBaseline`, is planned next.
+A manual audit of a sampled subset of the 41 findings, plus baseline comparisons, is planned next.
 
 ## Running tests
 
@@ -137,13 +136,12 @@ amc/                    Core package
   config.py             Configuration dataclass
   pipeline.py           End-to-end orchestrator (AMCPipeline, PropagationEvent)
   spec_generator.py     Phase 1: LLM spec generation
-  bmc_engine.py         Phase 2: CBMC runner
-  cex_validator.py      Phase 3: counterexample classification
-  spec_refiner logic    Phase 3: precondition refinement (in pipeline.py)
-  harness_generator.py  CBMC harness synthesis
-  dsl_to_cbmc.py        Spec DSL → __CPROVER_assume / __CPROVER_assert
+  bmc_engine.py         Phase 2: BMC runner
+  cex_validator.py      Phase 3: counterexample classification and refinement
+  harness_generator.py  BMC harness synthesis
+  dsl_to_cbmc.py        Spec DSL → solver assume / assert calls
   evaluation/           Baselines, metrics, corpus, report generation
-  backends/             BMCBackend ABC; CBMCBackend (working); KaniBackend (stub)
+  backends/             BMCBackend ABC and concrete backend implementations
 examples/               Synthetic and real-world C targets
 tests/                  Unit and integration tests
 ```
@@ -152,11 +150,8 @@ tests/                  Unit and integration tests
 
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C via CBMC, all four agentic components, filtering-only ablation, parallel CBMC execution, propagation event tracking.
-- **Scaffolded:** Rust via Kani (backend stub exists; not functional).
+- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking.
 - **Planned:** Mutation testing and other Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
-
-See `REPORT_AMC.md` and `PROPOSAL_AMC_v3.md` for the design rationale, research questions, and planned evaluation.
 
 ## License
 
