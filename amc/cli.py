@@ -268,6 +268,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     config = Config.from_env()
     if hasattr(args, "output") and args.output:
         config.artifact_dir = args.output
+    if hasattr(args, "include_dir") and args.include_dir:
+        config.include_dirs = args.include_dir
+        config.preprocess = True
 
     domain_knowledge = ""
     if hasattr(args, "domain_knowledge") and args.domain_knowledge:
@@ -280,6 +283,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     print(f"Full verification pipeline for: {args.source}")
     print(f"Driver: {args.driver}")
     print(f"Artifact dir: {config.artifact_dir}")
+    if config.preprocess:
+        print(f"Include dirs: {config.include_dirs}")
 
     pipeline = AMCPipeline(config)
     bug_reports = pipeline.run(
@@ -303,6 +308,55 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     # Print summary from reporter
     summary = pipeline.reporter.generate_summary(args.driver)
     print(f"\n{summary}")
+
+    return 0
+
+
+def _cmd_verify_dir(args: argparse.Namespace) -> int:
+    """Run the full pipeline on every .c file in a directory."""
+    from amc.config import Config
+    from amc.pipeline import AMCPipeline
+
+    config = Config.from_env()
+    if args.output:
+        config.artifact_dir = args.output
+
+    include_dirs = args.include_dir or []
+
+    domain_knowledge = ""
+    if args.domain_knowledge:
+        dk_path = Path(args.domain_knowledge)
+        if dk_path.exists():
+            domain_knowledge = dk_path.read_text(encoding="utf-8")
+        else:
+            domain_knowledge = args.domain_knowledge
+
+    exclude = args.exclude or []
+
+    print(f"Verifying directory: {args.source_dir}")
+    print(f"Driver prefix:       {args.driver}")
+    print(f"Include dirs:        {include_dirs or '(none)'}")
+    print(f"Artifact dir:        {config.artifact_dir}")
+    if exclude:
+        print(f"Excluded patterns:   {exclude}")
+
+    pipeline = AMCPipeline(config)
+    results = pipeline.run_directory(
+        source_dir=args.source_dir,
+        driver_name=args.driver,
+        include_dirs=include_dirs,
+        domain_knowledge=domain_knowledge,
+        exclude_patterns=exclude,
+    )
+
+    print(f"\n=== Summary ===")
+    total = sum(len(v) for v in results.values())
+    print(f"Files processed: {len(results)}")
+    print(f"Total bugs confirmed: {total}")
+    for fname, bugs in sorted(results.items()):
+        print(f"  {fname}: {len(bugs)} bug(s)")
+        for report in bugs:
+            print(f"    [{report.bug_type.upper()}] {report.function_name} — {report.violated_property}")
 
     return 0
 
@@ -356,7 +410,44 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TEXT_OR_FILE",
         help="Domain knowledge string or path to a file containing domain knowledge",
     )
+    ver.add_argument(
+        "--include-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Add an include directory for C preprocessing (repeatable)",
+    )
     ver.set_defaults(func=_cmd_verify)
+
+    # --- verify-dir ---
+    vd = subparsers.add_parser(
+        "verify-dir",
+        help="Run full pipeline on every .c file in a directory",
+    )
+    vd.add_argument("--source-dir", required=True, help="Directory containing .c files")
+    vd.add_argument("--driver", required=True, help="Driver name prefix")
+    vd.add_argument("--output", default="artifacts", help="Artifact directory")
+    vd.add_argument(
+        "--include-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Add an include directory for C preprocessing (repeatable)",
+    )
+    vd.add_argument(
+        "--domain-knowledge",
+        default="",
+        metavar="TEXT_OR_FILE",
+        help="Domain knowledge string or path to a file",
+    )
+    vd.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Glob pattern of filenames to skip (repeatable)",
+    )
+    vd.set_defaults(func=_cmd_verify_dir)
 
     # --- eval ---
     ev = subparsers.add_parser(

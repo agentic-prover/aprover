@@ -26,4 +26,5 @@ class CBMCBackend(BMCBackend):
             unwind=self._config.cbmc_unwind,
             timeout=self._config.cbmc_timeout,
             cbmc_path=self._config.cbmc_path,
+            include_dirs=getattr(self._config, "include_dirs", None),
         )

@@ -375,6 +375,7 @@ class CExValidator:
                 unwind=self.config.cbmc_unwind,
                 timeout=self.config.cbmc_timeout,
                 cbmc_path=self.config.cbmc_path,
+                include_dirs=getattr(self.config, "include_dirs", None),
             )
         finally:
             try:
@@ -799,6 +800,7 @@ class CExValidator:
                 unwind=self.config.cbmc_unwind,
                 timeout=min(self.config.cbmc_timeout, 30),
                 cbmc_path=self.config.cbmc_path,
+                include_dirs=getattr(self.config, "include_dirs", None),
             )
         except Exception:
             return None

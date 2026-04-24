@@ -210,14 +210,24 @@ def _generate_stub(
     callee_name: str,
     callee_spec: Optional[Spec],
     parsed_file: ParsedCFile,
+    extern_sigs: Optional[dict] = None,
 ) -> str:
-    """Generate a C stub function for a callee."""
+    """Generate a C stub function for a callee.
+
+    *extern_sigs* is an optional dict mapping callee names to FunctionSignature
+    objects sourced from other parsed files (multi-file mode).  When the callee
+    is not in *parsed_file.functions* we check here before giving up.
+    """
     sig = parsed_file.functions.get(callee_name)
+    if sig is None and extern_sigs:
+        sig = extern_sigs.get(callee_name)
     if sig is None:
-        # Unknown external function — generate a generic stub
+        # Unknown external — emit a fully-generic havoc stub.
+        # We don't know the signature, so we use a conservative
+        # void-returning stub that at least prevents a compile error.
         return (
-            f"/* Stub for unknown external callee: {callee_name} */\n"
-            f"/* (no signature available; skipping stub) */"
+            f"/* Auto-stub for unknown external: {callee_name} */\n"
+            f"void {callee_name}_stub(void) {{ /* unknown signature — void havoc */ }}"
         )
 
     ret_type = sig.return_type.strip()
@@ -362,7 +372,11 @@ class HarnessGenerator:
         sig = caller.signature
 
         # --- 1. Collect type declarations from the source ---
-        source_text = _read_source(caller.source_file)
+        source_text = (
+            parsed_file.preprocessed_source
+            if parsed_file.preprocessed_source is not None
+            else _read_source(caller.source_file)
+        )
         type_decls = _extract_type_declarations(source_text, parsed_file)
 
         # --- 2. Identify callees that are defined in the parsed file ---
@@ -565,9 +579,17 @@ class HarnessGenerator:
         func: FunctionInfo,
         spec: Spec,
         parsed_file: ParsedCFile,
+        extern_sigs: Optional[dict] = None,
     ) -> str:
         """
         Generate a CBMC harness for *func* against *spec*.
+
+        Parameters
+        ----------
+        extern_sigs:
+            Optional mapping of function-name → FunctionSignature for
+            functions defined in *other* source files (multi-file mode).
+            Used to generate proper stubs for cross-file callees.
 
         Returns the harness as a C source string.
         """
@@ -575,18 +597,32 @@ class HarnessGenerator:
         sig = func.signature
 
         # --- 1. Collect type declarations from the source ---
-        source_text = _read_source(func.source_file)
+        # Prefer preprocessed_source (all includes already expanded) over
+        # reading the original file (which may have unresolved #include "...").
+        source_text = (
+            parsed_file.preprocessed_source
+            if parsed_file.preprocessed_source is not None
+            else _read_source(func.source_file)
+        )
         type_decls = _extract_type_declarations(source_text, parsed_file)
 
-        # --- 2. Identify callees that are defined in the parsed file ---
-        defined_callees = func.callees & set(parsed_file.functions.keys())
+        # --- 2. Identify callees to stub ---
+        # "local" callees: defined in this parsed file
+        local_callees = func.callees & set(parsed_file.functions.keys())
+        # "extern" callees: not in this file but known from other parsed files
+        extern_callees = set()
+        if extern_sigs:
+            extern_callees = (func.callees - local_callees) & set(extern_sigs.keys())
+        all_stub_callees = local_callees | extern_callees
 
         # --- 3. Generate stubs for each callee ---
         stub_sections: list[str] = []
-        for callee_name in sorted(defined_callees):
+        for callee_name in sorted(all_stub_callees):
             callee_spec = spec.callee_specs.get(callee_name)
-            stub_src = _generate_stub(callee_name, callee_spec, parsed_file)
+            stub_src = _generate_stub(callee_name, callee_spec, parsed_file, extern_sigs)
             stub_sections.append(stub_src)
+
+        defined_callees = all_stub_callees  # used below for substitution
 
         # --- 4. Build the function body with callee calls substituted ---
         body_with_stubs = _substitute_callee_calls(func.body, defined_callees)
@@ -603,8 +639,11 @@ class HarnessGenerator:
         assume_stmts = precond_to_assume(spec.precondition, param_names)
 
         # --- 7. Function call and postcondition assertions ---
+        # Filter out lone "void" params — `f(void)` means no params in C.
+        real_params = [(pt, pn) for pt, pn in sig.parameters
+                       if not (pt.strip() == "void" and not pn.strip())]
         call_args = ", ".join(
-            (pname if pname else "_") for _, pname in sig.parameters
+            (pname if pname else "_") for _, pname in real_params
         )
         ret_type = sig.return_type.strip()
         # Replace callee function names with their _stub variants so that the

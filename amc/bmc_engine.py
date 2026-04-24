@@ -103,6 +103,7 @@ class BMCEngine:
             unwind=self.config.cbmc_unwind,
             timeout=self.config.cbmc_timeout,
             cbmc_path=self.config.cbmc_path,
+            include_dirs=getattr(self.config, "include_dirs", None),
         )
 
         # ---- Step 4: build verdict ----

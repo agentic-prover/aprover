@@ -45,6 +45,10 @@ class ParsedCFile:
     functions: dict[str, FunctionSignature]  # name -> signature
     call_graph: dict[str, set[str]]          # caller -> set of callee names
     function_bodies: dict[str, str]          # name -> raw body text
+    # When the file was preprocessed before parsing, the expanded source is
+    # stored here so harness generators can use it instead of re-reading the
+    # original (unexpanded) file.
+    preprocessed_source: Optional[str] = None
 
     def get_function_info(self, name: str) -> Optional["FunctionInfo"]:
         """Return a FunctionInfo for the named function, or None if not found."""
@@ -97,25 +101,46 @@ def _try_load_tree_sitter() -> None:
 # ---------------------------------------------------------------------------
 
 
-def parse_c_file(path: str | Path) -> ParsedCFile:
+def parse_c_file(
+    path: str | Path,
+    source_text: Optional[str] = None,
+) -> ParsedCFile:
     """
     Parse a C source file and return function signatures + call graph.
+
+    Parameters
+    ----------
+    path:
+        Path to the original ``.c`` file (used for artifact naming).
+    source_text:
+        If provided, parse this string instead of reading *path* from disk.
+        Use this to pass preprocessed / expanded source.
 
     Uses tree-sitter if available; otherwise falls back to regex.
     """
     path = Path(path)
-    source_bytes = path.read_bytes()
-    source_text = source_bytes.decode("utf-8", errors="replace")
+    provided_source = source_text is not None
+    if source_text is None:
+        source_bytes = path.read_bytes()
+        source_text = source_bytes.decode("utf-8", errors="replace")
+    else:
+        source_bytes = source_text.encode("utf-8", errors="replace")
 
     _try_load_tree_sitter()
 
     if _TS_AVAILABLE:
         try:
-            return _parse_with_tree_sitter(source_bytes, source_text, str(path))
+            result = _parse_with_tree_sitter(source_bytes, source_text, str(path))
+            if provided_source:
+                result.preprocessed_source = source_text
+            return result
         except Exception:
             pass  # fall through to regex
 
-    return _parse_with_regex(source_text, str(path))
+    result = _parse_with_regex(source_text, str(path))
+    if provided_source:
+        result.preprocessed_source = source_text
+    return result
 
 
 # ---------------------------------------------------------------------------

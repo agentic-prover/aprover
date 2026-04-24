@@ -52,6 +52,7 @@ def run_cbmc(
     unwind: int = 4,
     timeout: int = 120,
     cbmc_path: str = "cbmc",
+    include_dirs: list[str] | None = None,
 ) -> CBMCResult:
     """
     Run CBMC on *harness_path* and return a structured result.
@@ -91,6 +92,8 @@ def run_cbmc(
         str(unwind),
         "--unwinding-assertions",
     ]
+    for d in (include_dirs or []):
+        cmd += ["-I", d]
 
     # 3. Execute
     try:

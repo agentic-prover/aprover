@@ -32,6 +32,11 @@ class Config:
     # Batch processing
     batch_size: int = 10
 
+    # Multi-file / whole-codebase support
+    include_dirs: list = field(default_factory=list)  # -I paths for cc -E
+    cc_path: str = "cc"                               # C compiler for preprocessing
+    preprocess: bool = False                          # run cc -E before parsing
+
     # V2 features
     enable_dual_spec: bool = True    # generate spec twice with different emphases, flag disagreements
     enable_spec_quality: bool = False  # run Phase 5 spec quality analysis (expensive)
@@ -65,4 +70,7 @@ class Config:
             enable_spec_quality=os.environ.get("AMC_ENABLE_SPEC_QUALITY", "false").lower() == "true",
             skip_refinement=os.environ.get("AMC_SKIP_REFINEMENT", "false").lower() == "true",
             max_requeue_per_function=int(os.environ.get("AMC_MAX_REQUEUE_PER_FUNCTION", "3")),
+            include_dirs=[d for d in os.environ.get("AMC_INCLUDE_DIRS", "").split(":") if d],
+            cc_path=os.environ.get("AMC_CC_PATH", "cc"),
+            preprocess=os.environ.get("AMC_PREPROCESS", "false").lower() == "true",
         )

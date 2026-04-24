@@ -106,7 +106,23 @@ class AMCPipeline:
         # Phase 1: Parse + Generate specs
         # ------------------------------------------------------------------
         logger.info("--- Phase 1: Generating specs ---")
-        parsed = parse_c_file(source_file)
+
+        # Optionally preprocess with cc -E before parsing (multi-file mode)
+        preprocessed_source: Optional[str] = None
+        if self.config.preprocess and self.config.include_dirs:
+            from amc.preprocessor import preprocess
+            logger.info("Preprocessing %s with include dirs: %s",
+                        source_file, self.config.include_dirs)
+            try:
+                preprocessed_source = preprocess(
+                    source_file,
+                    include_dirs=self.config.include_dirs,
+                    cc=self.config.cc_path,
+                )
+            except Exception as exc:
+                logger.warning("Preprocessing failed (%s) — parsing file as-is", exc)
+
+        parsed = parse_c_file(source_file, source_text=preprocessed_source)
         self.store.init_driver(driver_name)
 
         specs = self.spec_gen.generate_specs(
@@ -436,3 +452,126 @@ class AMCPipeline:
             len(self.reporter._unresolved),
         )
         return bug_reports
+
+    # ------------------------------------------------------------------
+    # Multi-file / whole-codebase entry point
+    # ------------------------------------------------------------------
+
+    def run_directory(
+        self,
+        source_dir: str,
+        driver_name: str,
+        include_dirs: Optional[list[str]] = None,
+        domain_knowledge: str = "",
+        exclude_patterns: Optional[list[str]] = None,
+    ) -> dict[str, list[BugReport]]:
+        """
+        Run AMC on every ``.c`` file in *source_dir*.
+
+        Each file is preprocessed with ``cc -E`` (using *include_dirs*) so
+        that cross-file ``#include`` references are resolved before parsing.
+        Files are verified independently — callees from other files get
+        auto-generated havoc stubs.
+
+        Parameters
+        ----------
+        source_dir:
+            Directory containing ``.c`` files to verify.
+        driver_name:
+            Base name for artifact storage; each file gets its own
+            sub-driver ``{driver_name}/{stem}``.
+        include_dirs:
+            ``-I`` paths forwarded to the C preprocessor.
+        domain_knowledge:
+            Optional domain knowledge string passed to the LLM.
+        exclude_patterns:
+            List of filename glob patterns to skip (e.g. ``["*.test.c"]``).
+
+        Returns
+        -------
+        Mapping of filename → list of BugReport.
+        """
+        import fnmatch
+        from amc.preprocessor import preprocess
+
+        source_dir = Path(source_dir)
+        include_dirs = include_dirs or self.config.include_dirs or []
+        exclude_patterns = exclude_patterns or []
+
+        c_files = sorted(source_dir.rglob("*.c"))
+        c_files = [
+            f for f in c_files
+            if not any(fnmatch.fnmatch(f.name, pat) for pat in exclude_patterns)
+        ]
+
+        if not c_files:
+            logger.warning("No .c files found in '%s'", source_dir)
+            return {}
+
+        logger.info(
+            "=== run_directory: %d files in '%s' ===", len(c_files), source_dir
+        )
+
+        all_results: dict[str, list[BugReport]] = {}
+        total_bugs = 0
+
+        for c_file in c_files:
+            file_driver = f"{driver_name}/{c_file.stem}"
+            logger.info("--- Processing %s (driver=%s) ---", c_file.name, file_driver)
+
+            # Preprocess to resolve cross-file includes
+            try:
+                expanded = preprocess(
+                    c_file,
+                    include_dirs=[str(source_dir)] + include_dirs,
+                    cc=self.config.cc_path,
+                )
+            except Exception as exc:
+                logger.warning("Preprocessing failed for %s: %s — skipping", c_file.name, exc)
+                continue
+
+            # Temporarily override preprocessing config for this run
+            orig_preprocess = self.config.preprocess
+            self.config.preprocess = False  # already done above
+
+            try:
+                parsed = parse_c_file(c_file, source_text=expanded)
+
+                if not parsed.functions:
+                    logger.info("No functions found in %s — skipping", c_file.name)
+                    continue
+
+                # Run the full pipeline on the preprocessed source.
+                # We write the expanded source to a temp file so the
+                # harness generator can read it for type declarations.
+                import tempfile, os
+                with tempfile.NamedTemporaryFile(
+                    suffix=".c", prefix=f"amc_{c_file.stem}_",
+                    mode="w", encoding="utf-8", delete=False
+                ) as tmp:
+                    tmp.write(expanded)
+                    tmp_path = tmp.name
+
+                try:
+                    bugs = self.run(
+                        source_file=tmp_path,
+                        driver_name=file_driver,
+                        domain_knowledge=domain_knowledge,
+                    )
+                finally:
+                    os.unlink(tmp_path)
+
+            finally:
+                self.config.preprocess = orig_preprocess
+
+            all_results[c_file.name] = bugs
+            total_bugs += len(bugs)
+            logger.info(
+                "Finished %s: %d bug(s) confirmed", c_file.name, len(bugs)
+            )
+
+        logger.info(
+            "=== run_directory DONE: %d files, %d total bug(s) ===",
+            len(all_results), total_bugs,
+        )
+        return all_results
