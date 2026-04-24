@@ -151,6 +151,8 @@ class AMCPipeline:
         self_recheck_queue: set[str] = set()  # refined fns to re-check themselves
         # RQ3: maps caller_name → set of refined functions that queued it for recheck
         recheck_triggered_by: dict[str, set[str]] = {}
+        # Global re-queue bound: tracks how many times each function has been re-queued
+        requeue_counts: dict[str, int] = {}
 
         for fn_name, verdict in verdicts.items():
             if verdict.verified:
@@ -184,6 +186,9 @@ class AMCPipeline:
                     parsed_file=parsed,
                     driver_name=driver_name,
                 )
+
+                # Always persist the classification result for this counterexample
+                self.store.save_classification(driver_name, fn_name, validation)
 
                 if validation.outcome == CExOutcome.UNRESOLVED:
                     logger.info(
@@ -219,11 +224,25 @@ class AMCPipeline:
                         )
                         current_specs[fn_name] = refined_spec
                         self.store.save_spec(driver_name, fn_name, refined_spec)
-                        # Queue callers for compositional propagation recheck
+                        # Persist refinement history for this function
+                        if validation.refinement_history:
+                            self.store.save_refinement_history(
+                                driver_name, fn_name, validation.refinement_history
+                            )
+                        # Queue callers for compositional propagation recheck,
+                        # subject to the global per-function re-queue cap.
                         for caller_name in callee_to_callers.get(fn_name, set()):
                             if caller_name in all_funcs:
-                                recheck_queue.add(caller_name)
-                                recheck_triggered_by.setdefault(caller_name, set()).add(fn_name)
+                                count = requeue_counts.get(caller_name, 0)
+                                if count < self.config.max_requeue_per_function:
+                                    recheck_queue.add(caller_name)
+                                    requeue_counts[caller_name] = count + 1
+                                    recheck_triggered_by.setdefault(caller_name, set()).add(fn_name)
+                                else:
+                                    logger.info(
+                                        "Re-queue cap reached for '%s' (count=%d) — skipping",
+                                        caller_name, count,
+                                    )
                         # Also re-run CBMC on the function itself under the
                         # refined precondition — the spurious CEx may have
                         # masked a real bug (CEGAR: tighten abstract domain,
@@ -376,6 +395,7 @@ class AMCPipeline:
                     bugs_found_via_propagation=bugs_via,
                 )
                 self.propagation_events.append(event)
+                self.store.save_propagation_events(driver_name, rf, [event])
                 logger.info(
                     "PropagationEvent: refined='%s', callers=%d, outcome_changes=%d, bugs=%d",
                     rf, len(callers), len(outcome_changes), len(bugs_via),

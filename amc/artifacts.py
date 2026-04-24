@@ -130,6 +130,85 @@ class ArtifactStore:
         return _read_json(path).get("report")
 
     # ------------------------------------------------------------------
+    # Classification storage (per-counterexample validation result)
+    # ------------------------------------------------------------------
+
+    def save_classification(self, driver: str, function: str, result: Any) -> Path:
+        """Save a ValidationResult to ``{driver}/{function}/classification.json``."""
+        path = self._fn_dir(driver, function) / "classification.json"
+        payload: dict[str, Any] = {"saved_at": _utcnow()}
+        if hasattr(result, "to_dict"):
+            payload["classification"] = result.to_dict()
+        elif isinstance(result, dict):
+            payload["classification"] = result
+        elif hasattr(result, "__dataclass_fields__"):
+            import dataclasses
+            payload["classification"] = dataclasses.asdict(result)
+        else:
+            payload["classification"] = str(result)
+        _write_json(path, payload)
+        return path
+
+    def load_classification(self, driver: str, function: str) -> Optional[dict]:
+        path = self._fn_dir(driver, function) / "classification.json"
+        if not path.exists():
+            return None
+        return _read_json(path).get("classification")
+
+    # ------------------------------------------------------------------
+    # Refinement history storage
+    # ------------------------------------------------------------------
+
+    def save_refinement_history(
+        self,
+        driver: str,
+        function: str,
+        history: list[dict[str, Any]],
+    ) -> Path:
+        """Save the refinement iteration history to ``{driver}/{function}/refinement_history.json``."""
+        path = self._fn_dir(driver, function) / "refinement_history.json"
+        payload = {"saved_at": _utcnow(), "refinement_history": history}
+        _write_json(path, payload)
+        return path
+
+    def load_refinement_history(self, driver: str, function: str) -> Optional[list]:
+        path = self._fn_dir(driver, function) / "refinement_history.json"
+        if not path.exists():
+            return None
+        return _read_json(path).get("refinement_history")
+
+    # ------------------------------------------------------------------
+    # Propagation events storage
+    # ------------------------------------------------------------------
+
+    def save_propagation_events(
+        self,
+        driver: str,
+        function: str,
+        events: list[Any],
+    ) -> Path:
+        """Save PropagationEvent list to ``{driver}/{function}/propagation_events.json``."""
+        path = self._fn_dir(driver, function) / "propagation_events.json"
+        import dataclasses
+        serialized = []
+        for e in events:
+            if hasattr(e, "__dataclass_fields__"):
+                serialized.append(dataclasses.asdict(e))
+            elif isinstance(e, dict):
+                serialized.append(e)
+            else:
+                serialized.append(str(e))
+        payload = {"saved_at": _utcnow(), "propagation_events": serialized}
+        _write_json(path, payload)
+        return path
+
+    def load_propagation_events(self, driver: str, function: str) -> Optional[list]:
+        path = self._fn_dir(driver, function) / "propagation_events.json"
+        if not path.exists():
+            return None
+        return _read_json(path).get("propagation_events")
+
+    # ------------------------------------------------------------------
     # Spec quality storage
     # ------------------------------------------------------------------
 
@@ -185,6 +264,9 @@ class ArtifactStore:
             spec_path = fn_dir / "spec.json"
             cbmc_path = fn_dir / "cbmc_result.json"
             bug_path = fn_dir / "bug_report.json"
+            cls_path = fn_dir / "classification.json"
+            ref_path = fn_dir / "refinement_history.json"
+            prop_path = fn_dir / "propagation_events.json"
 
             has_spec = spec_path.exists()
             has_cbmc = cbmc_path.exists()
@@ -193,6 +275,9 @@ class ArtifactStore:
             fn_info["has_spec"] = has_spec
             fn_info["has_cbmc_result"] = has_cbmc
             fn_info["has_bug_report"] = has_bug
+            fn_info["has_classification"] = cls_path.exists()
+            fn_info["has_refinement_history"] = ref_path.exists()
+            fn_info["has_propagation_events"] = prop_path.exists()
 
             if has_spec:
                 stats["with_spec"] += 1

@@ -528,7 +528,7 @@ class CExValidator:
     ) -> ValidationResult:
         """Handle a spurious counterexample by refining the precondition."""
         func_name = func.name
-        refinement_history: list[str] = []
+        refinement_history: list[dict] = []
         current_spec = spec
 
         # Collect caller-reachable states for the over-refinement guard
@@ -571,13 +571,31 @@ class CExValidator:
                 stalled = True
                 break
 
-            refinement_history.append(new_precondition)
-
-            # Check over-refinement
-            is_safe = self._check_over_refinement(
+            # Check over-refinement: try CBMC first, fall back to LLM
+            cbmc_guard = self._check_over_refinement_with_cbmc(
                 new_precondition=new_precondition,
-                caller_expected_preconditions=caller_expected_preconditions,
+                original_precondition=current_spec.precondition,
+                spurious_counterexample=counterexample,
+                func=func,
             )
+            if cbmc_guard is not None:
+                is_safe = cbmc_guard
+                guard_method = "cbmc"
+                logger.info("Soundness guard (CBMC): safe=%s for '%s'", is_safe, func_name)
+            else:
+                is_safe = self._check_over_refinement(
+                    new_precondition=new_precondition,
+                    caller_expected_preconditions=caller_expected_preconditions,
+                )
+                guard_method = "llm"
+                logger.info("Soundness guard (LLM): safe=%s for '%s'", is_safe, func_name)
+
+            refinement_history.append({
+                "iteration": iteration + 1,
+                "proposed_precondition": new_precondition,
+                "guard_method": guard_method,
+                "accepted": is_safe,
+            })
 
             if not is_safe:
                 logger.warning(
@@ -682,6 +700,120 @@ class CExValidator:
 
         # Fallback: return original unchanged
         return original_spec.precondition
+
+    def _check_over_refinement_with_cbmc(
+        self,
+        new_precondition: str,
+        original_precondition: str,
+        spurious_counterexample: Counterexample,
+        func: FunctionInfo,
+    ) -> "bool | None":
+        """
+        CBMC-based soundness guard (conventional component).
+
+        Checks: ∃ params s.t. original_precond(params) ∧ ¬spurious_state(params) ∧ ¬new_precond(params)
+        i.e., are there non-spurious states that satisfy the old precondition but are
+        excluded by the proposed new precondition?
+
+        Returns True (safe to apply), False (over-refined), or None (inconclusive — fall back to LLM).
+        """
+        import shutil
+        import tempfile
+
+        from amc.dsl_to_cbmc import translate_atom
+
+        if not shutil.which(self.config.cbmc_path):
+            return None
+
+        sig = func.signature
+
+        # Only attempt CBMC check for scalar (non-pointer, non-struct) parameters —
+        # pointer preconditions require heap modelling that this harness doesn't provide.
+        for ptype, _ in sig.parameters:
+            ptype_stripped = ptype.strip()
+            if "*" in ptype_stripped or "struct" in ptype_stripped or "..." in ptype_stripped:
+                return None
+
+        # Try translating new_precondition via DSL translator.
+        try:
+            new_assert = translate_atom(new_precondition.strip(), context="assert")
+            if not new_assert or new_assert.startswith("/* condition:"):
+                return None
+        except Exception:
+            return None
+
+        # Build C harness
+        lines: list[str] = [
+            "#include <stdint.h>",
+            "#include <stddef.h>",
+            "void __CPROVER_assume(_Bool);",
+            "",
+            "int main(void) {",
+        ]
+
+        # Declare nondeterministic parameters
+        param_names: list[str] = []
+        for idx, (ptype, pname) in enumerate(sig.parameters):
+            var = pname if pname else f"arg{idx}"
+            lines.append(f"    {ptype.strip()} {var};")
+            param_names.append(var)
+
+        # Assume original precondition (if translatable)
+        try:
+            old_assume = translate_atom(original_precondition.strip(), context="assume")
+            if old_assume and not old_assume.startswith("/* condition:"):
+                lines.append(f"    {old_assume}")
+        except Exception:
+            pass  # skip — no assumption on original precondition
+
+        # Assume NOT the spurious state (we're looking for other states excluded by new precond)
+        # Build a conjunction of the counterexample variable assignments that match parameters
+        spurious_excludes: list[str] = []
+        for pname in param_names:
+            val = spurious_counterexample.variable_assignments.get(pname)
+            if val and val not in ("NULL", "unknown", "{}"):
+                # Keep it simple: only scalar integer literals
+                val_stripped = str(val).strip().rstrip("ul").rstrip("l")
+                if val_stripped.lstrip("-").isdigit():
+                    spurious_excludes.append(f"{pname} == {val}")
+        if spurious_excludes:
+            conjunction = " && ".join(f"({e})" for e in spurious_excludes)
+            lines.append(f"    __CPROVER_assume(!({conjunction}));")
+
+        # Assert new precondition — CBMC CEX means over-refinement
+        lines.append(f"    {new_assert}")
+        lines.append("    return 0;")
+        lines.append("}")
+
+        harness_src = "\n".join(lines) + "\n"
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".c", delete=False, mode="w", encoding="utf-8"
+        ) as tmp:
+            tmp.write(harness_src)
+            tmp_path = tmp.name
+
+        try:
+            result = run_cbmc(
+                harness_path=tmp_path,
+                unwind=self.config.cbmc_unwind,
+                timeout=min(self.config.cbmc_timeout, 30),
+                cbmc_path=self.config.cbmc_path,
+            )
+        except Exception:
+            return None
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        if result.error:
+            return None  # inconclusive
+
+        # CBMC verified → no non-spurious state violates new_precond → safe
+        # CBMC found CEX → some non-spurious state is excluded → over-refined
+        return result.verified
 
     def _check_over_refinement(
         self,

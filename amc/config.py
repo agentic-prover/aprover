@@ -38,6 +38,7 @@ class Config:
 
     # V3 features
     skip_refinement: bool = False    # filtering-only ablation: classify spurious but skip spec update + caller requeue
+    max_requeue_per_function: int = 3  # global cap on how many times a single function can be re-queued
 
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly."""
@@ -63,4 +64,5 @@ class Config:
             enable_dual_spec=os.environ.get("AMC_ENABLE_DUAL_SPEC", "true").lower() != "false",
             enable_spec_quality=os.environ.get("AMC_ENABLE_SPEC_QUALITY", "false").lower() == "true",
             skip_refinement=os.environ.get("AMC_SKIP_REFINEMENT", "false").lower() == "true",
+            max_requeue_per_function=int(os.environ.get("AMC_MAX_REQUEUE_PER_FUNCTION", "3")),
         )
