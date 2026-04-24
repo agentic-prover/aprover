@@ -1,20 +1,22 @@
 # AMC — Agentic Model Checking
 
-AMC is a prototype implementation of agentic model checking: an architecture that combines an LLM agent for specification generation, counterexample classification, and spec refinement with CBMC as a sound bounded model checking backend. The agent handles tasks where natural-language reasoning is appropriate (generating specifications from code, classifying counterexamples, proposing refinements); CBMC handles verification itself, preserving formal guarantees within the unwinding bound.
+AMC is a prototype implementation of agentic model checking: an architecture that combines an LLM agent for specification generation, counterexample classification, and spec refinement with a sound bounded model checking backend. The agent handles tasks where natural-language reasoning is appropriate (generating specifications from code, classifying counterexamples, proposing refinements); the BMC backend handles verification itself, preserving formal guarantees within the unwinding bound.
 
-Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated specifications. CBMC then checks the function against its spec and those stubs. This makes verification tractable on real codebases without manual annotations.
+The architecture is backend-agnostic by design: AMC defines a `BMCBackend` abstraction that any BMC tool can implement. The current working backend targets C programs via CBMC; a Rust/Kani backend is scaffolded. The agentic layer — spec generation, counterexample classification, refinement — is independent of which solver is underneath.
+
+Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated specifications. The BMC backend then checks the function against its spec and those stubs. This makes verification tractable on real codebases without manual annotations.
 
 ## What AMC is, and what it isn't
 
 AMC **is** a research prototype that:
 - Runs end-to-end on real-world C, including bare-metal OS kernels.
-- Gives you sound per-function verification *within CBMC's unwinding bound*, conditional on the LLM-generated specs being correct.
+- Gives you sound per-function verification *within the BMC backend's unwinding bound*, conditional on the LLM-generated specs being correct.
 - Produces concrete reproducible counterexamples, not natural-language bug descriptions.
 - Supports a filtering-only ablation mode, so you can compare "classify only" against "classify + refine."
 
 AMC **is not** (yet):
 - Production-ready. Expect rough edges, failed harnesses on trivial functions, and spec-quality issues that the LLM sometimes introduces.
-- Backend-agnostic in practice. The architecture supports multiple backends, but only C + CBMC is working today. The Rust/Kani backend is scaffolded as a stub.
+- Fully backend-agnostic in practice yet. The `BMCBackend` abstraction is in place and C + CBMC is working; the Rust + Kani backend is scaffolded but not yet functional.
 - A replacement for full formal verification. Soundness is bounded by the unwinding depth and by spec correctness, neither of which AMC proves.
 - Evaluated against other tools yet. Comparisons against FM-Agent, Preguss, CBMC-alone, and static analyzers are planned but not yet reported.
 
