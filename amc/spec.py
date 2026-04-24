@@ -41,12 +41,20 @@ class Spec:
     status: SpecStatus = SpecStatus.PENDING
     spec_disagreement: bool = False
 
-    def to_dict(self) -> dict:
+    def to_dict(self, _seen: frozenset | None = None) -> dict:
+        # Guard against circular callee_specs (e.g. mutually recursive fns).
+        if _seen is None:
+            _seen = frozenset()
+        callee_dicts = {}
+        for k, v in self.callee_specs.items():
+            vid = id(v)
+            if vid not in _seen:
+                callee_dicts[k] = v.to_dict(_seen | {vid})
         return {
             "function_name": self.function_name,
             "precondition": self.precondition,
             "postcondition": self.postcondition,
-            "callee_specs": {k: v.to_dict() for k, v in self.callee_specs.items()},
+            "callee_specs": callee_dicts,
             "loop_invariants": self.loop_invariants,
             "status": self.status.value,
             "spec_disagreement": self.spec_disagreement,
