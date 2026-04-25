@@ -548,8 +548,8 @@ class AMCPipeline:
             file_parsed_c[stem] = parsed_pass1
             file_defined[stem] = set(parsed_pass1.functions.keys())
             file_callees[stem] = set().union(
-                *(fi.callees for fi in parsed_pass1.functions.values())
-            )
+                *parsed_pass1.call_graph.values()
+            ) if parsed_pass1.call_graph else set()
 
         # Global set: all functions that have callers in at least one other file.
         global_cross_file_callers: set[str] = set()
@@ -565,17 +565,19 @@ class AMCPipeline:
             str, list[tuple[FunctionInfo, ParsedCFile]]
         ] = {}
         for stem_a, parsed_a in file_parsed_c.items():
-            for caller_fi in parsed_a.functions.values():
-                for callee_name in caller_fi.callees:
+            for caller_name, caller_callees in parsed_a.call_graph.items():
+                for callee_name in caller_callees:
                     # Only index if the callee is defined in a different file
                     if any(
                         callee_name in file_defined[stem_b]
                         for stem_b in file_defined
                         if stem_b != stem_a
                     ):
-                        global_cross_file_caller_contexts.setdefault(
-                            callee_name, []
-                        ).append((caller_fi, parsed_a))
+                        caller_fi = parsed_a.get_function_info(caller_name)
+                        if caller_fi is not None:
+                            global_cross_file_caller_contexts.setdefault(
+                                callee_name, []
+                            ).append((caller_fi, parsed_a))
 
         logger.info(
             "Pass 1 complete: %d functions have cross-file callers; "
