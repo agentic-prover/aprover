@@ -271,6 +271,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if hasattr(args, "include_dir") and args.include_dir:
         config.include_dirs = args.include_dir
         config.preprocess = True
+    if getattr(args, "skip_refinement", False):
+        config.skip_refinement = True
 
     domain_knowledge = ""
     if hasattr(args, "domain_knowledge") and args.domain_knowledge:
@@ -283,6 +285,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     print(f"Full verification pipeline for: {args.source}")
     print(f"Driver: {args.driver}")
     print(f"Artifact dir: {config.artifact_dir}")
+    if config.skip_refinement:
+        print("Mode: FilteringOnly (skip_refinement=True) — RQ3 ablation baseline")
     if config.preprocess:
         print(f"Include dirs: {config.include_dirs}")
 
@@ -320,6 +324,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     config = Config.from_env()
     if args.output:
         config.artifact_dir = args.output
+    if getattr(args, "skip_refinement", False):
+        config.skip_refinement = True
 
     include_dirs = args.include_dir or []
 
@@ -417,6 +423,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="Add an include directory for C preprocessing (repeatable)",
     )
+    ver.add_argument(
+        "--skip-refinement",
+        action="store_true",
+        default=False,
+        help="FilteringOnly mode: classify counterexamples but skip spec update and caller re-queue (RQ3 ablation)",
+    )
     ver.set_defaults(func=_cmd_verify)
 
     # --- verify-dir ---
@@ -446,6 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="PATTERN",
         help="Glob pattern of filenames to skip (repeatable)",
+    )
+    vd.add_argument(
+        "--skip-refinement",
+        action="store_true",
+        default=False,
+        help="FilteringOnly mode: classify counterexamples but skip spec update and caller re-queue (RQ3 ablation)",
     )
     vd.set_defaults(func=_cmd_verify_dir)
 
