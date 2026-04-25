@@ -220,7 +220,11 @@ class CExValidator:
 
                 if reachable_cross:
                     caller_name_cf, caller_fi_cf, caller_parsed_cf = reachable_cross[0]
-                    caller_all_funcs_cf = dict(caller_parsed_cf.functions)
+                    caller_all_funcs_cf = {
+                        n: caller_parsed_cf.get_function_info(n)
+                        for n in caller_parsed_cf.functions
+                        if caller_parsed_cf.get_function_info(n) is not None
+                    }
                     is_system_reachable, call_chain = self._propagate_upward(
                         func_name=caller_name_cf,
                         counterexample=counterexample,
@@ -800,7 +804,11 @@ class CExValidator:
                         reachable, chain = self._propagate_upward(
                             func_name=caller_fi.name,
                             counterexample=counterexample,
-                            all_funcs=dict(caller_parsed.functions),
+                            all_funcs={
+                                n: caller_parsed.get_function_info(n)
+                                for n in caller_parsed.functions
+                                if caller_parsed.get_function_info(n) is not None
+                            },
                             all_specs=all_specs,
                             parsed_file=caller_parsed,
                             driver_name=driver_name,
