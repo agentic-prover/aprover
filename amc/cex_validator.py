@@ -75,6 +75,7 @@ class ValidationResult:
         reasoning: str,
         outcome: CExOutcome = CExOutcome.REAL_BUG,
         over_refinement_rejected: bool = False,
+        system_entry_reached: bool = False,
         # Legacy backward-compat param
         is_real_bug: bool | None = None,
     ) -> None:
@@ -86,6 +87,11 @@ class ValidationResult:
         self.final_precondition = final_precondition
         self.reasoning = reasoning
         self.over_refinement_rejected = over_refinement_rejected
+        # True when the full call chain was traced back to a system entry point
+        # (a function with no callers in the analysed file, e.g. kernel_main,
+        # an IRQ handler, a syscall dispatcher).  Drives the confirmed_system_entry
+        # confidence tier, which ranks above confirmed_bmc.
+        self.system_entry_reached: bool = system_entry_reached
         # If caller passed legacy is_real_bug, derive outcome from it
         if is_real_bug is not None:
             self.outcome = CExOutcome.REAL_BUG if is_real_bug else CExOutcome.SPURIOUS
@@ -117,6 +123,7 @@ class ValidationResult:
             "reasoning": self.reasoning,
             "outcome": self.outcome.value,
             "over_refinement_rejected": self.over_refinement_rejected,
+            "system_entry_reached": self.system_entry_reached,
             "is_real_bug": self.is_real_bug,
             "dynamic_result": self.dynamic_result.to_dict() if self.dynamic_result else None,
         }
@@ -226,6 +233,7 @@ class CExValidator:
                     + (" Callee feasibility confirmed." if feasible is True else "")
                 ),
                 outcome=CExOutcome.REAL_BUG,
+                system_entry_reached=True,
             )
             self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
             return result
@@ -318,9 +326,11 @@ class CExValidator:
                 reasoning=(
                     f"Counterexample state is reachable from caller(s): "
                     f"{reachable_from}. Call chain: {full_chain}."
+                    + (" Full chain traced to system entry." if is_system_reachable else "")
                     + (" Callee feasibility confirmed." if feasible is True else "")
                 ),
                 outcome=CExOutcome.REAL_BUG,
+                system_entry_reached=is_system_reachable,
             )
             self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
             return result

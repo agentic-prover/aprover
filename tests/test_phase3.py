@@ -483,7 +483,7 @@ def test_bug_report_creation(tmp_path: Path):
     assert report.bug_type == "memory_safety"  # "array-bounds" → memory_safety
     assert report.violated_property == "array-bounds.1"
     assert report.call_chain == ["system_entry", "rb_write"]
-    assert report.confidence in ("confirmed_dynamic", "confirmed_bmc", "likely", "possible")
+    assert report.confidence in ("confirmed_dynamic", "confirmed_system_entry", "confirmed_bmc", "likely")
     assert report.reproducer is not None
     assert "reasoning" in report.reasoning_trail.lower() or len(report.reasoning_trail) > 0
 
@@ -492,6 +492,66 @@ def test_bug_report_creation(tmp_path: Path):
     assert d["bug_type"] == "memory_safety"
     serialized = json.dumps(d, default=str)
     assert "rb_write" in serialized
+
+
+def test_confirmed_system_entry_tier(tmp_path):
+    """system_entry_reached=True produces confirmed_system_entry confidence."""
+    from amc.bug_reporter import BugReporter
+    from amc.cex_validator import CExOutcome, ValidationResult
+
+    store = _make_store(tmp_path)
+    reporter = BugReporter(store)
+    func = _make_func_info("leaf_fn", callees=set())
+
+    cex = _make_counterexample(
+        failing_property="overflow.1",
+        var_assignments={"x": "2147483647"},
+    )
+    # Simulate a full chain traced back to a system entry
+    validation = ValidationResult(
+        function_name="leaf_fn",
+        outcome=CExOutcome.REAL_BUG,
+        counterexample=cex,
+        caller_path=["kernel_main", "mid_fn", "leaf_fn"],
+        system_entry_input="/* kernel entry harness */",
+        refinement_history=[],
+        final_precondition=None,
+        reasoning="Full chain traced to system entry. Callee feasibility confirmed.",
+        system_entry_reached=True,
+    )
+
+    report = reporter.create_report(validation, func)
+    assert report.confidence == "confirmed_system_entry"
+    assert report.call_chain == ["kernel_main", "mid_fn", "leaf_fn"]
+
+
+def test_confirmed_bmc_tier_without_system_entry(tmp_path):
+    """system_entry_reached=False keeps confirmed_bmc confidence."""
+    from amc.bug_reporter import BugReporter
+    from amc.cex_validator import CExOutcome, ValidationResult
+
+    store = _make_store(tmp_path)
+    reporter = BugReporter(store)
+    func = _make_func_info("leaf_fn", callees=set())
+
+    cex = _make_counterexample(
+        failing_property="overflow.1",
+        var_assignments={"x": "2147483647"},
+    )
+    validation = ValidationResult(
+        function_name="leaf_fn",
+        outcome=CExOutcome.REAL_BUG,
+        counterexample=cex,
+        caller_path=["mid_fn", "leaf_fn"],
+        system_entry_input=None,
+        refinement_history=[],
+        final_precondition=None,
+        reasoning="Reachable from caller mid_fn.",
+        system_entry_reached=False,
+    )
+
+    report = reporter.create_report(validation, func)
+    assert report.confidence == "confirmed_bmc"
 
 
 def test_bug_type_classification():

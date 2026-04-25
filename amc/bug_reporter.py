@@ -80,7 +80,7 @@ class BugReport:
     call_chain: list[str]
     reproducer: str | None        # C code that triggers the bug
     reasoning_trail: str          # step-by-step explanation
-    confidence: str               # "confirmed_dynamic" | "confirmed_bmc" | "likely" | "possible"
+    confidence: str               # "confirmed_dynamic" | "confirmed_system_entry" | "confirmed_bmc" | "likely"
     cex_outcome: CExOutcome | None = None
     dynamic_outcome: DynamicOutcome | None = None
     dynamic_signal: str | None = None
@@ -132,13 +132,18 @@ class BugReporter:
         cex = validation_result.counterexample
         bug_type = _classify_bug_type(cex.failing_property)
 
-        # Determine confidence (highest tier wins):
-        #   confirmed_dynamic — runtime fault observed by the dynamic harness
-        #   confirmed_bmc     — BMC + caller reachability / entry function
-        #   likely            — over-refinement guard triggered
+        # Determine confidence tier (highest wins):
+        #   confirmed_dynamic       — runtime fault observed by GCC harness (Stage 3)
+        #   confirmed_system_entry  — full call chain traced back to a system entry
+        #                             point (no-caller function) via CBMC reachability
+        #   confirmed_bmc           — at least one immediate caller can reach the CEx
+        #                             state, but chain to system entry not fully traced
+        #   likely                  — over-refinement guard triggered; assumed real bug
         dynamic = validation_result.dynamic_result
         if dynamic and dynamic.outcome == DynamicOutcome.CONFIRMED:
             confidence = "confirmed_dynamic"
+        elif getattr(validation_result, "system_entry_reached", False):
+            confidence = "confirmed_system_entry"
         elif validation_result.caller_path:
             confidence = "confirmed_bmc"
         elif "over-refined" in validation_result.reasoning.lower():
