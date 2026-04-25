@@ -605,7 +605,6 @@ class AMCPipeline:
             file_driver = f"{driver_name}/{stem}"
             logger.info("--- Processing %s (driver=%s) ---", c_file.name, file_driver)
 
-            cross_file_callers = cross_file_callers_for.get(stem, set())
             expanded = file_expanded[stem]
 
             with tempfile.NamedTemporaryFile(
