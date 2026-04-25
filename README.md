@@ -123,19 +123,21 @@ Hand-crafted per-module wrappers inline cross-file includes and stub external de
 | `vibeos_printf.c` | 3 | `INT64_MIN` signed overflow; two unbounded loops |
 | `vibeos_klog.c` | 0 | Ring-buffer logic verified |
 
-### Raw-source mode — 45 findings across 12 files (partial run)
+### Raw-source mode — ~198 findings across 43 files (partial run)
 
-In raw-source mode AMC preprocesses the unmodified kernel source directly using `cc -E` and verifies each file without any manual wrapper preparation. A partial run (12 of 35 kernel files) confirmed 45 bugs, including HAL-layer findings in the SD card driver and interrupt controller that are the kinds of defect most likely to cause hardware hangs.
+In raw-source mode AMC preprocesses the unmodified kernel source directly using `cc -E` and verifies each file without any manual wrapper preparation. A partial run across 43 of 48 kernel `.c` files (stopped before `ttf`, `vfs`, `virtio_blk`, `virtio_net`, `virtio_sound`) reported ~198 confirmed bugs, including HAL-layer findings in the SD card driver and interrupt controller.
 
 ```bash
 amc verify-dir \
   --source-dir examples/vibeos/repo/kernel \
-  --driver vibeos_full \
-  --output artifacts/vibeos_full \
+  --driver vibeos_kernel \
+  --output artifacts/vibeos_kernel_full \
   --include-dir examples/vibeos/repo/kernel
 ```
 
-**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 now includes a two-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, and (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined — a CEx that passes reachability but fails feasibility is classified UNRESOLVED rather than REAL_BUG. A manual audit of a sampled subset and the `FilteringOnlyBaseline` comparison are the next steps.
+**FilteringOnly baseline (RQ3).** On the five wrapper modules, the `--skip-refinement` ablation (classify only, no spec update, no caller re-queue) reported 59 findings vs. AMC's 41 — a 44% increase. Refinement acts as a precision filter on this corpus, not a recall enhancer.
+
+**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 applies a three-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined, and (3) an optional Stage 3 GCC harness directly confirms the fault at runtime. Each confirmed real bug is assigned one of four evidence tiers: `confirmed_dynamic` (runtime fault observed), `confirmed_system_entry` (full call chain traced back to a system entry point with no callers), `confirmed_bmc` (reachability confirmed from at least one caller via BMC), or `likely` (over-refinement guard triggered). A manual precision audit of a sampled subset is the immediate next step.
 
 AMC independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating at least one finding against an independent source.
 
@@ -150,7 +152,7 @@ AMC independently reproduced the `calloc` integer-overflow issue filed in the Vi
 
 ```bash
 uv run pytest tests/ -q
-# 129 passed, 1 skipped
+# 131 passed, 1 skipped
 ```
 
 ## Usage — whole-codebase mode
@@ -189,7 +191,7 @@ tests/                  Unit and integration tests
 
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime, `confirmed_dynamic` confidence tier), prompt caching.
+- **Working:** C verification, all four agentic components, filtering-only ablation (`--skip-refinement`), parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime), four-tier confidence reporting (`confirmed_dynamic` > `confirmed_system_entry` > `confirmed_bmc` > `likely`), prompt caching.
 - **Partial:** External callee postconditions are LLM-generated and may be over-permissive; multi-file callee bodies outside the verified file cannot be inlined in the feasibility check.
 - **Planned:** Mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
 
