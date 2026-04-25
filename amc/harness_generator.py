@@ -736,6 +736,225 @@ class HarnessGenerator:
 
         return "\n\n".join(sections) + "\n"
 
+    def generate_dynamic_harness(
+        self,
+        entry_func: "FunctionInfo",
+        counterexample: "Counterexample",
+        parsed_file: ParsedCFile,
+        all_funcs: Optional[dict] = None,
+        all_specs: Optional[dict] = None,
+        with_globals: bool = True,
+    ) -> str:
+        """
+        Generate a GCC-compilable dynamic validation harness (Phase 3 Stage 3).
+
+        The harness includes the function's call closure, signal handlers that catch
+        SIGSEGV/SIGABRT/SIGFPE/SIGILL, optionally sets global state from CEx witness
+        values, and calls ``entry_func`` with concrete CEx witness inputs.
+
+        Output conventions (stdout):
+          ``DYNAMIC:CONFIRMED signal=<NAME>``  — fault caught
+          ``DYNAMIC:NOT_TRIGGERED``             — no fault within timeout
+        """
+        fn_name = entry_func.name
+        sig = entry_func.signature
+
+        source_text = (
+            parsed_file.preprocessed_source
+            if parsed_file.preprocessed_source is not None
+            else _read_source(entry_func.source_file)
+        )
+        type_decls = _extract_type_declarations(source_text, parsed_file)
+
+        # --- 1. Transitive local call closure ---
+        local_closure = self._local_call_closure(fn_name, entry_func, parsed_file)
+
+        # --- 2. External callees (need stubs) ---
+        all_local = local_closure | {fn_name}
+        external_callees: set[str] = set()
+        for name in all_local:
+            for callee in parsed_file.call_graph.get(name, set()):
+                if callee not in all_local:
+                    external_callees.add(callee)
+
+        # --- 3. Build runtime-safe stubs for external callees ---
+        stub_sections: list[str] = []
+        for cname in sorted(external_callees):
+            stub_sections.append(_generate_dynamic_stub(cname, parsed_file))
+
+        # --- 4. Build real function definitions for local closure ---
+        local_func_defs: list[str] = []
+        for cname in sorted(local_closure):
+            cfi = parsed_file.get_function_info(cname)
+            if cfi is None:
+                continue
+            cbody = _substitute_callee_calls(cfi.body, external_callees)
+            cparams = _params_str(cfi.signature.parameters)
+            # Strip 'static' so the function is accessible from main()
+            ret_local = re.sub(r'\bstatic\b\s*', '', cfi.signature.return_type).strip()
+            local_func_defs.append(
+                f"/* local callee: {cname} */\n"
+                f"{ret_local} {cname}({cparams})\n{cbody}"
+            )
+
+        # --- 5. Build entry function definition ---
+        func_body = _substitute_callee_calls(entry_func.body, external_callees)
+        params_str = _params_str(sig.parameters)
+        ret_entry = re.sub(r'\bstatic\b\s*', '', sig.return_type).strip()
+        func_def = f"{ret_entry} {fn_name}({params_str})\n{func_body}"
+
+        # --- 6. Identify global variable assignments from CEx witness ---
+        entry_param_names: set[str] = {pname for _, pname in sig.parameters if pname}
+        global_assigns: list[str] = []
+        if with_globals:
+            for var_name, var_value in counterexample.variable_assignments.items():
+                clean_var = var_name.strip()
+                clean_val = var_value.strip()
+                if (clean_var.startswith("__CPROVER_") or clean_var.startswith("_")
+                        or "$" in clean_var
+                        or not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', clean_var)
+                        or clean_var in entry_param_names):
+                    continue
+                if _is_simple_value(clean_val):
+                    global_assigns.append(
+                        f"    {clean_var} = {clean_val};  /* witness */"
+                    )
+
+        # --- 7. Build entry function call argument setup ---
+        call_arg_lines: list[str] = []
+        call_args_list: list[str] = []
+        real_params = [
+            (pt, pn) for pt, pn in sig.parameters
+            if not (pt.strip() == "void" and not pn.strip())
+        ]
+        for ptype, pname in real_params:
+            if not pname:
+                continue
+            ptype_s = ptype.strip()
+            is_pointer = "*" in ptype_s
+            witness = counterexample.variable_assignments.get(pname, "")
+            arg_var = f"_amc_arg_{pname}"
+
+            if not is_pointer and witness and _is_simple_value(witness):
+                call_arg_lines.append(
+                    f"    {ptype_s} {arg_var} = {witness};  /* witness */"
+                )
+            elif is_pointer:
+                if witness.strip() in ("NULL", "0", ""):
+                    call_arg_lines.append(
+                        f"    {ptype_s} {arg_var} = NULL;  /* witness */"
+                    )
+                else:
+                    base_type = re.sub(r'\bconst\b', '', ptype_s.rstrip("*")).strip()
+                    if base_type.lower() in ("void",):
+                        call_arg_lines.append(f"    {ptype_s} {arg_var} = NULL;")
+                    else:
+                        buf_var = f"_amc_buf_{pname}"
+                        call_arg_lines.append(f"    {base_type} {buf_var};")
+                        call_arg_lines.append(
+                            f"    memset(&{buf_var}, 0, sizeof({buf_var}));"
+                        )
+                        call_arg_lines.append(f"    {ptype_s} {arg_var} = &{buf_var};")
+            else:
+                call_arg_lines.append(f"    {ptype_s} {arg_var} = 0;")
+
+            call_args_list.append(arg_var)
+
+        call_expr_args = ", ".join(call_args_list)
+
+        # --- 8. Assemble the harness ---
+        sections: list[str] = []
+
+        # Signal headers first — identical typedef re-declarations (C11 §6.7.8) are allowed
+        sections.append(
+            "/* AMC Dynamic Validation Harness — Phase 3 Stage 3 */\n"
+            "#include <signal.h>\n"
+            "#include <setjmp.h>\n"
+            "#include <stdio.h>\n"
+            "#include <string.h>\n"
+            "#include <stdlib.h>\n"
+            "#include <stddef.h>\n"
+            "#include <stdint.h>"
+        )
+
+        if type_decls.strip():
+            sections.append(
+                "/* --- Type declarations and globals from source --- */\n"
+                + type_decls
+            )
+
+        if stub_sections:
+            sections.append("/* --- Dynamic stubs for external callees --- */")
+            sections.extend(stub_sections)
+
+        if local_func_defs:
+            sections.append("/* --- Local callee implementations --- */")
+            sections.extend(local_func_defs)
+
+        sections.append(f"/* --- Entry function: {fn_name} --- */\n" + func_def)
+
+        # Signal handling machinery
+        sections.append(
+            "/* AMC signal handler */\n"
+            "static sigjmp_buf _amc_jmp;\n"
+            "static volatile int _amc_signal = 0;\n"
+            "static volatile const char *_amc_signal_name = NULL;\n"
+            "static void _amc_handler(int sig) {\n"
+            "    _amc_signal = sig;\n"
+            "    switch (sig) {\n"
+            "        case SIGSEGV: _amc_signal_name = \"SIGSEGV\"; break;\n"
+            "        case SIGABRT: _amc_signal_name = \"SIGABRT\"; break;\n"
+            "        case SIGFPE:  _amc_signal_name = \"SIGFPE\";  break;\n"
+            "        case SIGILL:  _amc_signal_name = \"SIGILL\";  break;\n"
+            "        default:      _amc_signal_name = \"UNKNOWN\"; break;\n"
+            "    }\n"
+            "    siglongjmp(_amc_jmp, 1);\n"
+            "}"
+        )
+
+        # Global state setup
+        if global_assigns:
+            sections.append(
+                "static void _amc_setup_state(void) {\n"
+                + "\n".join(global_assigns) + "\n"
+                "}"
+            )
+        else:
+            sections.append(
+                "static void _amc_setup_state(void) { /* no global state to set */ }"
+            )
+
+        # main()
+        main_lines: list[str] = [
+            "    signal(SIGSEGV, _amc_handler);",
+            "    signal(SIGABRT, _amc_handler);",
+            "    signal(SIGFPE,  _amc_handler);",
+            "    signal(SIGILL,  _amc_handler);",
+            "    _amc_setup_state();",
+        ]
+        main_lines.extend(call_arg_lines)
+        main_lines.append("    if (sigsetjmp(_amc_jmp, 1) == 0) {")
+        if ret_entry == "void":
+            main_lines.append(f"        {fn_name}({call_expr_args});")
+        else:
+            main_lines.append(
+                f"        {ret_entry} _amc_result = {fn_name}({call_expr_args});"
+            )
+            main_lines.append("        (void)_amc_result;")
+        main_lines.append('        puts("DYNAMIC:NOT_TRIGGERED");')
+        main_lines.append("        return 0;")
+        main_lines.append("    }")
+        main_lines.append(
+            '    printf("DYNAMIC:CONFIRMED signal=%s\\n",'
+            " (const char *)_amc_signal_name);"
+        )
+        main_lines.append("    return 1;")
+
+        main_func = "int main(void) {\n" + "\n".join(main_lines) + "\n}"
+        sections.append("/* --- Dynamic harness entry point --- */\n" + main_func)
+
+        return "\n\n".join(sections) + "\n"
+
     def _local_call_closure(
         self,
         fn_name: str,
@@ -928,6 +1147,34 @@ class HarnessGenerator:
         )
 
         return "\n\n".join(sections) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Helpers: dynamic stub (runtime-safe — no CBMC constructs)
+# ---------------------------------------------------------------------------
+
+
+def _generate_dynamic_stub(callee_name: str, parsed_file: "ParsedCFile") -> str:
+    """Generate a runtime-safe stub for dynamic harnesses (no __CPROVER_assume)."""
+    sig = parsed_file.functions.get(callee_name)
+    if sig is None:
+        return f"/* dynamic stub: {callee_name} — no signature, skipped */"
+
+    ret_type = sig.return_type.strip()
+    params_str = _params_str(sig.parameters)
+    stub_name = f"{callee_name}_stub"
+
+    lines = [
+        f"/* Dynamic stub: {callee_name} */",
+        f"{ret_type} {stub_name}({params_str}) {{",
+    ]
+    if ret_type == "void":
+        lines.append("    /* void */")
+    else:
+        default = _c_default_value(ret_type)
+        lines.append(f"    return ({ret_type}){default};")
+    lines.append("}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

@@ -22,13 +22,15 @@ AMC **is not** (yet):
 ## How it works
 
 ```
-Phase 1   Spec Generator      [AGENTIC]      LLM generates pre/postconditions per function
-Phase 2   BMC Engine          [CONVENTIONAL] Checks each function against its spec
-Phase 3   CEx Confirmation    [AGENTIC]      LLM classifies: REAL_BUG / SPURIOUS / UNRESOLVED
-          Spec Refiner        [AGENTIC]      Refines preconditions on spurious counterexamples
-Phase 3b  Propagation         [CONVENTIONAL] Re-verifies callers after spec refinement
-Phase 3c  CEGAR loop          [CONVENTIONAL] Re-verifies refined functions (may unmask bugs)
-Phase 4   Spec Quality        [AGENTIC]      Coverage / mutation / consistency checks (optional)
+Phase 1    Spec Generator      [AGENTIC]      LLM generates pre/postconditions per function
+Phase 2    BMC Engine          [CONVENTIONAL] Checks each function against its spec
+Phase 3    CEx Confirmation    [AGENTIC]      LLM classifies: REAL_BUG / SPURIOUS / UNRESOLVED
+           Spec Refiner        [AGENTIC]      Refines preconditions on spurious counterexamples
+Phase 3 S2 Feasibility check  [CONVENTIONAL] Re-verifies violation with real callee bodies inlined
+Phase 3 S3 Dynamic validation [CONVENTIONAL] Compiles + runs GCC harness to confirm fault at runtime
+Phase 3b   Propagation        [CONVENTIONAL] Re-verifies callers after spec refinement
+Phase 3c   CEGAR loop         [CONVENTIONAL] Re-verifies refined functions (may unmask bugs)
+Phase 4    Spec Quality        [AGENTIC]      Coverage / mutation / consistency checks (optional)
 ```
 
 The agentic components handle semantic reasoning; the conventional BMC engine provides the formal guarantee. The design principle is *agents propose, conventional tools dispose* — every soundness-relevant decision the LLM proposes passes through a conventional check before affecting the verification verdict.
@@ -81,6 +83,9 @@ All settings can be overridden via environment variables or as `Config` dataclas
 | `AMC_ENABLE_DUAL_SPEC` | `true` | Generate each spec twice, flag disagreements |
 | `AMC_ENABLE_SPEC_QUALITY` | `false` | Run Phase 4 spec-quality checks |
 | `AMC_SKIP_REFINEMENT` | `false` | Filtering-only mode (classify but don't refine) |
+| `AMC_ENABLE_DYNAMIC_VALIDATION` | `false` | Phase 3 S3: compile + run a GCC harness to confirm real faults |
+| `AMC_DYNAMIC_VALIDATION_TIMEOUT` | `30` | Seconds the compiled harness is allowed to run |
+| `AMC_DYNAMIC_CC_PATH` | `gcc` | C compiler for dynamic harness compilation |
 
 The `AMC_SKIP_REFINEMENT` toggle is the control for the project's own ablation study: running AMC with and without refinement on the same input measures whether the refinement machinery contributes value beyond simple filtering of spurious counterexamples.
 
@@ -145,7 +150,7 @@ AMC independently reproduced the `calloc` integer-overflow issue filed in the Vi
 
 ```bash
 uv run pytest tests/ -q
-# 111 passed, 1 skipped
+# 129 passed, 1 skipped
 ```
 
 ## Usage — whole-codebase mode
@@ -184,7 +189,7 @@ tests/                  Unit and integration tests
 
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), prompt caching.
+- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime, `confirmed_dynamic` confidence tier), prompt caching.
 - **Partial:** External callee postconditions are LLM-generated and may be over-permissive; multi-file callee bodies outside the verified file cannot be inlined in the feasibility check.
 - **Planned:** Mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
 

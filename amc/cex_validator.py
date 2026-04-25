@@ -24,6 +24,7 @@ from typing import Optional
 from amc.artifacts import ArtifactStore
 from amc.cbmc import Counterexample, run_cbmc
 from amc.config import Config
+from amc.dynamic_validator import DynamicOutcome, DynamicValidationResult, DynamicValidator
 from amc.harness_generator import HarnessGenerator
 from amc.llm import LLMClient, LLMError
 from amc.logger import get_logger
@@ -90,6 +91,8 @@ class ValidationResult:
             self.outcome = CExOutcome.REAL_BUG if is_real_bug else CExOutcome.SPURIOUS
         else:
             self.outcome = outcome
+        # Dynamic validation result, populated after construction if enabled
+        self.dynamic_result: DynamicValidationResult | None = None
 
     # ------------------------------------------------------------------
     # Backward-compat property
@@ -115,6 +118,7 @@ class ValidationResult:
             "outcome": self.outcome.value,
             "over_refinement_rejected": self.over_refinement_rejected,
             "is_real_bug": self.is_real_bug,
+            "dynamic_result": self.dynamic_result.to_dict() if self.dynamic_result else None,
         }
 
 
@@ -137,6 +141,11 @@ class CExValidator:
         self.llm = llm
         self.store = store
         self.harness_gen = harness_gen
+        self._dynamic_validator: DynamicValidator | None = (
+            DynamicValidator(config, harness_gen)
+            if getattr(config, "enable_dynamic_validation", False)
+            else None
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -204,7 +213,7 @@ class CExValidator:
                 all_funcs=all_funcs,
                 parsed_file=parsed_file,
             )
-            return ValidationResult(
+            result = ValidationResult(
                 function_name=func_name,
                 counterexample=counterexample,
                 caller_path=[func_name],
@@ -218,6 +227,8 @@ class CExValidator:
                 ),
                 outcome=CExOutcome.REAL_BUG,
             )
+            self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+            return result
 
         # Step 4: check if any caller can produce the counterexample state
         reachable_from: list[str] = []
@@ -297,7 +308,7 @@ class CExValidator:
                 all_funcs=all_funcs,
                 parsed_file=parsed_file,
             )
-            return ValidationResult(
+            result = ValidationResult(
                 function_name=func_name,
                 counterexample=counterexample,
                 caller_path=full_chain,
@@ -311,6 +322,8 @@ class CExValidator:
                 ),
                 outcome=CExOutcome.REAL_BUG,
             )
+            self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+            return result
 
         # Step 5: no caller can reach the state → spurious → refine
         logger.info(
@@ -767,7 +780,7 @@ class CExValidator:
                     "and marking as real bug",
                     iteration,
                 )
-                return ValidationResult(
+                over_result = ValidationResult(
                     function_name=func_name,
                     counterexample=counterexample,
                     caller_path=[],
@@ -782,6 +795,9 @@ class CExValidator:
                     outcome=CExOutcome.REAL_BUG,
                     over_refinement_rejected=True,
                 )
+                # Note: over-refinement case doesn't have access to all_funcs/all_specs
+                # from _handle_spurious params; dynamic validation skipped here.
+                return over_result
 
             # Accept the refinement
             current_spec = Spec(
@@ -1080,6 +1096,45 @@ class CExValidator:
             f"       {state_str} */\n"
             f"}}\n"
         )
+
+    # ------------------------------------------------------------------
+    # Dynamic validation (Stage 3)
+    # ------------------------------------------------------------------
+
+    def _try_dynamic_validation(
+        self,
+        validation_result: ValidationResult,
+        func: FunctionInfo,
+        all_funcs: dict[str, FunctionInfo],
+        all_specs: dict[str, Spec],
+        parsed_file: ParsedCFile,
+    ) -> None:
+        """Run dynamic validation and attach the result to validation_result in-place."""
+        if self._dynamic_validator is None:
+            return
+
+        caller_path = validation_result.caller_path
+        entry_name = caller_path[0] if caller_path else func.name
+        entry_func = all_funcs.get(entry_name) or parsed_file.get_function_info(entry_name)
+        if entry_func is None:
+            logger.warning(
+                "Dynamic validation: entry function '%s' not found", entry_name
+            )
+            return
+
+        logger.info(
+            "Running dynamic validation for '%s' (entry: '%s')",
+            func.name, entry_func.name,
+        )
+        dynamic_result = self._dynamic_validator.validate(
+            entry_func=entry_func,
+            counterexample=validation_result.counterexample,
+            parsed_file=parsed_file,
+            all_funcs=all_funcs,
+            all_specs=all_specs,
+            caller_path=caller_path,
+        )
+        validation_result.dynamic_result = dynamic_result
 
     # ------------------------------------------------------------------
     # Internal helpers

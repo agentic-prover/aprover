@@ -14,6 +14,7 @@ from typing import Optional
 from amc.artifacts import ArtifactStore
 from amc.cbmc import Counterexample
 from amc.cex_validator import CExOutcome, ValidationResult
+from amc.dynamic_validator import DynamicOutcome
 from amc.logger import get_logger
 from amc.parser import FunctionInfo
 
@@ -77,10 +78,12 @@ class BugReport:
     violated_property: str
     counterexample: Counterexample
     call_chain: list[str]
-    reproducer: str | None   # C code that triggers the bug
-    reasoning_trail: str     # step-by-step explanation
-    confidence: str          # "confirmed" | "likely" | "possible"
+    reproducer: str | None        # C code that triggers the bug
+    reasoning_trail: str          # step-by-step explanation
+    confidence: str               # "confirmed_dynamic" | "confirmed_bmc" | "likely" | "possible"
     cex_outcome: CExOutcome | None = None
+    dynamic_outcome: DynamicOutcome | None = None
+    dynamic_signal: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +101,8 @@ class BugReport:
             "reasoning_trail": self.reasoning_trail,
             "confidence": self.confidence,
             "cex_outcome": self.cex_outcome.value if self.cex_outcome else None,
+            "dynamic_outcome": self.dynamic_outcome.value if self.dynamic_outcome else None,
+            "dynamic_signal": self.dynamic_signal,
         }
 
 
@@ -127,16 +132,19 @@ class BugReporter:
         cex = validation_result.counterexample
         bug_type = _classify_bug_type(cex.failing_property)
 
-        # Determine confidence:
-        # - call chain found → "confirmed"
-        # - no call chain but entry function → "confirmed"
-        # - over-refinement triggered → "likely"
-        if validation_result.caller_path:
-            confidence = "confirmed"
+        # Determine confidence (highest tier wins):
+        #   confirmed_dynamic — runtime fault observed by the dynamic harness
+        #   confirmed_bmc     — BMC + caller reachability / entry function
+        #   likely            — over-refinement guard triggered
+        dynamic = validation_result.dynamic_result
+        if dynamic and dynamic.outcome == DynamicOutcome.CONFIRMED:
+            confidence = "confirmed_dynamic"
+        elif validation_result.caller_path:
+            confidence = "confirmed_bmc"
         elif "over-refined" in validation_result.reasoning.lower():
             confidence = "likely"
         else:
-            confidence = "confirmed"
+            confidence = "confirmed_bmc"
 
         # Build reasoning trail
         reasoning_parts: list[str] = [
@@ -154,6 +162,7 @@ class BugReporter:
 
         reasoning_trail = "\n".join(reasoning_parts)
 
+        dynamic = validation_result.dynamic_result
         report = BugReport(
             driver_name="",  # filled in by save_report
             function_name=validation_result.function_name,
@@ -165,6 +174,8 @@ class BugReporter:
             reasoning_trail=reasoning_trail,
             confidence=confidence,
             cex_outcome=validation_result.outcome,
+            dynamic_outcome=dynamic.outcome if dynamic else None,
+            dynamic_signal=dynamic.signal_name if dynamic else None,
         )
         return report
 
@@ -211,6 +222,11 @@ class BugReporter:
                 lines.append(f"  Function: {r.function_name}")
                 lines.append(f"  Property: {r.violated_property}")
                 lines.append(f"  Confidence: {r.confidence}")
+                if r.dynamic_outcome is not None:
+                    dyn_str = r.dynamic_outcome.value
+                    if r.dynamic_signal:
+                        dyn_str += f" signal={r.dynamic_signal}"
+                    lines.append(f"  Dynamic: {dyn_str}")
                 if r.call_chain:
                     lines.append(f"  Call chain: {' → '.join(r.call_chain)}")
                 if r.counterexample.variable_assignments:

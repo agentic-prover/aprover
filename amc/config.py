@@ -45,6 +45,11 @@ class Config:
     skip_refinement: bool = False    # filtering-only ablation: classify spurious but skip spec update + caller requeue
     max_requeue_per_function: int = 3  # global cap on how many times a single function can be re-queued
 
+    # Dynamic validation settings (Phase 3 Stage 3)
+    enable_dynamic_validation: bool = False  # compile and run a GCC harness to confirm real faults
+    dynamic_validation_timeout: int = 30     # seconds to allow the compiled harness to run
+    dynamic_cc_path: str = "gcc"             # C compiler for dynamic harness compilation
+
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly."""
         if self.llm_api_key:
@@ -73,4 +78,7 @@ class Config:
             include_dirs=[d for d in os.environ.get("AMC_INCLUDE_DIRS", "").split(":") if d],
             cc_path=os.environ.get("AMC_CC_PATH", "cc"),
             preprocess=os.environ.get("AMC_PREPROCESS", "false").lower() == "true",
+            enable_dynamic_validation=os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION", "false").lower() == "true",
+            dynamic_validation_timeout=int(os.environ.get("AMC_DYNAMIC_VALIDATION_TIMEOUT", "30")),
+            dynamic_cc_path=os.environ.get("AMC_DYNAMIC_CC_PATH", "gcc"),
         )

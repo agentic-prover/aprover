@@ -483,7 +483,7 @@ def test_bug_report_creation(tmp_path: Path):
     assert report.bug_type == "memory_safety"  # "array-bounds" → memory_safety
     assert report.violated_property == "array-bounds.1"
     assert report.call_chain == ["system_entry", "rb_write"]
-    assert report.confidence in ("confirmed", "likely", "possible")
+    assert report.confidence in ("confirmed_dynamic", "confirmed_bmc", "likely", "possible")
     assert report.reproducer is not None
     assert "reasoning" in report.reasoning_trail.lower() or len(report.reasoning_trail) > 0
 
