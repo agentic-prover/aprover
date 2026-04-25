@@ -168,6 +168,7 @@ class CExValidator:
         parsed_file: ParsedCFile,
         driver_name: str,
         cross_file_callers: set[str] | None = None,
+        cross_file_caller_contexts: "dict[str, list[tuple[FunctionInfo, ParsedCFile]]] | None" = None,
     ) -> ValidationResult:
         """
         Validate a counterexample.
@@ -188,12 +189,77 @@ class CExValidator:
                 cross_file_callers and func_name in cross_file_callers
             )
             if has_cross_file_caller:
-                # Callers exist in other files — not a true system entry point.
-                # We cannot run reachability against them (no parsed body), so
-                # report as confirmed_bmc with a note about the scope limit.
+                # Callers exist in other files — run CBMC reachability against
+                # them using their own ParsedCFile context (if available).
+                cross_contexts = (
+                    cross_file_caller_contexts.get(func_name, [])
+                    if cross_file_caller_contexts else []
+                )
+                reachable_cross: list[tuple[str, FunctionInfo, ParsedCFile]] = []
+                for caller_fi, caller_parsed in cross_contexts:
+                    caller_spec = all_specs.get(
+                        caller_fi.name,
+                        Spec(function_name=caller_fi.name, precondition="true", postcondition="true"),
+                    )
+                    can_reach = self._check_caller_reachability(
+                        caller=caller_fi,
+                        callee_name=func_name,
+                        counterexample=counterexample,
+                        callee_spec=spec,
+                        parsed_file=caller_parsed,
+                        driver_name=driver_name,
+                        caller_spec=caller_spec,
+                        all_specs=all_specs,
+                    )
+                    if can_reach:
+                        logger.info(
+                            "Cross-file caller '%s' CAN reach '%s' CEx state",
+                            caller_fi.name, func_name,
+                        )
+                        reachable_cross.append((caller_fi.name, caller_fi, caller_parsed))
+
+                if reachable_cross:
+                    caller_name_cf, caller_fi_cf, caller_parsed_cf = reachable_cross[0]
+                    caller_all_funcs_cf = dict(caller_parsed_cf.functions)
+                    is_system_reachable, call_chain = self._propagate_upward(
+                        func_name=caller_name_cf,
+                        counterexample=counterexample,
+                        all_funcs=caller_all_funcs_cf,
+                        all_specs=all_specs,
+                        parsed_file=caller_parsed_cf,
+                        driver_name=driver_name,
+                        cross_file_callers=cross_file_callers,
+                        cross_file_caller_contexts=cross_file_caller_contexts,
+                    )
+                    full_chain = call_chain + [func_name]
+                    reproducer = self._generate_system_entry_reproducer(
+                        call_chain=full_chain,
+                        counterexample=counterexample,
+                        all_funcs=all_funcs,
+                        parsed_file=parsed_file,
+                    )
+                    result = ValidationResult(
+                        function_name=func_name,
+                        counterexample=counterexample,
+                        caller_path=full_chain,
+                        system_entry_input=reproducer,
+                        refinement_history=[],
+                        final_precondition=None,
+                        reasoning=(
+                            f"Cross-file caller '{caller_name_cf}' can reach the CEx state. "
+                            f"Call chain: {full_chain}."
+                            + (" Full chain traced to system entry." if is_system_reachable else "")
+                        ),
+                        outcome=CExOutcome.REAL_BUG,
+                        system_entry_reached=is_system_reachable,
+                    )
+                    self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+                    return result
+
+                # Cross-file callers exist but none confirmed reachable — fall back
                 logger.info(
-                    "'%s' has no in-file callers but has cross-file callers — "
-                    "treating as confirmed_bmc (cross-file reachability not checked)",
+                    "'%s' has cross-file callers but none confirmed reachable — "
+                    "reporting as confirmed_bmc",
                     func_name,
                 )
                 reproducer = self._generate_system_entry_reproducer(
@@ -210,10 +276,8 @@ class CExValidator:
                     refinement_history=[],
                     final_precondition=None,
                     reasoning=(
-                        f"'{func_name}' has no callers within the analyzed file but "
-                        "is called from other files (cross-file callers detected). "
-                        "Cannot trace reachability across file boundaries — "
-                        "reporting as confirmed_bmc."
+                        f"'{func_name}' has cross-file callers but no reachability "
+                        "was confirmed via CBMC — reporting as confirmed_bmc."
                     ),
                     outcome=CExOutcome.REAL_BUG,
                     system_entry_reached=False,
@@ -345,6 +409,7 @@ class CExValidator:
                 parsed_file=parsed_file,
                 driver_name=driver_name,
                 cross_file_callers=cross_file_callers,
+                cross_file_caller_contexts=cross_file_caller_contexts,
             )
             # Append the current function to the chain
             full_chain = call_chain + [func_name]
@@ -684,6 +749,7 @@ class CExValidator:
         driver_name: str,
         visited: set[str] | None = None,
         cross_file_callers: set[str] | None = None,
+        cross_file_caller_contexts: "dict[str, list[tuple[FunctionInfo, ParsedCFile]]] | None" = None,
     ) -> tuple[bool, list[str]]:
         """
         Recursively propagate upward through callers.
@@ -691,6 +757,8 @@ class CExValidator:
         Returns (is_reachable_from_entry, call_chain).
         A function is a true system entry point only if it has no callers in
         all_funcs AND no cross-file callers are known for it.
+        When cross_file_caller_contexts is available, also runs CBMC reachability
+        against cross-file callers and continues propagation in their file context.
         """
         if visited is None:
             visited = set()
@@ -701,8 +769,48 @@ class CExValidator:
         callers = self._find_callers(func_name, all_funcs)
 
         if not callers:
-            # No in-file callers — only a true entry if no cross-file callers either
+            # No in-file callers — check for cross-file callers
             if cross_file_callers and func_name in cross_file_callers:
+                # Try to continue the chain upward through cross-file callers
+                cross_contexts = (
+                    cross_file_caller_contexts.get(func_name, [])
+                    if cross_file_caller_contexts else []
+                )
+                for caller_fi, caller_parsed in cross_contexts:
+                    if caller_fi.name in visited:
+                        continue
+                    caller_spec = all_specs.get(
+                        caller_fi.name,
+                        Spec(function_name=caller_fi.name, precondition="true", postcondition="true"),
+                    )
+                    can_reach = self._check_caller_reachability(
+                        caller=caller_fi,
+                        callee_name=func_name,
+                        counterexample=counterexample,
+                        callee_spec=all_specs.get(
+                            func_name,
+                            Spec(function_name=func_name, precondition="true", postcondition="true"),
+                        ),
+                        parsed_file=caller_parsed,
+                        driver_name=driver_name,
+                        caller_spec=caller_spec,
+                        all_specs=all_specs,
+                    )
+                    if can_reach:
+                        reachable, chain = self._propagate_upward(
+                            func_name=caller_fi.name,
+                            counterexample=counterexample,
+                            all_funcs=dict(caller_parsed.functions),
+                            all_specs=all_specs,
+                            parsed_file=caller_parsed,
+                            driver_name=driver_name,
+                            visited=visited,
+                            cross_file_callers=cross_file_callers,
+                            cross_file_caller_contexts=cross_file_caller_contexts,
+                        )
+                        if reachable:
+                            return True, chain + [func_name]
+                # No cross-file chain leads to entry
                 return False, [func_name]
             return True, [func_name]
 
@@ -737,6 +845,7 @@ class CExValidator:
                     driver_name=driver_name,
                     visited=visited,
                     cross_file_callers=cross_file_callers,
+                    cross_file_caller_contexts=cross_file_caller_contexts,
                 )
                 if reachable:
                     return True, chain + [func_name]

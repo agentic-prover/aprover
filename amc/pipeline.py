@@ -84,6 +84,7 @@ class AMCPipeline:
         driver_name: str,
         domain_knowledge: str = "",
         cross_file_callers: set[str] | None = None,
+        cross_file_caller_contexts: dict[str, list[tuple[FunctionInfo, ParsedCFile]]] | None = None,
     ) -> list[BugReport]:
         """
         Run the full AMC pipeline.
@@ -207,6 +208,7 @@ class AMCPipeline:
                     parsed_file=parsed,
                     driver_name=driver_name,
                     cross_file_callers=cross_file_callers,
+                    cross_file_caller_contexts=cross_file_caller_contexts,
                 )
 
                 # Always persist the classification result for this counterexample
@@ -518,13 +520,14 @@ class AMCPipeline:
 
         # ------------------------------------------------------------------
         # Pass 1: preprocess + parse every file to build a global call graph.
-        # This lets us tell each file's pipeline which of its root functions
-        # actually have callers in other files, preventing those functions
-        # from being incorrectly classified as system entry points.
+        # Caches expanded source and ParsedCFile objects so Pass 2 can:
+        #   (a) skip re-running cc -E
+        #   (b) run CBMC reachability queries against cross-file callers
         # ------------------------------------------------------------------
-        file_expanded: dict[str, str] = {}        # stem → preprocessed source
-        file_defined: dict[str, set[str]] = {}    # stem → function names defined
-        file_callees: dict[str, set[str]] = {}    # stem → all function names called
+        file_expanded: dict[str, str] = {}           # stem → preprocessed source
+        file_defined: dict[str, set[str]] = {}       # stem → function names defined
+        file_callees: dict[str, set[str]] = {}       # stem → all function names called
+        file_parsed_c: dict[str, ParsedCFile] = {}   # stem → ParsedCFile
 
         logger.info("Pass 1: building global call graph across %d files", len(c_files))
         for c_file in c_files:
@@ -542,28 +545,44 @@ class AMCPipeline:
                 continue
             stem = c_file.stem
             file_expanded[stem] = expanded
+            file_parsed_c[stem] = parsed_pass1
             file_defined[stem] = set(parsed_pass1.functions.keys())
             file_callees[stem] = set().union(
                 *(fi.callees for fi in parsed_pass1.functions.values())
             )
 
-        # For each stem S, a function F has a cross-file caller if F is defined
-        # in S and appears in the callees set of any other stem T.
-        cross_file_callers_for: dict[str, set[str]] = {}
+        # Global set: all functions that have callers in at least one other file.
+        global_cross_file_callers: set[str] = set()
         for stem, defined in file_defined.items():
-            cross_file_callers_for[stem] = {
-                fn for fn in defined
-                if any(
-                    fn in file_callees[other]
-                    for other in file_callees
-                    if other != stem
-                )
-            }
-            if cross_file_callers_for[stem]:
-                logger.debug(
-                    "Cross-file callers detected in %s: %s",
-                    stem, cross_file_callers_for[stem],
-                )
+            for fn in defined:
+                if any(fn in file_callees[other] for other in file_callees if other != stem):
+                    global_cross_file_callers.add(fn)
+
+        # Global contexts: for each callee function name, all (caller_FunctionInfo,
+        # caller_ParsedCFile) pairs from OTHER files.  Used by CExValidator to run
+        # CBMC reachability queries against cross-file callers.
+        global_cross_file_caller_contexts: dict[
+            str, list[tuple[FunctionInfo, ParsedCFile]]
+        ] = {}
+        for stem_a, parsed_a in file_parsed_c.items():
+            for caller_fi in parsed_a.functions.values():
+                for callee_name in caller_fi.callees:
+                    # Only index if the callee is defined in a different file
+                    if any(
+                        callee_name in file_defined[stem_b]
+                        for stem_b in file_defined
+                        if stem_b != stem_a
+                    ):
+                        global_cross_file_caller_contexts.setdefault(
+                            callee_name, []
+                        ).append((caller_fi, parsed_a))
+
+        logger.info(
+            "Pass 1 complete: %d functions have cross-file callers; "
+            "%d cross-file caller relationships indexed",
+            len(global_cross_file_callers),
+            sum(len(v) for v in global_cross_file_caller_contexts.values()),
+        )
 
         # ------------------------------------------------------------------
         # Pass 2: run the full AMC pipeline per file using cached preprocessed
@@ -599,7 +618,8 @@ class AMCPipeline:
                     source_file=tmp_path,
                     driver_name=file_driver,
                     domain_knowledge=domain_knowledge,
-                    cross_file_callers=cross_file_callers,
+                    cross_file_callers=global_cross_file_callers,
+                    cross_file_caller_contexts=global_cross_file_caller_contexts,
                 )
             finally:
                 os.unlink(tmp_path)
