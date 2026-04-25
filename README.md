@@ -65,6 +65,12 @@ uv run amc generate --source examples/simple_driver.c --driver simple_driver
 
 # Run a corpus
 uv run amc eval --corpus path/to/corpus.json --output artifacts/
+
+# Verify a two-file cross-file demo (confirmed_system_entry across files)
+uv run amc verify-dir \
+  --source-dir examples/cross_file_demo \
+  --driver cross_file_demo \
+  --output artifacts/cross_file_demo
 ```
 
 Artifacts — generated specs, BMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and are intended to be inspected or diffed.
@@ -99,6 +105,7 @@ The `examples/` directory contains synthetic targets used to validate the pipeli
 | `sensor_hub.c` | CEGAR demo: spurious counterexample triggers refinement, reveals real bug |
 | `block_device.c` | Integer overflow in `blk_seek` |
 | `memory_allocator.c` | Null dereference in `alloc_free` |
+| `cross_file_demo/` | Two-file demo of cross-file `confirmed_system_entry`: `apply_op` (null fn-ptr in `libmath.c`) traced to `system_entry` (in `main.c`) |
 | `vibeos/vibeos_memory.c` | VibeOS kernel allocator — `calloc` overflow and `malloc` wraparound |
 | `vibeos/vibeos_string.c` | VibeOS string functions — 16 unbounded-loop findings |
 | `vibeos/vibeos_printf.c` | VibeOS printf — `print_signed` `INT64_MIN` UB |
@@ -137,7 +144,7 @@ amc verify-dir \
 
 **FilteringOnly baseline (RQ3).** On the five wrapper modules, the `--skip-refinement` ablation (classify only, no spec update, no caller re-queue) reported 59 findings vs. AMC's 41 — a 44% increase. Refinement acts as a precision filter on this corpus, not a recall enhancer.
 
-**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 applies a three-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined, and (3) an optional Stage 3 GCC harness directly confirms the fault at runtime. Each confirmed real bug is assigned one of four evidence tiers: `confirmed_dynamic` (runtime fault observed), `confirmed_system_entry` (full call chain traced back to a function with no callers in any file), `confirmed_bmc` (reachability confirmed from at least one caller via BMC), or `likely` (over-refinement guard triggered). In whole-codebase mode (`verify-dir`), AMC performs a two-pass global call-graph construction so that functions whose callers reside in other files are not misclassified as system entry points. A manual precision audit of a sampled subset is the immediate next step.
+**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 applies a three-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined, and (3) an optional Stage 3 GCC harness directly confirms the fault at runtime. Each confirmed real bug is assigned one of four evidence tiers: `confirmed_dynamic` (runtime fault observed), `confirmed_system_entry` (full call chain traced back to a function with no callers in any file), `confirmed_bmc` (reachability confirmed from at least one caller via BMC), or `likely` (over-refinement guard triggered). In whole-codebase mode (`verify-dir`), AMC performs a two-pass global call-graph construction so that functions whose callers reside in other files are not misclassified as system entry points. The `confirmed_system_entry` tier is demonstrated end-to-end in `examples/cross_file_demo/`: `apply_op` (null function-pointer dereference in `libmath.c`) is confirmed reachable from `system_entry` in `main.c` via cross-file CBMC reachability, yielding `confirmed_system_entry` with chain `system_entry → apply_op`. A manual precision audit of a sampled subset is the immediate next step.
 
 AMC independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating at least one finding against an independent source.
 
@@ -191,8 +198,8 @@ tests/                  Unit and integration tests
 
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C verification, all four agentic components, filtering-only ablation (`--skip-refinement`), parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), two-pass global call-graph construction for cross-file caller awareness, callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime), four-tier confidence reporting (`confirmed_dynamic` > `confirmed_system_entry` > `confirmed_bmc` > `likely`), prompt caching.
-- **Partial:** Cross-file caller *detection* is implemented (Pass 1 global graph); cross-file caller *reachability queries* (running CBMC against a caller in another file) are not yet implemented — cross-file-called functions are reported as `confirmed_bmc` rather than `confirmed_system_entry`. External callee postconditions are LLM-generated and may be over-permissive.
+- **Working:** C verification, all four agentic components, filtering-only ablation (`--skip-refinement`), parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), two-pass global call-graph construction for cross-file caller awareness, cross-file CBMC reachability queries (chain continues through caller files to a true system entry, promoting findings to `confirmed_system_entry`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime), four-tier confidence reporting (`confirmed_dynamic` > `confirmed_system_entry` > `confirmed_bmc` > `likely`), prompt caching.
+- **Partial:** External callee postconditions are LLM-generated and may be over-permissive.
 - **Planned:** Mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
 
 ## License

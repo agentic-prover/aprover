@@ -28,7 +28,7 @@ from amc.dynamic_validator import DynamicOutcome, DynamicValidationResult, Dynam
 from amc.harness_generator import HarnessGenerator
 from amc.llm import LLMClient, LLMError
 from amc.logger import get_logger
-from amc.parser import FunctionInfo, ParsedCFile
+from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
 from amc.prompts import (
     OVER_REFINEMENT_CHECK_PROMPT,
     REACHABILITY_PROMPT,
@@ -210,6 +210,7 @@ class CExValidator:
                         driver_name=driver_name,
                         caller_spec=caller_spec,
                         all_specs=all_specs,
+                        callee_sig=func.signature,
                     )
                     if can_reach:
                         logger.info(
@@ -570,6 +571,7 @@ class CExValidator:
         driver_name: str,
         caller_spec: "Spec | None" = None,
         all_specs: "dict[str, Spec] | None" = None,
+        callee_sig: "FunctionSignature | None" = None,
     ) -> bool:
         """
         Check if ``caller`` can produce the state described by ``counterexample``
@@ -592,6 +594,7 @@ class CExValidator:
                 driver_name=driver_name,
                 caller_spec=caller_spec,
                 all_specs=all_specs,
+                callee_sig=callee_sig,
             )
         else:
             return self._check_reachability_with_llm(
@@ -612,6 +615,7 @@ class CExValidator:
         driver_name: str,
         caller_spec: "Spec | None" = None,
         all_specs: "dict[str, Spec] | None" = None,
+        callee_sig: "FunctionSignature | None" = None,
     ) -> bool:
         """
         Generate a reachability harness and run CBMC on it.
@@ -640,6 +644,7 @@ class CExValidator:
                 caller_spec=caller_spec,
                 parsed_file=parsed_file,
                 all_specs=all_specs,
+                callee_sig=callee_sig,
             )
         except Exception as exc:
             logger.warning(
@@ -787,6 +792,9 @@ class CExValidator:
                         caller_fi.name,
                         Spec(function_name=caller_fi.name, precondition="true", postcondition="true"),
                     )
+                    # callee_sig: the signature of func_name (the callee being checked).
+                    # all_funcs contains FunctionInfo for funcs in the current file scope.
+                    _callee_fi = all_funcs.get(func_name)
                     can_reach = self._check_caller_reachability(
                         caller=caller_fi,
                         callee_name=func_name,
@@ -799,6 +807,7 @@ class CExValidator:
                         driver_name=driver_name,
                         caller_spec=caller_spec,
                         all_specs=all_specs,
+                        callee_sig=_callee_fi.signature if _callee_fi else None,
                     )
                     if can_reach:
                         reachable, chain = self._propagate_upward(

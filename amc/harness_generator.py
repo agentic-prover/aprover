@@ -17,7 +17,7 @@ from typing import Optional
 
 from amc.config import Config
 from amc.dsl_to_cbmc import postcond_to_assert, precond_to_assume
-from amc.parser import FunctionInfo, ParsedCFile
+from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
 from amc.spec import Spec
 
 
@@ -352,6 +352,7 @@ class HarnessGenerator:
         caller_spec: Spec,
         parsed_file: ParsedCFile,
         all_specs: Optional[dict] = None,
+        callee_sig: Optional["FunctionSignature"] = None,
     ) -> str:
         """
         Generate a CBMC harness to check whether ``caller`` can produce the
@@ -386,19 +387,35 @@ class HarnessGenerator:
         # --- 3. Generate stubs for each callee ---
         # The reachability stub for ``callee_name`` constrains state via __CPROVER_assume.
         # All other callees get normal stubs.
+        # callee_name always gets the reachability stub — even when it is defined in
+        # a *different* file (cross-file case).  In that case we fall back to the
+        # caller-provided ``callee_sig``.
         stub_sections: list[str] = []
+        stubs_to_substitute: set[str] = set()
         for cname in sorted(defined_callees):
             if cname == callee_name:
                 stub_src = self._generate_reachability_stub(
                     cname, counterexample, parsed_file
                 )
+                stubs_to_substitute.add(cname)
             else:
                 callee_spec = (all_specs or {}).get(cname)
                 stub_src = _generate_stub(cname, callee_spec, parsed_file)
+                stubs_to_substitute.add(cname)
             stub_sections.append(stub_src)
 
+        # If callee_name is external (not defined in parsed_file), still emit the
+        # reachability stub so that assert(0) inside it can be reached by CBMC.
+        if callee_name not in defined_callees and callee_name in caller.callees:
+            reach_sig = callee_sig or parsed_file.functions.get(callee_name)
+            stub_src = self._generate_reachability_stub(
+                callee_name, counterexample, parsed_file, override_sig=reach_sig
+            )
+            stub_sections.append(stub_src)
+            stubs_to_substitute.add(callee_name)
+
         # --- 4. Build the function body with callee calls substituted ---
-        body_with_stubs = _substitute_callee_calls(caller.body, defined_callees)
+        body_with_stubs = _substitute_callee_calls(caller.body, stubs_to_substitute)
 
         # Reconstruct the full function definition
         params_str = _params_str(sig.parameters)
@@ -412,8 +429,13 @@ class HarnessGenerator:
         assume_stmts = precond_to_assume(caller_spec.precondition, param_names)
 
         # --- 7. Call arguments ---
+        # Filter lone "void" params — `f(void)` means no params in C.
+        real_sig_params = [
+            (pt, pn) for pt, pn in sig.parameters
+            if not (pt.strip() == "void" and not pn.strip())
+        ]
         call_args = ", ".join(
-            (pname if pname else "_") for _, pname in sig.parameters
+            (pname if pname else "_") for _, pname in real_sig_params
         )
         ret_type = sig.return_type.strip()
 
@@ -498,16 +520,24 @@ class HarnessGenerator:
         callee_name: str,
         counterexample: "Counterexample",
         parsed_file: ParsedCFile,
+        override_sig: Optional["FunctionSignature"] = None,
     ) -> str:
         """
         Generate a stub for ``callee_name`` that uses ``__CPROVER_assume`` to
         constrain its arguments to match the counterexample state.
+
+        ``override_sig`` is used when the callee is defined in a different file
+        (cross-file case) and its signature is not in ``parsed_file``.
         """
-        sig = parsed_file.functions.get(callee_name)
+        sig = parsed_file.functions.get(callee_name) or override_sig
         if sig is None:
+            # Last resort: emit a minimal int-returning stub with assert(0).
             return (
-                f"/* Reachability stub for unknown callee: {callee_name} */\n"
-                f"/* (no signature available; skipping stub) */"
+                f"/* Reachability stub for external callee: {callee_name} */\n"
+                f"int {callee_name}_stub(void) {{\n"
+                f"    assert(0); /* reachability witness */\n"
+                f"    return 0;\n"
+                f"}}"
             )
 
         ret_type = sig.return_type.strip()

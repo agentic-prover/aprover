@@ -954,3 +954,282 @@ def test_llm_only_reachability(tmp_path: Path):
 
     # LLM said reachable → real bug
     assert result.is_real_bug is True
+
+
+# ---------------------------------------------------------------------------
+# Cross-file reachability tests (Phase 3 — multi-file call graph)
+# ---------------------------------------------------------------------------
+
+
+def _make_parsed_file(
+    path: str,
+    func_names: list[str],
+    call_graph: dict[str, set[str]] | None = None,
+) -> "ParsedCFile":
+    """Build a minimal ParsedCFile with stub signatures for the given functions."""
+    from amc.parser import FunctionSignature, ParsedCFile
+
+    sigs = {
+        n: FunctionSignature(name=n, return_type="int", parameters=[("int", "x")])
+        for n in func_names
+    }
+    bodies = {n: f"{{ return 0; /* {n} */ }}" for n in func_names}
+    cg = call_graph or {n: set() for n in func_names}
+    return ParsedCFile(path=path, functions=sigs, call_graph=cg, function_bodies=bodies)
+
+
+def test_cross_file_caller_confirmed_reachable_real_bug(tmp_path: Path):
+    """
+    A function with no in-file callers but a cross-file caller: when CBMC
+    confirms the cross-file caller can reach the CEx state, the result is
+    REAL_BUG with system_entry_reached=True (the cross-file caller itself
+    has no callers, so it is a system entry).
+    """
+    from amc.cbmc import CBMCResult, Counterexample
+    from amc.cex_validator import CExOutcome, CExValidator
+    from amc.harness_generator import HarnessGenerator
+    from amc.parser import FunctionInfo, FunctionSignature
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    # The file under verification: only "leaf_fn", no callers in this file.
+    leaf_fn = _make_func_info("leaf_fn", callees=set())
+    leaf_parsed = _make_parsed_file(
+        path="module_a.c",
+        func_names=["leaf_fn"],
+        call_graph={"leaf_fn": set()},
+    )
+    all_funcs = {"leaf_fn": leaf_fn}
+    all_specs = {"leaf_fn": _make_spec("leaf_fn")}
+
+    # A caller in another file that calls leaf_fn.
+    caller_parsed = _make_parsed_file(
+        path="module_b.c",
+        func_names=["entry_fn"],
+        call_graph={"entry_fn": {"leaf_fn"}},
+    )
+    caller_fi = FunctionInfo(
+        name="entry_fn",
+        signature=FunctionSignature("entry_fn", "int", [("int", "x")]),
+        body="{ return leaf_fn(x); }",
+        callees={"leaf_fn"},
+        source_file="module_b.c",
+    )
+    all_specs["entry_fn"] = _make_spec("entry_fn")
+
+    cross_file_callers: set[str] = {"leaf_fn"}
+    cross_file_caller_contexts = {"leaf_fn": [(caller_fi, caller_parsed)]}
+
+    cex = _make_counterexample(
+        failing_property="overflow.1",
+        var_assignments={"x": "2147483647"},
+    )
+
+    # CBMC confirms reachability: not verified → counterexample found
+    mock_cbmc_reachable = CBMCResult(
+        verified=False,
+        counterexamples=[cex],
+        raw_output="",
+    )
+
+    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_reachable):
+        with patch("shutil.which", return_value="/usr/bin/cbmc"):
+            result = validator.validate(
+                func=leaf_fn,
+                spec=_make_spec("leaf_fn"),
+                counterexample=cex,
+                all_funcs=all_funcs,
+                all_specs=all_specs,
+                parsed_file=leaf_parsed,
+                driver_name="test_driver",
+                cross_file_callers=cross_file_callers,
+                cross_file_caller_contexts=cross_file_caller_contexts,
+            )
+
+    assert result.outcome == CExOutcome.REAL_BUG
+    # entry_fn has no callers → system entry reached
+    assert result.system_entry_reached is True
+    assert "entry_fn" in result.caller_path
+    assert "leaf_fn" in result.caller_path
+
+
+def test_cross_file_caller_none_reachable_falls_back_to_confirmed_bmc(tmp_path: Path):
+    """
+    A function with no in-file callers but cross-file callers exist: when
+    CBMC says none of them can reach the CEx state, the result falls back
+    to REAL_BUG with system_entry_reached=False (confirmed_bmc tier).
+    """
+    from amc.cbmc import CBMCResult
+    from amc.cex_validator import CExOutcome, CExValidator
+    from amc.harness_generator import HarnessGenerator
+    from amc.parser import FunctionInfo, FunctionSignature
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    leaf_fn = _make_func_info("leaf_fn", callees=set())
+    leaf_parsed = _make_parsed_file(
+        path="module_a.c",
+        func_names=["leaf_fn"],
+        call_graph={"leaf_fn": set()},
+    )
+    all_funcs = {"leaf_fn": leaf_fn}
+    all_specs = {"leaf_fn": _make_spec("leaf_fn")}
+
+    caller_parsed = _make_parsed_file(
+        path="module_b.c",
+        func_names=["entry_fn"],
+        call_graph={"entry_fn": {"leaf_fn"}},
+    )
+    caller_fi = FunctionInfo(
+        name="entry_fn",
+        signature=FunctionSignature("entry_fn", "int", [("int", "x")]),
+        body="{ return leaf_fn(x); }",
+        callees={"leaf_fn"},
+        source_file="module_b.c",
+    )
+    all_specs["entry_fn"] = _make_spec("entry_fn")
+
+    cross_file_callers: set[str] = {"leaf_fn"}
+    cross_file_caller_contexts = {"leaf_fn": [(caller_fi, caller_parsed)]}
+
+    cex = _make_counterexample(
+        failing_property="overflow.1",
+        var_assignments={"x": "2147483647"},
+    )
+
+    # CBMC verifies → assert(0) never reached → caller CANNOT reach CEx state
+    mock_cbmc_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
+
+    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_verified):
+        with patch("shutil.which", return_value="/usr/bin/cbmc"):
+            result = validator.validate(
+                func=leaf_fn,
+                spec=_make_spec("leaf_fn"),
+                counterexample=cex,
+                all_funcs=all_funcs,
+                all_specs=all_specs,
+                parsed_file=leaf_parsed,
+                driver_name="test_driver",
+                cross_file_callers=cross_file_callers,
+                cross_file_caller_contexts=cross_file_caller_contexts,
+            )
+
+    assert result.outcome == CExOutcome.REAL_BUG
+    assert result.system_entry_reached is False
+
+
+def test_cross_file_caller_contexts_empty_falls_back_to_confirmed_bmc(tmp_path: Path):
+    """
+    When cross_file_callers indicates callers exist but cross_file_caller_contexts
+    has no entries for the function, fall back to confirmed_bmc.
+    """
+    from amc.cbmc import CBMCResult
+    from amc.cex_validator import CExOutcome, CExValidator
+    from amc.harness_generator import HarnessGenerator
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    leaf_fn = _make_func_info("leaf_fn", callees=set())
+    leaf_parsed = _make_parsed_file(
+        path="module_a.c",
+        func_names=["leaf_fn"],
+        call_graph={"leaf_fn": set()},
+    )
+    all_funcs = {"leaf_fn": leaf_fn}
+    all_specs = {"leaf_fn": _make_spec("leaf_fn")}
+
+    cex = _make_counterexample(
+        failing_property="overflow.1",
+        var_assignments={"x": "0"},
+    )
+
+    # cross_file_callers says callers exist, but contexts dict is empty
+    with patch("shutil.which", return_value="/usr/bin/cbmc"):
+        result = validator.validate(
+            func=leaf_fn,
+            spec=_make_spec("leaf_fn"),
+            counterexample=cex,
+            all_funcs=all_funcs,
+            all_specs=all_specs,
+            parsed_file=leaf_parsed,
+            driver_name="test_driver",
+            cross_file_callers={"leaf_fn"},
+            cross_file_caller_contexts={},  # no contexts available
+        )
+
+    assert result.outcome == CExOutcome.REAL_BUG
+    assert result.system_entry_reached is False
+
+
+def test_propagate_upward_crosses_file_boundary_to_entry(tmp_path: Path):
+    """
+    _propagate_upward should cross file boundaries: if func_X has no in-file
+    callers but has a cross-file caller entry_fn (which itself has no callers),
+    the chain is (True, ['entry_fn', 'func_X']).
+    """
+    from amc.cbmc import CBMCResult, Counterexample
+    from amc.cex_validator import CExValidator
+    from amc.harness_generator import HarnessGenerator
+    from amc.parser import FunctionInfo, FunctionSignature
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    func_x_parsed = _make_parsed_file(
+        path="module_a.c",
+        func_names=["func_x"],
+        call_graph={"func_x": set()},
+    )
+    all_funcs_a = {"func_x": func_x_parsed.get_function_info("func_x")}
+
+    caller_parsed = _make_parsed_file(
+        path="module_b.c",
+        func_names=["entry_fn"],
+        call_graph={"entry_fn": {"func_x"}},
+    )
+    caller_fi = FunctionInfo(
+        name="entry_fn",
+        signature=FunctionSignature("entry_fn", "void", []),
+        body="{ func_x(0); }",
+        callees={"func_x"},
+        source_file="module_b.c",
+    )
+    all_specs = {
+        "func_x": _make_spec("func_x"),
+        "entry_fn": _make_spec("entry_fn"),
+    }
+
+    cex = _make_counterexample(failing_property="overflow.1", var_assignments={"x": "0"})
+    mock_cbmc_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
+
+    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_reachable):
+        with patch("shutil.which", return_value="/usr/bin/cbmc"):
+            reachable, chain = validator._propagate_upward(
+                func_name="func_x",
+                counterexample=cex,
+                all_funcs=all_funcs_a,
+                all_specs=all_specs,
+                parsed_file=func_x_parsed,
+                driver_name="test_driver",
+                cross_file_callers={"func_x"},
+                cross_file_caller_contexts={"func_x": [(caller_fi, caller_parsed)]},
+            )
+
+    assert reachable is True
+    assert "entry_fn" in chain
+    assert "func_x" in chain
