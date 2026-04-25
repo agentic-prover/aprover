@@ -77,16 +77,23 @@ class LLMClient:
                     model=self.config.llm_model,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    system=system_prompt,
+                    system=[{
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }],
                     messages=[{"role": "user", "content": user_prompt}],
                 )
                 # Log token usage
                 usage = getattr(response, "usage", None)
                 if usage:
                     logger.debug(
-                        "LLM usage: input_tokens=%d output_tokens=%d",
+                        "LLM usage: input_tokens=%d output_tokens=%d "
+                        "cache_creation=%d cache_read=%d",
                         getattr(usage, "input_tokens", 0),
                         getattr(usage, "output_tokens", 0),
+                        getattr(usage, "cache_creation_input_tokens", 0),
+                        getattr(usage, "cache_read_input_tokens", 0),
                     )
                 # Extract text
                 text = ""

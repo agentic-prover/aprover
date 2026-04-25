@@ -351,6 +351,7 @@ class HarnessGenerator:
         counterexample: "Counterexample",
         caller_spec: Spec,
         parsed_file: ParsedCFile,
+        all_specs: Optional[dict] = None,
     ) -> str:
         """
         Generate a CBMC harness to check whether ``caller`` can produce the
@@ -392,7 +393,8 @@ class HarnessGenerator:
                     cname, counterexample, parsed_file
                 )
             else:
-                stub_src = _generate_stub(cname, None, parsed_file)
+                callee_spec = (all_specs or {}).get(cname)
+                stub_src = _generate_stub(cname, callee_spec, parsed_file)
             stub_sections.append(stub_src)
 
         # --- 4. Build the function body with callee calls substituted ---
@@ -573,6 +575,186 @@ class HarnessGenerator:
 
         lines.append("}")
         return "\n".join(lines)
+
+    def generate_feasibility_harness(
+        self,
+        func: "FunctionInfo",
+        spec: Spec,
+        counterexample: "Counterexample",
+        parsed_file: ParsedCFile,
+        all_specs: Optional[dict] = None,
+    ) -> str:
+        """
+        Generate a CBMC harness for CEx feasibility checking (Phase 3 Stage 2).
+
+        Strategy (tiered):
+        1. Fix scalar inputs to CEx witness values — eliminates input-space search,
+           making inlining tractable.
+        2. Inline local callee bodies (available in parsed_file) — real joint
+           execution, no stub approximation for in-source callees.
+        3. Use postcondition-constrained stubs for external/hardware callees.
+
+        If CBMC finds a violation: CEx is feasible under real callee bodies.
+        If CBMC verifies: CEx relied on callee behaviour not achievable in real code.
+        """
+        fn_name = func.name
+        sig = func.signature
+
+        source_text = (
+            parsed_file.preprocessed_source
+            if parsed_file.preprocessed_source is not None
+            else _read_source(func.source_file)
+        )
+        type_decls = _extract_type_declarations(source_text, parsed_file)
+
+        # --- 1. Transitive local call closure ---
+        # All functions reachable from func that are defined in parsed_file.
+        local_closure = self._local_call_closure(fn_name, func, parsed_file)
+
+        # --- 2. External callees (need stubs) ---
+        all_local = local_closure | {fn_name}
+        external_callees: set[str] = set()
+        for name in all_local:
+            for callee in parsed_file.call_graph.get(name, set()):
+                if callee not in all_local:
+                    external_callees.add(callee)
+
+        # --- 3. Build stubs for external callees ---
+        stub_sections: list[str] = []
+        for cname in sorted(external_callees):
+            callee_spec = (all_specs or {}).get(cname)
+            stub_src = _generate_stub(cname, callee_spec, parsed_file)
+            stub_sections.append(stub_src)
+
+        # --- 4. Build real function definitions for local closure ---
+        # Substitute only external callee calls (local callees are real).
+        local_func_defs: list[str] = []
+        for cname in sorted(local_closure):
+            cfi = parsed_file.get_function_info(cname)
+            if cfi is None:
+                continue
+            cbody = _substitute_callee_calls(cfi.body, external_callees)
+            cparams = _params_str(cfi.signature.parameters)
+            local_func_defs.append(
+                f"/* inlined local callee: {cname} */\n"
+                f"{cfi.signature.return_type} {cname}({cparams})\n{cbody}"
+            )
+
+        # --- 5. Build func definition (substitute only external callee calls) ---
+        func_body = _substitute_callee_calls(func.body, external_callees)
+        params_str = _params_str(sig.parameters)
+        func_def = f"{sig.return_type} {fn_name}({params_str})\n{func_body}"
+
+        # --- 6. Build fixed-input declarations from CEx witness values ---
+        fixed_decls: list[str] = []
+        nondet_decls: list[str] = []
+        real_params = [
+            (pt, pn) for pt, pn in sig.parameters
+            if not (pt.strip() == "void" and not pn.strip())
+        ]
+        for ptype, pname in real_params:
+            if not pname:
+                continue
+            ptype_s = ptype.strip()
+            is_pointer = "*" in ptype_s
+            witness = counterexample.variable_assignments.get(pname, "")
+            if not is_pointer and witness and _is_simple_value(witness):
+                fixed_decls.append(f"    {ptype_s} {pname} = {witness};  /* CEx witness */")
+            elif is_pointer:
+                # Pointer: allocate a local value on the stack (conservative)
+                base_type = ptype_s.rstrip("*").strip()
+                if base_type.lower() in ("void", "const void"):
+                    nondet_decls.append(f"    {ptype_s} {pname} = NULL;")
+                else:
+                    local_name = f"_{pname}_val"
+                    nondet_decls.append(f"    {base_type} {local_name};")
+                    nondet_decls.append(f"    {ptype_s} {pname} = &{local_name};")
+            else:
+                # Scalar without witness: uninitialized → nondet in CBMC
+                nondet_decls.append(f"    {ptype_s} {pname};")
+
+        # --- 7. Postcondition assertions ---
+        param_names = [pn for _, pn in real_params if pn]
+        assert_stmts = postcond_to_assert(spec.postcondition, param_names)
+        ret_type = sig.return_type.strip()
+        call_args = ", ".join(pn for _, pn in real_params if pn)
+
+        # --- 8. Assemble ---
+        sections: list[str] = []
+        sections.append(
+            f"/* Feasibility harness for '{fn_name}' — real callee bodies, fixed inputs */\n"
+            f"/* Generated by AMC Phase 3 Stage 2 */"
+        )
+
+        _stdlib_fns = {"malloc", "free", "calloc", "realloc", "abort", "exit"}
+        _stdio_fns  = {"printf", "fprintf", "sprintf", "snprintf", "puts", "putchar"}
+        _string_fns = {"memcpy", "memset", "memmove", "memcmp", "strlen", "strcpy", "strcmp"}
+        _def = set(parsed_file.functions.keys())
+        inc_lines = ["#include <assert.h>"]
+        if not (_def & _stdlib_fns):
+            inc_lines.append("#include <stdlib.h>")
+        if not (_def & _stdio_fns):
+            inc_lines.append("#include <stdio.h>")
+        if not (_def & _string_fns):
+            inc_lines.append("#include <string.h>")
+        inc_lines += ["#include <stddef.h>", "#include <stdint.h>"]
+        sections.append("\n".join(inc_lines))
+
+        if type_decls.strip():
+            sections.append("/* --- Type declarations --- */\n" + type_decls)
+
+        if stub_sections:
+            sections.append("/* --- Stubs for external/hardware callees --- */")
+            sections.extend(stub_sections)
+
+        if local_func_defs:
+            sections.append("/* --- Inlined local callees (real implementations) --- */")
+            sections.extend(local_func_defs)
+
+        sections.append(f"/* --- Function under test: {fn_name} --- */\n" + func_def)
+
+        harness_lines: list[str] = []
+        harness_lines.append("    /* Fixed inputs from CEx witness */")
+        harness_lines.extend(fixed_decls)
+        if nondet_decls:
+            harness_lines.append("    /* Remaining inputs (no witness value) */")
+            harness_lines.extend(nondet_decls)
+        harness_lines.append(f"    /* Call {fn_name} with real callee bodies */")
+        if ret_type == "void":
+            harness_lines.append(f"    {fn_name}({call_args});")
+        else:
+            harness_lines.append(f"    {ret_type} _result = {fn_name}({call_args});")
+            harness_lines.append("    (void)_result;")
+            if assert_stmts:
+                harness_lines.append("    /* Postcondition — check violation still fires */")
+                for stmt in assert_stmts:
+                    harness_lines.append(f"    {stmt}")
+
+        sections.append(
+            "void main(void) {\n" + "\n".join(harness_lines) + "\n}"
+        )
+
+        return "\n\n".join(sections) + "\n"
+
+    def _local_call_closure(
+        self,
+        fn_name: str,
+        func: "FunctionInfo",
+        parsed_file: ParsedCFile,
+    ) -> set[str]:
+        """Return all local function names transitively reachable from fn_name."""
+        visited: set[str] = set()
+        queue = [fn_name]
+        while queue:
+            name = queue.pop()
+            if name in visited:
+                continue
+            visited.add(name)
+            for callee in parsed_file.call_graph.get(name, set()):
+                if callee in parsed_file.functions and callee not in visited:
+                    queue.append(callee)
+        visited.discard(fn_name)
+        return visited
 
     def generate_harness(
         self,

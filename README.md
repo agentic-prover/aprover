@@ -130,13 +130,13 @@ amc verify-dir \
   --include-dir examples/vibeos/repo/kernel
 ```
 
-**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. The one remaining caveat is that callee stubs are currently generated without postcondition constraints (see Limitations below), which means a witness may rely on a callee returning a value that the real callee would never return. A manual audit of a sampled subset and the `FilteringOnlyBaseline` comparison are the next steps.
+**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 now includes a two-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, and (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined — a CEx that passes reachability but fails feasibility is classified UNRESOLVED rather than REAL_BUG. A manual audit of a sampled subset and the `FilteringOnlyBaseline` comparison are the next steps.
 
 AMC independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating at least one finding against an independent source.
 
 ### Limitations
 
-- **Callee stub soundness.** Callee stubs currently return unconstrained non-deterministic values; they do not enforce the callee's postcondition via `__CPROVER_assume`. A counterexample may therefore rely on a callee return value that the real callee would never produce. Fixing this requires translating callee postconditions into assume-constraints on their stubs (assume-guarantee composition).
+- **Callee stub soundness (partial).** Phase 2 and Phase 3 reachability stubs are now constrained by callee postconditions, and Phase 3 Stage 2 inlines real local callee bodies for feasibility checking. External callees (hardware registers, OS syscalls) still use postcondition-constrained stubs; their postconditions are LLM-generated and may be over-permissive.
 - **No baseline comparisons reported yet.** The three ablation baselines are implemented but not yet exercised on VibeOS.
 - **Raw-source run is partial.** 23 of 35 kernel files remain.
 - **Single-system evaluation.** Generalization beyond VibeOS is not yet demonstrated.
@@ -184,9 +184,9 @@ tests/                  Unit and integration tests
 
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`).
-- **Partial:** Multi-callee stubs are independent and non-communicating; callee postconditions are not yet used to constrain stub return values.
-- **Planned:** Callee stub postcondition constraints (assume-guarantee composition); mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
+- **Working:** C verification, all four agentic components, filtering-only ablation, parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), prompt caching.
+- **Partial:** External callee postconditions are LLM-generated and may be over-permissive; multi-file callee bodies outside the verified file cannot be inlined in the feasibility check.
+- **Planned:** Mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
 
 ## License
 

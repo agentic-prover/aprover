@@ -165,12 +165,39 @@ class CExValidator:
         callers = self._find_callers(func_name, all_funcs)
         logger.debug("Callers of '%s': %s", func_name, list(callers.keys()))
 
-        # Step 2 / Step 3: no callers → entry function → real bug directly
+        # Step 2 / Step 3: no callers → entry function → check callee feasibility
         if not callers:
             logger.info(
-                "'%s' has no callers — counterexample is directly reachable (real bug)",
+                "'%s' has no callers — checking callee feasibility before confirming real bug",
                 func_name,
             )
+            feasible = self._check_cex_feasibility(
+                func=func,
+                spec=spec,
+                counterexample=counterexample,
+                parsed_file=parsed_file,
+                all_specs=all_specs,
+            )
+            if feasible is False:
+                logger.info(
+                    "Feasibility check: violation absent with real callees for '%s' → UNRESOLVED",
+                    func_name,
+                )
+                return ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[func_name],
+                    system_entry_input=None,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"'{func_name}' is an entry function. "
+                        "CEx inputs are reachable but the violation does not occur "
+                        "with real callee implementations — callee return values "
+                        "assumed by the stubs are not achievable. Marking UNRESOLVED."
+                    ),
+                    outcome=CExOutcome.UNRESOLVED,
+                )
             reproducer = self._generate_system_entry_reproducer(
                 call_chain=[func_name],
                 counterexample=counterexample,
@@ -187,6 +214,7 @@ class CExValidator:
                 reasoning=(
                     f"'{func_name}' is an entry function (no callers). "
                     "The counterexample is directly reachable from the system boundary."
+                    + (" Callee feasibility confirmed." if feasible is True else "")
                 ),
                 outcome=CExOutcome.REAL_BUG,
             )
@@ -207,6 +235,7 @@ class CExValidator:
                 caller_spec=caller_spec,
                 parsed_file=parsed_file,
                 driver_name=driver_name,
+                all_specs=all_specs,
             )
             if can_reach:
                 reachable_from.append(caller_name)
@@ -221,6 +250,35 @@ class CExValidator:
                 )
 
         if reachable_from:
+            # Stage 2: check callee feasibility before confirming real bug
+            feasible = self._check_cex_feasibility(
+                func=func,
+                spec=spec,
+                counterexample=counterexample,
+                parsed_file=parsed_file,
+                all_specs=all_specs,
+            )
+            if feasible is False:
+                logger.info(
+                    "Feasibility check: violation absent with real callees for '%s' → UNRESOLVED",
+                    func_name,
+                )
+                return ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[func_name],
+                    system_entry_input=None,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"CEx inputs are reachable from caller(s) {reachable_from}, "
+                        "but the violation does not occur with real callee implementations "
+                        "— callee return values assumed by the stubs are not achievable. "
+                        "Marking UNRESOLVED."
+                    ),
+                    outcome=CExOutcome.UNRESOLVED,
+                )
+
             # Propagate upward through the first reachable caller
             is_system_reachable, call_chain = self._propagate_upward(
                 func_name=reachable_from[0],
@@ -249,6 +307,7 @@ class CExValidator:
                 reasoning=(
                     f"Counterexample state is reachable from caller(s): "
                     f"{reachable_from}. Call chain: {full_chain}."
+                    + (" Callee feasibility confirmed." if feasible is True else "")
                 ),
                 outcome=CExOutcome.REAL_BUG,
             )
@@ -268,6 +327,105 @@ class CExValidator:
         )
 
     # ------------------------------------------------------------------
+    # CEx feasibility check (Stage 2: real callee bodies)
+    # ------------------------------------------------------------------
+
+    def _check_cex_feasibility(
+        self,
+        func: FunctionInfo,
+        spec: Spec,
+        counterexample: Counterexample,
+        parsed_file: ParsedCFile,
+        all_specs: "dict[str, Spec] | None" = None,
+    ) -> "bool | None":
+        """
+        Check whether the CEx violation still occurs with real callee bodies.
+
+        The feasibility harness fixes scalar inputs to CEx witness values,
+        inlines local callees, and stubs external callees with postcondition
+        constraints.  If CBMC finds a violation → CEx is feasible (real bug).
+        If CBMC verifies → callee return values assumed by the stub were not
+        achievable by real callees.
+
+        Returns
+        -------
+        True   — violation confirmed with real callees (feasible, real bug)
+        False  — violation absent with real callees (callee values unachievable)
+        None   — inconclusive (CBMC unavailable, harness error, CBMC error)
+        """
+        import shutil
+
+        if not shutil.which(self.config.cbmc_path):
+            return None
+
+        # Only meaningful when the function actually has callees defined locally;
+        # if there are none, the original BMC result is already exact.
+        has_local_callees = bool(
+            func.callees & set(parsed_file.functions.keys())
+        )
+        if not has_local_callees:
+            logger.debug(
+                "'%s' has no local callees — feasibility check skipped (BMC already exact)",
+                func.name,
+            )
+            return None
+
+        try:
+            harness_src = self.harness_gen.generate_feasibility_harness(
+                func=func,
+                spec=spec,
+                counterexample=counterexample,
+                parsed_file=parsed_file,
+                all_specs=all_specs,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Feasibility harness generation failed for '%s': %s",
+                func.name, exc,
+            )
+            return None
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".c", delete=False, mode="w", encoding="utf-8"
+        ) as tmp:
+            tmp.write(harness_src)
+            tmp_path = tmp.name
+
+        try:
+            result = run_cbmc(
+                harness_path=tmp_path,
+                unwind=self.config.cbmc_unwind,
+                timeout=self.config.cbmc_timeout,
+                cbmc_path=self.config.cbmc_path,
+                include_dirs=getattr(self.config, "include_dirs", None),
+            )
+        except Exception as exc:
+            logger.warning(
+                "CBMC feasibility check raised for '%s': %s", func.name, exc
+            )
+            return None
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        if result.error:
+            logger.warning(
+                "CBMC feasibility check error for '%s': %s", func.name, result.error
+            )
+            return None
+
+        # CBMC found a violation → postcondition violated with real callees → feasible
+        # CBMC verified → no violation with real callees → callee values unachievable
+        feasible = not result.verified
+        logger.info(
+            "Feasibility check for '%s': %s",
+            func.name, "FEASIBLE" if feasible else "INFEASIBLE",
+        )
+        return feasible
+
+    # ------------------------------------------------------------------
     # Reachability check
     # ------------------------------------------------------------------
 
@@ -280,6 +438,7 @@ class CExValidator:
         parsed_file: ParsedCFile,
         driver_name: str,
         caller_spec: "Spec | None" = None,
+        all_specs: "dict[str, Spec] | None" = None,
     ) -> bool:
         """
         Check if ``caller`` can produce the state described by ``counterexample``
@@ -301,6 +460,7 @@ class CExValidator:
                 parsed_file=parsed_file,
                 driver_name=driver_name,
                 caller_spec=caller_spec,
+                all_specs=all_specs,
             )
         else:
             return self._check_reachability_with_llm(
@@ -320,6 +480,7 @@ class CExValidator:
         parsed_file: ParsedCFile,
         driver_name: str,
         caller_spec: "Spec | None" = None,
+        all_specs: "dict[str, Spec] | None" = None,
     ) -> bool:
         """
         Generate a reachability harness and run CBMC on it.
@@ -347,6 +508,7 @@ class CExValidator:
                 counterexample=counterexample,
                 caller_spec=caller_spec,
                 parsed_file=parsed_file,
+                all_specs=all_specs,
             )
         except Exception as exc:
             logger.warning(
@@ -497,6 +659,7 @@ class CExValidator:
                 )),
                 parsed_file=parsed_file,
                 driver_name=driver_name,
+                all_specs=all_specs,
             )
             if can_reach:
                 reachable, chain = self._propagate_upward(
