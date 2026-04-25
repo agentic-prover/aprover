@@ -83,6 +83,7 @@ class AMCPipeline:
         source_file: str,
         driver_name: str,
         domain_knowledge: str = "",
+        cross_file_callers: set[str] | None = None,
     ) -> list[BugReport]:
         """
         Run the full AMC pipeline.
@@ -205,6 +206,7 @@ class AMCPipeline:
                     all_specs=current_specs,
                     parsed_file=parsed,
                     driver_name=driver_name,
+                    cross_file_callers=cross_file_callers,
                 )
 
                 # Always persist the classification result for this counterexample
@@ -512,63 +514,103 @@ class AMCPipeline:
             "=== run_directory: %d files in '%s' ===", len(c_files), source_dir
         )
 
-        all_results: dict[str, list[BugReport]] = {}
-        total_bugs = 0
+        import tempfile, os
 
+        # ------------------------------------------------------------------
+        # Pass 1: preprocess + parse every file to build a global call graph.
+        # This lets us tell each file's pipeline which of its root functions
+        # actually have callers in other files, preventing those functions
+        # from being incorrectly classified as system entry points.
+        # ------------------------------------------------------------------
+        file_expanded: dict[str, str] = {}        # stem → preprocessed source
+        file_defined: dict[str, set[str]] = {}    # stem → function names defined
+        file_callees: dict[str, set[str]] = {}    # stem → all function names called
+
+        logger.info("Pass 1: building global call graph across %d files", len(c_files))
         for c_file in c_files:
-            file_driver = f"{driver_name}/{c_file.stem}"
-            logger.info("--- Processing %s (driver=%s) ---", c_file.name, file_driver)
-
-            # Preprocess to resolve cross-file includes
             try:
                 expanded = preprocess(
                     c_file,
                     include_dirs=[str(source_dir)] + include_dirs,
                     cc=self.config.cc_path,
                 )
+                parsed_pass1 = parse_c_file(c_file, source_text=expanded)
             except Exception as exc:
-                logger.warning("Preprocessing failed for %s: %s — skipping", c_file.name, exc)
+                logger.warning("Pass 1: failed for %s: %s — skipping", c_file.name, exc)
+                continue
+            if not parsed_pass1.functions:
+                continue
+            stem = c_file.stem
+            file_expanded[stem] = expanded
+            file_defined[stem] = set(parsed_pass1.functions.keys())
+            file_callees[stem] = set().union(
+                *(fi.callees for fi in parsed_pass1.functions.values())
+            )
+
+        # For each stem S, a function F has a cross-file caller if F is defined
+        # in S and appears in the callees set of any other stem T.
+        cross_file_callers_for: dict[str, set[str]] = {}
+        for stem, defined in file_defined.items():
+            cross_file_callers_for[stem] = {
+                fn for fn in defined
+                if any(
+                    fn in file_callees[other]
+                    for other in file_callees
+                    if other != stem
+                )
+            }
+            if cross_file_callers_for[stem]:
+                logger.debug(
+                    "Cross-file callers detected in %s: %s",
+                    stem, cross_file_callers_for[stem],
+                )
+
+        # ------------------------------------------------------------------
+        # Pass 2: run the full AMC pipeline per file using cached preprocessed
+        # source and cross-file caller information.
+        # ------------------------------------------------------------------
+        all_results: dict[str, list[BugReport]] = {}
+        total_bugs = 0
+
+        orig_preprocess = self.config.preprocess
+        self.config.preprocess = False  # preprocessing already done in Pass 1
+
+        for c_file in c_files:
+            stem = c_file.stem
+            if stem not in file_expanded:
+                logger.info("Skipping %s (failed or empty in Pass 1)", c_file.name)
                 continue
 
-            # Temporarily override preprocessing config for this run
-            orig_preprocess = self.config.preprocess
-            self.config.preprocess = False  # already done above
+            file_driver = f"{driver_name}/{stem}"
+            logger.info("--- Processing %s (driver=%s) ---", c_file.name, file_driver)
+
+            cross_file_callers = cross_file_callers_for.get(stem, set())
+            expanded = file_expanded[stem]
+
+            with tempfile.NamedTemporaryFile(
+                suffix=".c", prefix=f"amc_{stem}_",
+                mode="w", encoding="utf-8", delete=False
+            ) as tmp:
+                tmp.write(expanded)
+                tmp_path = tmp.name
 
             try:
-                parsed = parse_c_file(c_file, source_text=expanded)
-
-                if not parsed.functions:
-                    logger.info("No functions found in %s — skipping", c_file.name)
-                    continue
-
-                # Run the full pipeline on the preprocessed source.
-                # We write the expanded source to a temp file so the
-                # harness generator can read it for type declarations.
-                import tempfile, os
-                with tempfile.NamedTemporaryFile(
-                    suffix=".c", prefix=f"amc_{c_file.stem}_",
-                    mode="w", encoding="utf-8", delete=False
-                ) as tmp:
-                    tmp.write(expanded)
-                    tmp_path = tmp.name
-
-                try:
-                    bugs = self.run(
-                        source_file=tmp_path,
-                        driver_name=file_driver,
-                        domain_knowledge=domain_knowledge,
-                    )
-                finally:
-                    os.unlink(tmp_path)
-
+                bugs = self.run(
+                    source_file=tmp_path,
+                    driver_name=file_driver,
+                    domain_knowledge=domain_knowledge,
+                    cross_file_callers=cross_file_callers,
+                )
             finally:
-                self.config.preprocess = orig_preprocess
+                os.unlink(tmp_path)
 
             all_results[c_file.name] = bugs
             total_bugs += len(bugs)
             logger.info(
                 "Finished %s: %d bug(s) confirmed", c_file.name, len(bugs)
             )
+
+        self.config.preprocess = orig_preprocess
 
         logger.info(
             "=== run_directory DONE: %d files, %d total bug(s) ===",

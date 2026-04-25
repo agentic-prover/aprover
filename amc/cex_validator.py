@@ -167,6 +167,7 @@ class CExValidator:
         all_specs: dict[str, Spec],
         parsed_file: ParsedCFile,
         driver_name: str,
+        cross_file_callers: set[str] | None = None,
     ) -> ValidationResult:
         """
         Validate a counterexample.
@@ -181,8 +182,45 @@ class CExValidator:
         callers = self._find_callers(func_name, all_funcs)
         logger.debug("Callers of '%s': %s", func_name, list(callers.keys()))
 
-        # Step 2 / Step 3: no callers → entry function → check callee feasibility
+        # Step 2 / Step 3: no callers within file → check if cross-file callers exist
         if not callers:
+            has_cross_file_caller = bool(
+                cross_file_callers and func_name in cross_file_callers
+            )
+            if has_cross_file_caller:
+                # Callers exist in other files — not a true system entry point.
+                # We cannot run reachability against them (no parsed body), so
+                # report as confirmed_bmc with a note about the scope limit.
+                logger.info(
+                    "'%s' has no in-file callers but has cross-file callers — "
+                    "treating as confirmed_bmc (cross-file reachability not checked)",
+                    func_name,
+                )
+                reproducer = self._generate_system_entry_reproducer(
+                    call_chain=[func_name],
+                    counterexample=counterexample,
+                    all_funcs=all_funcs,
+                    parsed_file=parsed_file,
+                )
+                result = ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[func_name],
+                    system_entry_input=reproducer,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"'{func_name}' has no callers within the analyzed file but "
+                        "is called from other files (cross-file callers detected). "
+                        "Cannot trace reachability across file boundaries — "
+                        "reporting as confirmed_bmc."
+                    ),
+                    outcome=CExOutcome.REAL_BUG,
+                    system_entry_reached=False,
+                )
+                self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+                return result
+
             logger.info(
                 "'%s' has no callers — checking callee feasibility before confirming real bug",
                 func_name,
@@ -228,7 +266,7 @@ class CExValidator:
                 refinement_history=[],
                 final_precondition=None,
                 reasoning=(
-                    f"'{func_name}' is an entry function (no callers). "
+                    f"'{func_name}' is an entry function (no callers in any file). "
                     "The counterexample is directly reachable from the system boundary."
                     + (" Callee feasibility confirmed." if feasible is True else "")
                 ),
@@ -306,6 +344,7 @@ class CExValidator:
                 all_specs=all_specs,
                 parsed_file=parsed_file,
                 driver_name=driver_name,
+                cross_file_callers=cross_file_callers,
             )
             # Append the current function to the chain
             full_chain = call_chain + [func_name]
@@ -644,12 +683,14 @@ class CExValidator:
         parsed_file: ParsedCFile,
         driver_name: str,
         visited: set[str] | None = None,
+        cross_file_callers: set[str] | None = None,
     ) -> tuple[bool, list[str]]:
         """
         Recursively propagate upward through callers.
 
         Returns (is_reachable_from_entry, call_chain).
-        A function is an entry function if it has no callers in all_funcs.
+        A function is a true system entry point only if it has no callers in
+        all_funcs AND no cross-file callers are known for it.
         """
         if visited is None:
             visited = set()
@@ -660,7 +701,9 @@ class CExValidator:
         callers = self._find_callers(func_name, all_funcs)
 
         if not callers:
-            # This is an entry function
+            # No in-file callers — only a true entry if no cross-file callers either
+            if cross_file_callers and func_name in cross_file_callers:
+                return False, [func_name]
             return True, [func_name]
 
         for caller_name, caller_func in callers.items():
@@ -693,6 +736,7 @@ class CExValidator:
                     parsed_file=parsed_file,
                     driver_name=driver_name,
                     visited=visited,
+                    cross_file_callers=cross_file_callers,
                 )
                 if reachable:
                     return True, chain + [func_name]
