@@ -142,6 +142,37 @@ amc verify-dir \
   --include-dir examples/vibeos/repo/kernel
 ```
 
+### Raw-source mode with dynamic validation — 81 real bugs in 28/48 files
+
+A second raw-source run with `AMC_ENABLE_DYNAMIC_VALIDATION=true` exercised the complete dynamic validation pipeline directly on the unmodified VibeOS kernel source. The run covered 28 of 48 kernel `.c` files before being stopped.
+
+**Enabling dynamic validation on bare-metal C** required four harness fixes to allow the GCC harness to compile and run against preprocessed ARM64 kernel sources on an x86 host:
+- Strip ARM64 inline ASM blocks (`asm volatile`, `__asm__`) that won't assemble on x86.
+- Strip `static inline` libc stubs that the kernel defines internally (e.g. `signal()`, `memcpy()`) and that conflict with the system headers the harness includes.
+- Strip glibc-internal typedefs (`__fsid_t`, `__dev_t`, `max_align_t`, etc.) from the preprocessed type declarations — the VibeOS in-tree libc headers redefine these identically to glibc, causing duplicate-type errors when the harness also includes `<signal.h>`.
+- Strip forward declarations of standard functions with non-standard signatures (e.g. `printf.h` declares `snprintf(char*, int, ...)` instead of `snprintf(char*, size_t, ...)`).
+- When kernel functions reference globals from other translation units (e.g. `fb_base` defined in `fb.c`), a third compile attempt uses `-Wl,--unresolved-symbols=ignore-all` so the harness still links and runs.
+
+**Results across 28 files:**
+
+| Confidence tier | Count | Description |
+|---|---|---|
+| `confirmed_dynamic` | 6 | Runtime fault (SIGSEGV) directly observed |
+| `confirmed_system_entry` | 56 | Full call chain traced to kernel entry point |
+| `confirmed_bmc` | 19 | BMC reachability confirmed from a caller |
+| **Total** | **81** | |
+
+**`confirmed_dynamic` bugs (runtime SIGSEGV):** `console.scroll_up`, `cursor.draw_cursor_at`, `cursor.save_background`, `elf.elf_load`, `elf.elf_load_at`, `gpio.gpio_delay_us`.
+
+To reproduce:
+```bash
+AMC_ENABLE_DYNAMIC_VALIDATION=true amc verify-dir \
+  --source-dir examples/vibeos/repo/kernel \
+  --driver vibeos_dynamic \
+  --output artifacts/vibeos_dynamic \
+  --include-dir examples/vibeos/repo/kernel
+```
+
 **FilteringOnly baseline (RQ3).** On the five wrapper modules, the `--skip-refinement` ablation (classify only, no spec update, no caller re-queue) reported 59 findings vs. AMC's 41 — a 44% increase. Refinement acts as a precision filter on this corpus, not a recall enhancer.
 
 **How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 applies a three-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined, and (3) an optional Stage 3 GCC harness directly confirms the fault at runtime. Each confirmed real bug is assigned one of four evidence tiers: `confirmed_dynamic` (runtime fault observed), `confirmed_system_entry` (full call chain traced back to a function with no callers in any file), `confirmed_bmc` (reachability confirmed from at least one caller via BMC), or `likely` (over-refinement guard triggered). In whole-codebase mode (`verify-dir`), AMC performs a two-pass global call-graph construction so that functions whose callers reside in other files are not misclassified as system entry points. The `confirmed_system_entry` tier is demonstrated end-to-end in `examples/cross_file_demo/`: `apply_op` (null function-pointer dereference in `libmath.c`) is confirmed reachable from `system_entry` in `main.c` via cross-file CBMC reachability, yielding `confirmed_system_entry` with chain `system_entry → apply_op`. A manual precision audit of a sampled subset is the immediate next step.
@@ -152,14 +183,14 @@ AMC independently reproduced the `calloc` integer-overflow issue filed in the Vi
 
 - **Callee stub soundness (partial).** Phase 2 and Phase 3 reachability stubs are now constrained by callee postconditions, and Phase 3 Stage 2 inlines real local callee bodies for feasibility checking. External callees (hardware registers, OS syscalls) still use postcondition-constrained stubs; their postconditions are LLM-generated and may be over-permissive.
 - **No baseline comparisons reported yet.** The three ablation baselines are implemented but not yet exercised on VibeOS.
-- **Raw-source run is partial.** 23 of 35 kernel files remain.
+- **Raw-source run (without dynamic validation):** ~198 findings across 43/48 files. Dynamic-validation run: 81 findings across 28/48 files (stopped mid-run).
 - **Single-system evaluation.** Generalization beyond VibeOS is not yet demonstrated.
 
 ## Running tests
 
 ```bash
 uv run pytest tests/ -q
-# 131 passed, 1 skipped
+# 164 passed, 1 skipped
 ```
 
 ## Usage — whole-codebase mode
