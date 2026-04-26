@@ -268,7 +268,22 @@ class DynamicValidator:
                     reasoning="Dynamic harness ran to completion without triggering a fault.",
                 )
 
-        # Process exited non-zero with no DYNAMIC: line — likely killed by signal
+        # On Linux/macOS, a process killed by signal N exits with returncode = -N
+        # in Python subprocess.  Detect this as a confirmed fault even when the
+        # in-process signal handler did not fire (e.g. bare-metal signal() stub).
+        _sig_names = {-11: "SIGSEGV", -6: "SIGABRT", -8: "SIGFPE", -4: "SIGILL"}
+        if proc.returncode in _sig_names:
+            sig = _sig_names[proc.returncode]
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.CONFIRMED,
+                signal_name=sig,
+                reasoning=(
+                    f"Process killed by {sig} (exit code {proc.returncode}); "
+                    "fault confirmed at runtime."
+                ),
+            )
+
+        # Other non-zero exit with no DYNAMIC: line
         if proc.returncode != 0:
             return DynamicValidationResult(
                 outcome=DynamicOutcome.INCONCLUSIVE,

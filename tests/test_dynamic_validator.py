@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +26,7 @@ from amc.dynamic_validator import (
     DynamicValidationResult,
     DynamicValidator,
 )
-from amc.harness_generator import HarnessGenerator
+from amc.harness_generator import HarnessGenerator, _strip_inline_asm, _strip_static_inline_defs
 from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
 
 
@@ -380,3 +381,215 @@ def test_dynamic_validator_harness_generation_exception_returns_inconclusive():
 
     result = dv.validate(func, cex, _make_parsed_file(), {}, {})
     assert result.outcome == DynamicOutcome.INCONCLUSIVE
+
+
+# ---------------------------------------------------------------------------
+# Unit: _strip_inline_asm
+# ---------------------------------------------------------------------------
+
+
+def test_strip_inline_asm_basic_nop():
+    src = 'void f(void) { asm("nop"); }'
+    out = _strip_inline_asm(src)
+    assert 'asm(' not in out
+    assert '/* asm removed */' in out
+    assert 'void f(void) {' in out
+
+
+def test_strip_inline_asm_volatile():
+    src = 'static void setup(void) { asm volatile("isb"); }'
+    out = _strip_inline_asm(src)
+    assert 'asm' not in out.replace('/* asm removed */', '')
+    assert '/* asm removed */' in out
+
+
+def test_strip_inline_asm_dunder_asm():
+    src = '__asm__("ldr x0, [sp]");'
+    out = _strip_inline_asm(src)
+    assert '__asm__' not in out
+    assert '/* asm removed */' in out
+
+
+def test_strip_inline_asm_multiline():
+    src = (
+        'void f(void) {\n'
+        '    __asm__ volatile(\n'
+        '        "mov x0, #0\\n"\n'
+        '        "ret\\n"\n'
+        '    );\n'
+        '}'
+    )
+    out = _strip_inline_asm(src)
+    assert '__asm__' not in out
+    assert '/* asm removed */' in out
+    assert 'void f(void)' in out
+
+
+def test_strip_inline_asm_no_asm():
+    src = 'int add(int a, int b) { return a + b; }'
+    assert _strip_inline_asm(src) == src
+
+
+def test_strip_inline_asm_multiple_blocks():
+    src = 'void f(void) { asm("nop"); asm("isb"); }'
+    out = _strip_inline_asm(src)
+    assert out.count('/* asm removed */') == 2
+
+
+def test_strip_inline_asm_not_a_statement():
+    """'asm' not followed by '(' should be left in place (e.g. in identifiers)."""
+    src = 'int has_asm_support = 1;'
+    out = _strip_inline_asm(src)
+    assert out == src
+
+
+# ---------------------------------------------------------------------------
+# Unit: _strip_static_inline_defs
+# ---------------------------------------------------------------------------
+
+
+def test_strip_static_inline_def_simple():
+    src = 'static inline int foo(void) { return 0; }'
+    out = _strip_static_inline_defs(src)
+    assert 'static inline int foo' not in out
+    assert '/* static inline removed */' in out
+
+
+def test_strip_static_inline_def_dunder():
+    src = 'static __inline__ void bar(int x) { x = x + 1; }'
+    out = _strip_static_inline_defs(src)
+    assert '/* static inline removed */' in out
+
+
+def test_strip_static_inline_keeps_declaration():
+    """A declaration (ends in ';') must be preserved."""
+    src = 'static inline int baz(void);'
+    out = _strip_static_inline_defs(src)
+    assert 'static inline int baz(void);' in out
+    assert '/* static inline removed */' not in out
+
+
+def test_strip_static_inline_mixed():
+    src = (
+        'static inline int decl(void);\n'
+        'static inline int def(void) { return 1; }\n'
+        'int other(void) { return 2; }\n'
+    )
+    out = _strip_static_inline_defs(src)
+    assert 'static inline int decl(void);' in out
+    assert '/* static inline removed */' in out
+    assert 'int other(void)' in out
+
+
+def test_strip_static_inline_nested_braces():
+    src = 'static inline int nested(void) { if (1) { return 1; } return 0; }'
+    out = _strip_static_inline_defs(src)
+    assert '/* static inline removed */' in out
+    assert 'nested' not in out.replace('/* static inline removed */', '')
+
+
+# ---------------------------------------------------------------------------
+# Unit: DynamicValidator._run() — negative-exit-code signal detection
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_proc(returncode: int, stdout: str = "") -> types.SimpleNamespace:
+    proc = types.SimpleNamespace()
+    proc.returncode = returncode
+    proc.stdout = stdout
+    return proc
+
+
+def _make_dv() -> DynamicValidator:
+    config = Config(enable_dynamic_validation=True)
+    return DynamicValidator(config, MagicMock())
+
+
+def test_run_negative_exit_sigsegv_detected():
+    """returncode=-11 with no DYNAMIC: line → CONFIRMED SIGSEGV."""
+    dv = _make_dv()
+    with patch("subprocess.run", return_value=_make_fake_proc(-11)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGSEGV"
+    assert "SIGSEGV" in result.reasoning
+
+
+def test_run_negative_exit_sigabrt_detected():
+    dv = _make_dv()
+    with patch("subprocess.run", return_value=_make_fake_proc(-6)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGABRT"
+
+
+def test_run_negative_exit_sigfpe_detected():
+    dv = _make_dv()
+    with patch("subprocess.run", return_value=_make_fake_proc(-8)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGFPE"
+
+
+def test_run_negative_exit_sigill_detected():
+    dv = _make_dv()
+    with patch("subprocess.run", return_value=_make_fake_proc(-4)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGILL"
+
+
+def test_run_in_process_confirmed_takes_priority_over_negative_exit():
+    """If DYNAMIC:CONFIRMED appears in stdout, use that even if returncode is also -11."""
+    dv = _make_dv()
+    stdout = "DYNAMIC:CONFIRMED signal=SIGSEGV\n"
+    with patch("subprocess.run", return_value=_make_fake_proc(-11, stdout)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGSEGV"
+
+
+def test_run_not_triggered():
+    dv = _make_dv()
+    stdout = "DYNAMIC:NOT_TRIGGERED\n"
+    with patch("subprocess.run", return_value=_make_fake_proc(0, stdout)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.NOT_TRIGGERED
+
+
+def test_run_unknown_nonzero_exit_inconclusive():
+    """Non-zero exit that isn't a signal code and has no DYNAMIC: line → INCONCLUSIVE."""
+    dv = _make_dv()
+    with patch("subprocess.run", return_value=_make_fake_proc(42)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.INCONCLUSIVE
+
+
+@pytest.mark.skipif(not GCC_AVAILABLE, reason="gcc not available")
+def test_negative_exit_code_detected_end_to_end():
+    """Real crash with no signal handlers → negative exit code detected by _run()."""
+    src = r"""
+#include <stdint.h>
+/* No signal handler registered — process is killed by SIGSEGV directly */
+int main(void) {
+    volatile uint8_t *p = (volatile uint8_t *)0;
+    *p = 42;
+    return 0;
+}
+"""
+    with tempfile.TemporaryDirectory() as td:
+        src_path = Path(td) / "crash.c"
+        bin_path = Path(td) / "crash"
+        src_path.write_text(src)
+        cp = subprocess.run(
+            ["gcc", "-w", "-fno-builtin", "-o", str(bin_path), str(src_path)],
+            capture_output=True, text=True,
+        )
+        assert cp.returncode == 0, f"Compile failed: {cp.stderr}"
+
+        config = Config(enable_dynamic_validation=True)
+        dv = DynamicValidator(config, MagicMock())
+        result = dv._run(str(bin_path))
+
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGSEGV"

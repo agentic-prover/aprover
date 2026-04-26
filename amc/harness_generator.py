@@ -892,14 +892,22 @@ class HarnessGenerator:
 
         call_expr_args = ", ".join(call_args_list)
 
-        # --- 8. Assemble the harness ---
+        # --- 8. Strip inline ASM and bare-metal header stubs ---
+        # Bare-metal sources (e.g. VibeOS) contain ARM64 asm blocks and expanded
+        # libc stubs (signal(), setjmp(), ...) that won't compile on x86.
+        type_decls = _strip_static_inline_defs(_strip_inline_asm(type_decls))
+        func_def   = _strip_inline_asm(func_def)
+        local_func_defs = [_strip_inline_asm(d) for d in local_func_defs]
+
+        # --- 9. Assemble the harness ---
         sections: list[str] = []
 
-        # Signal headers first — identical typedef re-declarations (C11 §6.7.8) are allowed
+        # System headers come first so their types take priority.
+        # We drop setjmp.h: signal handling uses _Exit() instead of siglongjmp
+        # so there is no jmp_buf type conflict with bare-metal setjmp stubs.
         sections.append(
             "/* AMC Dynamic Validation Harness — Phase 3 Stage 3 */\n"
             "#include <signal.h>\n"
-            "#include <setjmp.h>\n"
             "#include <stdio.h>\n"
             "#include <string.h>\n"
             "#include <stdlib.h>\n"
@@ -923,22 +931,23 @@ class HarnessGenerator:
 
         sections.append(f"/* --- Entry function: {fn_name} --- */\n" + func_def)
 
-        # Signal handling machinery
+        # Signal handler: print confirmation and exit immediately.
+        # Using _Exit() avoids atexit handlers and is async-signal-safe enough
+        # for testing.  We also use numeric signal values (11/6/8/4) so the
+        # handler compiles even when the preprocessed source has already
+        # re-defined SIGSEGV etc. as different constants.
         sections.append(
             "/* AMC signal handler */\n"
-            "static sigjmp_buf _amc_jmp;\n"
-            "static volatile int _amc_signal = 0;\n"
-            "static volatile const char *_amc_signal_name = NULL;\n"
+            "static volatile const char *_amc_signal_name = \"UNKNOWN\";\n"
             "static void _amc_handler(int sig) {\n"
-            "    _amc_signal = sig;\n"
-            "    switch (sig) {\n"
-            "        case SIGSEGV: _amc_signal_name = \"SIGSEGV\"; break;\n"
-            "        case SIGABRT: _amc_signal_name = \"SIGABRT\"; break;\n"
-            "        case SIGFPE:  _amc_signal_name = \"SIGFPE\";  break;\n"
-            "        case SIGILL:  _amc_signal_name = \"SIGILL\";  break;\n"
-            "        default:      _amc_signal_name = \"UNKNOWN\"; break;\n"
-            "    }\n"
-            "    siglongjmp(_amc_jmp, 1);\n"
+            "    if (sig == 11) _amc_signal_name = \"SIGSEGV\";\n"
+            "    else if (sig == 6)  _amc_signal_name = \"SIGABRT\";\n"
+            "    else if (sig == 8)  _amc_signal_name = \"SIGFPE\";\n"
+            "    else if (sig == 4)  _amc_signal_name = \"SIGILL\";\n"
+            "    printf(\"DYNAMIC:CONFIRMED signal=%s\\n\","
+            " (const char *)_amc_signal_name);\n"
+            "    fflush(stdout);\n"
+            "    _Exit(1);\n"
             "}"
         )
 
@@ -954,31 +963,28 @@ class HarnessGenerator:
                 "static void _amc_setup_state(void) { /* no global state to set */ }"
             )
 
-        # main()
+        # main() — register handlers (best-effort; may be no-ops in bare-metal
+        # environments), call the function, report result.
+        # If the function crashes and signal() is a no-op, the process is killed
+        # by the OS signal and dynamic_validator._run() detects the negative
+        # exit code.
         main_lines: list[str] = [
-            "    signal(SIGSEGV, _amc_handler);",
-            "    signal(SIGABRT, _amc_handler);",
-            "    signal(SIGFPE,  _amc_handler);",
-            "    signal(SIGILL,  _amc_handler);",
+            "    signal(11, _amc_handler);  /* SIGSEGV */",
+            "    signal(6,  _amc_handler);  /* SIGABRT */",
+            "    signal(8,  _amc_handler);  /* SIGFPE  */",
+            "    signal(4,  _amc_handler);  /* SIGILL  */",
             "    _amc_setup_state();",
         ]
         main_lines.extend(call_arg_lines)
-        main_lines.append("    if (sigsetjmp(_amc_jmp, 1) == 0) {")
         if ret_entry == "void":
-            main_lines.append(f"        {fn_name}({call_expr_args});")
+            main_lines.append(f"    {fn_name}({call_expr_args});")
         else:
             main_lines.append(
-                f"        {ret_entry} _amc_result = {fn_name}({call_expr_args});"
+                f"    {ret_entry} _amc_result = {fn_name}({call_expr_args});"
             )
-            main_lines.append("        (void)_amc_result;")
-        main_lines.append('        puts("DYNAMIC:NOT_TRIGGERED");')
-        main_lines.append("        return 0;")
-        main_lines.append("    }")
-        main_lines.append(
-            '    printf("DYNAMIC:CONFIRMED signal=%s\\n",'
-            " (const char *)_amc_signal_name);"
-        )
-        main_lines.append("    return 1;")
+            main_lines.append("    (void)_amc_result;")
+        main_lines.append('    puts("DYNAMIC:NOT_TRIGGERED");')
+        main_lines.append("    return 0;")
 
         main_func = "int main(void) {\n" + "\n".join(main_lines) + "\n}"
         sections.append("/* --- Dynamic harness entry point --- */\n" + main_func)
@@ -1218,6 +1224,103 @@ def _read_source(source_file: str) -> str:
         return Path(source_file).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+
+
+def _strip_inline_asm(text: str) -> str:
+    """Remove asm/asm volatile/__asm__/etc. statements so the harness compiles on x86."""
+    result: list[str] = []
+    i = 0
+    pat = re.compile(r'\b(asm|__asm__|__asm)\b')
+    while i < len(text):
+        m = pat.search(text, i)
+        if m is None:
+            result.append(text[i:])
+            break
+        result.append(text[i:m.start()])
+        j = m.end()
+        # optional volatile qualifier
+        vol = re.match(r'\s+(?:volatile|__volatile__)\b', text[j:])
+        if vol:
+            j += vol.end()
+        # skip whitespace
+        while j < len(text) and text[j] in ' \t\n\r':
+            j += 1
+        if j < len(text) and text[j] == '(':
+            depth = 0
+            while j < len(text):
+                if text[j] == '(':
+                    depth += 1
+                elif text[j] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            while j < len(text) and text[j] in ' \t':
+                j += 1
+            if j < len(text) and text[j] == ';':
+                j += 1
+            result.append('/* asm removed */')
+            i = j
+        else:
+            result.append(text[m.start():j])
+            i = j
+    return ''.join(result)
+
+
+def _strip_static_inline_defs(text: str) -> str:
+    """
+    Remove static inline function *definitions* from preprocessed type declarations.
+
+    Bare-metal codebases (e.g. VibeOS) expand their own libc stubs (signal(),
+    setjmp(), etc.) into the preprocessed source.  These conflict with the system
+    headers we include in the dynamic harness.  Strip the definitions; forward
+    declarations (ending in ';') are kept so callers still compile.
+    """
+    result: list[str] = []
+    i = 0
+    pat = re.compile(r'\bstatic\s+(?:inline|__inline__)\b')
+    while i < len(text):
+        m = pat.search(text, i)
+        if m is None:
+            result.append(text[i:])
+            break
+        j = m.end()
+        # Scan forward for the first '{' or ';' at top brace depth.
+        depth = 0
+        found_brace = False
+        while j < len(text):
+            ch = text[j]
+            if ch == '{':
+                if depth == 0:
+                    found_brace = True
+                    break
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            elif ch == ';' and depth == 0:
+                break
+            j += 1
+        if found_brace:
+            # Function definition — strip from 'static' to matching '}'
+            result.append(text[i:m.start()])
+            depth = 0
+            while j < len(text):
+                if text[j] == '{':
+                    depth += 1
+                elif text[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            result.append('/* static inline removed */')
+            i = j
+        else:
+            # Declaration ending in ';' — keep it
+            result.append(text[i:j + 1])
+            i = j + 1
+    return ''.join(result)
 
 
 def _is_simple_value(val: str) -> bool:
