@@ -895,7 +895,11 @@ class HarnessGenerator:
         # --- 8. Strip inline ASM and bare-metal header stubs ---
         # Bare-metal sources (e.g. VibeOS) contain ARM64 asm blocks and expanded
         # libc stubs (signal(), setjmp(), ...) that won't compile on x86.
-        type_decls = _strip_static_inline_defs(_strip_inline_asm(type_decls))
+        type_decls = _strip_stdlib_decls(
+            _strip_glibc_internal_typedefs(
+                _strip_static_inline_defs(_strip_inline_asm(type_decls))
+            )
+        )
         func_def   = _strip_inline_asm(func_def)
         local_func_defs = [_strip_inline_asm(d) for d in local_func_defs]
 
@@ -1320,6 +1324,161 @@ def _strip_static_inline_defs(text: str) -> str:
             # Declaration ending in ';' — keep it
             result.append(text[i:j + 1])
             i = j + 1
+    return ''.join(result)
+
+
+# Standard C / POSIX functions that kernel headers may re-declare with
+# non-standard signatures (e.g. VibeOS printf.h uses int size for snprintf).
+# Any forward declaration (no body) whose name is in this set is stripped from
+# the preprocessed type_decls so our system #include directives win.
+_SYSTEM_FUNCTION_NAMES: frozenset[str] = frozenset({
+    # <stdio.h>
+    "printf", "fprintf", "sprintf", "snprintf",
+    "vprintf", "vfprintf", "vsprintf", "vsnprintf",
+    "puts", "putchar", "putc", "getchar", "getc",
+    "fopen", "fclose", "fread", "fwrite",
+    "fgetc", "fputc", "fputs", "fgets",
+    "fflush", "fseek", "ftell", "feof", "ferror",
+    "rewind", "perror", "remove", "rename",
+    "scanf", "fscanf", "sscanf",
+    # <string.h>
+    "memcpy", "memmove", "memset", "memcmp", "memchr",
+    "strlen", "strcpy", "strncpy", "strcat", "strncat",
+    "strcmp", "strncmp", "strchr", "strrchr",
+    "strstr", "strtok", "strtok_r",
+    "strcasecmp", "strncasecmp",
+    # <stdlib.h>
+    "malloc", "free", "calloc", "realloc",
+    "abort", "exit", "_Exit",
+    "atoi", "atol", "atoll",
+    "strtol", "strtoul", "strtoll", "strtoull", "strtod",
+    "rand", "srand", "abs", "labs", "llabs",
+    "qsort", "bsearch", "atexit",
+    # <signal.h>
+    "signal", "raise", "kill", "sigaction",
+    # <ctype.h>
+    "isalpha", "isdigit", "isspace", "isalnum",
+    "isupper", "islower", "toupper", "tolower",
+    "isprint", "ispunct", "isxdigit",
+    # <math.h>
+    "sin", "cos", "tan", "sqrt", "fabs", "ceil", "floor", "pow",
+    # <unistd.h>
+    "read", "write", "close", "lseek",
+})
+
+
+# C-standard / POSIX types that bare-metal stubs redefine but system headers
+# will provide.  Any typedef that defines one of these names is stripped from
+# the preprocessed type_decls section of the dynamic harness so our explicit
+# system #include directives win.
+_SYSTEM_TYPEDEF_NAMES: frozenset[str] = frozenset({
+    # C11 <stddef.h>
+    "max_align_t", "size_t", "ptrdiff_t", "wchar_t",
+    # C99 <wchar.h>
+    "wint_t", "wctrans_t", "wctype_t",
+    # POSIX <sys/types.h>
+    "FILE", "fpos_t", "clock_t", "time_t",
+    "pid_t", "uid_t", "gid_t", "mode_t", "nlink_t",
+    "off_t", "ino_t", "dev_t", "blkcnt_t", "blksize_t",
+    "rlim_t", "id_t", "suseconds_t", "useconds_t",
+    "ssize_t", "socklen_t", "sa_family_t",
+})
+
+
+def _strip_glibc_internal_typedefs(text: str) -> str:
+    """
+    Remove typedef declarations that define names starting with '__' OR that
+    define known C-standard / POSIX types (see _SYSTEM_TYPEDEF_NAMES).
+
+    Preprocessed bare-metal sources (e.g. VibeOS) expand their own libc stub
+    headers which redefine glibc-internal types (__fsid_t, __dev_t, …) and
+    C-standard types (max_align_t, size_t, …).  When the dynamic harness then
+    includes <signal.h>, <stdio.h>, etc., GCC sees conflicting redefinitions.
+    Stripping these typedefs from the preprocessed section lets the system
+    headers win without any conflict.
+
+    Handles both simple and struct typedefs, including one-level nested braces:
+        typedef unsigned long int __dev_t;
+        typedef struct { int __val[2]; } __fsid_t;
+        typedef union { long long __ll; long double __ld; } max_align_t;
+    """
+    result: list[str] = []
+    i = 0
+    pat = re.compile(r'\btypedef\b')
+    while i < len(text):
+        m = pat.search(text, i)
+        if m is None:
+            result.append(text[i:])
+            break
+        j = m.end()
+        depth = 0
+        while j < len(text):
+            ch = text[j]
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            elif ch == ';' and depth == 0:
+                break
+            j += 1
+        if j >= len(text):
+            result.append(text[i:])
+            break
+        typedef_text = text[m.start():j + 1]
+        name_m = re.search(r'\b(\w+)\s*;$', typedef_text)
+        if name_m and (
+            name_m.group(1).startswith('__')
+            or name_m.group(1) in _SYSTEM_TYPEDEF_NAMES
+        ):
+            result.append(text[i:m.start()])
+            result.append(f'/* typedef {name_m.group(1)} removed */')
+        else:
+            result.append(text[i:j + 1])
+        i = j + 1
+    return ''.join(result)
+
+
+def _strip_stdlib_decls(text: str) -> str:
+    """
+    Remove forward declarations (no body) for standard C/POSIX functions.
+
+    Kernel headers (e.g. VibeOS printf.h) sometimes re-declare standard
+    functions with non-standard signatures (e.g. ``int snprintf(char*, int, …)``
+    instead of ``int snprintf(char*, size_t, …)``).  These conflict with the
+    system ``<stdio.h>`` we include in the dynamic harness.  Strip any
+    declaration — a statement ending in ``;`` at brace depth 0 that contains
+    a ``(`` and whose function name is in _SYSTEM_FUNCTION_NAMES — from the
+    preprocessed type_decls.
+    """
+    # Match function declarations at brace depth 0: lines/blocks ending in ';'
+    # that look like "... funcname ( ... );"
+    _DECL_PAT = re.compile(r'\b(\w+)\s*\(')
+    result: list[str] = []
+    i = 0
+    while i < len(text):
+        # Find the next ';' at depth 0
+        j = i
+        depth = 0
+        while j < len(text):
+            ch = text[j]
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            elif ch == ';' and depth == 0:
+                break
+            j += 1
+        if j >= len(text):
+            result.append(text[i:])
+            break
+        stmt = text[i:j + 1]
+        # Does this statement look like a function declaration (has parens, no body)?
+        m = _DECL_PAT.search(stmt)
+        if m and m.group(1) in _SYSTEM_FUNCTION_NAMES and '{' not in stmt:
+            result.append(f'/* {m.group(1)} decl removed */')
+        else:
+            result.append(stmt)
+        i = j + 1
     return ''.join(result)
 
 

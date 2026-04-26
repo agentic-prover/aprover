@@ -26,7 +26,7 @@ from amc.dynamic_validator import (
     DynamicValidationResult,
     DynamicValidator,
 )
-from amc.harness_generator import HarnessGenerator, _strip_inline_asm, _strip_static_inline_defs
+from amc.harness_generator import HarnessGenerator, _strip_glibc_internal_typedefs, _strip_inline_asm, _strip_static_inline_defs
 from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
 
 
@@ -593,3 +593,94 @@ int main(void) {
 
     assert result.outcome == DynamicOutcome.CONFIRMED
     assert result.signal_name == "SIGSEGV"
+
+
+# ---------------------------------------------------------------------------
+# Unit: _strip_glibc_internal_typedefs
+# ---------------------------------------------------------------------------
+
+
+def test_strip_glibc_typedefs_simple():
+    src = "typedef unsigned long int __dev_t;"
+    out = _strip_glibc_internal_typedefs(src)
+    assert "typedef unsigned long int __dev_t;" not in out
+    assert "/* typedef __dev_t removed */" in out
+
+
+def test_strip_glibc_typedefs_struct():
+    src = "typedef struct { int __val[2]; } __fsid_t;"
+    out = _strip_glibc_internal_typedefs(src)
+    assert "typedef struct" not in out
+    assert "/* typedef __fsid_t removed */" in out
+
+
+def test_strip_glibc_typedefs_keeps_public_names():
+    src = "typedef unsigned long kernel_addr_t;"
+    out = _strip_glibc_internal_typedefs(src)
+    assert out == src
+
+
+def test_strip_glibc_typedefs_mixed():
+    src = (
+        "typedef unsigned long int __dev_t;\n"
+        "typedef unsigned int kernel_flags_t;\n"
+        "typedef struct { int __val[2]; } __fsid_t;\n"
+        "typedef long int __time_t;\n"
+        "typedef long long max_align_t;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    assert "typedef unsigned int kernel_flags_t;" in out
+    assert "/* typedef __dev_t removed */" in out
+    assert "/* typedef __fsid_t removed */" in out
+    assert "/* typedef __time_t removed */" in out
+    assert "/* typedef max_align_t removed */" in out
+    assert "typedef unsigned long int __dev_t;" not in out
+    assert "typedef struct" not in out
+
+
+def test_strip_glibc_typedefs_no_typedefs():
+    src = "int x = 0;\nvoid foo(void) { }\n"
+    assert _strip_glibc_internal_typedefs(src) == src
+
+
+def test_dynamic_harness_compiles_without_fsid_conflict():
+    """End-to-end: harness with preprocessed glibc type decls compiles cleanly."""
+    if not GCC_AVAILABLE:
+        pytest.skip("gcc not available")
+    config = Config(enable_dynamic_validation=True, dynamic_cc_path="gcc")
+    hg = HarnessGenerator(config)
+
+    # Inject a preprocessed_source that contains conflicting glibc typedefs.
+    # This simulates what happens when VibeOS kernel sources are preprocessed.
+    glibc_types = (
+        "typedef unsigned long int __dev_t;\n"
+        "typedef struct { int __val[2]; } __fsid_t;\n"
+        "typedef long int __time_t;\n"
+        "typedef long int __clock_t;\n"
+    )
+    func = _make_func(
+        name="safe_nop",
+        body="{ }",
+        params=[],
+        ret_type="void",
+    )
+    pf = ParsedCFile(
+        path="kernel.c",
+        functions={"safe_nop": func.signature},
+        call_graph={"safe_nop": set()},
+        function_bodies={"safe_nop": func.body},
+        preprocessed_source=glibc_types + "\nvoid safe_nop(void) { }\n",
+    )
+    cex = _make_cex()
+    dv = DynamicValidator(config, hg)
+
+    result = dv.validate(
+        entry_func=func,
+        counterexample=cex,
+        parsed_file=pf,
+        all_funcs={"safe_nop": func},
+        all_specs={},
+    )
+    assert result.outcome in (DynamicOutcome.NOT_TRIGGERED, DynamicOutcome.CONFIRMED), (
+        f"Expected compile success, got {result.outcome}: {result.compile_error}"
+    )

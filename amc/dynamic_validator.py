@@ -137,15 +137,34 @@ class DynamicValidator:
                 )
             binary_path, compile_err2 = self._compile(harness_src2, cc)
             if binary_path is None:
-                err_snippet = (compile_err2 or "unknown")[:300]
-                return DynamicValidationResult(
-                    outcome=DynamicOutcome.INCONCLUSIVE,
-                    compile_error=compile_err2,
-                    reasoning=(
-                        f"Dynamic harness compilation failed even without global state "
-                        f"injection for '{entry_func.name}'. Error: {err_snippet}"
-                    ),
-                )
+                # --- Attempt 3: relax linker — ignore undefined external symbols ---
+                # Bare-metal functions often reference globals from other translation
+                # units (e.g. fb_base from fb.c).  Allow undefined references so the
+                # harness still runs; unresolved globals default to address 0, which
+                # is likely to trigger the same fault the CEx predicts.
+                if compile_err2 and "undefined reference" in compile_err2:
+                    logger.info(
+                        "Dynamic harness has undefined external refs for '%s' — "
+                        "retrying with --allow-unresolved-symbols",
+                        entry_func.name,
+                    )
+                    binary_path, compile_err3 = self._compile(
+                        harness_src2, cc,
+                        extra_flags=["-Wl,--unresolved-symbols=ignore-all"],
+                    )
+                else:
+                    compile_err3 = compile_err2
+                    binary_path = None
+                if binary_path is None:
+                    err_snippet = (compile_err3 or compile_err2 or "unknown")[:300]
+                    return DynamicValidationResult(
+                        outcome=DynamicOutcome.INCONCLUSIVE,
+                        compile_error=compile_err2,
+                        reasoning=(
+                            f"Dynamic harness compilation failed even without global state "
+                            f"injection for '{entry_func.name}'. Error: {err_snippet}"
+                        ),
+                    )
 
         try:
             result = self._run(binary_path)
@@ -189,7 +208,9 @@ class DynamicValidator:
             )
             return None
 
-    def _compile(self, harness_src: str, cc: str) -> "tuple[str | None, str | None]":
+    def _compile(
+        self, harness_src: str, cc: str, extra_flags: "list[str] | None" = None
+    ) -> "tuple[str | None, str | None]":
         """Write harness to a temp file and compile it.  Returns (binary_path, error)."""
         with tempfile.NamedTemporaryFile(
             suffix=".c", delete=False, mode="w", encoding="utf-8"
@@ -200,9 +221,12 @@ class DynamicValidator:
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as bin_f:
             bin_path = bin_f.name
 
+        cmd = [cc, "-g", "-fno-builtin", "-w", "-o", bin_path, src_path]
+        if extra_flags:
+            cmd.extend(extra_flags)
         try:
             proc = subprocess.run(
-                [cc, "-g", "-fno-builtin", "-w", "-o", bin_path, src_path],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
