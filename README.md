@@ -135,7 +135,7 @@ Hand-crafted per-module wrappers inline cross-file includes and stub external de
 | `vibeos_printf.c` | 3 | `INT64_MIN` signed overflow; two unbounded loops |
 | `vibeos_klog.c` | 0 | Ring-buffer logic verified |
 
-### Raw-source mode — ~198 findings across 43 files (partial run)
+### Raw-source mode — ~198 findings across 43 files (partial run, no dynamic validation)
 
 In raw-source mode AMC preprocesses the unmodified kernel source directly using `cc -E` and verifies each file without any manual wrapper preparation. A partial run across 43 of 48 kernel `.c` files (stopped before `ttf`, `vfs`, `virtio_blk`, `virtio_net`, `virtio_sound`) reported ~198 confirmed bugs, including HAL-layer findings in the SD card driver and interrupt controller.
 
@@ -147,9 +147,9 @@ amc verify-dir \
   --include-dir examples/vibeos/repo/kernel
 ```
 
-### Raw-source mode with dynamic validation — 81 real bugs in 28/48 files
+### Raw-source mode with dynamic validation — 173 findings across 37 modules
 
-A second raw-source run with `AMC_ENABLE_DYNAMIC_VALIDATION=true` exercised the complete dynamic validation pipeline directly on the unmodified VibeOS kernel source. The run covered 28 of 48 kernel `.c` files before being stopped.
+A full raw-source run with `AMC_ENABLE_DYNAMIC_VALIDATION=true` exercised the complete dynamic validation pipeline across all 38 unique kernel modules (47 of 48 files — `font.c` was not processed; 7 stems appear in both HAL variants and their results are merged into one artifact directory per stem).
 
 **Enabling dynamic validation on bare-metal C** required four harness fixes to allow the GCC harness to compile and run against preprocessed ARM64 kernel sources on an x86 host:
 - Strip ARM64 inline ASM blocks (`asm volatile`, `__asm__`) that won't assemble on x86.
@@ -158,23 +158,40 @@ A second raw-source run with `AMC_ENABLE_DYNAMIC_VALIDATION=true` exercised the 
 - Strip forward declarations of standard functions with non-standard signatures (e.g. `printf.h` declares `snprintf(char*, int, ...)` instead of `snprintf(char*, size_t, ...)`).
 - When kernel functions reference globals from other translation units (e.g. `fb_base` defined in `fb.c`), a third compile attempt uses `-Wl,--unresolved-symbols=ignore-all` so the harness still links and runs.
 
-**Results across 28 files:**
+**Results across 37 modules:**
 
 | Confidence tier | Count | Description |
 |---|---|---|
-| `confirmed_dynamic` | 6 | Runtime fault (SIGSEGV) directly observed |
-| `confirmed_system_entry` | 56 | Full call chain traced to kernel entry point |
-| `confirmed_bmc` | 19 | BMC reachability confirmed from a caller |
-| **Total** | **81** | |
+| `confirmed_dynamic` | **32** | Runtime fault (SIGSEGV) directly observed |
+| `confirmed_system_entry` | **108** | Full call chain traced to kernel entry point |
+| `confirmed_bmc` | **33** | Reachability confirmed from a caller via BMC |
+| **Total** | **173** | |
 
-**`confirmed_dynamic` bugs (runtime SIGSEGV):** `console.scroll_up`, `cursor.draw_cursor_at`, `cursor.save_background`, `elf.elf_load`, `elf.elf_load_at`, `gpio.gpio_delay_us`.
+**`confirmed_dynamic` bugs (runtime SIGSEGV confirmed):**
+
+| Module | Functions |
+|---|---|
+| `irq` | `handle_serror`, `handle_sync_exception`, `uart_puthex`, `wsod_animate_ekg`, `wsod_draw_line`, `wsod_draw_sad_mac`, `wsod_draw_text`, `wsod_hex`, `wsod_int` |
+| `ttf` | `stbtt__sort_edges_ins_sort`, `stbtt__sort_edges_quicksort` |
+| `dma` | `hal_dma_copy`, `hal_dma_fb_copy` |
+| `fb` | `find_ramfb_selector`, `fw_cfg_read`, `local_strcmp` |
+| `usb_hid` | `kbd_ring_push`, `mouse_ring_push`, `usb_irq_handler` |
+| `vfs` | `readdir_callback`, `vfs_lookup` |
+| `elf` | `elf_load`, `elf_load_at` |
+| `cursor` | `draw_cursor_at`, `save_background` |
+| `console` | `scroll_up` |
+| `string` | `strlen` |
+| `kapi` | `kapi_print_hex`, `kapi_print_int` |
+| `kernel` | `uart_getc_blocking` |
+| `process` | `process_init` |
+| `usb_enum` | `usb_enumerate_hub` |
 
 To reproduce:
 ```bash
 AMC_ENABLE_DYNAMIC_VALIDATION=true amc verify-dir \
   --source-dir examples/vibeos/repo/kernel \
   --driver vibeos_dynamic \
-  --output artifacts/vibeos_dynamic \
+  --output artifacts/vibeos_dynamic2 \
   --include-dir examples/vibeos/repo/kernel
 ```
 
@@ -188,14 +205,14 @@ AMC independently reproduced the `calloc` integer-overflow issue filed in the Vi
 
 - **Callee stub soundness (partial).** Phase 2 and Phase 3 reachability stubs are now constrained by callee postconditions, and Phase 3 Stage 2 inlines real local callee bodies for feasibility checking. External callees (hardware registers, OS syscalls) still use postcondition-constrained stubs; their postconditions are LLM-generated and may be over-permissive.
 - **No baseline comparisons reported yet.** The three ablation baselines are implemented but not yet exercised on VibeOS.
-- **Raw-source run (without dynamic validation):** ~198 findings across 43/48 files. Dynamic-validation run: 81 findings across 28/48 files (stopped mid-run).
+- **HAL deduplication.** The kernel has 48 `.c` files across 38 unique stems; 7 stems (`dma`, `fb`, `irq`, `keyboard`, `mouse`, `platform`, `serial`) each appear in both `hal/pizero2w/` and `hal/qemu/`. `verify-dir` processes all files but writes results to per-stem artifact directories, so only the last-processed HAL variant's results are retained for those 7 stems. `font.c` was not processed in any run.
 - **Single-system evaluation.** Generalization beyond VibeOS is not yet demonstrated.
 
 ## Running tests
 
 ```bash
 uv run pytest tests/ -q
-# 198 passed, 1 skipped
+# 211 passed, 1 skipped
 ```
 
 ## Usage — whole-codebase mode
