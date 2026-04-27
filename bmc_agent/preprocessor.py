@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from amc.logger import get_logger
+from bmc_agent.logger import get_logger
 
 logger = get_logger("preprocessor")
 

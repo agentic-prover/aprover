@@ -13,11 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from amc.cbmc import run_cbmc
+from bmc_agent.cbmc import run_cbmc
 
 if TYPE_CHECKING:
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
 
 
 @dataclass
@@ -57,7 +57,7 @@ class CBMCAloneBaseline:
         - Integer overflows
         - Array out-of-bounds
         """
-        from amc.parser import parse_c_file
+        from bmc_agent.parser import parse_c_file
 
         start = time.monotonic()
         bugs_found: list[str] = []
@@ -143,10 +143,10 @@ class AMCAblationBaseline:
         serving as a baseline to measure the value of caller-context-aware
         spec generation.
         """
-        from amc.artifacts import ArtifactStore
-        from amc.llm import LLMClient
-        from amc.parser import parse_c_file
-        from amc.spec_generator import SpecGenerator
+        from bmc_agent.artifacts import ArtifactStore
+        from bmc_agent.llm import LLMClient
+        from bmc_agent.parser import parse_c_file
+        from bmc_agent.spec_generator import SpecGenerator
 
         start = time.monotonic()
         bugs_found: list[str] = []
@@ -173,7 +173,7 @@ class AMCAblationBaseline:
             )
 
         # Run BMC
-        from amc.bmc_engine import BMCEngine
+        from bmc_agent.bmc_engine import BMCEngine
 
         try:
             parsed = parse_c_file(source_file)
@@ -225,7 +225,7 @@ class FilteringOnlyBaseline:
     ) -> BaselineResult:
         from dataclasses import replace
 
-        from amc.pipeline import AMCPipeline
+        from bmc_agent.pipeline import AMCPipeline
 
         start = time.monotonic()
 
@@ -277,7 +277,7 @@ def _make_minimal_harness(source_file: str, func_sig: "object") -> str:
     func_sig:
         A FunctionSignature object with .name, .return_type, and .parameters.
     """
-    from amc.parser import FunctionSignature
+    from bmc_agent.parser import FunctionSignature
 
     sig: FunctionSignature = func_sig  # type: ignore[assignment]
 

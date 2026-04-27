@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from amc.evaluation.corpus import Corpus
-    from amc.evaluation.metrics import EvaluationSummary
+    from bmc_agent.evaluation.corpus import Corpus
+    from bmc_agent.evaluation.metrics import EvaluationSummary
 
-from amc.config import Config
-from amc.evaluation.baselines import BaselineResult, CBMCAloneBaseline
-from amc.logger import get_logger
-from amc.pipeline import AMCPipeline
+from bmc_agent.config import Config
+from bmc_agent.evaluation.baselines import BaselineResult, CBMCAloneBaseline
+from bmc_agent.logger import get_logger
+from bmc_agent.pipeline import AMCPipeline
 
 logger = get_logger("evaluation.runner")
 
@@ -50,13 +50,13 @@ class EvaluationRunner:
 
         Returns the aggregated EvaluationSummary.
         """
-        from amc.artifacts import ArtifactStore
-        from amc.bmc_engine import BMCVerdict
-        from amc.bug_reporter import BugReport
-        from amc.cex_validator import ValidationResult
-        from amc.evaluation.metrics import DriverMetrics, MetricsCollector
-        from amc.evaluation.report import ReportGenerator
-        from amc.spec import Spec
+        from bmc_agent.artifacts import ArtifactStore
+        from bmc_agent.bmc_engine import BMCVerdict
+        from bmc_agent.bug_reporter import BugReport
+        from bmc_agent.cex_validator import ValidationResult
+        from bmc_agent.evaluation.metrics import DriverMetrics, MetricsCollector
+        from bmc_agent.evaluation.report import ReportGenerator
+        from bmc_agent.spec import Spec
 
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)

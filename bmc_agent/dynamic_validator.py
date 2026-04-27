@@ -23,13 +23,13 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from amc.config import Config
-from amc.logger import get_logger
-from amc.parser import FunctionInfo, ParsedCFile
+from bmc_agent.config import Config
+from bmc_agent.logger import get_logger
+from bmc_agent.parser import FunctionInfo, ParsedCFile
 
 if TYPE_CHECKING:
-    from amc.cbmc import Counterexample
-    from amc.harness_generator import HarnessGenerator
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.harness_generator import HarnessGenerator
 
 logger = get_logger("dynamic_validator")
 

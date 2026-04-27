@@ -11,12 +11,12 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional
 
-from amc.artifacts import ArtifactStore
-from amc.cbmc import Counterexample
-from amc.cex_validator import CExOutcome, ValidationResult
-from amc.dynamic_validator import DynamicOutcome
-from amc.logger import get_logger
-from amc.parser import FunctionInfo
+from bmc_agent.artifacts import ArtifactStore
+from bmc_agent.cbmc import Counterexample
+from bmc_agent.cex_validator import CExOutcome, ValidationResult
+from bmc_agent.dynamic_validator import DynamicOutcome
+from bmc_agent.logger import get_logger
+from bmc_agent.parser import FunctionInfo
 
 logger = get_logger("bug_reporter")
 

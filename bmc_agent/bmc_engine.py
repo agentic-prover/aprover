@@ -16,14 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from amc.artifacts import ArtifactStore
-from amc.backends import BMCBackend, CBMCBackend
-from amc.cbmc import CBMCResult, Counterexample, run_cbmc
-from amc.config import Config
-from amc.harness_generator import HarnessGenerator
-from amc.logger import get_logger
-from amc.parser import FunctionInfo, ParsedCFile
-from amc.spec import Spec
+from bmc_agent.artifacts import ArtifactStore
+from bmc_agent.backends import BMCBackend, CBMCBackend
+from bmc_agent.cbmc import CBMCResult, Counterexample, run_cbmc
+from bmc_agent.config import Config
+from bmc_agent.harness_generator import HarnessGenerator
+from bmc_agent.logger import get_logger
+from bmc_agent.parser import FunctionInfo, ParsedCFile
+from bmc_agent.spec import Spec
 
 logger = get_logger("bmc_engine")
 

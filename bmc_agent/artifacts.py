@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from amc.spec import Spec, SpecStatus
+from bmc_agent.spec import Spec, SpecStatus
 
 
 class ArtifactStore:

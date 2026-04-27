@@ -18,11 +18,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from amc.parser import FunctionInfo, ParsedCFile
-    from amc.spec import Spec
-    from amc.backends.bmc_backend import BMCBackend
-    from amc.llm import LLMClient
-    from amc.config import Config
+    from bmc_agent.parser import FunctionInfo, ParsedCFile
+    from bmc_agent.spec import Spec
+    from bmc_agent.backends.bmc_backend import BMCBackend
+    from bmc_agent.llm import LLMClient
+    from bmc_agent.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ class MutationTester:
         parsed_file: "ParsedCFile",
         driver_name: str,
     ) -> MutationResult:
-        from amc.parser import FunctionInfo
+        from bmc_agent.parser import FunctionInfo
 
         mutations = _apply_mutations(func.body)
         caught = 0
@@ -261,7 +261,7 @@ class SpecConsistencyChecker:
         callee_spec: "Spec",
     ) -> ConsistencyResult:
         import json
-        from amc.prompts import SPEC_CONSISTENCY_PROMPT
+        from bmc_agent.prompts import SPEC_CONSISTENCY_PROMPT
 
         system_prompt = "You are a formal verification expert for C programs."
         user_prompt = SPEC_CONSISTENCY_PROMPT.format(

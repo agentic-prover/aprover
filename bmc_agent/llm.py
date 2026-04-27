@@ -17,8 +17,8 @@ import os
 import time
 from typing import Optional
 
-from amc.config import Config
-from amc.logger import get_logger
+from bmc_agent.config import Config
+from bmc_agent.logger import get_logger
 
 logger = get_logger("llm")
 

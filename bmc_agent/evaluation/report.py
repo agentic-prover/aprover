@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from amc.artifacts import ArtifactStore
-    from amc.bug_reporter import BugReport
-    from amc.evaluation.metrics import DriverMetrics, EvaluationSummary
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bug_reporter import BugReport
+    from bmc_agent.evaluation.metrics import DriverMetrics, EvaluationSummary
 
 
 class ReportGenerator:

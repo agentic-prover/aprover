@@ -15,10 +15,10 @@ import textwrap
 from pathlib import Path
 from typing import Optional
 
-from amc.config import Config
-from amc.dsl_to_cbmc import postcond_to_assert, precond_to_assume
-from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
-from amc.spec import Spec
+from bmc_agent.config import Config
+from bmc_agent.dsl_to_cbmc import postcond_to_assert, precond_to_assume
+from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
+from bmc_agent.spec import Spec
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +368,7 @@ class HarnessGenerator:
 
         Returns the harness as a C source string.
         """
-        from amc.cbmc import Counterexample  # local import to avoid circular
+        from bmc_agent.cbmc import Counterexample  # local import to avoid circular
 
         fn_name = caller.name
         sig = caller.signature

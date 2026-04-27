@@ -32,7 +32,7 @@ EXAMPLE_C = REPO_ROOT / "examples" / "simple_driver.c"
 
 def test_parse_c_file_functions():
     """Parser must find all eight ring-buffer functions."""
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     result = parse_c_file(EXAMPLE_C)
 
@@ -57,7 +57,7 @@ def test_parse_c_file_functions():
 
 def test_parse_c_file_signatures():
     """Parser must extract return types and parameter lists."""
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     result = parse_c_file(EXAMPLE_C)
 
@@ -82,7 +82,7 @@ def test_call_graph_rb_write_calls_predicates():
     or, if the regex backend doesn't, that the graph structure is still
     consistent.
     """
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     result = parse_c_file(EXAMPLE_C)
     cg = result.call_graph
@@ -98,7 +98,7 @@ def test_call_graph_rb_write_calls_predicates():
 
 def test_call_graph_is_dict_of_sets():
     """call_graph must be dict[str, set[str]]."""
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     result = parse_c_file(EXAMPLE_C)
     assert isinstance(result.call_graph, dict)
@@ -109,7 +109,7 @@ def test_call_graph_is_dict_of_sets():
 
 def test_function_bodies_extracted():
     """Parser must store non-empty body text for each function."""
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     result = parse_c_file(EXAMPLE_C)
     for fn_name in result.functions:
@@ -127,7 +127,7 @@ _CBMC_INSTALLED = shutil.which("cbmc") is not None
 @pytest.mark.skipif(not _CBMC_INSTALLED, reason="cbmc not installed")
 def test_cbmc_on_trivial_harness(tmp_path: Path):
     """Run CBMC on a trivial harness; expect it to verify successfully."""
-    from amc.cbmc import run_cbmc
+    from bmc_agent.cbmc import run_cbmc
 
     harness = tmp_path / "harness_rb_is_empty.c"
     harness.write_text(
@@ -164,7 +164,7 @@ int main(void) {
 
 def test_cbmc_no_cbmc_installed(tmp_path: Path):
     """When cbmc_path is bogus, CBMCResult.error should indicate not found."""
-    from amc.cbmc import run_cbmc
+    from bmc_agent.cbmc import run_cbmc
 
     harness = tmp_path / "dummy.c"
     harness.write_text("int main(void) { return 0; }\n", encoding="utf-8")
@@ -177,7 +177,7 @@ def test_cbmc_no_cbmc_installed(tmp_path: Path):
 
 def test_cbmc_result_graceful_when_missing():
     """run_cbmc with a missing cbmc must not raise; must return error result."""
-    from amc.cbmc import CBMCResult, run_cbmc
+    from bmc_agent.cbmc import CBMCResult, run_cbmc
 
     result = run_cbmc(
         harness_path="/tmp/nonexistent_harness.c",
@@ -195,8 +195,8 @@ def test_cbmc_result_graceful_when_missing():
 
 def test_artifact_store_save_load_spec(tmp_path: Path):
     """ArtifactStore must round-trip a Spec through JSON."""
-    from amc.artifacts import ArtifactStore
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.spec import Spec, SpecStatus
 
     store = ArtifactStore(tmp_path / "artifacts")
     store.init_driver("simple_driver")
@@ -222,8 +222,8 @@ def test_artifact_store_save_load_spec(tmp_path: Path):
 
 def test_artifact_store_save_cbmc_result(tmp_path: Path):
     """ArtifactStore must save and load CBMC results."""
-    from amc.artifacts import ArtifactStore
-    from amc.cbmc import CBMCResult
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.cbmc import CBMCResult
 
     store = ArtifactStore(tmp_path / "artifacts")
     store.init_driver("simple_driver")
@@ -239,8 +239,8 @@ def test_artifact_store_save_cbmc_result(tmp_path: Path):
 
 def test_artifact_store_run_summary(tmp_path: Path):
     """get_run_summary must return correct aggregate counts."""
-    from amc.artifacts import ArtifactStore
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.spec import Spec, SpecStatus
 
     store = ArtifactStore(tmp_path / "artifacts")
     store.init_driver("drv")
@@ -266,7 +266,7 @@ def test_artifact_store_run_summary(tmp_path: Path):
 
 def test_artifact_store_bug_report(tmp_path: Path):
     """ArtifactStore must save and load bug reports."""
-    from amc.artifacts import ArtifactStore
+    from bmc_agent.artifacts import ArtifactStore
 
     store = ArtifactStore(tmp_path / "artifacts")
     store.init_driver("drv")
@@ -285,7 +285,7 @@ def test_artifact_store_bug_report(tmp_path: Path):
 
 
 def test_spec_validate_valid():
-    from amc.spec import Spec, validate_spec
+    from bmc_agent.spec import Spec, validate_spec
 
     s = Spec(
         function_name="rb_write",
@@ -296,14 +296,14 @@ def test_spec_validate_valid():
 
 
 def test_spec_validate_empty_name():
-    from amc.spec import Spec, validate_spec
+    from bmc_agent.spec import Spec, validate_spec
 
     s = Spec(function_name="", precondition="x > 0", postcondition="y > 0")
     assert validate_spec(s) is False
 
 
 def test_spec_validate_empty_precondition():
-    from amc.spec import Spec, validate_spec
+    from bmc_agent.spec import Spec, validate_spec
 
     s = Spec(function_name="foo", precondition="", postcondition="y > 0")
     assert validate_spec(s) is False
@@ -311,7 +311,7 @@ def test_spec_validate_empty_precondition():
 
 def test_spec_parse_json():
     """parse_spec must handle a JSON-encoded Spec."""
-    from amc.spec import Spec, parse_spec
+    from bmc_agent.spec import Spec, parse_spec
 
     data = {
         "function_name": "rb_read",
@@ -330,7 +330,7 @@ def test_spec_parse_json():
 
 def test_spec_parse_natural_language():
     """parse_spec must handle a rough natural-language spec block."""
-    from amc.spec import parse_spec
+    from bmc_agent.spec import parse_spec
 
     text = (
         "Function: my_func\n"
@@ -345,7 +345,7 @@ def test_spec_parse_natural_language():
 
 def test_spec_merge():
     """merge_specs should combine preconditions with OR and postconditions with AND."""
-    from amc.spec import Spec, merge_specs
+    from bmc_agent.spec import Spec, merge_specs
 
     s1 = Spec(function_name="f", precondition="x > 0", postcondition="y > 0")
     s2 = Spec(function_name="f", precondition="x > 1", postcondition="z > 0")
@@ -361,7 +361,7 @@ def test_spec_merge():
 
 def test_spec_merge_single():
     """merge_specs of a single spec returns it unchanged."""
-    from amc.spec import Spec, merge_specs
+    from bmc_agent.spec import Spec, merge_specs
 
     s = Spec(function_name="f", precondition="x > 0", postcondition="y > 0")
     merged = merge_specs([s])
@@ -369,7 +369,7 @@ def test_spec_merge_single():
 
 
 def test_spec_merge_empty_raises():
-    from amc.spec import merge_specs
+    from bmc_agent.spec import merge_specs
 
     with pytest.raises(ValueError):
         merge_specs([])
@@ -381,7 +381,7 @@ def test_spec_merge_empty_raises():
 
 
 def test_config_defaults():
-    from amc.config import Config
+    from bmc_agent.config import Config
 
     c = Config()
     assert c.llm_model == "claude-sonnet-4-6"
@@ -393,7 +393,7 @@ def test_config_from_env(monkeypatch):
     monkeypatch.setenv("AMC_CBMC_UNWIND", "8")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-xyz")
 
-    from amc.config import Config
+    from bmc_agent.config import Config
 
     c = Config.from_env()
     assert c.cbmc_unwind == 8
@@ -407,7 +407,7 @@ def test_config_from_env(monkeypatch):
 
 def test_logger_creates_file(tmp_path: Path):
     """Logger must create amc.log in the artifact directory."""
-    from amc import logger as lg
+    from bmc_agent import logger as lg
 
     lg.reset_loggers()
     log = lg.get_logger("test_component", artifact_dir=str(tmp_path))

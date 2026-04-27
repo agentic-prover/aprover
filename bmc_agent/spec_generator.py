@@ -23,12 +23,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from amc.artifacts import ArtifactStore
-from amc.config import Config
-from amc.llm import LLMClient, LLMError
-from amc.logger import get_logger
-from amc.parser import FunctionInfo, ParsedCFile, parse_c_file
-from amc.prompts import (
+from bmc_agent.artifacts import ArtifactStore
+from bmc_agent.config import Config
+from bmc_agent.llm import LLMClient, LLMError
+from bmc_agent.logger import get_logger
+from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
+from bmc_agent.prompts import (
     CALLER_HEAVY_SPEC_PROMPT,
     DSL_GRAMMAR,
     ENTRY_SPEC_PROMPT,
@@ -37,7 +37,7 @@ from amc.prompts import (
     INTERNAL_SPEC_PROMPT,
     SPEC_DISAGREEMENT_PROMPT,
 )
-from amc.spec import Spec, SpecStatus, merge_specs
+from bmc_agent.spec import Spec, SpecStatus, merge_specs
 
 logger = get_logger("spec_generator")
 

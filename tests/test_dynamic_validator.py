@@ -19,17 +19,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from amc.cbmc import Counterexample
-from amc.config import Config
-from amc.dynamic_validator import (
+from bmc_agent.cbmc import Counterexample
+from bmc_agent.config import Config
+from bmc_agent.dynamic_validator import (
     DynamicOutcome,
     DynamicValidationResult,
     DynamicValidator,
     _looks_like_c_code,
     _wrap_reproducer_with_signal_handlers,
 )
-from amc.harness_generator import HarnessGenerator, _strip_glibc_internal_typedefs, _strip_inline_asm, _strip_static_inline_defs
-from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
+from bmc_agent.harness_generator import HarnessGenerator, _strip_glibc_internal_typedefs, _strip_inline_asm, _strip_static_inline_defs
+from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
 
 
 # ---------------------------------------------------------------------------

@@ -54,8 +54,8 @@ def test_build_generation_order_simple_driver():
     rb_init, rb_is_full, rb_is_empty, rb_write, rb_read are internals called
     by the entry points. So layer 1 = entry points, layer 2 = internals.
     """
-    from amc.parser import parse_c_file
-    from amc.spec_generator import _build_generation_order
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec_generator import _build_generation_order
 
     parsed = parse_c_file(EXAMPLE_C)
     defined = set(parsed.functions.keys())
@@ -116,7 +116,7 @@ def test_build_generation_order_simple_driver():
 
 def test_build_generation_order_empty():
     """Empty call graph returns empty layers."""
-    from amc.spec_generator import _build_generation_order
+    from bmc_agent.spec_generator import _build_generation_order
 
     layers = _build_generation_order({})
     assert layers == []
@@ -124,7 +124,7 @@ def test_build_generation_order_empty():
 
 def test_build_generation_order_single_node():
     """Single function with no calls returns one layer."""
-    from amc.spec_generator import _build_generation_order
+    from bmc_agent.spec_generator import _build_generation_order
 
     layers = _build_generation_order({"foo": set()})
     assert len(layers) == 1
@@ -137,7 +137,7 @@ def test_build_generation_order_single_node():
 
 def test_scc_detects_cycle():
     """Kosaraju's algorithm must group cyclic functions into one SCC."""
-    from amc.spec_generator import _kosaraju_sccs
+    from bmc_agent.spec_generator import _kosaraju_sccs
 
     # A -> B -> C -> A  (a cycle)
     graph = {
@@ -159,7 +159,7 @@ def test_scc_detects_cycle():
 
 def test_scc_no_cycle():
     """DAG should yield singleton SCCs."""
-    from amc.spec_generator import _kosaraju_sccs
+    from bmc_agent.spec_generator import _kosaraju_sccs
 
     graph = {
         "A": {"B", "C"},
@@ -181,7 +181,7 @@ def test_generation_order_with_cycle():
     """
     Functions in the same SCC (cycle) should appear in the same layer.
     """
-    from amc.spec_generator import _build_generation_order
+    from bmc_agent.spec_generator import _build_generation_order
 
     # A <-> B (mutual recursion), both called by C, C called by nobody
     graph = {
@@ -211,7 +211,7 @@ def test_generation_order_with_cycle():
 
 def test_merge_specs_disjunction_conjunction():
     """merge_specs: preconditions are OR'd, postconditions are AND'd."""
-    from amc.spec import Spec, merge_specs
+    from bmc_agent.spec import Spec, merge_specs
 
     s1 = Spec(
         function_name="callee",
@@ -236,14 +236,14 @@ def test_merge_specs_disjunction_conjunction():
 
 def test_merge_specs_single():
     """merge_specs of one spec returns the spec unchanged."""
-    from amc.spec import Spec, merge_specs
+    from bmc_agent.spec import Spec, merge_specs
 
     s = Spec(function_name="f", precondition="x > 0", postcondition="y > 0")
     assert merge_specs([s]) is s
 
 
 def test_merge_specs_empty_raises():
-    from amc.spec import merge_specs
+    from bmc_agent.spec import merge_specs
 
     with pytest.raises(ValueError):
         merge_specs([])
@@ -251,7 +251,7 @@ def test_merge_specs_empty_raises():
 
 def test_merge_specs_three_callers():
     """Merging three caller specs should produce correct OR/AND combination."""
-    from amc.spec import Spec, merge_specs
+    from bmc_agent.spec import Spec, merge_specs
 
     specs = [
         Spec(function_name="f", precondition="a > 0", postcondition="p"),
@@ -277,9 +277,9 @@ def test_spec_generator_full_run(tmp_path: Path):
     Full spec generation run on simple_driver.c with mocked LLM.
     Verifies all functions get non-trivial specs.
     """
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.spec_generator import SpecGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
 
     config = Config(
         llm_model="mock-model",
@@ -324,10 +324,10 @@ def test_spec_generator_full_run(tmp_path: Path):
 
 def test_spec_generator_callee_specs_populated(tmp_path: Path):
     """Callee specs should be attached to the caller's spec."""
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.spec_generator import SpecGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
+    from bmc_agent.parser import parse_c_file
 
     config = Config(
         llm_model="mock-model",
@@ -360,9 +360,9 @@ def test_spec_generator_callee_specs_populated(tmp_path: Path):
 
 def test_spec_generator_specs_saved_to_disk(tmp_path: Path):
     """Specs must be persisted to the artifact store."""
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.spec_generator import SpecGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
 
     config = Config(
         llm_model="mock-model",
@@ -391,10 +391,10 @@ def test_spec_generator_specs_saved_to_disk(tmp_path: Path):
 
 def test_spec_generator_llm_failure_fallback(tmp_path: Path):
     """When LLM raises LLMError, generator should fall back to weak spec."""
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.llm import LLMError
-    from amc.spec_generator import SpecGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMError
+    from bmc_agent.spec_generator import SpecGenerator
 
     config = Config(
         llm_model="mock-model",
@@ -427,9 +427,9 @@ def test_spec_generator_llm_failure_fallback(tmp_path: Path):
 
 def test_spec_generator_unparseable_response_fallback(tmp_path: Path):
     """When LLM returns garbage JSON, generator should fall back gracefully."""
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.spec_generator import SpecGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
 
     config = Config(
         llm_model="mock-model",
@@ -460,9 +460,9 @@ def test_spec_generator_unparseable_response_fallback(tmp_path: Path):
 def test_no_api_key_needed(tmp_path: Path):
     """Spec generation with mocked LLM must not require ANTHROPIC_API_KEY."""
     import os
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.spec_generator import SpecGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
 
     # Ensure no API key is set
     env_backup = os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -494,7 +494,7 @@ def test_no_api_key_needed(tmp_path: Path):
 
 def test_function_info_from_parsed():
     """ParsedCFile.get_function_info should return a correct FunctionInfo."""
-    from amc.parser import parse_c_file, FunctionInfo
+    from bmc_agent.parser import parse_c_file, FunctionInfo
 
     parsed = parse_c_file(EXAMPLE_C)
     info = parsed.get_function_info("rb_write")
@@ -509,7 +509,7 @@ def test_function_info_from_parsed():
 
 def test_all_function_infos():
     """ParsedCFile.all_function_infos should return all functions."""
-    from amc.parser import parse_c_file, FunctionInfo
+    from bmc_agent.parser import parse_c_file, FunctionInfo
 
     parsed = parse_c_file(EXAMPLE_C)
     infos = parsed.all_function_infos()
@@ -526,7 +526,7 @@ def test_all_function_infos():
 
 def test_prompts_module_constants():
     """All prompt template constants should exist and contain key substrings."""
-    from amc import prompts
+    from bmc_agent import prompts
 
     assert hasattr(prompts, "DSL_GRAMMAR")
     assert hasattr(prompts, "ENTRY_SPEC_PROMPT")
@@ -546,7 +546,7 @@ def test_prompts_module_constants():
 
 def test_cli_help():
     """CLI should print help without error."""
-    from amc.cli import build_parser
+    from bmc_agent.cli import build_parser
 
     parser = build_parser()
     # Should not raise
@@ -556,10 +556,10 @@ def test_cli_help():
 def test_cli_generate_with_mock(tmp_path: Path):
     """CLI generate command should work end-to-end with a mocked LLM."""
     from unittest.mock import patch
-    from amc.cli import main
+    from bmc_agent.cli import main
 
     with patch("amc.spec_generator.SpecGenerator.generate_specs") as mock_gen:
-        from amc.spec import Spec, SpecStatus
+        from bmc_agent.spec import Spec, SpecStatus
         mock_gen.return_value = {
             "rb_write": Spec(
                 function_name="rb_write",

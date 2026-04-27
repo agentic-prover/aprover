@@ -5,19 +5,19 @@ Provides tools for running GRACE on a corpus of C programs,
 comparing against baselines, and generating research-ready metrics.
 """
 
-from amc.evaluation.corpus import Corpus, CorpusEntry, GroundTruthBug
-from amc.evaluation.baselines import (
+from bmc_agent.evaluation.corpus import Corpus, CorpusEntry, GroundTruthBug
+from bmc_agent.evaluation.baselines import (
     BaselineResult,
     CBMCAloneBaseline,
     AMCAblationBaseline,
 )
-from amc.evaluation.metrics import (
+from bmc_agent.evaluation.metrics import (
     DriverMetrics,
     EvaluationSummary,
     MetricsCollector,
 )
-from amc.evaluation.report import ReportGenerator
-from amc.evaluation.runner import EvaluationRunner
+from bmc_agent.evaluation.report import ReportGenerator
+from bmc_agent.evaluation.runner import EvaluationRunner
 
 __all__ = [
     "Corpus",

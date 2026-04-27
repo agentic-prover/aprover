@@ -68,7 +68,7 @@ def _write_divide_files(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _make_config(tmp_path: Path):
-    from amc.config import Config
+    from bmc_agent.config import Config
     return Config(
         artifact_dir=str(tmp_path / "artifacts"),
         cbmc_path="cbmc",
@@ -80,7 +80,7 @@ def _make_config(tmp_path: Path):
 
 
 def _make_spec(name: str, pre: str = "true", post: str = "true"):
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.spec import Spec, SpecStatus
     return Spec(
         function_name=name,
         precondition=pre,
@@ -90,7 +90,7 @@ def _make_spec(name: str, pre: str = "true", post: str = "true"):
 
 
 def _make_store(tmp_path: Path):
-    from amc.artifacts import ArtifactStore
+    from bmc_agent.artifacts import ArtifactStore
     return ArtifactStore(str(tmp_path / "artifacts"))
 
 
@@ -121,11 +121,11 @@ def test_cross_file_confirmed_system_entry_apply_op(tmp_path: Path):
     confirmed_system_entry because CBMC can confirm system_entry reaches
     apply_op and system_entry itself is a true entry point.
     """
-    from amc.bug_reporter import BugReporter
-    from amc.cbmc import Counterexample
-    from amc.cex_validator import CExOutcome, CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     libmath_path = CROSS_FILE_DEMO / "libmath.c"
     main_path = CROSS_FILE_DEMO / "main.c"
@@ -217,10 +217,10 @@ def test_propagate_upward_crosses_file_boundary(tmp_path: Path):
     _propagate_upward with real CBMC: divide (lib.c) has no in-file callers,
     but kernel_main (entry.c) calls divide and has no callers → system entry.
     """
-    from amc.cbmc import Counterexample
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     lib_path, entry_path = _write_divide_files(tmp_path)
     lib_parsed = parse_c_file(str(lib_path))
@@ -272,11 +272,11 @@ def test_cross_file_confirmed_system_entry_divide(tmp_path: Path):
     """
     Full validate() call for divide/kernel_main pair with real CBMC.
     """
-    from amc.bug_reporter import BugReporter
-    from amc.cbmc import Counterexample
-    from amc.cex_validator import CExOutcome, CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     lib_path, entry_path = _write_divide_files(tmp_path)
     lib_parsed = parse_c_file(str(lib_path))

@@ -1,6 +1,6 @@
 """Kani backend stub for Rust programs. Not yet implemented."""
 from __future__ import annotations
-from amc.backends.bmc_backend import BMCBackend
+from bmc_agent.backends.bmc_backend import BMCBackend
 
 
 class KaniBackend(BMCBackend):

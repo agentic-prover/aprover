@@ -38,7 +38,7 @@ MEMORY_ALLOCATOR = EXAMPLES_DIR / "memory_allocator.c"
 
 
 def _make_config(tmp_path: Path) -> "Config":
-    from amc.config import Config
+    from bmc_agent.config import Config
 
     return Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -50,7 +50,7 @@ def _make_config(tmp_path: Path) -> "Config":
 
 
 def _make_store(tmp_path: Path) -> "ArtifactStore":
-    from amc.artifacts import ArtifactStore
+    from bmc_agent.artifacts import ArtifactStore
 
     return ArtifactStore(str(tmp_path / "artifacts"))
 
@@ -62,7 +62,7 @@ def _make_driver_metrics(
     fp_rate: float = 0.2,
     coverage: float = 0.8,
 ) -> "DriverMetrics":
-    from amc.evaluation.metrics import DriverMetrics
+    from bmc_agent.evaluation.metrics import DriverMetrics
 
     return DriverMetrics(
         driver_name=driver_name,
@@ -84,8 +84,8 @@ def _make_driver_metrics(
 
 
 def _make_bug_report(driver_name: str, fn_name: str) -> "BugReport":
-    from amc.bug_reporter import BugReport
-    from amc.cbmc import Counterexample
+    from bmc_agent.bug_reporter import BugReport
+    from bmc_agent.cbmc import Counterexample
 
     cex = Counterexample(
         failing_property="array-bounds.1",
@@ -106,8 +106,8 @@ def _make_bug_report(driver_name: str, fn_name: str) -> "BugReport":
 
 
 def _make_validation_result(is_real_bug: bool, fn_name: str) -> "ValidationResult":
-    from amc.cbmc import Counterexample
-    from amc.cex_validator import ValidationResult
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import ValidationResult
 
     cex = Counterexample(
         failing_property="assertion.1",
@@ -133,7 +133,7 @@ def _make_validation_result(is_real_bug: bool, fn_name: str) -> "ValidationResul
 
 def test_corpus_entry_dataclass():
     """CorpusEntry and GroundTruthBug can be created and accessed."""
-    from amc.evaluation.corpus import CorpusEntry, GroundTruthBug
+    from bmc_agent.evaluation.corpus import CorpusEntry, GroundTruthBug
 
     bug = GroundTruthBug(
         function_name="rb_write",
@@ -160,7 +160,7 @@ def test_corpus_entry_dataclass():
 
 def test_ground_truth_bug_optional_line():
     """GroundTruthBug line_number is optional (can be None)."""
-    from amc.evaluation.corpus import GroundTruthBug
+    from bmc_agent.evaluation.corpus import GroundTruthBug
 
     bug = GroundTruthBug(
         function_name="some_func",
@@ -177,7 +177,7 @@ def test_ground_truth_bug_optional_line():
 
 def test_corpus_load_examples_dir():
     """Corpus.load() treats each .c file in examples/ as a corpus entry."""
-    from amc.evaluation.corpus import Corpus
+    from bmc_agent.evaluation.corpus import Corpus
 
     corpus = Corpus(str(EXAMPLES_DIR))
     entries = corpus.load()
@@ -195,7 +195,7 @@ def test_corpus_load_examples_dir():
 
 def test_corpus_load_empty_dir(tmp_path: Path):
     """Corpus.load() on an empty directory returns empty list."""
-    from amc.evaluation.corpus import Corpus
+    from bmc_agent.evaluation.corpus import Corpus
 
     corpus = Corpus(str(tmp_path / "nonexistent"))
     entries = corpus.load()
@@ -204,7 +204,7 @@ def test_corpus_load_empty_dir(tmp_path: Path):
 
 def test_corpus_load_subdir_layout(tmp_path: Path):
     """Corpus.load() supports the subdirectory layout with metadata and ground truth."""
-    from amc.evaluation.corpus import Corpus
+    from bmc_agent.evaluation.corpus import Corpus
 
     # Create a subdir-based entry
     entry_dir = tmp_path / "my_driver"
@@ -247,7 +247,7 @@ def test_corpus_load_subdir_layout(tmp_path: Path):
 
 def test_corpus_add_entry(tmp_path: Path):
     """Corpus.add_entry() creates the expected directory structure."""
-    from amc.evaluation.corpus import Corpus, CorpusEntry, GroundTruthBug
+    from bmc_agent.evaluation.corpus import Corpus, CorpusEntry, GroundTruthBug
 
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()
@@ -291,7 +291,7 @@ def test_corpus_add_entry(tmp_path: Path):
 
 def test_corpus_add_then_load(tmp_path: Path):
     """Entries added with add_entry() can be loaded back with load()."""
-    from amc.evaluation.corpus import Corpus, CorpusEntry, GroundTruthBug
+    from bmc_agent.evaluation.corpus import Corpus, CorpusEntry, GroundTruthBug
 
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()
@@ -325,8 +325,8 @@ def test_corpus_add_then_load(tmp_path: Path):
 
 def test_cbmc_alone_baseline_bugs_found(tmp_path: Path):
     """CBMCAloneBaseline finds bugs when CBMC returns counterexamples."""
-    from amc.cbmc import CBMCResult, Counterexample
-    from amc.evaluation.baselines import CBMCAloneBaseline
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.evaluation.baselines import CBMCAloneBaseline
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -355,8 +355,8 @@ def test_cbmc_alone_baseline_bugs_found(tmp_path: Path):
 
 def test_cbmc_alone_baseline_no_bugs(tmp_path: Path):
     """CBMCAloneBaseline returns empty bugs list when CBMC verifies."""
-    from amc.cbmc import CBMCResult
-    from amc.evaluation.baselines import CBMCAloneBaseline
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.evaluation.baselines import CBMCAloneBaseline
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -378,7 +378,7 @@ def test_cbmc_alone_baseline_no_bugs(tmp_path: Path):
 
 def test_cbmc_alone_baseline_parse_error(tmp_path: Path):
     """CBMCAloneBaseline handles parse errors gracefully."""
-    from amc.evaluation.baselines import CBMCAloneBaseline
+    from bmc_agent.evaluation.baselines import CBMCAloneBaseline
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -402,10 +402,10 @@ def test_cbmc_alone_baseline_parse_error(tmp_path: Path):
 
 def test_metrics_collector_basic(tmp_path: Path):
     """collect_driver_metrics() computes correct metrics from mock data."""
-    from amc.bmc_engine import BMCVerdict
-    from amc.cbmc import Counterexample
-    from amc.evaluation.metrics import MetricsCollector
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.evaluation.metrics import MetricsCollector
+    from bmc_agent.spec import Spec, SpecStatus
 
     store = _make_store(tmp_path)
     collector = MetricsCollector(store)
@@ -449,10 +449,10 @@ def test_metrics_collector_basic(tmp_path: Path):
 
 def test_metrics_collector_false_positive_rate(tmp_path: Path):
     """false_positive_rate is computed correctly when there are spurious cexes."""
-    from amc.bmc_engine import BMCVerdict
-    from amc.cbmc import Counterexample
-    from amc.evaluation.metrics import MetricsCollector
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.evaluation.metrics import MetricsCollector
+    from bmc_agent.spec import Spec, SpecStatus
 
     store = _make_store(tmp_path)
     collector = MetricsCollector(store)
@@ -493,8 +493,8 @@ def test_metrics_collector_false_positive_rate(tmp_path: Path):
 
 def test_compute_summary_two_drivers(tmp_path: Path):
     """compute_summary() correctly aggregates 2 driver metrics."""
-    from amc.evaluation.baselines import BaselineResult
-    from amc.evaluation.metrics import MetricsCollector
+    from bmc_agent.evaluation.baselines import BaselineResult
+    from bmc_agent.evaluation.metrics import MetricsCollector
 
     store = _make_store(tmp_path)
     collector = MetricsCollector(store)
@@ -522,7 +522,7 @@ def test_compute_summary_two_drivers(tmp_path: Path):
 
 def test_compute_summary_empty(tmp_path: Path):
     """compute_summary() with no drivers returns zeroed summary."""
-    from amc.evaluation.metrics import MetricsCollector
+    from bmc_agent.evaluation.metrics import MetricsCollector
 
     store = _make_store(tmp_path)
     collector = MetricsCollector(store)
@@ -541,7 +541,7 @@ def test_compute_summary_empty(tmp_path: Path):
 
 def test_generate_driver_report(tmp_path: Path):
     """generate_driver_report() produces non-empty markdown with key fields."""
-    from amc.evaluation.report import ReportGenerator
+    from bmc_agent.evaluation.report import ReportGenerator
 
     store = _make_store(tmp_path)
     gen = ReportGenerator(store)
@@ -564,7 +564,7 @@ def test_generate_driver_report(tmp_path: Path):
 
 def test_generate_driver_report_no_bugs(tmp_path: Path):
     """generate_driver_report() without bugs is still valid markdown."""
-    from amc.evaluation.report import ReportGenerator
+    from bmc_agent.evaluation.report import ReportGenerator
 
     store = _make_store(tmp_path)
     gen = ReportGenerator(store)
@@ -583,9 +583,9 @@ def test_generate_driver_report_no_bugs(tmp_path: Path):
 
 def test_generate_summary_report(tmp_path: Path):
     """generate_summary_report() produces a table with correct numbers."""
-    from amc.evaluation.baselines import BaselineResult
-    from amc.evaluation.metrics import EvaluationSummary, MetricsCollector
-    from amc.evaluation.report import ReportGenerator
+    from bmc_agent.evaluation.baselines import BaselineResult
+    from bmc_agent.evaluation.metrics import EvaluationSummary, MetricsCollector
+    from bmc_agent.evaluation.report import ReportGenerator
 
     store = _make_store(tmp_path)
     collector = MetricsCollector(store)
@@ -619,8 +619,8 @@ def test_generate_summary_report(tmp_path: Path):
 
 def test_summary_report_bug_type_breakdown(tmp_path: Path):
     """Bug type breakdown section appears when there are bugs."""
-    from amc.evaluation.metrics import DriverMetrics, EvaluationSummary
-    from amc.evaluation.report import ReportGenerator
+    from bmc_agent.evaluation.metrics import DriverMetrics, EvaluationSummary
+    from bmc_agent.evaluation.report import ReportGenerator
 
     store = _make_store(tmp_path)
     gen = ReportGenerator(store)
@@ -670,11 +670,11 @@ def test_evaluation_runner_end_to_end(tmp_path: Path):
     EvaluationRunner.run_corpus() runs without errors and returns an
     EvaluationSummary with the expected structure.
     """
-    from amc.bmc_engine import BMCVerdict
-    from amc.evaluation.corpus import Corpus, CorpusEntry
-    from amc.evaluation.metrics import EvaluationSummary
-    from amc.evaluation.runner import EvaluationRunner
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.evaluation.corpus import Corpus, CorpusEntry
+    from bmc_agent.evaluation.metrics import EvaluationSummary
+    from bmc_agent.evaluation.runner import EvaluationRunner
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = _make_config(tmp_path)
     runner = EvaluationRunner(config)
@@ -721,7 +721,7 @@ def test_evaluation_runner_end_to_end(tmp_path: Path):
 
         with patch.object(corpus, "load", return_value=corpus_entries):
             with patch("amc.evaluation.runner.CBMCAloneBaseline") as MockCBMC:
-                from amc.evaluation.baselines import BaselineResult
+                from bmc_agent.evaluation.baselines import BaselineResult
                 mock_cbmc_inst = MagicMock()
                 MockCBMC.return_value = mock_cbmc_inst
                 mock_cbmc_inst.run.return_value = BaselineResult(
@@ -742,8 +742,8 @@ def test_evaluation_runner_end_to_end(tmp_path: Path):
 
 def test_evaluation_runner_no_baselines(tmp_path: Path):
     """EvaluationRunner with run_baselines=False skips baselines."""
-    from amc.evaluation.corpus import Corpus, CorpusEntry
-    from amc.evaluation.runner import EvaluationRunner
+    from bmc_agent.evaluation.corpus import Corpus, CorpusEntry
+    from bmc_agent.evaluation.runner import EvaluationRunner
 
     config = _make_config(tmp_path)
     runner = EvaluationRunner(config)
@@ -786,7 +786,7 @@ def test_evaluation_runner_no_baselines(tmp_path: Path):
 
 def test_block_device_c_parses():
     """examples/block_device.c can be parsed by grace.parser."""
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     assert BLOCK_DEVICE.exists(), f"block_device.c not found at {BLOCK_DEVICE}"
     parsed = parse_c_file(str(BLOCK_DEVICE))
@@ -803,7 +803,7 @@ def test_block_device_c_parses():
 
 def test_memory_allocator_c_parses():
     """examples/memory_allocator.c can be parsed by grace.parser."""
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
 
     assert MEMORY_ALLOCATOR.exists(), f"memory_allocator.c not found at {MEMORY_ALLOCATOR}"
     parsed = parse_c_file(str(MEMORY_ALLOCATOR))
@@ -839,7 +839,7 @@ def test_memory_allocator_c_has_null_bug():
 
 def test_cli_eval_subcommand_registered():
     """The 'eval' subcommand is registered in the CLI parser."""
-    from amc.cli import build_parser
+    from bmc_agent.cli import build_parser
 
     parser = build_parser()
     # Should not raise
@@ -855,7 +855,7 @@ def test_cli_eval_subcommand_registered():
 
 def test_cli_report_subcommand_registered():
     """The 'report' subcommand is registered in the CLI parser."""
-    from amc.cli import build_parser
+    from bmc_agent.cli import build_parser
 
     parser = build_parser()
     args = parser.parse_args(["report", "--eval-dir", "artifacts/eval/"])
@@ -864,7 +864,7 @@ def test_cli_report_subcommand_registered():
 
 def test_cli_corpus_generate_subcommand_registered():
     """The 'corpus generate' subcommand is registered in the CLI parser."""
-    from amc.cli import build_parser
+    from bmc_agent.cli import build_parser
 
     parser = build_parser()
     args = parser.parse_args([
@@ -883,9 +883,9 @@ def test_cli_corpus_generate_subcommand_registered():
 
 def test_report_generator_save_reports(tmp_path: Path):
     """ReportGenerator.save_reports() writes files to the artifact directory."""
-    from amc.evaluation.baselines import BaselineResult
-    from amc.evaluation.metrics import MetricsCollector
-    from amc.evaluation.report import ReportGenerator
+    from bmc_agent.evaluation.baselines import BaselineResult
+    from bmc_agent.evaluation.metrics import MetricsCollector
+    from bmc_agent.evaluation.report import ReportGenerator
 
     store = _make_store(tmp_path)
     collector = MetricsCollector(store)
@@ -916,7 +916,7 @@ def test_report_generator_save_reports(tmp_path: Path):
 
 def test_cli_baseline_subcommand_registered():
     """The 'baseline' subcommand is registered in the CLI parser."""
-    from amc.cli import build_parser
+    from bmc_agent.cli import build_parser
 
     parser = build_parser()
     args = parser.parse_args([

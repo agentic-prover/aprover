@@ -17,17 +17,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from amc.artifacts import ArtifactStore
-from amc.bmc_engine import BMCEngine, BMCVerdict
-from amc.bug_reporter import BugReport, BugReporter
-from amc.cex_validator import CExOutcome, CExValidator, ValidationResult
-from amc.config import Config
-from amc.harness_generator import HarnessGenerator
-from amc.llm import LLMClient
-from amc.logger import get_logger
-from amc.parser import FunctionInfo, ParsedCFile, parse_c_file
-from amc.spec import Spec, SpecStatus
-from amc.spec_generator import SpecGenerator
+from bmc_agent.artifacts import ArtifactStore
+from bmc_agent.bmc_engine import BMCEngine, BMCVerdict
+from bmc_agent.bug_reporter import BugReport, BugReporter
+from bmc_agent.cex_validator import CExOutcome, CExValidator, ValidationResult
+from bmc_agent.config import Config
+from bmc_agent.harness_generator import HarnessGenerator
+from bmc_agent.llm import LLMClient
+from bmc_agent.logger import get_logger
+from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
+from bmc_agent.spec import Spec, SpecStatus
+from bmc_agent.spec_generator import SpecGenerator
 
 logger = get_logger("pipeline")
 
@@ -112,7 +112,7 @@ class AMCPipeline:
         # Optionally preprocess with cc -E before parsing (multi-file mode)
         preprocessed_source: Optional[str] = None
         if self.config.preprocess and self.config.include_dirs:
-            from amc.preprocessor import preprocess
+            from bmc_agent.preprocessor import preprocess
             logger.info("Preprocessing %s with include dirs: %s",
                         source_file, self.config.include_dirs)
             try:
@@ -435,8 +435,8 @@ class AMCPipeline:
         # ------------------------------------------------------------------
         if self.config.enable_spec_quality:
             logger.info("--- Phase 4: Spec Quality Analysis ---")
-            from amc.spec_quality import SpecQualityAnalyzer
-            from amc.backends.cbmc_backend import CBMCBackend
+            from bmc_agent.spec_quality import SpecQualityAnalyzer
+            from bmc_agent.backends.cbmc_backend import CBMCBackend
 
             backend = getattr(self.bmc_engine, 'backend', None) or CBMCBackend(self.config)
             analyzer = SpecQualityAnalyzer(backend=backend, llm=self.llm, config=self.config)
@@ -496,7 +496,7 @@ class AMCPipeline:
         Mapping of filename → list of BugReport.
         """
         import fnmatch
-        from amc.preprocessor import preprocess
+        from bmc_agent.preprocessor import preprocess
 
         source_dir = Path(source_dir)
         include_dirs = include_dirs or self.config.include_dirs or []

@@ -35,7 +35,7 @@ EXAMPLE_C = REPO_ROOT / "examples" / "simple_driver.c"
 
 
 def _make_config(tmp_path: Path, max_refinement_iters: int = 3) -> "Config":
-    from amc.config import Config
+    from bmc_agent.config import Config
 
     return Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -52,7 +52,7 @@ def _make_spec(
     pre: str = "true",
     post: str = "true",
 ) -> "Spec":
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.spec import Spec, SpecStatus
 
     return Spec(
         function_name=fn_name,
@@ -67,7 +67,7 @@ def _make_counterexample(
     var_assignments: dict | None = None,
     trace: list | None = None,
 ) -> "Counterexample":
-    from amc.cbmc import Counterexample
+    from bmc_agent.cbmc import Counterexample
 
     return Counterexample(
         failing_property=failing_property,
@@ -77,7 +77,7 @@ def _make_counterexample(
 
 
 def _make_func_info(name: str, callees: set[str] | None = None) -> "FunctionInfo":
-    from amc.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
 
     sig = FunctionSignature(
         name=name,
@@ -94,14 +94,14 @@ def _make_func_info(name: str, callees: set[str] | None = None) -> "FunctionInfo
 
 
 def _make_store(tmp_path: Path) -> "ArtifactStore":
-    from amc.artifacts import ArtifactStore
+    from bmc_agent.artifacts import ArtifactStore
 
     return ArtifactStore(str(tmp_path / "artifacts"))
 
 
 def _make_llm_mock() -> MagicMock:
     """Return a mock LLMClient that raises LLMError by default."""
-    from amc.llm import LLMError
+    from bmc_agent.llm import LLMError
 
     mock = MagicMock()
     mock.complete.side_effect = LLMError("No API key in tests")
@@ -115,7 +115,7 @@ def _make_llm_mock() -> MagicMock:
 
 def test_validation_result_creation(tmp_path: Path):
     """ValidationResult can be created and serialized to a dict."""
-    from amc.cex_validator import ValidationResult
+    from bmc_agent.cex_validator import ValidationResult
 
     cex = _make_counterexample()
     result = ValidationResult(
@@ -147,7 +147,7 @@ def test_validation_result_creation(tmp_path: Path):
 
 def test_validation_result_spurious():
     """ValidationResult for spurious counterexample."""
-    from amc.cex_validator import ValidationResult
+    from bmc_agent.cex_validator import ValidationResult
 
     cex = _make_counterexample()
     result = ValidationResult(
@@ -180,11 +180,11 @@ def test_counterexample_is_reachable_real_bug(tmp_path: Path):
     When CBMC finds a path (counterexample for assert(0)), the counterexample
     is marked as a real bug.
     """
-    from amc.cbmc import CBMCResult, Counterexample
-    from amc.cex_validator import CExValidator
-    from amc.config import Config
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -245,11 +245,11 @@ def test_counterexample_not_reachable_spurious(tmp_path: Path):
     When CBMC verifies (no counterexample for assert(0)), the state is not
     reachable → spurious → triggers refinement.
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExValidator
-    from amc.config import Config
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path, max_refinement_iters=2)
     store = _make_store(tmp_path)
@@ -321,9 +321,9 @@ def test_refinement_iteration_cap(tmp_path: Path):
     When LLM always returns the same precondition, refinement stalls and stops
     at max_refinement_iters.
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
 
     MAX_ITERS = 3
     config = _make_config(tmp_path, max_refinement_iters=MAX_ITERS)
@@ -341,7 +341,7 @@ def test_refinement_iteration_cap(tmp_path: Path):
     harness_gen = HarnessGenerator(config)
     validator = CExValidator(config, llm, store, harness_gen)
 
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
     parsed = parse_c_file(EXAMPLE_C)
 
     caller_func = _make_func_info("caller_func", callees={"target_func"})
@@ -386,9 +386,9 @@ def test_over_refinement_guard(tmp_path: Path):
     When the over-refinement check says the new precondition is too restrictive,
     the refinement is rejected and the bug is treated as real.
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
 
     config = _make_config(tmp_path, max_refinement_iters=3)
     store = _make_store(tmp_path)
@@ -406,7 +406,7 @@ def test_over_refinement_guard(tmp_path: Path):
     harness_gen = HarnessGenerator(config)
     validator = CExValidator(config, llm, store, harness_gen)
 
-    from amc.parser import parse_c_file
+    from bmc_agent.parser import parse_c_file
     parsed = parse_c_file(EXAMPLE_C)
 
     caller_func = _make_func_info("caller_func", callees={"target_func"})
@@ -455,8 +455,8 @@ def test_over_refinement_guard(tmp_path: Path):
 
 def test_bug_report_creation(tmp_path: Path):
     """BugReport is correctly created from a ValidationResult."""
-    from amc.bug_reporter import BugReporter
-    from amc.cex_validator import ValidationResult
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.cex_validator import ValidationResult
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -496,8 +496,8 @@ def test_bug_report_creation(tmp_path: Path):
 
 def test_confirmed_system_entry_tier(tmp_path):
     """system_entry_reached=True produces confirmed_system_entry confidence."""
-    from amc.bug_reporter import BugReporter
-    from amc.cex_validator import CExOutcome, ValidationResult
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -527,8 +527,8 @@ def test_confirmed_system_entry_tier(tmp_path):
 
 def test_confirmed_bmc_tier_without_system_entry(tmp_path):
     """system_entry_reached=False keeps confirmed_bmc confidence."""
-    from amc.bug_reporter import BugReporter
-    from amc.cex_validator import CExOutcome, ValidationResult
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -556,7 +556,7 @@ def test_confirmed_bmc_tier_without_system_entry(tmp_path):
 
 def test_bug_type_classification():
     """Bug types are classified correctly from property names."""
-    from amc.bug_reporter import _classify_bug_type
+    from bmc_agent.bug_reporter import _classify_bug_type
 
     assert _classify_bug_type("overflow.1") == "arithmetic"
     assert _classify_bug_type("null-pointer.2") == "memory_safety"
@@ -573,8 +573,8 @@ def test_bug_type_classification():
 
 def test_bug_reporter_generate_summary(tmp_path: Path):
     """generate_summary() returns a readable string with all bugs."""
-    from amc.bug_reporter import BugReport, BugReporter
-    from amc.cex_validator import ValidationResult
+    from bmc_agent.bug_reporter import BugReport, BugReporter
+    from bmc_agent.cex_validator import ValidationResult
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -617,7 +617,7 @@ def test_bug_reporter_generate_summary(tmp_path: Path):
 
 def test_bug_reporter_empty_summary(tmp_path: Path):
     """generate_summary() with no bugs returns a helpful message."""
-    from amc.bug_reporter import BugReporter
+    from bmc_agent.bug_reporter import BugReporter
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -636,12 +636,12 @@ def test_pipeline_run_end_to_end(tmp_path: Path):
     Full pipeline run with all external dependencies mocked.
     Should produce BugReport objects without crashing.
     """
-    from amc.bmc_engine import BMCVerdict
-    from amc.cbmc import CBMCResult, Counterexample
-    from amc.cex_validator import ValidationResult
-    from amc.config import Config
-    from amc.pipeline import AMCPipeline
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import ValidationResult
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = _make_config(tmp_path, max_refinement_iters=2)
     pipeline = AMCPipeline(config)
@@ -707,9 +707,9 @@ def test_pipeline_run_no_bugs(tmp_path: Path):
     """
     When all functions verify, no bug reports are produced.
     """
-    from amc.bmc_engine import BMCVerdict
-    from amc.config import Config
-    from amc.pipeline import AMCPipeline
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
 
     config = _make_config(tmp_path)
     pipeline = AMCPipeline(config)
@@ -740,10 +740,10 @@ def test_upward_propagation(tmp_path: Path):
     Upward propagation: entry_func → caller_func → target_func
     should find a real bug with the full call chain.
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -802,10 +802,10 @@ def test_entry_function_real_bug(tmp_path: Path):
     A function with no callers (entry function) should immediately
     produce a real bug report without any CBMC reachability queries.
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -857,8 +857,8 @@ def test_entry_function_real_bug(tmp_path: Path):
 
 def test_bug_reporter_saves_to_disk(tmp_path: Path):
     """save_report() should write a bug_report.json to the artifact store."""
-    from amc.bug_reporter import BugReporter
-    from amc.cex_validator import ValidationResult
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.cex_validator import ValidationResult
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -899,9 +899,9 @@ def test_llm_only_reachability(tmp_path: Path):
     """
     When CBMC is not available, LLM is used for reachability analysis.
     """
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
     # cbmc_path is set to __nonexistent_cbmc__ in _make_config
@@ -967,7 +967,7 @@ def _make_parsed_file(
     call_graph: dict[str, set[str]] | None = None,
 ) -> "ParsedCFile":
     """Build a minimal ParsedCFile with stub signatures for the given functions."""
-    from amc.parser import FunctionSignature, ParsedCFile
+    from bmc_agent.parser import FunctionSignature, ParsedCFile
 
     sigs = {
         n: FunctionSignature(name=n, return_type="int", parameters=[("int", "x")])
@@ -985,10 +985,10 @@ def test_cross_file_caller_confirmed_reachable_real_bug(tmp_path: Path):
     REAL_BUG with system_entry_reached=True (the cross-file caller itself
     has no callers, so it is a system entry).
     """
-    from amc.cbmc import CBMCResult, Counterexample
-    from amc.cex_validator import CExOutcome, CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -1063,10 +1063,10 @@ def test_cross_file_caller_none_reachable_falls_back_to_confirmed_bmc(tmp_path: 
     CBMC says none of them can reach the CEx state, the result falls back
     to REAL_BUG with system_entry_reached=False (confirmed_bmc tier).
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExOutcome, CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -1131,9 +1131,9 @@ def test_cross_file_caller_contexts_empty_falls_back_to_confirmed_bmc(tmp_path: 
     When cross_file_callers indicates callers exist but cross_file_caller_contexts
     has no entries for the function, fall back to confirmed_bmc.
     """
-    from amc.cbmc import CBMCResult
-    from amc.cex_validator import CExOutcome, CExValidator
-    from amc.harness_generator import HarnessGenerator
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)
@@ -1179,10 +1179,10 @@ def test_propagate_upward_crosses_file_boundary_to_entry(tmp_path: Path):
     callers but has a cross-file caller entry_fn (which itself has no callers),
     the chain is (True, ['entry_fn', 'func_X']).
     """
-    from amc.cbmc import CBMCResult, Counterexample
-    from amc.cex_validator import CExValidator
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
 
     config = _make_config(tmp_path)
     store = _make_store(tmp_path)

@@ -38,7 +38,7 @@ def _make_mock_spec(
     post: str = r"result <= len",
     callee_specs: dict | None = None,
 ) -> "Spec":
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.spec import Spec, SpecStatus
 
     return Spec(
         function_name=fn_name,
@@ -50,7 +50,7 @@ def _make_mock_spec(
 
 
 def _make_config(tmp_path: Path) -> "Config":
-    from amc.config import Config
+    from bmc_agent.config import Config
 
     return Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -70,10 +70,10 @@ def test_harness_generation_rb_write(tmp_path: Path):
     Generate a harness for rb_write with a mock spec.
     Verify the harness is valid C containing CPROVER_assume, assert, and the function body.
     """
-    from amc.config import Config
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(artifact_dir=str(tmp_path / "artifacts"))
     parsed = parse_c_file(EXAMPLE_C)
@@ -103,10 +103,10 @@ def test_harness_generation_rb_write(tmp_path: Path):
 
 def test_harness_contains_function_body(tmp_path: Path):
     """Harness should include the function body (with stubs substituted)."""
-    from amc.config import Config
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(artifact_dir=str(tmp_path / "artifacts"))
     parsed = parse_c_file(EXAMPLE_C)
@@ -136,7 +136,7 @@ def test_harness_contains_function_body(tmp_path: Path):
 
 def test_precond_to_assume_null_check():
     """valid(ptr) should become __CPROVER_assume(ptr != NULL)."""
-    from amc.dsl_to_cbmc import precond_to_assume
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
 
     stmts = precond_to_assume("valid(rb)", ["rb"])
     assert len(stmts) > 0
@@ -147,7 +147,7 @@ def test_precond_to_assume_null_check():
 
 def test_precond_to_assume_comparison():
     """Simple C comparison should become an assume statement."""
-    from amc.dsl_to_cbmc import precond_to_assume
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
 
     stmts = precond_to_assume("rb != NULL && data != NULL", ["rb", "data"])
     joined = " ".join(stmts)
@@ -158,7 +158,7 @@ def test_precond_to_assume_comparison():
 
 def test_precond_to_assume_true():
     """'true' precondition should produce a comment, not an assume."""
-    from amc.dsl_to_cbmc import precond_to_assume
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
 
     stmts = precond_to_assume("true", [])
     assert len(stmts) > 0
@@ -168,7 +168,7 @@ def test_precond_to_assume_true():
 
 def test_postcond_to_assert_result():
     r"""'\result' should be replaced with the return variable name."""
-    from amc.dsl_to_cbmc import postcond_to_assert
+    from bmc_agent.dsl_to_cbmc import postcond_to_assert
 
     stmts = postcond_to_assert(r"\result <= len", ["len"], return_var="result")
     joined = " ".join(stmts)
@@ -178,7 +178,7 @@ def test_postcond_to_assert_result():
 
 def test_postcond_to_assert_comparisons():
     """Standard comparisons become assert statements."""
-    from amc.dsl_to_cbmc import postcond_to_assert
+    from bmc_agent.dsl_to_cbmc import postcond_to_assert
 
     stmts = postcond_to_assert("result >= 0", ["result"], return_var="result")
     joined = " ".join(stmts)
@@ -187,7 +187,7 @@ def test_postcond_to_assert_comparisons():
 
 def test_translate_atom_valid():
     """translate_atom with valid(ptr) in assume context."""
-    from amc.dsl_to_cbmc import translate_atom
+    from bmc_agent.dsl_to_cbmc import translate_atom
 
     stmt = translate_atom("valid(ptr)", context="assume")
     assert stmt is not None
@@ -196,7 +196,7 @@ def test_translate_atom_valid():
 
 def test_translate_atom_assert_context():
     """translate_atom with valid(ptr) in assert context."""
-    from amc.dsl_to_cbmc import translate_atom
+    from bmc_agent.dsl_to_cbmc import translate_atom
 
     stmt = translate_atom("valid(ptr)", context="assert")
     assert stmt is not None
@@ -205,7 +205,7 @@ def test_translate_atom_assert_context():
 
 def test_translate_atom_in_bounds():
     """in_bounds translates correctly."""
-    from amc.dsl_to_cbmc import translate_atom
+    from bmc_agent.dsl_to_cbmc import translate_atom
 
     stmt = translate_atom("in_bounds(arr, idx)", context="assume")
     assert stmt is not None
@@ -215,7 +215,7 @@ def test_translate_atom_in_bounds():
 
 def test_translate_atom_null():
     """null(ptr) translates to ptr == NULL."""
-    from amc.dsl_to_cbmc import translate_atom
+    from bmc_agent.dsl_to_cbmc import translate_atom
 
     stmt = translate_atom("null(ptr)", context="assume")
     assert stmt is not None
@@ -224,7 +224,7 @@ def test_translate_atom_null():
 
 def test_translate_atom_locked_is_comment():
     """locked(x) is a ghost predicate — should produce a comment."""
-    from amc.dsl_to_cbmc import translate_atom
+    from bmc_agent.dsl_to_cbmc import translate_atom
 
     stmt = translate_atom("locked(mutex)", context="assume")
     assert stmt is not None
@@ -233,7 +233,7 @@ def test_translate_atom_locked_is_comment():
 
 def test_translate_atom_natural_language():
     """Natural language condition produces a comment."""
-    from amc.dsl_to_cbmc import translate_atom
+    from bmc_agent.dsl_to_cbmc import translate_atom
 
     stmt = translate_atom("the buffer is not full", context="assume")
     assert stmt is not None
@@ -250,10 +250,10 @@ def test_callee_stubbing_in_harness(tmp_path: Path):
     rb_write calls rb_is_full (or at least accesses rb fields).
     The harness should contain stub functions for any defined callees.
     """
-    from amc.config import Config
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(artifact_dir=str(tmp_path / "artifacts"))
     parsed = parse_c_file(EXAMPLE_C)
@@ -288,9 +288,9 @@ def test_callee_calls_replaced_with_stubs(tmp_path: Path):
     """
     The function body copy should call _stub variants, not the originals.
     """
-    from amc.config import Config
-    from amc.harness_generator import _substitute_callee_calls
-    from amc.parser import parse_c_file
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import _substitute_callee_calls
+    from bmc_agent.parser import parse_c_file
 
     parsed = parse_c_file(EXAMPLE_C)
     func = parsed.get_function_info("rb_write")
@@ -315,11 +315,11 @@ def test_callee_calls_replaced_with_stubs(tmp_path: Path):
 
 def test_bmc_engine_cbmc_not_installed(tmp_path: Path):
     """When CBMC is not installed, BMCVerdict should have error, not crash."""
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCEngine
-    from amc.config import Config
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -356,12 +356,12 @@ def test_bmc_engine_cbmc_not_installed(tmp_path: Path):
 
 def test_check_all_with_mocked_cbmc(tmp_path: Path):
     """Mock run_cbmc to return a counterexample; verify verdict is structured."""
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCEngine, BMCVerdict
-    from amc.cbmc import CBMCResult, Counterexample
-    from amc.config import Config
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine, BMCVerdict
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -438,10 +438,10 @@ def test_check_all_with_mocked_cbmc(tmp_path: Path):
 
 def test_harness_no_callees(tmp_path: Path):
     """rb_is_empty has no (defined) callees — harness should still be valid."""
-    from amc.config import Config
-    from amc.harness_generator import HarnessGenerator
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(artifact_dir=str(tmp_path / "artifacts"))
     parsed = parse_c_file(EXAMPLE_C)
@@ -477,12 +477,12 @@ def test_harness_no_callees(tmp_path: Path):
 
 def test_harness_saved_to_correct_path(tmp_path: Path):
     """BMCEngine should save the harness to artifacts/driver/function/harness.c."""
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCEngine
-    from amc.cbmc import CBMCResult
-    from amc.config import Config
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -515,12 +515,12 @@ def test_harness_saved_to_correct_path(tmp_path: Path):
 
 def test_cbmc_result_saved_to_artifact_store(tmp_path: Path):
     """After check_function, a cbmc_result.json should be in the artifact store."""
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCEngine
-    from amc.cbmc import CBMCResult
-    from amc.config import Config
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -559,11 +559,11 @@ def test_rbwrite_bug_found_by_cbmc(tmp_path: Path):
     Run CBMC on the rb_write harness and assert that a counterexample is found.
     The intentional off-by-one bug in rb_write should be detected.
     """
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCEngine
-    from amc.config import Config
-    from amc.parser import parse_c_file
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec, SpecStatus
 
     config = Config(
         artifact_dir=str(tmp_path / "artifacts"),
@@ -612,8 +612,8 @@ def test_rbwrite_bug_found_by_cbmc(tmp_path: Path):
 
 def test_bmc_verdict_to_dict():
     """BMCVerdict.to_dict() should produce a JSON-serializable dict."""
-    from amc.bmc_engine import BMCVerdict
-    from amc.cbmc import CBMCResult, Counterexample
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.cbmc import CBMCResult, Counterexample
 
     cex = Counterexample(
         failing_property="p.1",
@@ -645,7 +645,7 @@ def test_bmc_verdict_to_dict():
 
 def test_cli_check_no_specs(tmp_path: Path, capsys):
     """CLI check with no saved specs should print a warning and return non-zero."""
-    from amc.cli import main
+    from bmc_agent.cli import main
 
     ret = main([
         "check",
@@ -660,9 +660,9 @@ def test_cli_check_no_specs(tmp_path: Path, capsys):
 
 def test_cli_check_with_mock_specs(tmp_path: Path):
     """CLI check with pre-saved specs should run without crashing."""
-    from amc.artifacts import ArtifactStore
-    from amc.cli import main
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.cli import main
+    from bmc_agent.spec import Spec, SpecStatus
 
     # Pre-save a spec for rb_is_empty
     store = ArtifactStore(str(tmp_path / "artifacts"))
@@ -678,7 +678,7 @@ def test_cli_check_with_mock_specs(tmp_path: Path):
     )
 
     with patch("amc.bmc_engine.run_cbmc") as mock_cbmc:
-        from amc.cbmc import CBMCResult
+        from bmc_agent.cbmc import CBMCResult
         mock_cbmc.return_value = CBMCResult(verified=True)
         ret = main([
             "check",

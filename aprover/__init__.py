@@ -1,0 +1,1 @@
+"""AProver — Agentic Prover suite."""

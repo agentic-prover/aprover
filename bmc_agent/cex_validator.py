@@ -21,21 +21,21 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from amc.artifacts import ArtifactStore
-from amc.cbmc import Counterexample, run_cbmc
-from amc.config import Config
-from amc.dynamic_validator import DynamicOutcome, DynamicValidationResult, DynamicValidator
-from amc.harness_generator import HarnessGenerator
-from amc.llm import LLMClient, LLMError
-from amc.logger import get_logger
-from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
-from amc.prompts import (
+from bmc_agent.artifacts import ArtifactStore
+from bmc_agent.cbmc import Counterexample, run_cbmc
+from bmc_agent.config import Config
+from bmc_agent.dynamic_validator import DynamicOutcome, DynamicValidationResult, DynamicValidator
+from bmc_agent.harness_generator import HarnessGenerator
+from bmc_agent.llm import LLMClient, LLMError
+from bmc_agent.logger import get_logger
+from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
+from bmc_agent.prompts import (
     OVER_REFINEMENT_CHECK_PROMPT,
     REACHABILITY_PROMPT,
     REFINEMENT_PROMPT,
     REPRODUCER_PROMPT,
 )
-from amc.spec import Spec
+from bmc_agent.spec import Spec
 
 logger = get_logger("cex_validator")
 
@@ -1080,7 +1080,7 @@ class CExValidator:
         import shutil
         import tempfile
 
-        from amc.dsl_to_cbmc import translate_atom
+        from bmc_agent.dsl_to_cbmc import translate_atom
 
         if not shutil.which(self.config.cbmc_path):
             return None

@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCVerdict
-    from amc.bug_reporter import BugReport
-    from amc.cex_validator import ValidationResult
-    from amc.evaluation.baselines import BaselineResult
-    from amc.pipeline import PropagationEvent
-    from amc.spec import Spec
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.bug_reporter import BugReport
+    from bmc_agent.cex_validator import ValidationResult
+    from bmc_agent.evaluation.baselines import BaselineResult
+    from bmc_agent.pipeline import PropagationEvent
+    from bmc_agent.spec import Spec
 
 
 @dataclass
@@ -103,7 +103,7 @@ class MetricsCollector:
         bug_reports:    Confirmed BugReport objects for this driver.
         runtime:        Wall-clock seconds for the full pipeline run.
         """
-        from amc.cex_validator import CExOutcome
+        from bmc_agent.cex_validator import CExOutcome
 
         total_functions = len(specs)
         functions_specified = _count_non_fallback_specs(specs)

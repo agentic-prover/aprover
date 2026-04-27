@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).parent.parent
 
 
 def _make_sig(name: str, ret: str = "int", params: list | None = None):
-    from amc.parser import FunctionSignature
+    from bmc_agent.parser import FunctionSignature
 
     return FunctionSignature(
         name=name,
@@ -36,7 +36,7 @@ def _make_func(
     params: list | None = None,
     ret: str = "int",
 ) -> "FunctionInfo":
-    from amc.parser import FunctionInfo
+    from bmc_agent.parser import FunctionInfo
 
     sig = _make_sig(name, ret=ret, params=params)
     return FunctionInfo(
@@ -53,7 +53,7 @@ def _make_spec(
     pre: str = "true",
     post: str = "\\result >= 0",
 ) -> "Spec":
-    from amc.spec import Spec, SpecStatus
+    from bmc_agent.spec import Spec, SpecStatus
 
     return Spec(
         function_name=name,
@@ -64,7 +64,7 @@ def _make_spec(
 
 
 def _make_parsed_file(funcs: dict | None = None) -> "ParsedCFile":
-    from amc.parser import ParsedCFile
+    from bmc_agent.parser import ParsedCFile
 
     sigs = funcs or {}
     return ParsedCFile(
@@ -82,7 +82,7 @@ def _make_parsed_file(funcs: dict | None = None) -> "ParsedCFile":
 
 class TestSpecCoverageChecker:
     def test_full_coverage(self):
-        from amc.spec_quality import SpecCoverageChecker
+        from bmc_agent.spec_quality import SpecCoverageChecker
 
         checker = SpecCoverageChecker()
         func = _make_func("add", body="{ return x + y; }", params=[("int", "x"), ("int", "y")])
@@ -95,7 +95,7 @@ class TestSpecCoverageChecker:
         assert result.score == 1.0
 
     def test_missing_return_value_reference(self):
-        from amc.spec_quality import SpecCoverageChecker
+        from bmc_agent.spec_quality import SpecCoverageChecker
 
         checker = SpecCoverageChecker()
         func = _make_func("get_val", body="{ return x; }")
@@ -106,7 +106,7 @@ class TestSpecCoverageChecker:
         assert result.score < 1.0
 
     def test_pure_function_no_mutations_refs_mutated_satisfied(self):
-        from amc.spec_quality import SpecCoverageChecker
+        from bmc_agent.spec_quality import SpecCoverageChecker
 
         checker = SpecCoverageChecker()
         func = _make_func("pure", body="{ return x * 2; }", params=[("int", "x")])
@@ -117,7 +117,7 @@ class TestSpecCoverageChecker:
         assert result.references_mutated_fields is True
 
     def test_struct_mutation_referenced_in_post(self):
-        from amc.spec_quality import SpecCoverageChecker
+        from bmc_agent.spec_quality import SpecCoverageChecker
 
         checker = SpecCoverageChecker()
         func = _make_func(
@@ -132,7 +132,7 @@ class TestSpecCoverageChecker:
         assert result.references_mutated_fields is True
 
     def test_struct_mutation_not_referenced_in_post(self):
-        from amc.spec_quality import SpecCoverageChecker
+        from bmc_agent.spec_quality import SpecCoverageChecker
 
         checker = SpecCoverageChecker()
         func = _make_func(
@@ -148,7 +148,7 @@ class TestSpecCoverageChecker:
         assert result.score < 1.0
 
     def test_no_parameters_refs_params_satisfied(self):
-        from amc.spec_quality import SpecCoverageChecker
+        from bmc_agent.spec_quality import SpecCoverageChecker
 
         checker = SpecCoverageChecker()
         func = _make_func("init", body="{ return 42; }", params=[])
@@ -166,7 +166,7 @@ class TestSpecCoverageChecker:
 
 class TestApplyMutations:
     def test_off_by_one_lt_spaced(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ if (x < limit) return 1; return 0; }"
         mutations = dict(_apply_mutations(body))
@@ -174,7 +174,7 @@ class TestApplyMutations:
         assert "<= limit" in mutations["off_by_one_lt"]
 
     def test_off_by_one_lt_nospace(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ if (x<limit) return 1; return 0; }"
         mutations = dict(_apply_mutations(body))
@@ -182,7 +182,7 @@ class TestApplyMutations:
         assert "<= limit" in mutations["off_by_one_lt"]
 
     def test_off_by_one_lte(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ if (x <= limit) return 1; return 0; }"
         mutations = dict(_apply_mutations(body))
@@ -190,7 +190,7 @@ class TestApplyMutations:
         assert "< limit" in mutations["off_by_one_lte"]
 
     def test_flip_eq(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ if (x == 0) return -1; return x; }"
         mutations = dict(_apply_mutations(body))
@@ -198,7 +198,7 @@ class TestApplyMutations:
         assert "!= 0" in mutations["flip_eq"]
 
     def test_drop_null_check(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ if (ptr == NULL) return -1; return ptr->val; }"
         mutations = dict(_apply_mutations(body))
@@ -206,14 +206,14 @@ class TestApplyMutations:
         assert "== NULL" not in mutations["drop_null_check"]
 
     def test_no_mutations_applicable(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ return 42; }"
         mutations = _apply_mutations(body)
         assert mutations == []
 
     def test_returns_list_of_tuples(self):
-        from amc.spec_quality import _apply_mutations
+        from bmc_agent.spec_quality import _apply_mutations
 
         body = "{ if (x < 10) return 1; return 0; }"
         mutations = _apply_mutations(body)
@@ -248,12 +248,12 @@ class TestMutationTester:
         return backend
 
     def _make_config(self):
-        from amc.config import Config
+        from bmc_agent.config import Config
 
         return Config(artifact_dir="/tmp/test_artifacts", cbmc_path="cbmc", llm_api_key="fake")
 
     def test_all_mutations_caught(self):
-        from amc.spec_quality import MutationTester
+        from bmc_agent.spec_quality import MutationTester
 
         backend = self._make_backend_catching()
         tester = MutationTester(backend, self._make_config())
@@ -274,7 +274,7 @@ class TestMutationTester:
         assert result.mutation_score == 1.0
 
     def test_no_mutations_caught(self):
-        from amc.spec_quality import MutationTester
+        from bmc_agent.spec_quality import MutationTester
 
         backend = self._make_backend_not_catching()
         tester = MutationTester(backend, self._make_config())
@@ -294,7 +294,7 @@ class TestMutationTester:
         assert result.mutation_score == 0.0
 
     def test_no_applicable_mutations(self):
-        from amc.spec_quality import MutationTester
+        from bmc_agent.spec_quality import MutationTester
 
         backend = self._make_backend_catching()
         tester = MutationTester(backend, self._make_config())
@@ -309,7 +309,7 @@ class TestMutationTester:
         assert result.mutation_score == 1.0  # no mutations → score defaults to 1.0
 
     def test_harness_exception_counts_as_caught(self):
-        from amc.spec_quality import MutationTester
+        from bmc_agent.spec_quality import MutationTester
 
         backend = MagicMock()
         backend.generate_harness.side_effect = RuntimeError("compile failure")
@@ -337,7 +337,7 @@ class TestSpecConsistencyChecker:
         return llm
 
     def test_consistent_returns_true(self):
-        from amc.spec_quality import SpecConsistencyChecker
+        from bmc_agent.spec_quality import SpecConsistencyChecker
 
         llm = self._make_llm('{"consistent": true, "reasoning": "looks fine"}')
         checker = SpecConsistencyChecker(llm)
@@ -354,7 +354,7 @@ class TestSpecConsistencyChecker:
         assert result.callee_name == "callee"
 
     def test_inconsistent_returns_false(self):
-        from amc.spec_quality import SpecConsistencyChecker
+        from bmc_agent.spec_quality import SpecConsistencyChecker
 
         llm = self._make_llm('{"consistent": false, "reasoning": "callee post contradicts usage"}')
         checker = SpecConsistencyChecker(llm)
@@ -369,7 +369,7 @@ class TestSpecConsistencyChecker:
         assert "contradicts" in result.reasoning
 
     def test_llm_failure_defaults_to_consistent(self):
-        from amc.spec_quality import SpecConsistencyChecker
+        from bmc_agent.spec_quality import SpecConsistencyChecker
 
         llm = MagicMock()
         llm.complete.side_effect = Exception("network error")
@@ -385,7 +385,7 @@ class TestSpecConsistencyChecker:
         assert result.consistent is True
 
     def test_malformed_json_defaults_to_consistent(self):
-        from amc.spec_quality import SpecConsistencyChecker
+        from bmc_agent.spec_quality import SpecConsistencyChecker
 
         llm = self._make_llm("this is not json")
         checker = SpecConsistencyChecker(llm)
@@ -399,7 +399,7 @@ class TestSpecConsistencyChecker:
         assert result.consistent is True
 
     def test_to_dict(self):
-        from amc.spec_quality import ConsistencyResult
+        from bmc_agent.spec_quality import ConsistencyResult
 
         cr = ConsistencyResult(
             caller_name="caller",
@@ -424,7 +424,7 @@ class TestExecutableSanityChecker:
         return llm
 
     def test_no_violations_found(self):
-        from amc.spec_quality import ExecutableSanityChecker
+        from bmc_agent.spec_quality import ExecutableSanityChecker
 
         response = '{"tests": [{"input": "x=0", "satisfies_postcondition": true, "explanation": "ok"}], "violations_found": 0}'
         llm = self._make_llm(response)
@@ -440,7 +440,7 @@ class TestExecutableSanityChecker:
         assert result.function_name == "double_x"
 
     def test_violation_found(self):
-        from amc.spec_quality import ExecutableSanityChecker
+        from bmc_agent.spec_quality import ExecutableSanityChecker
 
         response = '{"tests": [{"input": "x=5", "satisfies_postcondition": false, "explanation": "wrong"}, {"input": "x=0", "satisfies_postcondition": true, "explanation": "ok"}], "violations_found": 1}'
         llm = self._make_llm(response)
@@ -454,7 +454,7 @@ class TestExecutableSanityChecker:
         assert result.violations_found == 1
 
     def test_llm_failure_returns_zero_violations(self):
-        from amc.spec_quality import ExecutableSanityChecker
+        from bmc_agent.spec_quality import ExecutableSanityChecker
 
         llm = MagicMock()
         llm.complete.side_effect = Exception("timeout")
@@ -470,7 +470,7 @@ class TestExecutableSanityChecker:
         assert "failed" in result.notes.lower()
 
     def test_to_dict_has_expected_keys(self):
-        from amc.spec_quality import SanityResult
+        from bmc_agent.spec_quality import SanityResult
 
         sr = SanityResult(
             function_name="fn",
@@ -489,7 +489,7 @@ class TestExecutableSanityChecker:
 
 class TestSpecQualityReport:
     def test_to_dict_structure(self):
-        from amc.spec_quality import (
+        from bmc_agent.spec_quality import (
             ConsistencyResult,
             CoverageResult,
             MutationResult,
@@ -531,8 +531,8 @@ class TestSpecQualityReport:
 
 class TestSpecQualityAnalyzer:
     def _make_analyzer(self, backend_catching: bool = True):
-        from amc.config import Config
-        from amc.spec_quality import SpecQualityAnalyzer
+        from bmc_agent.config import Config
+        from bmc_agent.spec_quality import SpecQualityAnalyzer
 
         backend = MagicMock()
         backend.generate_harness.return_value = "int main(){return 0;}"
@@ -639,7 +639,7 @@ class TestSpecQualityAnalyzer:
 
 
 def test_coverage_result_to_dict():
-    from amc.spec_quality import CoverageResult
+    from bmc_agent.spec_quality import CoverageResult
 
     cr = CoverageResult(
         function_name="fn",
@@ -656,7 +656,7 @@ def test_coverage_result_to_dict():
 
 
 def test_mutation_result_to_dict():
-    from amc.spec_quality import MutationResult
+    from bmc_agent.spec_quality import MutationResult
 
     mr = MutationResult(
         function_name="fn",

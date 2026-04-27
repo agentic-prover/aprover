@@ -17,10 +17,10 @@ from pathlib import Path
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     """Phase 1: Generate specs for all functions in a C source file."""
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.llm import LLMClient
-    from amc.spec_generator import SpecGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient
+    from bmc_agent.spec_generator import SpecGenerator
 
     config = Config.from_env()
     if args.output:
@@ -61,10 +61,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 def _cmd_check(args: argparse.Namespace) -> int:
     """Phase 2: Run BMC on previously generated specs."""
-    from amc.artifacts import ArtifactStore
-    from amc.bmc_engine import BMCEngine
-    from amc.config import Config
-    from amc.parser import parse_c_file
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
 
     config = Config.from_env()
     if hasattr(args, "output") and args.output:
@@ -138,9 +138,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 def _cmd_eval(args: argparse.Namespace) -> int:
     """Phase 4: Run AMC and baselines on a corpus of C programs."""
-    from amc.config import Config
-    from amc.evaluation.corpus import Corpus
-    from amc.evaluation.runner import EvaluationRunner
+    from bmc_agent.config import Config
+    from bmc_agent.evaluation.corpus import Corpus
+    from bmc_agent.evaluation.runner import EvaluationRunner
 
     config = Config.from_env()
     corpus = Corpus(args.corpus)
@@ -169,9 +169,9 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 def _cmd_report(args: argparse.Namespace) -> int:
     """Phase 4: Generate a summary report from evaluation artifacts."""
     import json
-    from amc.artifacts import ArtifactStore
-    from amc.evaluation.metrics import DriverMetrics, EvaluationSummary
-    from amc.evaluation.report import ReportGenerator
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.evaluation.metrics import DriverMetrics, EvaluationSummary
+    from bmc_agent.evaluation.report import ReportGenerator
 
     eval_dir = Path(args.eval_dir)
     summary_json = eval_dir / "eval_summary.json"
@@ -222,7 +222,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
         baseline_unique_bugs=data.get("baseline_unique_bugs", {}),
     )
 
-    from amc.artifacts import ArtifactStore
+    from bmc_agent.artifacts import ArtifactStore
 
     store = ArtifactStore(str(eval_dir))
     gen = ReportGenerator(store)
@@ -240,9 +240,9 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 def _cmd_corpus_generate(args: argparse.Namespace) -> int:
     """Phase 4: Use LLM to generate synthetic C programs for the corpus."""
-    from amc.config import Config
-    from amc.evaluation.corpus import Corpus
-    from amc.llm import LLMClient
+    from bmc_agent.config import Config
+    from bmc_agent.evaluation.corpus import Corpus
+    from bmc_agent.llm import LLMClient
 
     config = Config.from_env()
     llm = LLMClient(config)
@@ -262,8 +262,8 @@ def _cmd_corpus_generate(args: argparse.Namespace) -> int:
 
 def _cmd_verify(args: argparse.Namespace) -> int:
     """Full pipeline: generate specs + run BMC + validate counterexamples (Phase 3)."""
-    from amc.config import Config
-    from amc.pipeline import AMCPipeline
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
 
     config = Config.from_env()
     if hasattr(args, "output") and args.output:
@@ -318,9 +318,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _cmd_baseline(args: argparse.Namespace) -> int:
     """Run CBMC-alone baseline on a C source file (no LLM, no spec generation)."""
-    from amc.artifacts import ArtifactStore
-    from amc.config import Config
-    from amc.evaluation.baselines import CBMCAloneBaseline
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.evaluation.baselines import CBMCAloneBaseline
 
     config = Config.from_env()
     if args.output:
@@ -357,8 +357,8 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
 
 def _cmd_verify_dir(args: argparse.Namespace) -> int:
     """Run the full pipeline on every .c file in a directory."""
-    from amc.config import Config
-    from amc.pipeline import AMCPipeline
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
 
     config = Config.from_env()
     if args.output:
@@ -408,8 +408,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="amc",
-        description="AMC: Agentic Model Checking for C programs",
+        prog="bmc-agent",
+        description="BMC-Agent: Agentic Model Checking for C programs (part of AProver)",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers.required = True
