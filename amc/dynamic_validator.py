@@ -84,14 +84,17 @@ class DynamicValidator:
         all_funcs: Optional[dict] = None,
         all_specs: Optional[dict] = None,
         caller_path: Optional[list[str]] = None,
+        system_entry_reproducer: Optional[str] = None,
     ) -> DynamicValidationResult:
         """
         Attempt to confirm the counterexample by compiling and running a dynamic harness.
 
         Strategy:
-        1. Generate a harness with global state injection (with_globals=True).
-        2. Compile it.  If compilation fails, retry without globals (with_globals=False).
-        3. Run the compiled binary and parse stdout for DYNAMIC:CONFIRMED / NOT_TRIGGERED.
+        1. If system_entry_reproducer is provided (LLM-generated C from the system entry),
+           try to compile and run it first — this exercises the real call chain.
+        2. Generate a unit-level harness with global state injection (with_globals=True).
+        3. Compile it.  If compilation fails, retry without globals (with_globals=False).
+        4. Run the compiled binary and parse stdout for DYNAMIC:CONFIRMED / NOT_TRIGGERED.
         """
         if not self.config.enable_dynamic_validation:
             return DynamicValidationResult(
@@ -106,7 +109,29 @@ class DynamicValidator:
                 reasoning=f"C compiler '{cc}' not found on PATH — skipping dynamic validation.",
             )
 
-        # --- Attempt 1: with global state injection ---
+        # --- Attempt 0: system-entry reproducer (LLM-generated, call chain intact) ---
+        if system_entry_reproducer and _looks_like_c_code(system_entry_reproducer):
+            se_harness = _wrap_reproducer_with_signal_handlers(system_entry_reproducer)
+            binary_path_se, _ = self._compile(se_harness, cc)
+            if binary_path_se is not None:
+                try:
+                    result = self._run(binary_path_se)
+                finally:
+                    _unlink(binary_path_se)
+                logger.info(
+                    "System-entry dynamic validation for '%s': %s%s",
+                    entry_func.name,
+                    result.outcome.value,
+                    f" signal={result.signal_name}" if result.signal_name else "",
+                )
+                return result
+            logger.info(
+                "System-entry reproducer compilation failed for '%s' — "
+                "falling back to unit-level harness",
+                entry_func.name,
+            )
+
+        # --- Attempt 1: unit-level harness with global state injection ---
         harness_src = self._generate(
             entry_func, counterexample, parsed_file, all_funcs, all_specs,
             with_globals=True,
@@ -334,3 +359,58 @@ def _unlink(path: str) -> None:
         Path(path).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def _looks_like_c_code(text: str) -> bool:
+    """Return True if text looks like compilable C rather than pseudocode/stub."""
+    if not text or len(text) < 20:
+        return False
+    # Must contain a main function and at least one C statement
+    return "main" in text and ("{" in text and "}" in text)
+
+
+def _wrap_reproducer_with_signal_handlers(reproducer_code: str) -> str:
+    """
+    Wrap an LLM-generated C reproducer with AMC signal handlers.
+
+    The reproducer already has its own main().  We use a #define trick to rename
+    it to _amc_original_main(), then our main() installs signal handlers before
+    calling it so faults are caught and reported in the standard AMC format.
+    """
+    preamble = (
+        "/* AMC Dynamic Validation Harness — system-entry reproducer */\n"
+        "#include <signal.h>\n"
+        "#include <stdio.h>\n"
+        "#include <string.h>\n"
+        "#include <stdlib.h>\n"
+        "#include <stddef.h>\n"
+        "#include <stdint.h>\n"
+        "\n"
+        "static volatile const char *_amc_signal_name = \"UNKNOWN\";\n"
+        "static void _amc_handler(int sig) {\n"
+        "    if (sig == 11) _amc_signal_name = \"SIGSEGV\";\n"
+        "    else if (sig == 6)  _amc_signal_name = \"SIGABRT\";\n"
+        "    else if (sig == 8)  _amc_signal_name = \"SIGFPE\";\n"
+        "    else if (sig == 4)  _amc_signal_name = \"SIGILL\";\n"
+        "    printf(\"DYNAMIC:CONFIRMED signal=%s\\n\", (const char *)_amc_signal_name);\n"
+        "    fflush(stdout);\n"
+        "    _Exit(1);\n"
+        "}\n"
+        "\n"
+        "/* Rename main() in reproducer so we can wrap it */\n"
+        "#define main _amc_reproducer_main\n"
+    )
+    suffix = (
+        "\n#undef main\n"
+        "\n"
+        "int main(void) {\n"
+        "    signal(11, _amc_handler);  /* SIGSEGV */\n"
+        "    signal(6,  _amc_handler);  /* SIGABRT */\n"
+        "    signal(8,  _amc_handler);  /* SIGFPE  */\n"
+        "    signal(4,  _amc_handler);  /* SIGILL  */\n"
+        "    _amc_reproducer_main();\n"
+        "    puts(\"DYNAMIC:NOT_TRIGGERED\");\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    return preamble + reproducer_code + suffix

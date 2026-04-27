@@ -66,6 +66,11 @@ uv run amc generate --source examples/simple_driver.c --driver simple_driver
 # Run a corpus
 uv run amc eval --corpus path/to/corpus.json --output artifacts/
 
+# CBMC-alone baseline (no LLM, no spec generation — for comparison)
+uv run amc baseline --source examples/simple_driver.c \
+                    --driver simple_driver \
+                    --output artifacts/baseline_simple_driver
+
 # Verify a two-file cross-file demo (confirmed_system_entry across files)
 uv run amc verify-dir \
   --source-dir examples/cross_file_demo \
@@ -190,7 +195,7 @@ AMC independently reproduced the `calloc` integer-overflow issue filed in the Vi
 
 ```bash
 uv run pytest tests/ -q
-# 164 passed, 1 skipped
+# 198 passed, 1 skipped
 ```
 
 ## Usage — whole-codebase mode
@@ -230,8 +235,9 @@ tests/                  Unit and integration tests
 AMC is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
 
 - **Working:** C verification, all four agentic components, filtering-only ablation (`--skip-refinement`), parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), two-pass global call-graph construction for cross-file caller awareness, cross-file CBMC reachability queries (chain continues through caller files to a true system entry, promoting findings to `confirmed_system_entry`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime), four-tier confidence reporting (`confirmed_dynamic` > `confirmed_system_entry` > `confirmed_bmc` > `likely`), prompt caching.
-- **Partial:** External callee postconditions are LLM-generated and may be over-permissive.
-- **Planned:** Mutation testing and Phase 4 spec-quality defenses; full evaluation corpus beyond VibeOS; baseline comparisons.
+- **Working:** spec-quality module (`AMC_ENABLE_SPEC_QUALITY=true`) with mutation testing, coverage checks, consistency checks, and executable sanity checks; `amc baseline` command for CBMC-alone comparison runs.
+- **Partial:** External callee postconditions are LLM-generated and may be over-permissive; spec-quality analysis has not yet been run at scale.
+- **Planned:** Full evaluation corpus beyond VibeOS; CBMCAloneBaseline and AMCAblationBaseline comparisons on VibeOS.
 
 ## License
 

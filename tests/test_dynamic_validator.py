@@ -25,6 +25,8 @@ from amc.dynamic_validator import (
     DynamicOutcome,
     DynamicValidationResult,
     DynamicValidator,
+    _looks_like_c_code,
+    _wrap_reproducer_with_signal_handlers,
 )
 from amc.harness_generator import HarnessGenerator, _strip_glibc_internal_typedefs, _strip_inline_asm, _strip_static_inline_defs
 from amc.parser import FunctionInfo, FunctionSignature, ParsedCFile
@@ -683,4 +685,177 @@ def test_dynamic_harness_compiles_without_fsid_conflict():
     )
     assert result.outcome in (DynamicOutcome.NOT_TRIGGERED, DynamicOutcome.CONFIRMED), (
         f"Expected compile success, got {result.outcome}: {result.compile_error}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unit: _looks_like_c_code
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_c_code_valid():
+    src = "int main(void) { return 0; }"
+    assert _looks_like_c_code(src) is True
+
+
+def test_looks_like_c_code_empty():
+    assert _looks_like_c_code("") is False
+    assert _looks_like_c_code(None) is False
+
+
+def test_looks_like_c_code_too_short():
+    assert _looks_like_c_code("main{}") is False
+
+
+def test_looks_like_c_code_no_main():
+    assert _looks_like_c_code("int add(int a, int b) { return a + b; }") is False
+
+
+def test_looks_like_c_code_no_braces():
+    assert _looks_like_c_code("int main void return 0") is False
+
+
+# ---------------------------------------------------------------------------
+# Unit: _wrap_reproducer_with_signal_handlers
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_reproducer_contains_signal_setup():
+    src = "int main(void) { return 0; }"
+    wrapped = _wrap_reproducer_with_signal_handlers(src)
+    assert "#include <signal.h>" in wrapped
+    assert "_amc_handler" in wrapped
+    assert "DYNAMIC:CONFIRMED" in wrapped
+    assert "DYNAMIC:NOT_TRIGGERED" in wrapped
+
+
+def test_wrap_reproducer_renames_original_main():
+    src = "int main(void) { return 0; }"
+    wrapped = _wrap_reproducer_with_signal_handlers(src)
+    assert "#define main _amc_reproducer_main" in wrapped
+    assert "#undef main" in wrapped
+    assert "_amc_reproducer_main();" in wrapped
+
+
+def test_wrap_reproducer_includes_original_source():
+    src = "int main(void) { int x = 42; return x; }"
+    wrapped = _wrap_reproducer_with_signal_handlers(src)
+    assert "int x = 42;" in wrapped
+
+
+@pytest.mark.skipif(not GCC_AVAILABLE, reason="gcc not available")
+def test_wrap_reproducer_not_triggered_compiles_and_runs():
+    """Wrapped safe reproducer compiles and prints NOT_TRIGGERED."""
+    src = "int main(void) { return 0; }"
+    wrapped = _wrap_reproducer_with_signal_handlers(src)
+    rc, stdout, _ = _compile_and_run(wrapped)
+    assert "DYNAMIC:NOT_TRIGGERED" in stdout
+
+
+@pytest.mark.skipif(not GCC_AVAILABLE, reason="gcc not available")
+def test_wrap_reproducer_confirmed_on_null_deref():
+    """Wrapped reproducer with null dereference prints DYNAMIC:CONFIRMED."""
+    src = (
+        "#include <stdint.h>\n"
+        "int main(void) {\n"
+        "    volatile uint8_t *p = (volatile uint8_t *)0;\n"
+        "    *p = 1;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    wrapped = _wrap_reproducer_with_signal_handlers(src)
+    rc, stdout, _ = _compile_and_run(wrapped)
+    assert "DYNAMIC:CONFIRMED" in stdout
+
+
+# ---------------------------------------------------------------------------
+# Integration: validate() with system_entry_reproducer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not GCC_AVAILABLE, reason="gcc not available")
+def test_validate_system_entry_reproducer_confirmed():
+    """validate() with a crashing reproducer returns CONFIRMED via Attempt 0."""
+    config = Config(enable_dynamic_validation=True, dynamic_cc_path="gcc")
+    hg = HarnessGenerator(config)
+    dv = DynamicValidator(config, hg)
+
+    func = _make_func("entry", body="{ }", params=[], ret_type="void")
+    pf = ParsedCFile(
+        path="entry.c",
+        functions={"entry": func.signature},
+        call_graph={"entry": set()},
+        function_bodies={"entry": func.body},
+    )
+    cex = _make_cex()
+    reproducer = (
+        "#include <stdint.h>\n"
+        "int main(void) {\n"
+        "    volatile uint8_t *p = (volatile uint8_t *)0;\n"
+        "    *p = 1;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+    result = dv.validate(
+        entry_func=func,
+        counterexample=cex,
+        parsed_file=pf,
+        system_entry_reproducer=reproducer,
+    )
+    assert result.outcome == DynamicOutcome.CONFIRMED
+
+
+@pytest.mark.skipif(not GCC_AVAILABLE, reason="gcc not available")
+def test_validate_system_entry_reproducer_not_triggered():
+    """validate() with a safe reproducer returns NOT_TRIGGERED via Attempt 0."""
+    config = Config(enable_dynamic_validation=True, dynamic_cc_path="gcc")
+    hg = HarnessGenerator(config)
+    dv = DynamicValidator(config, hg)
+
+    func = _make_func("entry", body="{ }", params=[], ret_type="void")
+    pf = ParsedCFile(
+        path="entry.c",
+        functions={"entry": func.signature},
+        call_graph={"entry": set()},
+        function_bodies={"entry": func.body},
+    )
+    cex = _make_cex()
+    reproducer = "int main(void) { return 0; }\n"
+
+    result = dv.validate(
+        entry_func=func,
+        counterexample=cex,
+        parsed_file=pf,
+        system_entry_reproducer=reproducer,
+    )
+    assert result.outcome == DynamicOutcome.NOT_TRIGGERED
+
+
+def test_validate_system_entry_reproducer_not_c_falls_through():
+    """validate() skips Attempt 0 and uses unit harness when reproducer is not C."""
+    config = Config(enable_dynamic_validation=True, dynamic_cc_path="gcc")
+    hg = MagicMock()
+    hg.generate_dynamic_harness.return_value = "int main(){puts(\"DYNAMIC:NOT_TRIGGERED\");return 0;}"
+    dv = DynamicValidator(config, hg)
+
+    func = _make_func("fn", body="{ return 0; }", params=[], ret_type="int")
+    pf = ParsedCFile(
+        path="fn.c",
+        functions={"fn": func.signature},
+        call_graph={"fn": set()},
+        function_bodies={"fn": func.body},
+    )
+    cex = _make_cex()
+
+    result = dv.validate(
+        entry_func=func,
+        counterexample=cex,
+        parsed_file=pf,
+        system_entry_reproducer="pseudocode: call fn with x=0",
+    )
+    assert result.outcome in (
+        DynamicOutcome.NOT_TRIGGERED,
+        DynamicOutcome.CONFIRMED,
+        DynamicOutcome.INCONCLUSIVE,
     )

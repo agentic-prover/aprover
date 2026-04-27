@@ -316,6 +316,45 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_baseline(args: argparse.Namespace) -> int:
+    """Run CBMC-alone baseline on a C source file (no LLM, no spec generation)."""
+    from amc.artifacts import ArtifactStore
+    from amc.config import Config
+    from amc.evaluation.baselines import CBMCAloneBaseline
+
+    config = Config.from_env()
+    if args.output:
+        config.artifact_dir = args.output
+
+    store = ArtifactStore(config.artifact_dir)
+    baseline = CBMCAloneBaseline()
+
+    print(f"CBMC-alone baseline for: {args.source}")
+    print(f"Driver:       {args.driver}")
+    print(f"Artifact dir: {config.artifact_dir}")
+
+    result = baseline.run(
+        source_file=args.source,
+        driver_name=args.driver,
+        config=config,
+        store=store,
+    )
+
+    if result.error:
+        print(f"\nWarning: {result.error}", file=sys.stderr)
+
+    print(f"\n=== CBMC-Alone Baseline Results ===")
+    if not result.bugs_found:
+        print("No bugs found by CBMC alone.")
+    else:
+        print(f"Findings ({len(result.bugs_found)} total):")
+        for bug in result.bugs_found:
+            print(f"  {bug}")
+
+    print(f"\nRuntime: {result.runtime_seconds:.1f}s")
+    return 0
+
+
 def _cmd_verify_dir(args: argparse.Namespace) -> int:
     """Run the full pipeline on every .c file in a directory."""
     from amc.config import Config
@@ -430,6 +469,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="FilteringOnly mode: classify counterexamples but skip spec update and caller re-queue (RQ3 ablation)",
     )
     ver.set_defaults(func=_cmd_verify)
+
+    # --- baseline ---
+    bl = subparsers.add_parser(
+        "baseline",
+        help="Run CBMC-alone baseline on a C source file (no LLM, no spec generation)",
+    )
+    bl.add_argument("--source", required=True, help="Path to C source file")
+    bl.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
+    bl.add_argument("--output", default="artifacts", help="Artifact output directory")
+    bl.set_defaults(func=_cmd_baseline)
 
     # --- verify-dir ---
     vd = subparsers.add_parser(

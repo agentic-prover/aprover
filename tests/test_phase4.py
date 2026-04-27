@@ -912,3 +912,18 @@ def test_report_generator_save_reports(tmp_path: Path):
     data = json.loads((artifacts / "eval_summary.json").read_text())
     assert data["total_drivers"] == 2
     assert data["total_bugs_found"] == 1
+
+
+def test_cli_baseline_subcommand_registered():
+    """The 'baseline' subcommand is registered in the CLI parser."""
+    from amc.cli import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "baseline",
+        "--source", "examples/simple_driver.c",
+        "--driver", "simple_driver",
+    ])
+    assert args.source == "examples/simple_driver.c"
+    assert args.driver == "simple_driver"
+    assert args.output == "artifacts"

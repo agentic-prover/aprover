@@ -127,13 +127,13 @@ def _apply_mutations(body: str) -> list[tuple[str, str]]:
     """
     mutations = []
 
-    # off-by-one: `< N` → `<= N`
-    m = re.sub(r'\b(<)\s*(\w+)', lambda x: f'<= {x.group(2)}', body, count=1)
+    # off-by-one: `x < N` → `x <= N`  (handles spaced and unspaced operators)
+    m = re.sub(r'(\w)\s*<\s*(?!=)(\w+)', lambda x: f'{x.group(1)} <= {x.group(2)}', body, count=1)
     if m != body:
         mutations.append(("off_by_one_lt", m))
 
-    # off-by-one: `<= N` → `< N`
-    m2 = re.sub(r'\b(<=)\s*(\w+)', lambda x: f'< {x.group(2)}', body, count=1)
+    # off-by-one: `x <= N` → `x < N`
+    m2 = re.sub(r'(\w)\s*<=\s*(\w+)', lambda x: f'{x.group(1)} < {x.group(2)}', body, count=1)
     if m2 != body:
         mutations.append(("off_by_one_lte", m2))
 

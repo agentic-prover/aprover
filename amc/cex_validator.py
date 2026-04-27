@@ -1313,6 +1313,7 @@ class CExValidator:
             all_funcs=all_funcs,
             all_specs=all_specs,
             caller_path=caller_path,
+            system_entry_reproducer=validation_result.system_entry_input,
         )
         validation_result.dynamic_result = dynamic_result
 
