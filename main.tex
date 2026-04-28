@@ -6,23 +6,28 @@
 %%
 %% Target venues: CAV, FSE, ISSTA, ASE
 
-\documentclass[sigconf,anonymous]{acmart}
+\documentclass[11pt,a4paper]{article}
 
-\settopmatter{printacmref=false}
-\renewcommand\footnotetextcopyrightpermission[1]{}
-\pagestyle{plain}
-
-%% ── Packages ─────────────────────────────────────────────────────────────────
+\usepackage[margin=2.5cm]{geometry}
 \usepackage{microtype}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{xspace}
 \usepackage{listings}
-\usepackage{balance}
 \usepackage{xcolor}
 \usepackage[inline]{enumitem}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds}
+\usepackage{hyperref}
+\usepackage{abstract}
+\usepackage{titlesec}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{authblk}
+
+%% Compact section headings
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection}{1em}{}
 
 %% ── Tool names ───────────────────────────────────────────────────────────────
 \newcommand{\tool}{AProver\xspace}
@@ -52,17 +57,16 @@
 
 %% ─────────────────────────────────────────────────────────────────────────────
 
-\title{Agentic Model Checking}
+\title{\textbf{Agentic Model Checking}}
 
-\author{Youcheng Sun}
-\affiliation{%
-  \institution{Mohamed bin Zayed University of Artificial Intelligence}
-  \city{Abu Dhabi}
-  \country{UAE}
-}
-\email{youcheng.sun@mbzuai.ac.ae}
+\author[1]{Youcheng Sun}
+\affil[1]{Mohamed bin Zayed University of Artificial Intelligence, Abu Dhabi, UAE\\
+  \texttt{youcheng.sun@mbzuai.ac.ae}}
+\date{April 2026}
 
 \begin{document}
+
+\maketitle
 
 \begin{abstract}
 We present \emph{agentic model checking}, an architecture for automated
@@ -93,31 +97,9 @@ across 37 kernel modules: 32 faults confirmed at runtime (\dynconf{}),
 recall enhancer on this corpus.
 \end{abstract}
 
-%%
-%% CCS Concepts and Keywords
-%%
-\begin{CCSXML}
-<ccs2012>
- <concept>
-  <concept_id>10011007.10011006.10011008.10011024.10011028</concept_id>
-  <concept_desc>Software and its engineering~Model checking</concept_desc>
-  <concept_significance>500</concept_significance>
- </concept>
- <concept>
-  <concept_id>10011007.10011006.10011008.10011024</concept_id>
-  <concept_desc>Software and its engineering~Formal software verification</concept_desc>
-  <concept_significance>300</concept_significance>
- </concept>
-</ccs2012>
-\end{CCSXML}
-
-\ccsdesc[500]{Software and its engineering~Model checking}
-\ccsdesc[300]{Software and its engineering~Formal software verification}
-
-\keywords{bounded model checking, LLM agents, specification inference,
-  counterexample classification, compositional verification, systems software}
-
-\maketitle
+\noindent\textbf{Keywords:} bounded model checking, LLM agents, specification
+inference, counterexample classification, compositional verification, systems
+software
 
 %% ─────────────────────────────────────────────────────────────────────────────
 \section{Introduction}
@@ -884,12 +866,7 @@ historical buggy kernel versions; and
 (iv) activating the spec-quality defenses at scale to bound the over-weak-spec
 failure mode.
 
-\begin{acks}
-  % Acknowledgments omitted for anonymous review.
-\end{acks}
-
-\balance
-\bibliographystyle{ACM-Reference-Format}
+\bibliographystyle{plainnat}
 \bibliography{references}
 
 \end{document}
