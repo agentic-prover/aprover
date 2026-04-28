@@ -606,6 +606,21 @@ sanity checker} (LLM-based) that simulates concrete inputs against the spec.
 These defenses are the intended mitigation for over-weak LLM-generated specs;
 running them at scale on the evaluation corpus is future work.
 
+\smallskip\noindent\textbf{Bounded-string harness inputs.}
+For \texttt{char*} and \texttt{const char*} function parameters, \tool
+generates a bounded null-terminated string of at most $k$ characters
+(where $k$ is the unwinding bound) rather than a single nondeterministic
+byte. This is implemented by declaring a \texttt{char buf[k+1]} array,
+picking a nondeterministic length \texttt{len} with
+\texttt{\_\_CPROVER\_assume(len <= k)}, and placing a null terminator at
+\texttt{buf[len]}. With this constraint, CBMC can prove that any standard
+string-traversal loop terminates within $k$ iterations, eliminating spurious
+loop-bound violations (CBMC's \texttt{unwind.N} assertions) on correct
+string functions. Genuine loop bugs---functions that do not terminate even
+over a bounded null-terminated input---would still produce \texttt{unwind.N}
+findings; these are currently suppressed conservatively pending per-function
+auditing.
+
 \smallskip\noindent\textbf{Whole-codebase mode.}
 The \verb|verify-dir| command preprocesses every \texttt{.c} file in a
 directory using the C preprocessor, runs a two-pass global call-graph
@@ -910,10 +925,16 @@ ground truth. A manual audit of a randomly-sampled subset is needed to
 establish the false-positive rate of the \textsc{real\_bug} verdict.
 
 \noindent\textbf{Unwinding bound.}
-The default bound $k=4$ is conservative and favors loop-termination findings
-over deeper intra-loop bugs. The single unambiguous memory-safety finding
-(\texttt{print\_signed}) is not sensitive to $k$; the 40 unbounded-loop
-findings are.
+The default bound $k=4$ limits loop exploration depth; bugs that manifest only
+at iteration depths greater than 4 will not be found. All 65 reported findings
+are memory-safety violations (null dereference, integer overflow, out-of-bounds
+access) that do not depend on deep loop iteration.
+Loop-bound artifacts---CBMC's \texttt{unwind.N} assertions---are suppressed
+unconditionally. The bounded-string harness improvement (\S\ref{sec:impl})
+eliminates spurious \texttt{unwind.N} on correct string-traversal loops, but
+genuine loop bugs that persist even over bounded null-terminated inputs are also
+suppressed conservatively, pending a per-function audit to distinguish them from
+remaining harness-quality artifacts.
 
 \noindent\textbf{Single-system evaluation.}
 All real-world results are from a single target (\vibeos). Generalization to
