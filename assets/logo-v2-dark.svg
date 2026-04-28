@@ -1,30 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 140" width="460" height="140">
-  <!-- Icon badge: dark rounded square -->
-  <rect x="2" y="10" width="116" height="120" rx="20" ry="20" fill="#1a1040" stroke="#4338ca" stroke-width="1.5"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AProver logo v2 – dark-background variant (light wordmark) -->
+<svg width="480" height="140" viewBox="0 0 480 140"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-label="AProver – Agentic Prover">
 
-  <!-- Left leg: violet -->
-  <line x1="60" y1="28" x2="20" y2="110" stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+  <!-- Icon badge -->
+  <rect x="2" y="10" width="116" height="120" rx="20"
+        fill="#1a1040" stroke="#6366f1" stroke-width="1.5"/>
 
-  <!-- Right leg: green -->
-  <line x1="60" y1="28" x2="100" y2="110" stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
+  <!-- Upper leg (violet) -->
+  <line x1="18" y1="28" x2="104" y2="70"
+        stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
 
-  <!-- Crossbar: light lavender -->
-  <line x1="30" y1="72" x2="90" y2="72" stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
+  <!-- Lower leg (green) -->
+  <line x1="18" y1="112" x2="104" y2="70"
+        stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
 
-  <!-- Apex circle: covers leg junction cleanly -->
-  <circle cx="60" cy="28" r="5.5" fill="#ede9fe"/>
+  <!-- Crossbar (lavender) -->
+  <line x1="61" y1="49" x2="61" y2="91"
+        stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
 
-  <!-- Wordmark (dark variant) -->
-  <text x="138" y="85"
+  <!-- Apex dot -->
+  <circle cx="104" cy="70" r="6" fill="#ede9fe"/>
+
+  <!-- Wordmark – light for dark backgrounds -->
+  <text x="140" y="85"
         font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
-        font-size="50"
-        font-weight="700"
-        fill="#f5f3ff"
-        letter-spacing="-1.5">AProver</text>
-  <text x="138" y="108"
+        font-size="50" font-weight="700"
+        fill="#f5f3ff" letter-spacing="-1.5">AProver</text>
+
+  <!-- Tagline -->
+  <text x="142" y="108"
         font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
-        font-size="13"
-        font-weight="500"
-        fill="#a5b4fc"
-        letter-spacing="4.5">AGENTIC PROVER</text>
+        font-size="13" font-weight="500"
+        fill="#a5b4fc" letter-spacing="4.5">AGENTIC PROVER</text>
+
 </svg>

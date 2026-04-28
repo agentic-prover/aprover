@@ -1,30 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 140" width="460" height="140">
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="480" height="140" viewBox="0 0 480 140"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-label="AProver – Agentic Prover">
+
   <!-- Icon badge: dark rounded square -->
-  <rect x="2" y="10" width="116" height="120" rx="20" ry="20" fill="#1a1040" stroke="#4338ca" stroke-width="1.5"/>
+  <rect x="2" y="10" width="116" height="120" rx="20"
+        fill="#1a1040" stroke="#4338ca" stroke-width="1.5"/>
 
-  <!-- Left leg: violet -->
-  <line x1="60" y1="28" x2="20" y2="110" stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+  <!--
+    Horizontal "A" — rotated 90° so it points right.
 
-  <!-- Right leg: green -->
-  <line x1="60" y1="28" x2="100" y2="110" stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
+    Two feet on the left, apex on the right:
 
-  <!-- Crossbar: light lavender -->
-  <line x1="30" y1="72" x2="90" y2="72" stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
+      * ─────────────────────╲
+        (top foot)            ╲
+                    │          ● apex
+        (bot foot) ╱          ╱
+      * ─────────────────────╱
 
-  <!-- Apex circle: covers leg junction cleanly -->
-  <circle cx="60" cy="28" r="5.5" fill="#ede9fe"/>
+    The vertical crossbar sits at the horizontal midpoint of the two legs.
+    Upper leg: violet   (LLM / spec-gen side)
+    Lower leg: green    (BMC / formal side)
+    Crossbar:  lavender (the inference step connecting both)
+  -->
+
+  <!-- Upper leg: top-left foot → right apex (violet) -->
+  <line x1="18" y1="28" x2="104" y2="70"
+        stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Lower leg: bottom-left foot → right apex (green) -->
+  <line x1="18" y1="112" x2="104" y2="70"
+        stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Crossbar: vertical segment at horizontal midpoint (x≈61) -->
+  <line x1="61" y1="49" x2="61" y2="91"
+        stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Apex dot: covers the leg junction on the right -->
+  <circle cx="104" cy="70" r="6" fill="#ede9fe"/>
 
   <!-- Wordmark -->
-  <text x="138" y="85"
+  <text x="140" y="85"
         font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
-        font-size="50"
-        font-weight="700"
-        fill="#1e1b4b"
-        letter-spacing="-1.5">AProver</text>
-  <text x="138" y="108"
+        font-size="50" font-weight="700"
+        fill="#1e1b4b" letter-spacing="-1.5">AProver</text>
+
+  <!-- Tagline -->
+  <text x="142" y="108"
         font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
-        font-size="13"
-        font-weight="500"
-        fill="#6366f1"
-        letter-spacing="4.5">AGENTIC PROVER</text>
+        font-size="13" font-weight="500"
+        fill="#6366f1" letter-spacing="4.5">AGENTIC PROVER</text>
+
 </svg>
