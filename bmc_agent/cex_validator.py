@@ -179,6 +179,32 @@ class CExValidator:
         func_name = func.name
         logger.info("Validating counterexample for '%s'", func_name)
 
+        # Unwind-escalation pre-filter: if CBMC fired an unwinding assertion,
+        # re-run at a higher bound to check whether the loop is genuinely infinite
+        # or just legitimately needs more than cbmc_unwind iterations (false positive).
+        if counterexample.failing_property.endswith(".unwind.0"):
+            escalation_k = (
+                self.config.cbmc_unwind_escalation
+                if getattr(self.config, "cbmc_unwind_escalation", 0)
+                else max(self.config.cbmc_unwind * 4, 16)
+            )
+            genuine = self._check_unwind_escalation(func, spec, parsed_file, escalation_k)
+            if not genuine:
+                return ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[],
+                    system_entry_input=None,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"conservative-bound artifact: unwind.0 fires at k={self.config.cbmc_unwind} "
+                        f"but Phase 2 harness verifies at k={escalation_k} for all valid inputs; "
+                        f"loop terminates correctly, not a real bug"
+                    ),
+                    outcome=CExOutcome.SPURIOUS,
+                )
+
         # Step 1: find all callers of func_name in all_funcs
         callers = self._find_callers(func_name, all_funcs)
         logger.debug("Callers of '%s': %s", func_name, list(callers.keys()))
@@ -457,6 +483,83 @@ class CExValidator:
             all_specs=all_specs,
             parsed_file=parsed_file,
         )
+
+    # ------------------------------------------------------------------
+    # Unwind-escalation filter
+    # ------------------------------------------------------------------
+
+    def _check_unwind_escalation(
+        self,
+        func: FunctionInfo,
+        spec: "Spec",
+        parsed_file: "ParsedCFile",
+        high_k: int,
+    ) -> bool:
+        """
+        For unwind.0 findings: re-run the Phase 2 harness at a higher loop bound
+        to distinguish genuine infinite-loop bugs from conservative-bound artifacts.
+
+        Uses nondeterministic inputs (Phase 2 harness) so "verified" means the loop
+        terminates within k' for ALL valid inputs, not just the original witness.
+
+        Returns True  — loop still violates at high k (genuine unbounded-loop bug).
+        Returns False — loop verifies at high k (conservative-bound artifact).
+        """
+        import shutil
+
+        if not shutil.which(self.config.cbmc_path):
+            return True  # can't recheck; conservatively keep the finding
+
+        try:
+            harness_src = self.harness_gen.generate_harness(
+                func=func,
+                spec=spec,
+                parsed_file=parsed_file,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Unwind-escalation harness gen failed for '%s': %s", func.name, exc
+            )
+            return True
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".c", delete=False, mode="w", encoding="utf-8"
+        ) as tmp:
+            tmp.write(harness_src)
+            tmp_path = tmp.name
+
+        try:
+            result = run_cbmc(
+                harness_path=tmp_path,
+                unwind=high_k,
+                timeout=self.config.cbmc_timeout,
+                cbmc_path=self.config.cbmc_path,
+                include_dirs=getattr(self.config, "include_dirs", None),
+            )
+        except Exception as exc:
+            logger.debug(
+                "Unwind-escalation CBMC failed for '%s': %s", func.name, exc
+            )
+            return True
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        if result.error:
+            return True
+
+        if result.verified:
+            logger.info(
+                "Unwind-escalation: '%s' passes at k=%d — conservative-bound artifact, filtering",
+                func.name, high_k,
+            )
+            return False
+
+        # Still fails at high_k — genuine bug (infinite loop or very deep iteration)
+        logger.info(
+            "Unwind-escalation: '%s' still fails at k=%d — genuine unbounded-loop bug",
+            func.name, high_k,
+        )
+        return True
 
     # ------------------------------------------------------------------
     # CEx feasibility check (Stage 2: real callee bodies)
