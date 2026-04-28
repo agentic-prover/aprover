@@ -83,10 +83,10 @@ guard before triggering compositional re-verification of all callers.
 
 We evaluate \tool on \vibeos, a bare-metal ARM64 hobby operating system
 (\textasciitilde{}15{,}000 lines of LLM-generated C). In raw-source mode with
-dynamic validation enabled, \tool reports \textbf{173 confirmed findings}
-across 37 kernel modules: 32 faults confirmed at runtime (\dynconf{}),
-108 findings with full call chains traced to kernel entry points
-(\sysconf{}), and 33 with caller-reachability established by BMC
+dynamic validation enabled, \tool reports \textbf{65 confirmed findings}
+across 37 kernel modules: 22 faults confirmed at runtime (\dynconf{}),
+38 findings with full call chains traced to kernel entry points
+(\sysconf{}), and 5 with caller-reachability established by BMC
 (\bmcconf{}). An ablation removing the refinement loop
 (\emph{FilteringOnly}) reports 59 findings on five wrapper modules vs.\
 \tool's 41, showing that refinement acts as a precision filter rather than a
@@ -174,8 +174,8 @@ novel.
   improvements to callers (\S\ref{sec:refinement}).
 
 \item A prototype implementation targeting C/CBMC with bare-metal kernel
-  support, and an evaluation on \vibeos showing 173 confirmed findings across
-  37 modules with 32 confirmed at runtime (\S\ref{sec:evaluation}).
+  support, and an evaluation on \vibeos showing 65 confirmed findings across
+  37 modules with 22 confirmed at runtime (\S\ref{sec:evaluation}).
 \end{enumerate}
 
 %% ─────────────────────────────────────────────────────────────────────────────
@@ -672,7 +672,7 @@ uncontrolled targets.
 Table~\ref{tab:vibeos-full} shows results from the raw-source mode run with
 dynamic validation enabled across all 38 unique kernel module stems (47 of 48
 \texttt{.c} files; \texttt{font.c} was not processed in any run). \tool
-reports 173 confirmed findings across 37 modules in three evidence tiers.
+reports 65 confirmed findings across 37 modules in three evidence tiers.
 
 \begin{table}[t]
 \caption{VibeOS raw-source findings by evidence tier.}
@@ -681,19 +681,20 @@ reports 173 confirmed findings across 37 modules in three evidence tiers.
 \toprule
 \textbf{Evidence tier} & \textbf{Count} \\
 \midrule
-\dynconf{}     & 32  \\
-\sysconf{}     & 108 \\
-\bmcconf{}     & 33  \\
+\dynconf{}     & 22  \\
+\sysconf{}     & 38 \\
+\bmcconf{}     & 5  \\
 \midrule
-\textbf{Total} & \textbf{173} \\
+\textbf{Total} & \textbf{65} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The 32 \dynconf findings each triggered a SIGSEGV in a GCC-compiled harness
-running the exact counterexample witness, confirming the fault independently
-of any CBMC model. They span 14 modules including the IRQ handler, USB stack,
-ELF loader, VFS, DMA layer, cursor renderer, and TTF font renderer.
+The 22 \dynconf findings each triggered a signal (SIGSEGV, SIGABRT, or SIGILL)
+in a GCC-compiled harness running the exact counterexample witness, confirming
+the fault independently of any CBMC model assumption. They span 9 modules:
+\texttt{kapi}, \texttt{ttf}, \texttt{process}, \texttt{net}, \texttt{mouse},
+\texttt{memory}, \texttt{fat32}, \texttt{keyboard}, and \texttt{uart}.
 
 \begin{table}[t]
 \caption{\dynconf findings by module.}
@@ -701,62 +702,57 @@ ELF loader, VFS, DMA layer, cursor renderer, and TTF font renderer.
 \small
 \begin{tabular}{lp{5.5cm}}
 \toprule
-\textbf{Module} & \textbf{Functions} \\
+\textbf{Module} & \textbf{Functions (signal)} \\
 \midrule
-\texttt{irq}      & \texttt{handle\_serror}, \texttt{handle\_sync\_exception},
-                    \texttt{uart\_puthex}, \texttt{wsod\_animate\_ekg},
-                    \texttt{wsod\_draw\_line}, \texttt{wsod\_draw\_sad\_mac},
-                    \texttt{wsod\_draw\_text}, \texttt{wsod\_hex},
-                    \texttt{wsod\_int} \\
-\texttt{ttf}      & \texttt{stbtt\_\_sort\_edges\_ins\_sort},
-                    \texttt{stbtt\_\_sort\_edges\_quicksort} \\
-\texttt{dma}      & \texttt{hal\_dma\_copy}, \texttt{hal\_dma\_fb\_copy} \\
-\texttt{fb}       & \texttt{find\_ramfb\_selector}, \texttt{fw\_cfg\_read},
-                    \texttt{local\_strcmp} \\
-\texttt{usb\_hid} & \texttt{kbd\_ring\_push}, \texttt{mouse\_ring\_push},
-                    \texttt{usb\_irq\_handler} \\
-\texttt{vfs}      & \texttt{readdir\_callback}, \texttt{vfs\_lookup} \\
-\texttt{elf}      & \texttt{elf\_load}, \texttt{elf\_load\_at} \\
-\texttt{cursor}   & \texttt{draw\_cursor\_at}, \texttt{save\_background} \\
-Others            & \texttt{scroll\_up} (console), \texttt{strlen} (string),
-                    \texttt{uart\_getc\_blocking} (kernel),
-                    \texttt{process\_init}, \texttt{usb\_enumerate\_hub},
-                    \texttt{kapi\_print\_hex}, \texttt{kapi\_print\_int} \\
+\texttt{kapi}     & \texttt{kapi\_create}, \texttt{kapi\_delete},
+                    \texttt{kapi\_get\_datetime}, \texttt{kapi\_get\_ram\_total},
+                    \texttt{kapi\_open}, \texttt{kapi\_set\_cwd} (SIGSEGV) \\
+\texttt{ttf}      & \texttt{stbtt\_FreeBitmap} (SIGABRT),
+                    \texttt{stbtt\_FreeShape} (SIGSEGV),
+                    \texttt{stbtt\_GetCodepointHMetrics} (SIGSEGV),
+                    \texttt{stbtt\_GetFontBoundingBox} (SIGSEGV),
+                    \texttt{stbtt\_PackEnd} (SIGABRT),
+                    \texttt{stbtt\_ScaleForPixelHeight} (SIGILL),
+                    \texttt{stbtt\_\_buf\_get} (SIGSEGV),
+                    \texttt{stbtt\_\_sized\_trapezoid\_area} (SIGABRT) \\
+\texttt{process}  & \texttt{process\_current}, \texttt{process\_get\_current\_ptr} (SIGSEGV) \\
+\texttt{net}      & \texttt{net\_get\_mac} (SIGSEGV) \\
+\texttt{mouse}    & \texttt{mouse\_ring\_push} (SIGABRT) \\
+\texttt{memory}   & \texttt{memory\_get\_sp} (SIGABRT) \\
+\texttt{fat32}    & \texttt{fat32\_get\_fs\_info} (SIGSEGV) \\
+\texttt{keyboard} & \texttt{hal\_usb\_keyboard\_poll} (SIGSEGV) \\
+\texttt{uart}     & \texttt{uart\_getc} (SIGABRT) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \noindent\textbf{Bug categories.}
-Findings fall into two categories. \emph{Unbounded loops}: CBMC's unwinding
-assertion (\texttt{unwind.0}) fires when a loop takes \emph{more than $k=4$
-iterations} for some concrete input---it does not, by itself, mean the loop is
-truly infinite.  Not all \texttt{unwind.0} firings are bugs: some loops
-terminate correctly but legitimately require more than four iterations (e.g.,
-\texttt{usb\_enumerate\_hub} iterating once per USB port needs five iterations
-for a five-port hub).  \tool filters such conservative-bound artifacts
-automatically by re-running the Phase~2 harness at a higher bound $k'=16$ with
-nondeterministic inputs: if CBMC verifies the function under all valid inputs at
-$k'$, the finding is discarded as a conservative-bound artifact; if the
-unwinding assertion persists, the loop is genuinely unbounded.
+All 65 confirmed findings are property violations discovered by CBMC through
+BMC over per-function harnesses with LLM-generated specs. The majority are
+\emph{precondition violations}: CBMC finds a caller-reachable input under
+which the function violates a postcondition or one of CBMC's built-in safety
+checks. Representative examples:
 
-Findings that survive the escalation check represent real bugs.
-Two VibeOS examples: passing a non-null-terminated buffer
-(e.g., \texttt{char buf[4]=\{'a','b','c','d'\}}) to any string function such
-as \texttt{strlen} causes the function to scan past the array end---yielding
-an out-of-bounds read and, in the dynamic harness, a
-\texttt{SIGSEGV}---because the null terminator is never found.
-In \texttt{dtb\_parse}, a malformed device-tree string field whose stored
-length is \texttt{UINT\_MAX} causes approximately $2^{32}$ iterations,
-effectively hanging the kernel.  Both cases persist at $k'=16$; their
-practical severity depends on whether callers can supply the triggering
-input---a relevant concern for \texttt{dtb\_parse}, which consumes
-externally-supplied firmware data.
+\emph{Null-pointer and bounds violations.}
+\texttt{vfs\_read} (chain: \texttt{kapi\_read}$\to$\texttt{vfs\_read}) fails
+a \texttt{valid(handle)} precondition check, reachable when the VFS layer is
+called with an uninitialized handle. \texttt{icmp\_handle} (chain:
+\texttt{net\_ping}$\to$\texttt{net\_poll}$\to$\texttt{ip\_handle}$\to$\texttt{icmp\_handle})
+violates a precondition requiring the packet to be long enough to contain the
+ICMP header, triggering an out-of-bounds access on a short packet.
 
-\emph{Memory-safety bugs}: the clearest example is signed integer overflow in
-\texttt{print\_signed}, where the expression \texttt{num = -num} is undefined
-behavior when \texttt{num == INT64\_MIN}. Any call to
-\texttt{printf("\%ld", (long)INT64\_MIN)} triggers this UB unconditionally;
-the finding is unambiguous.
+\emph{Integer overflow.}
+\texttt{calloc} (confirmed\_system\_entry) is flagged for the expression
+\texttt{total = nmemb * size} with \texttt{nmemb = 9223372036854775808}
+($2^{63}$), wrapping to zero and causing a heap underallocation. This
+independently cross-validates \vibeos issue~\#26 in the public tracker.
+
+\emph{Deep calling-context bugs.}
+\texttt{stbtt\_\_buf\_get} (confirmed\_dynamic, SIGSEGV) is reached via
+a 13-level call chain from \texttt{stbtt\_PackFontRange}; the bug is a
+signed-integer overflow in the buffer-cursor arithmetic (\texttt{cursor =
+INT\_MAX$-$1}, \texttt{size = INT\_MAX$-$1}) causing out-of-bounds reads
+in the TTF font parser.
 
 \noindent\textbf{Cross-validation.} At the time of evaluation, the \vibeos
 public issue tracker contained a filed defect (issue~\#26) describing a
@@ -769,32 +765,96 @@ signal that the classifier is calibrated correctly on at least this finding.
 \noindent\textbf{Comparison with FM-Agent.}
 \fmagent~\cite{fmagent} also evaluates on \vibeos and reports 23 bugs,
 all confirmed by running generated test cases against the live system
-(up to 10 attempts per candidate). \tool reports 173 findings, but the
+(up to 10 attempts per candidate). \tool reports 65 findings, but the
 two numbers are \emph{not directly comparable}.
 
 The tools target overlapping but distinct bug classes.
 \fmagent finds semantic and logic bugs---incorrect return values, wrong
 conditional logic, behavioral errors---confirmed by running test cases
 against the live system. \tool targets low-level C undefined
-behaviour---null dereference, integer overflow, unbounded
-loops---confirmed by BMC and optionally by GCC-harness execution.
-\fmagent's 23 bugs include 4 memory-corruption cases, 2 infinite loops,
-4 incorrect return values, and 12 logic errors. \tool's findings include
-loop-termination violations (e.g., passing a non-null-terminated buffer to
-a string function, or a malformed \texttt{UINT\_MAX} length field to
-\texttt{dtb\_parse}) and memory-safety violations; these are real bugs,
-but their practical severity depends on whether callers can supply the
-triggering inputs.
+behaviour---null dereference, integer overflow, memory-safety violations---
+confirmed by BMC and optionally by GCC-harness execution.
+\fmagent's 23 bugs include 4 memory-corruption cases, 4 incorrect return
+values, and 12 logic errors. \tool's findings include precondition
+violations (e.g., \texttt{vfs\_read} with an uninitialized handle,
+\texttt{icmp\_handle} with an undersized packet) and memory-safety
+violations such as the \texttt{calloc} integer overflow and the
+\texttt{stbtt\_\_buf\_get} buffer cursor overflow.
 
-The most comparable subset is \tool's 32 \dynconf findings (runtime
-SIGSEGV in a GCC-compiled harness) against \fmagent's 23 runtime-confirmed
-bugs; even here the confirmation mechanisms differ---\tool compiles an
-x86-64 harness around an isolated function, while \fmagent runs
-system-entry test cases against the full kernel. A meaningful head-to-head
-comparison would require auditing both result sets manually on the same
-modules. The tools are best understood as \emph{complementary}: \fmagent
-excels at semantic bugs observable through system execution; \tool excels
-at low-level memory-safety violations detectable by bounded model checking.
+The most comparable subset is \tool's 22 \dynconf findings (runtime signal
+in a GCC-compiled harness) against \fmagent's 23 runtime-confirmed bugs;
+even here the confirmation mechanisms differ---\tool compiles an x86-64
+harness around an isolated function, while \fmagent runs system-entry test
+cases against the full kernel. A meaningful head-to-head comparison would
+require auditing both result sets manually on the same modules. The tools
+are best understood as \emph{complementary}: \fmagent excels at semantic
+bugs observable through system execution; \tool excels at low-level
+memory-safety violations detectable by bounded model checking.
+
+\subsection{Case Study: End-to-End Pipeline Trace}
+\label{sec:casestudy}
+
+We trace one finding end-to-end through all four pipeline phases to illustrate
+how the architecture works in practice. We choose
+\texttt{stbtt\_\_buf\_get} in VibeOS's TTF font renderer
+(\texttt{ttf.c}): it is confirmed at the highest evidence tier (\dynconf),
+involves a 13-level call chain that stresses the caller-reachability check,
+and the root cause---a signed integer overflow in buffer cursor arithmetic---is
+a class of bug that neither pattern-based tools nor manual inspection reliably
+catches.
+
+\smallskip\noindent\textbf{Phase 1: Specification generation.}
+The spec generator traverses the call graph top-down, starting from
+\texttt{stbtt\_PackFontRange} (a public TTF packing entry point with no
+in-corpus callers). For each of the 13 functions on the eventual chain, the
+LLM agent retrieves the function body and its callers' bodies, drafts a
+pre/postcondition pair in the DSL, and validates it against the parser.
+A representative generated spec for \texttt{stbtt\_\_buf\_get} states:
+\emph{precondition}: \texttt{valid(b) \&\& n >= 0 \&\& n <= 4};
+\emph{postcondition}: return value is a sequence of \texttt{n} bytes
+assembled from \texttt{b->data[b->cursor]} onwards.
+
+\smallskip\noindent\textbf{Phase 2: BMC.}
+CBMC is invoked on a harness for \texttt{stbtt\_\_buf\_get} that
+nondeterministically initializes the \texttt{stbtt\_\_buf} parameter
+subject to the precondition and asserts the postcondition at all return
+sites. With loop bound $k=4$, CBMC finds a counterexample:
+\texttt{cursor = 2147483646} (\texttt{INT\_MAX$-$1}), \texttt{size = 2147483646},
+\texttt{n = 3}. At these values \texttt{stbtt\_\_buf\_get8} is called three
+times; on each call \texttt{cursor >= size} is false (since
+\texttt{2147483646 < 2147483646} is false), so the bounds check
+passes---but the \texttt{data} pointer is backed by a nondeterministic
+one-byte object in the CBMC model, so the reads are out of bounds.
+The postcondition assertion fires at \texttt{main:992}.
+
+\smallskip\noindent\textbf{Phase 3 Stage 1: Caller reachability.}
+The classifier asks: can \texttt{stbtt\_\_cff\_int} (the immediate caller)
+supply \texttt{cursor = INT\_MAX$-$1}? A CBMC harness runs
+\texttt{stbtt\_\_cff\_int} with its own precondition and \texttt{stbtt\_\_buf\_get}'s
+argument fixed to the witness values; CBMC finds a satisfying execution.
+The upward propagation then iterates: each confirmed caller's own callers
+are queried in turn, traversing
+\texttt{stbtt\_\_cff\_int}$\to$\texttt{stbtt\_\_cff\_skip\_operand}$\to\cdots\to$%
+\texttt{stbtt\_\_run\_charstring}$\to\cdots\to$\texttt{stbtt\_PackFontRange}.
+\texttt{stbtt\_PackFontRange} has no callers anywhere in the analyzed corpus;
+upward propagation terminates with \sysconf.
+
+\smallskip\noindent\textbf{Phase 3 Stage 3: Dynamic validation.}
+The dynamic validator compiles a GCC harness that calls
+\texttt{stbtt\_PackFontRange} with the hardcoded witness inputs and catches
+SIGSEGV/SIGABRT/SIGFPE/SIGILL. Executing on the x86-64 host produces
+\textbf{SIGSEGV}---the GCC harness allocates a real heap object for \texttt{b->data}
+(a single byte), advances the cursor to \texttt{INT\_MAX$-$1} via the
+counterexample trace, and the out-of-bounds memory read produces a
+segmentation fault. The tier is upgraded to \dynconf.
+
+\smallskip\noindent\textbf{Root cause.}
+The bug is that \texttt{stbtt\_\_buf\_get8} stores the cursor and size as
+\texttt{signed int}, so large valid-looking values near \texttt{INT\_MAX}
+pass the bounds check \texttt{cursor < size} but cause out-of-bounds
+reads when the backing allocation is small. Using \texttt{unsigned int}
+or \texttt{size\_t} would prevent the confusion between large positive
+cursor values and the actual allocation size.
 
 \subsection{RQ3: Refinement vs.\ Filtering}
 
@@ -845,7 +905,7 @@ the eliminated findings---the most important next step in the evaluation.
 \subsection{Threats to Validity}
 
 \noindent\textbf{Classifier precision.}
-The 173 finding count is \tool's own classification, not an externally-audited
+The 65 finding count is \tool's own classification, not an externally-audited
 ground truth. A manual audit of a randomly-sampled subset is needed to
 establish the false-positive rate of the \textsc{real\_bug} verdict.
 
@@ -879,8 +939,8 @@ evaluated here (15k LoC, 452 functions). The key architectural difference
 is the verification oracle: \fmagent uses LLM reasoning (not sound for
 arithmetic and memory bugs); \tool uses CBMC (sound within the unwinding
 bound, producing concrete counterexamples). On \vibeos, \fmagent reports 23
-bugs confirmed by live test-case execution; \tool reports 173 findings of
-which 32 are runtime-confirmed (\dynconf). The counts are not directly
+bugs confirmed by live test-case execution; \tool reports 65 findings of
+which 22 are runtime-confirmed (\dynconf). The counts are not directly
 comparable: the tools target different bug classes (semantic/logic bugs
 vs.\ low-level memory-safety and termination violations) and use different
 confirmation mechanisms. They are best understood as complementary.
@@ -938,10 +998,13 @@ propose, conventional tools dispose}---assigns tasks to LLMs where semantic
 reasoning is appropriate while reserving all soundness-relevant decisions for
 deterministic solvers.
 
-Evaluated on \vibeos, \tool reports 173 confirmed findings across 37 kernel
-modules, including 32 runtime-confirmed faults (SIGSEGV in compiled harnesses)
-and one finding that independently cross-validates an open issue in the
-\vibeos tracker. The FilteringOnly ablation shows that on this corpus,
+Evaluated on \vibeos, \tool reports 65 confirmed findings across 37 kernel
+modules, including 22 runtime-confirmed faults (SIGSEGV/SIGABRT/SIGILL in
+compiled harnesses) and one finding that independently cross-validates an open
+issue in the \vibeos tracker. A case study traces \texttt{stbtt\_\_buf\_get}
+end-to-end: CBMC finds the bug, a 13-level caller-reachability chain confirms
+it is reachable from the TTF packing entry point, and dynamic execution
+confirms it with SIGSEGV. The FilteringOnly ablation shows that on this corpus,
 refinement acts as a precision filter (eliminating 18 findings vs.\ 59 for
 FilteringOnly) rather than a recall enhancer; resolving whether those
 eliminated findings represent genuine precision improvement or over-refinement
@@ -949,7 +1012,7 @@ artifacts is the most important next step.
 
 \smallskip\noindent\textbf{Future work.}
 The four most important open items are:
-(i) a manual precision audit of a sampled subset of the 173 findings to
+(i) a manual precision audit of a sampled subset of the 65 findings to
 establish the classifier's false-positive rate;
 (ii) running the CBMCAlone and AMCAblation baselines on \vibeos to complete
 the quantitative comparison;
