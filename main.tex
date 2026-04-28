@@ -179,6 +179,112 @@ novel.
 \end{enumerate}
 
 %% ─────────────────────────────────────────────────────────────────────────────
+\section{Motivating Example}
+\label{sec:motivating}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+We walk through a small embedded sensor hub to show each phase of \tool in
+action.  The example is representative of the patterns that dominate in
+LLM-generated systems code: boundary conditions that are enforced implicitly
+by callers, and counter types that silently wrap.
+
+\paragraph{Code.}
+\texttt{sensor\_hub.c} implements a two-layer call graph.
+The entry points \texttt{process\_sample} and \texttt{get\_reading} call the
+internal functions \texttt{record\_reading} and \texttt{latest\_value}.
+
+\begin{lstlisting}[language=C, label=lst:sensor, caption={Key fragments of
+\texttt{sensor\_hub.c}.  Bug annotations are for exposition only.}]
+/* Layer 2 internal — called by process_sample */
+static void record_reading(hub_t *hub, int sid, int32_t val) {
+    assert(sid >= 0 && sid < NUM_SENSORS);   /* BUG-A fires here */
+    sensor_t *s = &hub->sensors[sid];
+    if (s->count >= WINDOW) s->sum -= s->readings[s->slot];
+    s->readings[s->slot] = val;
+    s->slot = (uint8_t)((s->slot + 1) % WINDOW);
+    s->sum += val;
+    s->count++;                              /* uint8_t: 255 -> 0 */
+    assert(s->count > 0);                   /* BUG-B fires here */
+}
+
+/* Layer 1 entry — guards sid before calling record_reading */
+void process_sample(hub_t *hub, int sid, int32_t val) {
+    assert(hub != NULL);
+    if (sid < 0 || sid >= NUM_SENSORS) return; /* direct guard */
+    record_reading(hub, sid, val);
+    hub->total_samples++;
+}
+
+/* Layer 2 internal — called by get_reading */
+static int32_t latest_value(hub_t *hub, int sid) {
+    sensor_t *s = &hub->sensors[sid];
+    uint8_t   n = (s->count < WINDOW) ? s->count : (uint8_t)WINDOW;
+    return s->sum / (int32_t)n;             /* BUG-C: n==0 when count==0 */
+}
+
+/* Layer 1 entry — missing count>0 guard before calling latest_value */
+int32_t get_reading(hub_t *hub, int sid) {
+    assert(hub != NULL);
+    if (sid < 0 || sid >= NUM_SENSORS) return -1;
+    return latest_value(hub, sid);          /* BUG-C reachable here */
+}
+\end{lstlisting}
+
+\paragraph{Phase~1 --- Specification generation.}
+\tool traverses the call graph top-down.
+For \texttt{record\_reading}, the LLM infers the weakest spec consistent with
+the caller context: precondition \texttt{valid(hub)}, postcondition \texttt{true}.
+(\texttt{sid} is left unconstrained because the LLM cannot yet see the caller's
+guard.)
+For \texttt{latest\_value} the LLM similarly generates \texttt{valid(hub)} with
+no constraint on \texttt{sensors[sid].count}.
+
+\paragraph{Phase~2 --- BMC finds two counterexamples.}
+CBMC checks each Layer~2 function against its generated spec.  With \texttt{sid}
+unconstrained, the assert at line~3 of \texttt{record\_reading} is violated
+(e.g., \texttt{sid = -1}).  Separately, in \texttt{latest\_value}, CBMC
+produces a witness with \texttt{count = 0}, causing integer division by zero
+at line~25.
+
+\paragraph{Phase~3 --- Counterexample classification.}
+For the \texttt{record\_reading} counterexample (BUG-A), \tool constructs a
+reachability harness for \texttt{process\_sample}: is there an execution path
+that reaches the call \texttt{record\_reading(hub, sid, val)} with
+$\mathtt{sid} < 0$ or $\mathtt{sid} \geq \texttt{NUM\_SENSORS}$?
+The guard at line~16 (\texttt{if (sid < 0 || sid >= NUM\_SENSORS) return;})
+is a direct comparison in the caller's own body, not delegated to a callee
+stub.  CBMC therefore sees the full constraint and determines the path is
+\emph{unsatisfiable}: the counterexample is classified \textbf{SPURIOUS}.
+
+For the \texttt{latest\_value} division-by-zero (BUG-C), the reachability
+harness checks whether \texttt{get\_reading} can call \texttt{latest\_value}
+with \texttt{sensors[sid].count == 0}.  Because \texttt{get\_reading} performs
+no such guard, the path is \emph{satisfiable}: this counterexample is
+classified \textbf{REAL} and reported at tier~\bmcconf.
+
+\paragraph{Phase~3b --- Refinement and re-verification.}
+For the spurious BUG-A witness, the LLM refiner proposes a precondition
+tightening: add $0 \leq \mathtt{sid} < \texttt{NUM\_SENSORS}$.
+An SMT soundness guard checks that the new precondition does not imply
+the postcondition vacuously; it passes.
+CBMC re-verifies \texttt{record\_reading} under the refined spec.
+The BUG-A assert no longer fires.  A new counterexample emerges: with
+\texttt{s->count == 255} (valid because \texttt{process\_sample} places no
+upper bound on call count), the increment \texttt{s->count++} wraps the
+\texttt{uint8\_t} to~0 and the BUG-B assert fires.
+The reachability harness confirms BUG-B is a real bug: a \texttt{hub\_t}
+with \texttt{sensors[sid].count == 255} is a legitimate input to
+\texttt{process\_sample}.  The finding is reported at tier~\bmcconf.
+
+\paragraph{FilteringOnly contrast.}
+The FilteringOnly ablation (\S\ref{sec:evaluation}) classifies counterexamples
+but never updates specs or re-queues callers.  Applied here, it would
+retain the spurious BUG-A as a reported finding and would never discover
+BUG-B at all: a false positive replaces a true positive.  The refinement loop
+is necessary both for precision (eliminating BUG-A) and for recall of the
+counter-wrap bug (BUG-B).
+
+%% ─────────────────────────────────────────────────────────────────────────────
 \section{Background}
 \label{sec:background}
 %% ─────────────────────────────────────────────────────────────────────────────
