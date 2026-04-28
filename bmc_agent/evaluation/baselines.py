@@ -1,9 +1,9 @@
 """
-Baseline runners for GRACE evaluation.
+Baseline runners for BMC-Agent evaluation.
 
 Provides comparison baselines:
 - CBMCAloneBaseline: runs CBMC directly without LLM-generated specs.
-- AMCAblationBaseline: GRACE with bottom-up spec generation instead of top-down.
+- AMCAblationBaseline: BMC-Agent with bottom-up spec generation instead of top-down.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 class BaselineResult:
     """Result of running a baseline tool on a single driver."""
 
-    name: str                   # "cbmc_alone", "smatch", "grace_ablation"
+    name: str                   # "cbmc_alone", "smatch", "amc_ablation"
     driver_name: str
     bugs_found: list[str] = field(default_factory=list)   # list of bug descriptions
     false_positives: int = 0
@@ -124,7 +124,7 @@ class CBMCAloneBaseline:
 
 class AMCAblationBaseline:
     """
-    GRACE with bottom-up spec generation instead of top-down.
+    BMC-Agent with bottom-up spec generation instead of top-down.
 
     Generates specs from the implementation alone (no caller context),
     then runs the same BMC + validation pipeline.
@@ -137,9 +137,9 @@ class AMCAblationBaseline:
         config: "Config",
     ) -> BaselineResult:
         """
-        Run GRACE but generate specs without using caller context.
+        Run BMC-Agent but generate specs without using caller context.
 
-        This ablation removes the top-down refinement aspect of GRACE,
+        This ablation removes the top-down refinement aspect of BMC-Agent,
         serving as a baseline to measure the value of caller-context-aware
         spec generation.
         """
@@ -166,7 +166,7 @@ class AMCAblationBaseline:
             )
         except Exception as exc:
             return BaselineResult(
-                name="grace_ablation",
+                name="amc_ablation",
                 driver_name=driver_name,
                 runtime_seconds=time.monotonic() - start,
                 error=f"Spec generation failed: {exc}",
@@ -186,7 +186,7 @@ class AMCAblationBaseline:
             verdicts = engine.check_all(funcs, specs, parsed, driver_name)
         except Exception as exc:
             return BaselineResult(
-                name="grace_ablation",
+                name="amc_ablation",
                 driver_name=driver_name,
                 runtime_seconds=time.monotonic() - start,
                 error=f"BMC failed: {exc}",
@@ -198,7 +198,7 @@ class AMCAblationBaseline:
                     bugs_found.append(f"{fn_name}: {cex.failing_property}")
 
         return BaselineResult(
-            name="grace_ablation",
+            name="amc_ablation",
             driver_name=driver_name,
             bugs_found=bugs_found,
             false_positives=0,

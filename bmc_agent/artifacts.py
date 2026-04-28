@@ -1,5 +1,5 @@
 """
-Artifact directory layout for GRACE.
+Artifact directory layout for BMC-Agent.
 
 One subdirectory per driver; one sub-subdirectory per function.
 Each result is saved as a JSON file inside the function directory.
@@ -17,12 +17,12 @@ from bmc_agent.spec import Spec, SpecStatus
 
 class ArtifactStore:
     """
-    Manages the on-disk artifact layout for a GRACE verification run.
+    Manages the on-disk artifact layout for a BMC-Agent verification run.
 
     Layout::
 
         {base_dir}/
-            grace.log
+            amc.log
             {driver}/
                 {function}/
                     spec.json

@@ -1,5 +1,5 @@
 """
-Phase 3 acceptance tests for GRACE Counterexample Validator & Spec Refiner.
+Phase 3 acceptance tests for BMC-Agent Counterexample Validator & Spec Refiner.
 
 All tests run without CBMC or ANTHROPIC_API_KEY — LLM and CBMC are mocked.
 
@@ -219,7 +219,7 @@ def test_counterexample_is_reachable_real_bug(tmp_path: Path):
         raw_output="",
     )
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_result):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_cbmc_result):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             result = validator.validate(
                 func=func,
@@ -287,7 +287,7 @@ def test_counterexample_not_reachable_spurious(tmp_path: Path):
     # CBMC verifies → assert(0) never reached → state NOT reachable (spurious)
     mock_cbmc_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_verified):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_cbmc_verified):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             # Also mock over-refinement check to say "safe"
             with patch.object(
@@ -357,7 +357,7 @@ def test_refinement_iteration_cap(tmp_path: Path):
     # CBMC says not reachable (spurious)
     mock_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_verified):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_verified):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             with patch.object(validator, "_check_over_refinement", return_value=True):
                 result = validator.validate(
@@ -420,7 +420,7 @@ def test_over_refinement_guard(tmp_path: Path):
     cex = _make_counterexample()
     mock_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_verified):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_verified):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             # Over-refinement check returns False (NOT safe)
             with patch.object(
@@ -774,7 +774,7 @@ def test_upward_propagation(tmp_path: Path):
     # CBMC says all caller paths are reachable (not verified → cex found)
     mock_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_reachable):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_reachable):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             result = validator.validate(
                 func=leaf_func,
@@ -831,7 +831,7 @@ def test_entry_function_real_bug(tmp_path: Path):
     cex = _make_counterexample("null-pointer.1", {"ptr": "NULL"})
 
     # run_cbmc should NOT be called (entry function, no reachability check needed)
-    with patch("amc.cex_validator.run_cbmc") as mock_cbmc:
+    with patch("bmc_agent.cex_validator.run_cbmc") as mock_cbmc:
         result = validator.validate(
             func=entry_func,
             spec=_make_spec("entry_func"),
@@ -1036,7 +1036,7 @@ def test_cross_file_caller_confirmed_reachable_real_bug(tmp_path: Path):
         raw_output="",
     )
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_reachable):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_cbmc_reachable):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             result = validator.validate(
                 func=leaf_fn,
@@ -1108,7 +1108,7 @@ def test_cross_file_caller_none_reachable_falls_back_to_confirmed_bmc(tmp_path: 
     # CBMC verifies → assert(0) never reached → caller CANNOT reach CEx state
     mock_cbmc_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_verified):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_cbmc_verified):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             result = validator.validate(
                 func=leaf_fn,
@@ -1217,7 +1217,7 @@ def test_propagate_upward_crosses_file_boundary_to_entry(tmp_path: Path):
     cex = _make_counterexample(failing_property="overflow.1", var_assignments={"x": "0"})
     mock_cbmc_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
 
-    with patch("amc.cex_validator.run_cbmc", return_value=mock_cbmc_reachable):
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_cbmc_reachable):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             reachable, chain = validator._propagate_upward(
                 func_name="func_x",

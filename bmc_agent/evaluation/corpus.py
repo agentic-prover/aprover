@@ -1,5 +1,5 @@
 """
-Corpus management for GRACE evaluation.
+Corpus management for BMC-Agent evaluation.
 
 Manages a collection of C programs (corpus entries) used for evaluation.
 Each entry has a source file, optional ground-truth bug annotations, and metadata.

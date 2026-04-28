@@ -1,5 +1,5 @@
 """
-LLM client wrapper for GRACE.
+LLM client wrapper for BMC-Agent.
 
 Wraps the Anthropic Python SDK with:
 - Retry (up to 3 attempts) with exponential backoff on rate-limit / server errors
@@ -37,7 +37,7 @@ class LLMClient:
     Parameters
     ----------
     config:
-        GRACE configuration object.  The API key is read from
+        BMC-Agent configuration object.  The API key is read from
         ``config.resolved_api_key()`` (which falls back to
         ``ANTHROPIC_API_KEY`` environment variable).
     """

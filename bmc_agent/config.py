@@ -1,5 +1,5 @@
 """
-Configuration dataclass for GRACE.
+Configuration dataclass for BMC-Agent.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Config:
-    """Global configuration for a GRACE verification run."""
+    """Global configuration for a BMC-Agent verification run."""
 
     # LLM settings
     llm_model: str = "claude-sonnet-4-6"

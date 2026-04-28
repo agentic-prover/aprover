@@ -181,7 +181,7 @@ class ReportGenerator:
             "|--------|-----------|-------------|---------|",
         ]
 
-        # GRACE row
+        # BMC-Agent row
         amc_fp = f"{summary.avg_false_positive_rate * 100:.1f}%"
         lines.append(
             f"| AMC (ours) "

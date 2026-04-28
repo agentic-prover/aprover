@@ -1,5 +1,5 @@
 """
-Phase 3: Bug Reporter for GRACE.
+Phase 3: Bug Reporter for BMC-Agent.
 
 Converts ValidationResult objects into structured BugReport records,
 saves them to the artifact store, and generates human-readable summaries.

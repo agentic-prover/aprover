@@ -1,5 +1,5 @@
 """
-Metrics collection and aggregation for GRACE evaluation.
+Metrics collection and aggregation for BMC-Agent evaluation.
 
 Collects per-driver metrics and computes evaluation summaries.
 """
@@ -228,8 +228,8 @@ class MetricsCollector:
             for btype, count in m.bugs_by_type.items():
                 bugs_by_type[btype] = bugs_by_type.get(btype, 0) + count
 
-        # Compute amc_unique_bugs: bugs GRACE found that no baseline found
-        grace_bug_set = _grace_bug_set(all_metrics)
+        # Compute amc_unique_bugs: bugs BMC-Agent found that no baseline found
+        amc_bug_set = _amc_bug_set(all_metrics)
         baseline_bug_sets: dict[str, set[str]] = {}
         for bl_name, bl_results in baseline_results.items():
             bl_set: set[str] = set()
@@ -242,11 +242,11 @@ class MetricsCollector:
         for bl_set in baseline_bug_sets.values():
             all_baseline_bugs |= bl_set
 
-        amc_unique = len(grace_bug_set - all_baseline_bugs)
+        amc_unique = len(amc_bug_set - all_baseline_bugs)
 
         baseline_unique: dict[str, int] = {}
         for bl_name, bl_set in baseline_bug_sets.items():
-            baseline_unique[bl_name] = len(bl_set - grace_bug_set)
+            baseline_unique[bl_name] = len(bl_set - amc_bug_set)
 
         # V2 Track 1 aggregates
         avg_cex_resolution_rate = (
@@ -301,8 +301,8 @@ def _count_non_fallback_specs(specs: "dict[str, Spec]") -> int:
     return count
 
 
-def _grace_bug_set(all_metrics: "list[DriverMetrics]") -> set[str]:
-    """Build a set of 'driver:bug_type' keys for all GRACE-found bugs."""
+def _amc_bug_set(all_metrics: "list[DriverMetrics]") -> set[str]:
+    """Build a set of 'driver:bug_type' keys for all BMC-Agent-found bugs."""
     result: set[str] = set()
     for m in all_metrics:
         for btype, count in m.bugs_by_type.items():

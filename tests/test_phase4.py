@@ -1,5 +1,5 @@
 """
-Phase 4 acceptance tests for GRACE Evaluation Harness.
+Phase 4 acceptance tests for BMC-Agent Evaluation Harness.
 
 All tests run without CBMC or ANTHROPIC_API_KEY — LLM and CBMC are mocked.
 
@@ -339,7 +339,7 @@ def test_cbmc_alone_baseline_bugs_found(tmp_path: Path):
     mock_result = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
 
     baseline = CBMCAloneBaseline()
-    with patch("amc.evaluation.baselines.run_cbmc", return_value=mock_result):
+    with patch("bmc_agent.evaluation.baselines.run_cbmc", return_value=mock_result):
         result = baseline.run(
             source_file=str(SIMPLE_DRIVER),
             driver_name="simple_driver",
@@ -364,7 +364,7 @@ def test_cbmc_alone_baseline_no_bugs(tmp_path: Path):
     mock_result = CBMCResult(verified=True, counterexamples=[], raw_output="")
 
     baseline = CBMCAloneBaseline()
-    with patch("amc.evaluation.baselines.run_cbmc", return_value=mock_result):
+    with patch("bmc_agent.evaluation.baselines.run_cbmc", return_value=mock_result):
         result = baseline.run(
             source_file=str(SIMPLE_DRIVER),
             driver_name="simple_driver",
@@ -612,7 +612,7 @@ def test_generate_summary_report(tmp_path: Path):
     # Should contain the total bugs count
     assert str(summary.total_bugs_found) in md
     # Should have a comparison section
-    assert "Comparison" in md or "Baseline" in md or "GRACE" in md
+    assert "Comparison" in md or "Baseline" in md or "BMC-Agent" in md
     # Should have markdown tables
     assert "|" in md
 
@@ -690,7 +690,7 @@ def test_evaluation_runner_end_to_end(tmp_path: Path):
         "rb_is_empty": BMCVerdict("rb_is_empty", verified=True),
     }
 
-    with patch("amc.evaluation.runner.AMCPipeline") as MockPipeline:
+    with patch("bmc_agent.evaluation.runner.AMCPipeline") as MockPipeline:
         mock_pipeline_instance = MagicMock()
         MockPipeline.return_value = mock_pipeline_instance
 
@@ -720,7 +720,7 @@ def test_evaluation_runner_end_to_end(tmp_path: Path):
         ]
 
         with patch.object(corpus, "load", return_value=corpus_entries):
-            with patch("amc.evaluation.runner.CBMCAloneBaseline") as MockCBMC:
+            with patch("bmc_agent.evaluation.runner.CBMCAloneBaseline") as MockCBMC:
                 from bmc_agent.evaluation.baselines import BaselineResult
                 mock_cbmc_inst = MagicMock()
                 MockCBMC.return_value = mock_cbmc_inst
@@ -759,7 +759,7 @@ def test_evaluation_runner_no_baselines(tmp_path: Path):
         )
     ]
 
-    with patch("amc.evaluation.runner.AMCPipeline") as MockPipeline:
+    with patch("bmc_agent.evaluation.runner.AMCPipeline") as MockPipeline:
         mock_instance = MagicMock()
         MockPipeline.return_value = mock_instance
         mock_instance.run.return_value = []
@@ -769,7 +769,7 @@ def test_evaluation_runner_no_baselines(tmp_path: Path):
         mock_instance.spec_gen.generate_specs.return_value = {}
 
         with patch.object(corpus, "load", return_value=corpus_entries):
-            with patch("amc.evaluation.runner.CBMCAloneBaseline") as MockCBMC:
+            with patch("bmc_agent.evaluation.runner.CBMCAloneBaseline") as MockCBMC:
                 summary = runner.run_corpus(
                     corpus=corpus,
                     output_dir=str(tmp_path / "eval_out"),
@@ -785,7 +785,7 @@ def test_evaluation_runner_no_baselines(tmp_path: Path):
 
 
 def test_block_device_c_parses():
-    """examples/block_device.c can be parsed by grace.parser."""
+    """examples/block_device.c can be parsed by bmc_agent.parser."""
     from bmc_agent.parser import parse_c_file
 
     assert BLOCK_DEVICE.exists(), f"block_device.c not found at {BLOCK_DEVICE}"
@@ -802,7 +802,7 @@ def test_block_device_c_parses():
 
 
 def test_memory_allocator_c_parses():
-    """examples/memory_allocator.c can be parsed by grace.parser."""
+    """examples/memory_allocator.c can be parsed by bmc_agent.parser."""
     from bmc_agent.parser import parse_c_file
 
     assert MEMORY_ALLOCATOR.exists(), f"memory_allocator.c not found at {MEMORY_ALLOCATOR}"

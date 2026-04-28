@@ -1,5 +1,5 @@
 """
-Phase 0 acceptance tests for GRACE.
+Phase 0 acceptance tests for BMC-Agent.
 
 Tests:
 1.  Parse examples/simple_driver.c and build the call graph.
@@ -390,7 +390,7 @@ def test_config_defaults():
 
 
 def test_config_from_env(monkeypatch):
-    monkeypatch.setenv("AMC_CBMC_UNWIND", "8")
+    monkeypatch.setenv("BMC_AGENT_CBMC_UNWIND", "8")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-xyz")
 
     from bmc_agent.config import Config

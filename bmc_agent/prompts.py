@@ -1,5 +1,5 @@
 """
-Prompt templates for GRACE Phase 1 spec generation and Phase 3 validation.
+Prompt templates for BMC-Agent Phase 1 spec generation and Phase 3 validation.
 """
 
 from __future__ import annotations

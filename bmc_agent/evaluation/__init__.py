@@ -1,7 +1,7 @@
 """
-GRACE Evaluation Infrastructure (Phase 4).
+BMC-Agent Evaluation Infrastructure (Phase 4).
 
-Provides tools for running GRACE on a corpus of C programs,
+Provides tools for running BMC-Agent on a corpus of C programs,
 comparing against baselines, and generating research-ready metrics.
 """
 

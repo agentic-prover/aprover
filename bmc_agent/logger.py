@@ -1,5 +1,5 @@
 """
-Structured logging setup for GRACE.
+Structured logging setup for BMC-Agent.
 
 Uses Python's logging module with rich for pretty console output,
 and logs to both console and file.
@@ -62,7 +62,7 @@ def get_logger(
     if component in _LOGGERS:
         return _LOGGERS[component]
 
-    logger = logging.getLogger(f"grace.{component}")
+    logger = logging.getLogger(f"bmc_agent.{component}")
     logger.setLevel(level)
     logger.propagate = False  # avoid double-logging via root
 

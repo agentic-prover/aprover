@@ -1,5 +1,5 @@
 """
-DSL → CBMC translation helpers for GRACE Phase 2.
+DSL → CBMC translation helpers for BMC-Agent Phase 2.
 
 Converts pre/postcondition strings (DSL or natural language) into
 C statements using __CPROVER_assume() and assert().

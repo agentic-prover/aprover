@@ -1,5 +1,5 @@
 """
-Phase 2 acceptance tests for GRACE BMC Engine.
+Phase 2 acceptance tests for BMC-Agent BMC Engine.
 
 Tests:
 1. Harness generation for rb_write with a mock spec (valid C output).
@@ -410,7 +410,7 @@ def test_check_all_with_mocked_cbmc(tmp_path: Path):
             return mock_cbmc_fail
         return mock_cbmc_ok
 
-    with patch("amc.bmc_engine.run_cbmc", side_effect=fake_run_cbmc):
+    with patch("bmc_agent.bmc_engine.run_cbmc", side_effect=fake_run_cbmc):
         verdicts = engine.check_all(funcs, specs, parsed, "test_driver")
 
     assert "rb_is_empty" in verdicts
@@ -677,7 +677,7 @@ def test_cli_check_with_mock_specs(tmp_path: Path):
         ),
     )
 
-    with patch("amc.bmc_engine.run_cbmc") as mock_cbmc:
+    with patch("bmc_agent.bmc_engine.run_cbmc") as mock_cbmc:
         from bmc_agent.cbmc import CBMCResult
         mock_cbmc.return_value = CBMCResult(verified=True)
         ret = main([

@@ -1,7 +1,7 @@
 """
-Evaluation runner for GRACE.
+Evaluation runner for BMC-Agent.
 
-Runs GRACE and baselines on a corpus of C programs and aggregates results.
+Runs BMC-Agent and baselines on a corpus of C programs and aggregates results.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ logger = get_logger("evaluation.runner")
 
 class EvaluationRunner:
     """
-    Orchestrates evaluation of GRACE and baselines on a corpus.
+    Orchestrates evaluation of BMC-Agent and baselines on a corpus.
     """
 
     def __init__(self, config: Config) -> None:
@@ -37,12 +37,12 @@ class EvaluationRunner:
         run_baselines: bool = True,
     ) -> "EvaluationSummary":
         """
-        Run GRACE and optionally baselines on all corpus entries.
+        Run BMC-Agent and optionally baselines on all corpus entries.
 
         For each entry:
           1. Run full AMC pipeline
           2. Run CBMC-alone baseline (if run_baselines=True)
-          3. Run GRACE-ablation baseline (if run_baselines=True)
+          3. Run BMC-Agent-ablation baseline (if run_baselines=True)
           4. Collect per-driver metrics
           5. Generate per-driver report
 
@@ -85,7 +85,7 @@ class EvaluationRunner:
         all_bug_reports: dict[str, list[BugReport]] = {}
         baseline_results: dict[str, list[BaselineResult]] = {
             "cbmc_alone": [],
-            "grace_ablation": [],
+            "amc_ablation": [],
         }
 
         for entry in entries:
@@ -96,11 +96,11 @@ class EvaluationRunner:
 
             # ---- Step 1: Run full AMC pipeline ----
             pipeline = AMCPipeline(eval_config)
-            grace_start = time.monotonic()
-            grace_specs: dict[str, Spec] = {}
-            grace_verdicts: dict[str, BMCVerdict] = {}
-            grace_validations: list[ValidationResult] = []
-            grace_bugs: list[BugReport] = []
+            amc_start = time.monotonic()
+            amc_specs: dict[str, Spec] = {}
+            amc_verdicts: dict[str, BMCVerdict] = {}
+            amc_validations: list[ValidationResult] = []
+            amc_bugs: list[BugReport] = []
 
             try:
                 # Instrument pipeline to capture intermediate results
@@ -125,29 +125,29 @@ class EvaluationRunner:
                 pipeline.bmc_engine.check_all = _patched_check_all  # type: ignore[method-assign]
                 pipeline.validator.validate = _patched_validate  # type: ignore[method-assign]
 
-                grace_bugs = pipeline.run(
+                amc_bugs = pipeline.run(
                     source_file=source_file,
                     driver_name=driver_name,
                 )
-                grace_specs = captured_specs
-                grace_verdicts = captured_verdicts
-                grace_validations = captured_validations
+                amc_specs = captured_specs
+                amc_verdicts = captured_verdicts
+                amc_validations = captured_validations
 
             except Exception as exc:
                 logger.error("AMC pipeline failed for '%s': %s", driver_name, exc)
 
-            grace_runtime = time.monotonic() - grace_start
-            all_bug_reports[driver_name] = grace_bugs
+            amc_runtime = time.monotonic() - amc_start
+            all_bug_reports[driver_name] = amc_bugs
 
             # ---- Step 2: Collect metrics ----
             try:
                 metrics = collector.collect_driver_metrics(
                     driver_name=driver_name,
-                    specs=grace_specs,
-                    verdicts=grace_verdicts,
-                    validation_results=grace_validations,
-                    bug_reports=grace_bugs,
-                    runtime=grace_runtime,
+                    specs=amc_specs,
+                    verdicts=amc_verdicts,
+                    validation_results=amc_validations,
+                    bug_reports=amc_bugs,
+                    runtime=amc_runtime,
                 )
                 all_metrics.append(metrics)
             except Exception as exc:

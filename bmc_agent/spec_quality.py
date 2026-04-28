@@ -1,5 +1,5 @@
 """
-Phase 5: Spec-quality detection mechanisms (GRACE V2).
+Phase 5: Spec-quality detection mechanisms (BMC-Agent V2).
 
 Provides layered defenses to surface likely-wrong LLM-generated specs:
 1. SpecCoverageChecker  — heuristic checks on spec structure

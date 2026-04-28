@@ -1,5 +1,5 @@
 """
-CBMC harness generator for GRACE Phase 2.
+CBMC harness generator for BMC-Agent Phase 2.
 
 For each function F, generates a self-contained C file that:
   1. Declares all structs/typedefs from the original source.

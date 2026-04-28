@@ -1,5 +1,5 @@
 """
-Phase 1 acceptance tests for GRACE Spec Generator.
+Phase 1 acceptance tests for BMC-Agent Spec Generator.
 
 Tests:
 1. Load simple_driver.c, build generation order, verify layer structure.
@@ -558,7 +558,7 @@ def test_cli_generate_with_mock(tmp_path: Path):
     from unittest.mock import patch
     from bmc_agent.cli import main
 
-    with patch("amc.spec_generator.SpecGenerator.generate_specs") as mock_gen:
+    with patch("bmc_agent.spec_generator.SpecGenerator.generate_specs") as mock_gen:
         from bmc_agent.spec import Spec, SpecStatus
         mock_gen.return_value = {
             "rb_write": Spec(

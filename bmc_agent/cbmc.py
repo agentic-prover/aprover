@@ -1,5 +1,5 @@
 """
-CBMC subprocess wrapper for GRACE.
+CBMC subprocess wrapper for BMC-Agent.
 
 Runs CBMC with --json-ui output and parses the result into structured
 data classes.
