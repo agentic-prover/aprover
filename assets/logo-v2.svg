@@ -3,41 +3,42 @@
      xmlns="http://www.w3.org/2000/svg"
      role="img" aria-label="AProver – Agentic Prover">
 
-  <!-- Icon badge: dark rounded square -->
+  <!-- Icon badge -->
   <rect x="2" y="10" width="116" height="120" rx="20"
         fill="#1a1040" stroke="#4338ca" stroke-width="1.5"/>
 
   <!--
-    Horizontal "A" — rotated 90° so it points right.
+    Iceberg "A":
 
-    Two feet on the left, apex on the right:
+       ●          ← apex dot (the single visible tip)
+      ╱╲
+     ╱  ╲   bright   ← TIP: above the waterline, full opacity
+    ╱    ╲
+   ══════════      ← waterline (white bar)
+  ╱        ╲
+ ╱  muted   ╲  ← BODY: below the waterline, low opacity
+╱____________╲
 
-      * ─────────────────────╲
-        (top foot)            ╲
-                    │          ● apex
-        (bot foot) ╱          ╱
-      * ─────────────────────╱
-
-    The vertical crossbar sits at the horizontal midpoint of the two legs.
-    Upper leg: violet   (LLM / spec-gen side)
-    Lower leg: green    (BMC / formal side)
-    Crossbar:  lavender (the inference step connecting both)
+    Left half = violet (LLM / spec-gen)
+    Right half = green  (BMC / formal checker)
+    The small bright tip is the visible "proved result";
+    the large muted body is all the hidden work underneath.
   -->
 
-  <!-- Upper leg: top-left foot → right apex (violet) -->
-  <line x1="18" y1="28" x2="104" y2="70"
-        stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+  <!-- ── BODY (below waterline) – same hues, muted ── -->
+  <polygon points="39,76 60,76 60,114 8,114"   fill="#a78bfa" opacity="0.35"/>
+  <polygon points="60,76 82,76 112,114 60,114" fill="#4ade80" opacity="0.35"/>
 
-  <!-- Lower leg: bottom-left foot → right apex (green) -->
-  <line x1="18" y1="112" x2="104" y2="70"
-        stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
+  <!-- ── WATERLINE ── -->
+  <line x1="30" y1="76" x2="90" y2="76"
+        stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
 
-  <!-- Crossbar: vertical segment at horizontal midpoint (x≈61) -->
-  <line x1="61" y1="49" x2="61" y2="91"
-        stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
+  <!-- ── TIP (above waterline) – bright, full opacity ── -->
+  <polygon points="60,22 39,76 60,76" fill="#a78bfa"/>
+  <polygon points="60,22 60,76 82,76" fill="#4ade80"/>
 
-  <!-- Apex dot: covers the leg junction on the right -->
-  <circle cx="104" cy="70" r="6" fill="#ede9fe"/>
+  <!-- Apex dot – the single point visible above the surface -->
+  <circle cx="60" cy="22" r="6" fill="#ffffff"/>
 
   <!-- Wordmark -->
   <text x="140" y="85"

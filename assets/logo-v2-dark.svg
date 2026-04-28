@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AProver logo v2 – dark-background variant (light wordmark) -->
+<!-- AProver logo v2 – dark-background variant -->
 <svg width="480" height="140" viewBox="0 0 480 140"
      xmlns="http://www.w3.org/2000/svg"
      role="img" aria-label="AProver – Agentic Prover">
@@ -8,20 +8,20 @@
   <rect x="2" y="10" width="116" height="120" rx="20"
         fill="#1a1040" stroke="#6366f1" stroke-width="1.5"/>
 
-  <!-- Upper leg (violet) -->
-  <line x1="18" y1="28" x2="104" y2="70"
-        stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+  <!-- BODY (below waterline) -->
+  <polygon points="39,76 60,76 60,114 8,114"   fill="#a78bfa" opacity="0.35"/>
+  <polygon points="60,76 82,76 112,114 60,114" fill="#4ade80" opacity="0.35"/>
 
-  <!-- Lower leg (green) -->
-  <line x1="18" y1="112" x2="104" y2="70"
-        stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
+  <!-- WATERLINE -->
+  <line x1="30" y1="76" x2="90" y2="76"
+        stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
 
-  <!-- Crossbar (lavender) -->
-  <line x1="61" y1="49" x2="61" y2="91"
-        stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
+  <!-- TIP (above waterline) -->
+  <polygon points="60,22 39,76 60,76" fill="#a78bfa"/>
+  <polygon points="60,22 60,76 82,76" fill="#4ade80"/>
 
   <!-- Apex dot -->
-  <circle cx="104" cy="70" r="6" fill="#ede9fe"/>
+  <circle cx="60" cy="22" r="6" fill="#ffffff"/>
 
   <!-- Wordmark – light for dark backgrounds -->
   <text x="140" y="85"
