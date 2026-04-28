@@ -240,6 +240,65 @@ def test_translate_atom_natural_language():
     assert "/*" in stmt
 
 
+def test_translate_atom_valid_string():
+    """valid_string(ptr) in assume context translates to ptr != NULL."""
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("valid_string(s)", context="assume")
+    assert stmt is not None
+    assert "__CPROVER_assume(s != NULL)" in stmt
+
+
+def test_translate_atom_valid_string_assert():
+    """valid_string(ptr) in assert context translates to assert(ptr != NULL)."""
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("valid_string(buf)", context="assert")
+    assert stmt is not None
+    assert "assert(buf != NULL)" in stmt
+
+
+def test_nd_decls_char_ptr_bounded():
+    """char* parameters get bounded null-terminated string allocations."""
+    from unittest.mock import MagicMock
+    from bmc_agent.harness_generator import _generate_nd_decls
+    from bmc_agent.parser import FunctionSignature
+
+    sig = FunctionSignature(
+        name="fn", return_type="int",
+        parameters=[("const char *", "s"), ("int", "n")]
+    )
+    func = MagicMock()
+    func.signature.parameters = sig.parameters
+
+    lines = _generate_nd_decls(func, cbmc_unwind=4)
+    joined = "\n".join(lines)
+
+    # Must allocate a 5-char array (unwind+1) and constrain length
+    assert "char _s_buf[5]" in joined
+    assert "__CPROVER_assume(_s_len <= (unsigned int)4)" in joined
+    assert "_s_buf[_s_len] = '\\0'" in joined
+    assert "const char * s = _s_buf" in joined
+    # int n stays as a plain nondet value
+    assert "int n;" in joined
+
+
+def test_nd_decls_mutable_char_ptr_bounded():
+    """char* (mutable) parameters also get bounded string allocations."""
+    from unittest.mock import MagicMock
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    func = MagicMock()
+    func.signature.parameters = [("char *", "buf")]
+
+    lines = _generate_nd_decls(func, cbmc_unwind=3)
+    joined = "\n".join(lines)
+
+    assert "char _buf_buf[4]" in joined
+    assert "__CPROVER_assume(_buf_len <= (unsigned int)3)" in joined
+    assert "char * buf = _buf_buf" in joined
+
+
 # ---------------------------------------------------------------------------
 # 3. Test callee stubbing
 # ---------------------------------------------------------------------------

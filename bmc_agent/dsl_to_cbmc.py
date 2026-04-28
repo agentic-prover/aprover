@@ -15,6 +15,9 @@ from typing import Optional
 # DSL atom patterns
 # ---------------------------------------------------------------------------
 
+# valid_string(ptr)  → ptr != NULL  (string bounds handled by harness generator)
+_VALID_STRING_RE = re.compile(r"\bvalid_string\(\s*([^)]+)\s*\)")
+
 # valid(ptr)  → ptr != NULL
 _VALID_RE = re.compile(r"\bvalid\(\s*([^)]+)\s*\)")
 
@@ -91,6 +94,12 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
                 stmts.append(s)
         return "\n    ".join(stmts) if stmts else None
 
+    # valid_string(ptr)  → ptr != NULL (string length bound is set up in harness)
+    m = _VALID_STRING_RE.search(atom)
+    if m:
+        ptr = m.group(1).strip()
+        return wrap(f"{ptr} != NULL")
+
     # valid(ptr) / owns(ptr)  → ptr != NULL
     m = _VALID_RE.search(atom) or _OWNS_RE.search(atom)
     if m:
@@ -163,6 +172,10 @@ def _looks_like_c_expr(atom: str) -> bool:
 def _atom_to_expr(atom: str) -> Optional[str]:
     """Return a bare C expression (no statement wrapper) for an atom, or None."""
     atom = _RESULT_RE.sub("result", atom).strip()
+
+    m = _VALID_STRING_RE.search(atom)
+    if m:
+        return f"{m.group(1).strip()} != NULL"
 
     m = _VALID_RE.search(atom) or _OWNS_RE.search(atom)
     if m:

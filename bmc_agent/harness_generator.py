@@ -298,13 +298,14 @@ def _substitute_callee_calls(body: str, callees: set[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _generate_nd_decls(func: FunctionInfo) -> list[str]:
+def _generate_nd_decls(func: FunctionInfo, cbmc_unwind: int = 4) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
 
     For pointer parameters, we allocate a local struct/array on the stack and
-    point to it. This is intentionally conservative — just enough to let CBMC
-    reason about the structure.
+    point to it. char* and const char* parameters receive a bounded
+    null-terminated string (max length = cbmc_unwind) so that string-traversal
+    loops always terminate within the unwinding bound.
     """
     lines: list[str] = []
     for ptype, pname in func.signature.parameters:
@@ -313,15 +314,30 @@ def _generate_nd_decls(func: FunctionInfo) -> list[str]:
         ptype_stripped = ptype.strip()
 
         if ptype_stripped.endswith("*") or "*" in pname:
-            # Pointer parameter: declare a local value and point to it
+            # Pointer parameter
             base_type = ptype_stripped.rstrip("*").strip()
             local_name = f"_{pname}_val"
-            # Avoid redeclaring void *
+            clean_base = re.sub(r"\bconst\b", "", base_type).strip()
+
+            # Count pointer depth: char* is depth 1, char** is depth 2
+            star_count = ptype_stripped.count("*")
+
             if base_type.lower() in ("void", "const void"):
                 lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
                 lines.append(f"    {ptype_stripped} {pname} = NULL;")
+            elif clean_base == "char" and star_count == 1:
+                # Single-indirection char* — bounded null-terminated string.
+                # Ensures string-traversal loops terminate within the CBMC
+                # unwinding bound. char** (e.g. argv) uses the default treatment.
+                buf_name = f"_{pname}_buf"
+                len_name = f"_{pname}_len"
+                lines.append(f"    /* bounded null-terminated string for '{pname}' (max {cbmc_unwind} chars) */")
+                lines.append(f"    char {buf_name}[{cbmc_unwind + 1}];")
+                lines.append(f"    unsigned int {len_name};")
+                lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){cbmc_unwind});")
+                lines.append(f"    {buf_name}[{len_name}] = '\\0';")
+                lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
             elif "const" in ptype_stripped.lower():
-                clean_base = re.sub(r"\bconst\b", "", base_type).strip()
                 lines.append(f"    {clean_base} {local_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
             else:
@@ -1073,7 +1089,7 @@ class HarnessGenerator:
         func_def = f"{sig.return_type} {fn_name}({params_str})\n{body_with_stubs}"
 
         # --- 5. Generate nondeterministic input declarations ---
-        nd_decls = _generate_nd_decls(func)
+        nd_decls = _generate_nd_decls(func, self.config.cbmc_unwind)
 
         # --- 6. Precondition assumptions ---
         param_names = [pname for _, pname in sig.parameters if pname]
