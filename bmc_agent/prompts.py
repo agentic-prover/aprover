@@ -9,8 +9,9 @@ The specification DSL:
 - precondition: "requires <formula>"
 - postcondition: "ensures <formula>"
 - formulas can use: &&, ||, !, forall, exists
-- predicates: valid(ptr), valid_string(ptr), in_bounds(arr, idx), locked(lock), owns(ptr), null(ptr)
+- predicates: valid(ptr), valid_string(ptr), valid_range(ptr, lo, hi), in_bounds(arr, idx), locked(lock), owns(ptr), null(ptr)
 - valid_string(ptr): ptr is a non-null, null-terminated C string (use for char* parameters)
+- valid_range(ptr, lo, hi): ptr is non-null and the range ptr[lo..hi) is in bounds (lo >= 0 and hi >= lo)
 - arithmetic: +, -, *, /, %, <, <=, >, >=, ==, !=
 - you may also write natural language conditions if formal DSL is insufficient
 - return value is referred to as \\result

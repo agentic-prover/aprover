@@ -258,6 +258,38 @@ def test_translate_atom_valid_string_assert():
     assert "assert(buf != NULL)" in stmt
 
 
+def test_translate_atom_valid_range_assume():
+    """valid_range(ptr, lo, hi) in assume context → ptr != NULL && lo >= 0 && hi >= lo."""
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("valid_range(buf, 0, n)", context="assume")
+    assert stmt is not None
+    assert "buf != NULL" in stmt
+    assert "0 >= 0" in stmt
+    assert "n >= 0" in stmt
+
+
+def test_translate_atom_valid_range_assert():
+    """valid_range(ptr, lo, hi) in assert context → assert(ptr != NULL && lo >= 0 && hi >= lo)."""
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("valid_range(data, lo, hi)", context="assert")
+    assert stmt is not None
+    assert "data != NULL" in stmt
+    assert "lo >= 0" in stmt
+    assert "hi >= lo" in stmt
+
+
+def test_translate_atom_valid_range_in_compound():
+    """valid_range inside a compound precondition is split and translated."""
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
+
+    stmts = precond_to_assume("valid_range(buf, 0, len) && len > 0", params=["buf", "len"])
+    joined = "\n".join(stmts)
+    assert "buf != NULL" in joined
+    assert "len > 0" in joined
+
+
 def test_nd_decls_char_ptr_bounded():
     """char* parameters get bounded null-terminated string allocations."""
     from unittest.mock import MagicMock

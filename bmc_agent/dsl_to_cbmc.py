@@ -24,6 +24,9 @@ _VALID_RE = re.compile(r"\bvalid\(\s*([^)]+)\s*\)")
 # null(ptr)  → ptr == NULL
 _NULL_RE = re.compile(r"\bnull\(\s*([^)]+)\s*\)")
 
+# valid_range(ptr, lo, hi)  → ptr != NULL && lo >= 0 && hi >= lo
+_VALID_RANGE_RE = re.compile(r"\bvalid_range\(\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*([^)]+)\s*\)")
+
 # in_bounds(arr, idx)  → idx >= 0 && idx < sizeof(arr)/sizeof(arr[0])
 _IN_BOUNDS_RE = re.compile(r"\bin_bounds\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)")
 
@@ -94,11 +97,32 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
                 stmts.append(s)
         return "\n    ".join(stmts) if stmts else None
 
+    # Split on top-level || SECOND — before individual predicate matching.
+    # This ensures that "valid(a) || valid(b)" produces a disjunction rather
+    # than silently discarding the second clause.
+    parts_or = _top_level_split(atom, "||")
+    if len(parts_or) > 1:
+        exprs = []
+        for p in parts_or:
+            inner = _atom_to_expr(p.strip())
+            if inner:
+                exprs.append(inner)
+        if exprs:
+            return wrap(" || ".join(f"({e})" for e in exprs))
+
     # valid_string(ptr)  → ptr != NULL (string length bound is set up in harness)
     m = _VALID_STRING_RE.search(atom)
     if m:
         ptr = m.group(1).strip()
         return wrap(f"{ptr} != NULL")
+
+    # valid_range(ptr, lo, hi)  → ptr != NULL && lo >= 0 && hi >= lo
+    m = _VALID_RANGE_RE.search(atom)
+    if m:
+        ptr = m.group(1).strip()
+        lo = m.group(2).strip()
+        hi = m.group(3).strip()
+        return wrap(f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}")
 
     # valid(ptr) / owns(ptr)  → ptr != NULL
     m = _VALID_RE.search(atom) or _OWNS_RE.search(atom)
@@ -120,16 +144,6 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         arr = m.group(1).strip()
         idx = m.group(2).strip()
         return wrap(f"{idx} >= 0 && {idx} < (int)(sizeof({arr})/sizeof({arr}[0]))")
-
-    parts_or = _top_level_split(atom, "||")
-    if len(parts_or) > 1:
-        exprs = []
-        for p in parts_or:
-            inner = _atom_to_expr(p.strip())
-            if inner:
-                exprs.append(inner)
-        if exprs:
-            return wrap(" || ".join(f"({e})" for e in exprs))
 
     # Only wrap in assert/assume if the entire atom looks like valid C.
     # A simple heuristic: no spaces outside of parens (i.e. a single expression,
@@ -176,6 +190,13 @@ def _atom_to_expr(atom: str) -> Optional[str]:
     m = _VALID_STRING_RE.search(atom)
     if m:
         return f"{m.group(1).strip()} != NULL"
+
+    m = _VALID_RANGE_RE.search(atom)
+    if m:
+        ptr = m.group(1).strip()
+        lo = m.group(2).strip()
+        hi = m.group(3).strip()
+        return f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}"
 
     m = _VALID_RE.search(atom) or _OWNS_RE.search(atom)
     if m:
