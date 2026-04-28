@@ -1,0 +1,895 @@
+%% AProver: Agentic Model Checking
+%% Conference paper draft — April 2026
+%%
+%% Build:
+%%   pdflatex main && bibtex main && pdflatex main && pdflatex main
+%%
+%% Target venues: CAV, FSE, ISSTA, ASE
+
+\documentclass[sigconf,anonymous]{acmart}
+
+\settopmatter{printacmref=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+%% ── Packages ─────────────────────────────────────────────────────────────────
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xspace}
+\usepackage{listings}
+\usepackage{balance}
+\usepackage{xcolor}
+\usepackage[inline]{enumitem}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds}
+
+%% ── Tool names ───────────────────────────────────────────────────────────────
+\newcommand{\tool}{AProver\xspace}
+\newcommand{\toollong}{Agentic Prover\xspace}
+\newcommand{\fmagent}{FM-Agent\xspace}
+\newcommand{\preguss}{Preguss\xspace}
+\newcommand{\vibeos}{VibeOS\xspace}
+
+%% ── Confidence tiers (inline) ────────────────────────────────────────────────
+\newcommand{\dynconf}{\textsc{confirmed\_dynamic}\xspace}
+\newcommand{\sysconf}{\textsc{confirmed\_system\_entry}\xspace}
+\newcommand{\bmcconf}{\textsc{confirmed\_bmc}\xspace}
+\newcommand{\likelyconf}{\textsc{likely}\xspace}
+
+%% ── Listing style ────────────────────────────────────────────────────────────
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray},
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny,
+  xleftmargin=1.5em,
+  framexleftmargin=1.5em,
+}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\title{Agentic Model Checking}
+
+\author{Youcheng Sun}
+\affiliation{%
+  \institution{Mohamed bin Zayed University of Artificial Intelligence}
+  \city{Abu Dhabi}
+  \country{UAE}
+}
+\email{youcheng.sun@mbzuai.ac.ae}
+
+\begin{document}
+
+\begin{abstract}
+We present \emph{agentic model checking}, an architecture for automated
+verification of systems software that pairs LLM agents with a sound bounded
+model checking (BMC) backend. The central principle is \emph{agents propose,
+conventional tools dispose}: LLM agents perform specification generation,
+counterexample classification, and precondition refinement, but every
+soundness-relevant decision they produce is gated by a deterministic check
+before affecting the verification verdict.
+
+\tool, our prototype, operates in four phases: an LLM agent generates
+per-function pre/postconditions top-down along the call graph; CBMC checks
+each function in isolation against its spec with callee stubs constrained by
+their postconditions; a three-way classifier distinguishes confirmed real bugs,
+confirmed spurious counterexamples, and unresolved candidates; and a
+refinement agent proposes precondition tightenings that pass an SMT soundness
+guard before triggering compositional re-verification of all callers.
+
+We evaluate \tool on \vibeos, a bare-metal ARM64 hobby operating system
+(\textasciitilde{}8{,}000 lines of LLM-generated C). In raw-source mode with
+dynamic validation enabled, \tool reports \textbf{173 confirmed findings}
+across 37 kernel modules: 32 faults confirmed at runtime (\dynconf{}),
+108 findings with full call chains traced to kernel entry points
+(\sysconf{}), and 33 with caller-reachability established by BMC
+(\bmcconf{}). An ablation removing the refinement loop
+(\emph{FilteringOnly}) reports 59 findings on five wrapper modules vs.\
+\tool's 41, showing that refinement acts as a precision filter rather than a
+recall enhancer on this corpus.
+\end{abstract}
+
+%%
+%% CCS Concepts and Keywords
+%%
+\begin{CCSXML}
+<ccs2012>
+ <concept>
+  <concept_id>10011007.10011006.10011008.10011024.10011028</concept_id>
+  <concept_desc>Software and its engineering~Model checking</concept_desc>
+  <concept_significance>500</concept_significance>
+ </concept>
+ <concept>
+  <concept_id>10011007.10011006.10011008.10011024</concept_id>
+  <concept_desc>Software and its engineering~Formal software verification</concept_desc>
+  <concept_significance>300</concept_significance>
+ </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Software and its engineering~Model checking}
+\ccsdesc[300]{Software and its engineering~Formal software verification}
+
+\keywords{bounded model checking, LLM agents, specification inference,
+  counterexample classification, compositional verification, systems software}
+
+\maketitle
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+LLM coding assistants now generate substantial bodies of systems-level code,
+including operating systems, device drivers, and embedded utilities. Deployed
+artefacts from these tools raise a verification challenge that existing methods
+address poorly. Developers who deploy LLM-generated code frequently do not
+understand every function in detail; writing manual specifications is infeasible
+at scale; and the bugs that arise tend to be the low-level kind---integer
+overflow, off-by-one indexing, missing bounds checks on malformed input---that
+pure LLM-based reasoning handles badly.
+
+Two recent lines of work bracket the problem.
+\fmagent{}~\cite{fmagent} generates natural-language specifications top-down
+from callers and uses an LLM to reason about code against those specs. It
+scales to large systems but its verification verdicts are unsound: low-level
+arithmetic and memory bugs routinely escape LLM natural-language reasoning.
+\preguss{}~\cite{preguss} uses LLMs to synthesize formal specifications for
+Frama-C/Wp bottom-up; verification is sound but depends on deductive
+infrastructure that does not produce concrete counterexamples and that
+struggles with loop-heavy systems code.
+
+\tool occupies a different point in this space. Like \fmagent, it generates
+specifications top-down so each function's expected behavior is derived from
+how its callers invoke it. Like \preguss, it uses a sound solver---CBMC---for
+the verification step. Unlike either, it uses \emph{bounded model checking}
+as the solver, which brings three structural advantages:
+
+\begin{enumerate}
+\item \textbf{Concrete counterexamples.} When BMC finds a property violation it
+  produces a concrete execution witness, enabling a classifier that
+  distinguishes real bugs from artifacts of the abstraction by running the
+  witness against the real system.
+
+\item \textbf{Per-function parallelism.} Each function is checked in isolation
+  against its spec with callees replaced by spec-constrained stubs, avoiding
+  whole-program state-space explosion.
+
+\item \textbf{Meaningful compositional refinement.} When a spurious
+  counterexample triggers precondition tightening, the refined spec immediately
+  improves verification of every caller---because the refined spec is re-used
+  as the callee's stub in every caller's harness.
+\end{enumerate}
+
+The architectural principle unifying these choices is \emph{agents propose,
+conventional tools dispose}: every LLM output that could affect a verification
+verdict passes through a deterministic check (a DSL parser, a CBMC reachability
+query, an SMT soundness guard, or concrete execution) before being allowed to
+change the verification state. This principle is not new in spirit, but
+\tool's instantiation of it---a specific assignment of tasks to agents versus
+solvers, connected by a compositional refinement loop---is, to our knowledge,
+novel.
+
+\smallskip\noindent\textbf{Contributions.}
+\begin{enumerate}
+\item The \emph{agentic model checking} architecture: a principled decomposition
+  of the verification workflow into agentic and conventional components,
+  connected by a compositional CEGAR-style refinement loop
+  (\S\ref{sec:architecture}).
+
+\item A \emph{three-way counterexample classifier} with four evidence tiers
+  (\dynconf, \sysconf, \bmcconf, \likelyconf),
+  supporting nuanced reporting without silently suppressing findings
+  (\S\ref{sec:classifier}).
+
+\item A \emph{compositional refinement loop} with an SMT soundness guard that
+  prevents over-refinement from suppressing real bugs, and propagates spec
+  improvements to callers (\S\ref{sec:refinement}).
+
+\item A prototype implementation targeting C/CBMC with bare-metal kernel
+  support, and an evaluation on \vibeos showing 173 confirmed findings across
+  37 modules with 32 confirmed at runtime (\S\ref{sec:evaluation}).
+\end{enumerate}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Background}
+\label{sec:background}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Bounded Model Checking}
+
+Bounded model checking (BMC)~\cite{bmc-survey} checks whether a program
+property is violated within an execution of at most $k$ steps ($k$ being the
+\emph{unwinding bound}). CBMC~\cite{cbmc} applies BMC to C programs: given a
+harness that constrains program inputs and asserts output properties, CBMC
+unrolls loops up to bound $k$, encodes the resulting path set as a SAT/SMT
+formula, and either verifies the property or returns a concrete
+counterexample. The soundness guarantee is conditional: \emph{no violation in
+executions of depth at most $k$}, not full correctness.
+
+\subsection{Compositional Verification and Assume-Guarantee}
+
+Compositional verification~\cite{assume-guarantee} decomposes a system into
+components and verifies each in isolation, with inter-component interactions
+captured by \emph{contracts}---assume-guarantee pairs. A component is
+verified under the assumption that its environment satisfies its input
+contract; the proof obligation is that the component produces outputs
+satisfying its output contract. When contracts are sound (they correctly
+characterize actual behavior), individual component proofs compose into a
+whole-system proof. \tool instantiates this framework: each function's
+pre/postconditions are the contract, and BMC checks each function against its
+contract with callee stubs constrained by the callees' postconditions.
+
+Counterexample-guided abstraction refinement
+(CEGAR)~\cite{cegar} iteratively refines an abstract model when a spurious
+counterexample is found. \tool applies the same idea at the specification
+level: a spurious counterexample triggers a precondition tightening that
+removes the spurious behavior, with CBMC re-verifying the function under the
+refined spec.
+
+\subsection{LLM Agents for Verification}
+
+LLM agents augment language models with tool use---the ability to invoke
+external programs and observe their outputs within a reasoning
+loop~\cite{react}. Recent work has explored LLM agents for verification tasks
+including specification generation~\cite{fmagent,preguss,autospec},
+loop invariant inference~\cite{wu-invariants,lemur}, and test
+generation~\cite{copilot-formal}. \tool contributes to this line by combining
+an agentic layer with a sound solver in a closed compositional refinement loop.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Architecture}
+\label{sec:architecture}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Overview}
+
+Figure~\ref{fig:architecture} presents the \tool pipeline. Two phases are
+agentic (shaded): the \emph{spec generator} and the \emph{CEx validator +
+refiner}. Two are conventional: the \emph{BMC engine} and the \emph{soundness
+guard}. The dashed arc is the refinement feedback loop.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  node distance = 5mm and 8mm,
+  box/.style    = {draw, rounded corners=3pt, minimum width=2.4cm,
+                   minimum height=0.7cm, align=center, font=\small},
+  agent/.style  = {box, fill=violet!15, draw=violet!60},
+  conv/.style   = {box, fill=gray!12,   draw=gray!60},
+  arr/.style    = {-{Stealth[length=4pt]}, thick},
+  darr/.style   = {arr, dashed},
+]
+
+%% Column 1
+\node[agent] (sg)   {Spec Generator\\{\scriptsize (LLM)}};
+
+%% Column 2
+\node[conv,  right=of sg]  (sched)  {Scheduler\\{\scriptsize (call graph)}};
+
+%% Column 3
+\node[conv,  right=of sched] (bmc) {BMC Engine\\{\scriptsize (CBMC)}};
+
+%% Column 4 — stacked
+\node[agent, right=of bmc]        (cls) {CEx Classifier\\{\scriptsize (LLM + BMC)}};
+\node[agent, below=of cls]        (ref) {Refiner\\{\scriptsize (LLM)}};
+\node[conv,  below=of ref]        (sg2) {Soundness Guard\\{\scriptsize (SMT)}};
+
+%% Outputs
+\node[right=7mm of cls, align=left, font=\small]
+  (bugs) {Bug\\Reports};
+
+%% Arrows
+\draw[arr] (sg)    -- (sched);
+\draw[arr] (sched) -- (bmc);
+\draw[arr] (bmc)   -- node[above,font=\scriptsize]{CEx} (cls);
+\draw[arr] (cls)   -- node[right,font=\scriptsize]{spurious} (ref);
+\draw[arr] (ref)   -- (sg2);
+\draw[arr] (cls)   -- node[above,font=\scriptsize]{real} (bugs);
+
+%% Feedback arc
+\draw[darr] (sg2.west)
+  .. controls +(-1.6,0) and +(-0.5,-1.4) ..
+  node[left,font=\scriptsize,align=right]{refined\\spec}
+  (sched.south);
+
+%% Source input
+\node[left=6mm of sg, font=\small, align=right] (src) {C source\\+ context};
+\draw[arr] (src) -- (sg);
+
+\end{tikzpicture}
+\caption{\tool pipeline. Violet (shaded) boxes are LLM-driven; gray boxes are
+deterministic. The dashed arc is the refinement feedback loop: when a
+counterexample is confirmed spurious, the refiner proposes a precondition
+tightening that passes an SMT soundness guard and re-triggers verification of
+the refined function and all its callers.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Phase 1: Specification Generation}
+\label{sec:specgen}
+
+The spec generator is an LLM agent that traverses the call graph of the input
+C source top-down, starting from functions that have no callers (entry points
+or top-layer functions), and working layer by layer toward leaf functions.
+Generating specs top-down means each function's expected behavior is derived
+from how its callers invoke it---capturing caller intent---rather than from the
+potentially-buggy implementation itself.
+
+For each function, the agent:
+\begin{enumerate*}[label=(\roman*)]
+  \item retrieves the function body, its callers' bodies, and any available
+  domain knowledge (API documentation, datasheet excerpts);
+  \item drafts a pre/postcondition pair in a restricted DSL;
+  \item validates the draft against a deterministic parser; and
+  \item retries on failure, up to a configurable limit.
+\end{enumerate*}
+
+\smallskip\noindent\textbf{Dual-source generation.}
+When enabled, \tool generates each spec twice with different prompts---one
+emphasizing the function's role from the callers' perspective, one emphasizing
+its implementation behavior---and flags disagreements for human review.
+Disagreement is a useful signal that the function's intended semantics is
+ambiguous or that the LLM is uncertain.
+
+\smallskip\noindent\textbf{Specification DSL.}
+Specifications are expressed in a small DSL designed to be simultaneously
+expressive enough for driver- and OS-style bugs, reliably emittable by an LLM,
+and directly translatable to CBMC constructs without interpreter intervention.
+Core predicates include \lstinline{valid(ptr)} (non-null, allocated),
+\lstinline{valid_string(ptr)} (null-terminated), and
+\lstinline{valid_range(ptr, lo, hi)} (in-bounds range). Return-value
+constraints are first-order formulas over integers and pointer fields. The DSL
+excludes uninterpreted functions, which eliminates a common LLM failure
+mode---generating specifications that refer to concepts the solver cannot
+evaluate.
+
+The DSL translator converts each spec into \lstinline{__CPROVER_assume} and
+\lstinline{__CPROVER_assert} calls within the synthesized harness. This
+translation is a deterministic template substitution, not an LLM call.
+
+\smallskip\noindent\textbf{Strongly connected components.}
+Functions involved in mutual recursion are condensed into a single SCC node
+and specified and verified as a unit rather than individually. The SCC
+condensation is computed by Kosaraju's algorithm on the call graph.
+
+\subsection{Phase 2: BMC Engine}
+\label{sec:bmc}
+
+For each function $F$, the BMC engine synthesizes a CBMC harness that:
+\begin{enumerate*}[label=(\roman*)]
+  \item nondeterministically initializes $F$'s parameters subject to its
+    precondition via \lstinline{__CPROVER_assume};
+  \item provides a stub for each callee $G$ of $F$ that nondeterministically
+    returns a value satisfying $G$'s postcondition, also via
+    \lstinline{__CPROVER_assume};
+  \item asserts $F$'s postcondition at all return sites; and
+  \item injects CBMC's built-in safety properties (null dereference, integer
+    overflow, out-of-bounds array access, division by zero).
+\end{enumerate*}
+CBMC is invoked under a configured loop unwinding bound $k$ (default 4) and
+per-function timeout (default 120 s). Verdicts are either \emph{verified}
+(no violation within bound $k$) or a concrete counterexample with full
+variable assignments.
+
+Functions are dispatched to CBMC in call-graph order---leaf functions first,
+callers after all their callees have been assigned a spec. This ensures that
+each callee's spec is available when a caller's harness is synthesized.
+Functions within the same call-graph layer are dispatched in parallel.
+
+\subsection{Phase 3: Counterexample Classification}
+\label{sec:classifier}
+
+A central design decision in \tool is that a CBMC counterexample is
+\emph{not} treated as a bug report directly. Every counterexample passes
+through a three-way classifier that produces one of:
+
+\begin{description}
+\item[\textbf{Real bug.}] Some caller can supply inputs that reach the
+  violating state; the violation is reported with one of four evidence tiers
+  (Table~\ref{tab:tiers}).
+\item[\textbf{Spurious.}] No caller can supply such inputs; the counterexample
+  is an artifact of the stub over-approximation. Passed to the refiner.
+\item[\textbf{Unresolved.}] After multiple concretization strategies, the
+  classifier cannot confirm in either direction. Reported as a candidate
+  requiring human review, not filtered out.
+\end{description}
+
+The three-way structure is important for soundness. A two-way
+\emph{real-versus-spurious} classifier must commit on every counterexample;
+misclassifying a real bug as spurious silently suppresses it. The
+\emph{unresolved} category is the honest ``cannot confirm'' answer that
+preserves potentially-real bugs that would otherwise be lost.
+
+\subsubsection{Input reachability check (Stage 1)}
+
+The primary classification mechanism is a CBMC reachability harness. For a
+counterexample at function $F$ with witness input $\mathbf{x}$, the harness
+runs each caller $C$ of $F$ with stubs for $C$'s other callees constrained
+by their postconditions, and fixes $F$'s stub arguments to $\mathbf{x}$.
+If CBMC finds an execution of $C$ that produces $\mathbf{x}$ at the call
+site to $F$, the input is confirmed reachable. If CBMC verifies that no such
+execution exists, the counterexample is confirmed spurious. If $F$ has no
+in-file callers but has callers in other files (in whole-codebase mode), the
+reachability query is run against those cross-file callers using their parsed
+bodies.
+
+\subsubsection{Callee feasibility check (Stage 2)}
+
+Input reachability is necessary but not sufficient: the callee return values
+$R_1, R_2, \ldots$ appearing in the counterexample trace must also be
+achievable by the real callees. Stage 2 addresses this by inlining the real
+bodies of locally-available callees into a feasibility harness, fixing $F$'s
+scalar inputs to the witness values, and re-running CBMC. If the violation
+still fires with real callee bodies, it is feasible under the real (not stub)
+callee model. If CBMC verifies, the violation is infeasible and the
+counterexample is reclassified as \emph{unresolved} (not silently dropped).
+
+\subsubsection{Dynamic validation (Stage 3)}
+
+For bare-metal targets where CBMC reachability alone may be insufficient,
+\tool optionally compiles a GCC harness with the counterexample witness values
+hardcoded, runs it on the host machine, and observes any runtime fault
+directly. A SIGSEGV or other signal from the harness is ground-truth
+confirmation of the bug independent of any model assumptions.
+
+Bare-metal C sources require several compatibility transformations before
+compilation on a standard host: stripping ARM64 inline assembly blocks,
+removing static-inline libc stubs that conflict with system headers, removing
+glibc-internal typedef redefinitions, and stripping non-standard function
+re-declarations. A fallback compilation step with
+\verb|-Wl,--unresolved-symbols=ignore-all| handles functions that reference
+globals from other translation units.
+
+\begin{table}[t]
+\caption{Evidence tiers for confirmed real bugs.}
+\label{tab:tiers}
+\small
+\begin{tabular}{lp{5.5cm}}
+\toprule
+\textbf{Tier} & \textbf{Meaning} \\
+\midrule
+\dynconf     & Runtime fault (SIGSEGV) directly observed in a compiled harness on the host. Ground-truth confirmation; no model assumptions. \\[3pt]
+\sysconf     & Full call chain traced from the violating function to a kernel entry point (no callers in any analyzed file) via in-file and cross-file CBMC reachability. \\[3pt]
+\bmcconf     & Input confirmed reachable from at least one immediate caller via CBMC; Stage 2 feasibility check passed. \\[3pt]
+\likelyconf  & Over-refinement guard triggered during the refinement loop; violation likely real but not formally confirmed. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Phase 3 (cont.): Refinement Loop}
+\label{sec:refinement}
+
+When a counterexample is confirmed spurious, the \emph{refiner}---an LLM
+agent---performs blame analysis to identify which component's specification is
+responsible, and proposes a tightened precondition for function $F$.
+
+\smallskip\noindent\textbf{Blame analysis.}
+The refiner runs $F$'s real implementation on the counterexample's concrete
+input, compares the observed behavior against each spec in the harness, and
+identifies the inconsistency: Was $F$'s precondition too weak (allowing
+inputs that violate the spec's intent)? Was a callee's postcondition
+over-permissive (claiming the callee can return values it never produces)?
+Was $F$'s postcondition too strong (requiring more than $F$ actually
+guarantees)? The blame identifies where the spec needs tightening.
+
+\smallskip\noindent\textbf{Soundness guard.}
+A proposed precondition tightening is not applied directly. The soundness
+guard first checks via SMT whether the tightening would exclude any state
+actually reachable from $F$'s callers. If it would, the refinement is
+rejected and the counterexample is reported as \emph{unresolved} rather than
+refined away. This prevents the refinement loop from silently suppressing
+real bugs that happen to share the input space with spurious ones.
+
+\smallskip\noindent\textbf{Compositional propagation.}
+Once a refinement is accepted, the scheduler re-queues not only $F$ but every
+function that calls $F$. This reflects the compositional structure: $F$'s
+spec is used as $F$'s stub in every caller's harness. When the spec changes,
+each caller must be re-verified against the new stub. This propagation is the
+primary justification for the refinement loop: local filtering (discarding
+the spurious counterexample without updating the spec) would suppress the
+false alarm in $F$ but would not improve verification of $F$'s callers.
+
+Refinement can cascade: a new counterexample discovered during a caller's
+re-verification may itself be spurious, triggering further refinement up the
+call graph. A per-counterexample iteration cap (default 5) and a
+per-function re-queue limit bound the total work.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Soundness}
+\label{sec:soundness}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\tool is \emph{sound per function within the BMC unwinding bound, conditional
+on spec correctness and on the faithfulness of any LLM-synthesized environment
+stubs}.
+
+Formally: if CBMC returns \textsc{verified} for function $F$ under bound $k$,
+then for every execution of $F$ starting from a state satisfying $F$'s
+precondition, in which every callee of $F$ behaves according to its
+specification, and in which no loop iterates more than $k$ times, $F$
+satisfies its postcondition and all injected safety properties.
+
+The conditionality matters: an incorrect LLM-generated spec---either
+over-strong (causing spurious counterexamples) or over-weak (causing
+silently-missed bugs)---causes CBMC to verify the function against the wrong
+contract. Over-strong specs are handled by the classifier and refiner.
+Over-weak specs represent the primary remaining soundness gap; the
+spec-quality defenses (\S\ref{sec:impl}) are the intended mitigation.
+
+The \emph{agents propose, conventional tools dispose} principle is directly
+auditable:
+(i) LLM-generated specs are validated by a deterministic DSL parser before
+reaching CBMC;
+(ii) LLM-proposed refinements are gated by the SMT soundness guard;
+(iii) LLM classifications are cross-checked by a CBMC reachability query.
+Where LLM output is not gated by a conventional check---most critically, the
+initial spec generation---the soundness claim weakens correspondingly.
+
+\smallskip\noindent\textbf{Asymmetry in Phase 3.}
+The \textsc{spurious} direction is sound under the stub model: if even
+maximally permissive (fully nondeterministic) callee stubs cannot produce the
+counterexample state at any caller, the real, more-constrained callees also
+cannot. The \textsc{real\_bug} direction is conditionally sound: input
+reachability is a necessary but not sufficient condition. The missing piece
+is joint feasibility of the callee return values in the trace---whether all
+callees can simultaneously produce the values in the witness. Stage 2 (local
+callee inlining) addresses this for locally-available callees; Stage 3
+(dynamic execution) provides ground-truth confirmation for the subset that
+compiles and runs.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Implementation}
+\label{sec:impl}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\tool is implemented in Python 3.11 using Claude~\cite{anthropic-claude}
+(claude-sonnet-4-6) as the LLM backend. The core pipeline is 4{,}000 lines;
+the harness generator, DSL translator, and dynamic validator add another
+4{,}000 lines. The test suite has 211 passing tests. Table~\ref{tab:components}
+summarizes the implementation status of each architectural component.
+
+\begin{table}[t]
+\caption{Component implementation status.}
+\label{tab:components}
+\small
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Status} \\
+\midrule
+Spec Generator (LLM)              & Implemented \\
+BMC Engine (CBMC)                 & Implemented \\
+CEx Classifier: input reachability (Stage 1) & Implemented \\
+CEx Classifier: callee inlining (Stage 2)    & Implemented \\
+CEx Classifier: dynamic validation (Stage 3) & Implemented \\
+Refiner + SMT soundness guard     & Implemented \\
+Compositional caller propagation  & Implemented \\
+Cross-file call-graph construction& Implemented \\
+Spec-quality defenses             & Implemented (not yet run at scale) \\
+Kani (Rust) backend               & Scaffolded only \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\smallskip\noindent\textbf{Spec-quality defenses.}
+\tool implements four spec-quality mechanisms that can be enabled at analysis
+time: (i) a \emph{coverage checker} that verifies the spec references the
+return value, mutated fields, and key parameters; (ii) a \emph{mutation
+tester} that injects off-by-one, comparison-flip, and null-check-drop
+mutations into the function body and checks via BMC whether the spec catches
+the mutant; (iii) a \emph{consistency checker} (LLM-based) that compares
+caller-callee spec pairs for logical consistency; and (iv) an \emph{executable
+sanity checker} (LLM-based) that simulates concrete inputs against the spec.
+These defenses are the intended mitigation for over-weak LLM-generated specs;
+running them at scale on the evaluation corpus is future work.
+
+\smallskip\noindent\textbf{Whole-codebase mode.}
+The \verb|verify-dir| command preprocesses every \texttt{.c} file in a
+directory using the C preprocessor, runs a two-pass global call-graph
+construction to identify cross-file caller/callee relationships, and verifies
+each file. Functions whose callers reside in other files are not
+misclassified as system entry points; instead, \tool runs CBMC reachability
+harnesses against those cross-file callers and, if the chain reaches a true
+entry function (no callers anywhere in the corpus), promotes the finding to
+\sysconf.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Evaluation}
+\label{sec:evaluation}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+We evaluate \tool on \vibeos~\cite{vibeos}, a bare-metal ARM64 hobby
+operating system of approximately 8{,}000 lines of C written with substantial
+LLM assistance. We chose \vibeos because: (i) it is representative of the
+LLM-generated systems code that motivates the work; (ii) it is publicly
+available and independently developed, so our evaluation is not circular;
+and (iii) its bare-metal character stresses harness generation and
+dynamic validation in ways that a user-space target would not.
+
+We ask three research questions:
+
+\begin{description}
+\item[\textbf{RQ1}] Does \tool find real bugs in real-world C?
+\item[\textbf{RQ2}] What is the strength of evidence for reported findings?
+\item[\textbf{RQ3}] Does refinement add value over simple filtering of
+  spurious counterexamples?
+\end{description}
+
+\noindent\textbf{Setup.} CBMC 5.95.1, loop unwinding bound $k=4$, per-function
+timeout 120\,s, Claude claude-sonnet-4-6. Dynamic validation uses GCC 12.3 on
+an x86-64 Linux host. All runs use whole-codebase mode (\verb|verify-dir|)
+except the ablation, which uses per-module wrapper files.
+
+\subsection{RQ1: Synthetic Targets}
+
+To validate the pipeline end-to-end with known ground truth, we first apply
+\tool to four synthetic C programs each containing a planted bug:
+
+\begin{center}
+\small
+\begin{tabular}{llr}
+\toprule
+Source & Bug & Findings \\
+\midrule
+\texttt{simple\_driver.c} & off-by-one in ring-buffer write & 3 \\
+\texttt{sensor\_hub.c}    & integer overflow in reading accumulation & 2 \\
+\texttt{block\_device.c}  & integer overflow in block seek & 1 \\
+\texttt{memory\_allocator.c} & null dereference on free & 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All planted bugs are correctly found and none of the reported findings are
+false positives in the sense of not corresponding to any actual reachable
+violation. This is a pipeline sanity check, not a claim of precision on
+uncontrolled targets.
+
+\subsection{RQ1 + RQ2: VibeOS Full Kernel}
+
+Table~\ref{tab:vibeos-full} shows results from the raw-source mode run with
+dynamic validation enabled across all 38 unique kernel module stems (47 of 48
+\texttt{.c} files; \texttt{font.c} was not processed in any run). \tool
+reports 173 confirmed findings across 37 modules in three evidence tiers.
+
+\begin{table}[t]
+\caption{VibeOS raw-source findings by evidence tier.}
+\label{tab:vibeos-full}
+\begin{tabular}{lr}
+\toprule
+\textbf{Evidence tier} & \textbf{Count} \\
+\midrule
+\dynconf{}     & 32  \\
+\sysconf{}     & 108 \\
+\bmcconf{}     & 33  \\
+\midrule
+\textbf{Total} & \textbf{173} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 32 \dynconf findings each triggered a SIGSEGV in a GCC-compiled harness
+running the exact counterexample witness, confirming the fault independently
+of any CBMC model. They span 14 modules including the IRQ handler, USB stack,
+ELF loader, VFS, DMA layer, cursor renderer, and TTF font renderer.
+
+\begin{table}[t]
+\caption{\dynconf findings by module.}
+\label{tab:dynamic-findings}
+\small
+\begin{tabular}{lp{5.5cm}}
+\toprule
+\textbf{Module} & \textbf{Functions} \\
+\midrule
+\texttt{irq}      & \texttt{handle\_serror}, \texttt{handle\_sync\_exception},
+                    \texttt{uart\_puthex}, \texttt{wsod\_animate\_ekg},
+                    \texttt{wsod\_draw\_line}, \texttt{wsod\_draw\_sad\_mac},
+                    \texttt{wsod\_draw\_text}, \texttt{wsod\_hex},
+                    \texttt{wsod\_int} \\
+\texttt{ttf}      & \texttt{stbtt\_\_sort\_edges\_ins\_sort},
+                    \texttt{stbtt\_\_sort\_edges\_quicksort} \\
+\texttt{dma}      & \texttt{hal\_dma\_copy}, \texttt{hal\_dma\_fb\_copy} \\
+\texttt{fb}       & \texttt{find\_ramfb\_selector}, \texttt{fw\_cfg\_read},
+                    \texttt{local\_strcmp} \\
+\texttt{usb\_hid} & \texttt{kbd\_ring\_push}, \texttt{mouse\_ring\_push},
+                    \texttt{usb\_irq\_handler} \\
+\texttt{vfs}      & \texttt{readdir\_callback}, \texttt{vfs\_lookup} \\
+\texttt{elf}      & \texttt{elf\_load}, \texttt{elf\_load\_at} \\
+\texttt{cursor}   & \texttt{draw\_cursor\_at}, \texttt{save\_background} \\
+Others            & \texttt{scroll\_up} (console), \texttt{strlen} (string),
+                    \texttt{uart\_getc\_blocking} (kernel),
+                    \texttt{process\_init}, \texttt{usb\_enumerate\_hub},
+                    \texttt{kapi\_print\_hex}, \texttt{kapi\_print\_int} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Bug categories.}
+Findings fall into two categories. \emph{Unbounded loops}: CBMC finds that a
+loop does not terminate within unwinding bound $k=4$; the concrete witness
+demonstrates the triggering input. For example, passing a non-null-terminated
+buffer (e.g., \texttt{char buf[4] = \{'a','b','c','d'\}}) to any VibeOS
+string function causes an out-of-bounds read; in \texttt{dtb\_parse}, a
+malformed device-tree string field with length \texttt{UINT\_MAX} causes
+approximately $2^{32}$ iterations. These findings are real within the input
+space CBMC explores; their practical severity depends on whether callers can
+supply malformed inputs---a relevant concern for the DTB parser, which
+consumes externally-supplied hardware-description data.
+
+\emph{Memory-safety bugs}: the clearest example is signed integer overflow in
+\texttt{print\_signed}, where the expression \texttt{num = -num} is undefined
+behavior when \texttt{num == INT64\_MIN}. Any call to
+\texttt{printf("\%ld", (long)INT64\_MIN)} triggers this UB unconditionally;
+the finding is unambiguous.
+
+\noindent\textbf{Cross-validation.} At the time of evaluation, the \vibeos
+public issue tracker contained a filed defect (issue~\#26) describing a
+\texttt{calloc} integer-overflow vulnerability in the memory allocator.
+\tool independently reported the same defect in
+\texttt{vibeos\_memory.c} via BMC over a per-function harness. Independent
+discovery of the same bug by a different method is a meaningful positive
+signal that the classifier is calibrated correctly on at least this finding.
+
+\subsection{RQ3: Refinement vs.\ Filtering}
+
+To assess the value of the refinement loop (RQ3), we compare \tool in full
+mode against a \emph{FilteringOnly} ablation that classifies counterexamples
+as real or spurious and drops the confirmed-spurious ones, but never updates
+any spec and never re-queues any caller. We run both on five hand-prepared
+\vibeos wrapper modules.
+
+\begin{table}[t]
+\caption{Full AMC vs.\ FilteringOnly on five \vibeos modules.}
+\label{tab:ablation}
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Module} & \textbf{\tool} & \textbf{FilteringOnly} & \textbf{$\Delta$} \\
+\midrule
+\texttt{vibeos\_vfs.c}    & 18 & 27 & $+9$ \\
+\texttt{vibeos\_string.c} & 16 & 22 & $+6$ \\
+\texttt{vibeos\_dtb.c}    &  4 &  4 & $\phantom{+}0$ \\
+\texttt{vibeos\_printf.c} &  3 &  6 & $+3$ \\
+\texttt{vibeos\_klog.c}   &  0 &  0 & $\phantom{+}0$ \\
+\midrule
+\textbf{Total}            & \textbf{41} & \textbf{59} & $+18$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+FilteringOnly reports 44\% more findings (59 vs.\ 41). The direction is
+noteworthy: one might expect refinement to \emph{add} bugs by propagating
+tightened preconditions to callers and uncovering new violations. On this
+corpus, refinement acts primarily as a \emph{precision filter}---it eliminates
+18 findings that FilteringOnly reports as real, without adding any unique
+findings via caller re-queuing. Two modules (\texttt{dtb}, \texttt{klog}) are
+unaffected, suggesting the filtering effect concentrates in the more heavily
+interconnected modules.
+
+The mechanistic explanation is that refinement tightens a precondition in
+response to one spurious counterexample, which then also excludes the inputs
+that trigger other violations in the same function---violations that
+FilteringOnly correctly identifies as reachable under the original, weaker
+spec. Whether those 18 eliminated findings are genuine precision improvements
+(the refined spec correctly rules out inputs that callers never produce) or
+over-refinement artifacts (real bugs suppressed by an overly tight spec)
+remains the central open question. Resolving it requires a manual audit of
+the eliminated findings---the most important next step in the evaluation.
+
+\subsection{Threats to Validity}
+
+\noindent\textbf{Classifier precision.}
+The 173 finding count is \tool's own classification, not an externally-audited
+ground truth. A manual audit of a randomly-sampled subset is needed to
+establish the false-positive rate of the \textsc{real\_bug} verdict.
+
+\noindent\textbf{Unwinding bound.}
+The default bound $k=4$ is conservative and favors loop-termination findings
+over deeper intra-loop bugs. The single unambiguous memory-safety finding
+(\texttt{print\_signed}) is not sensitive to $k$; the 40 unbounded-loop
+findings are.
+
+\noindent\textbf{Single-system evaluation.}
+All real-world results are from a single target (\vibeos). Generalization to
+other LLM-generated codebases, historical buggy driver corpora, or
+non-ARM-targeted kernels is not yet demonstrated.
+
+\noindent\textbf{Spec correctness.}
+Soundness is conditional on LLM-generated specs being correct. Over-weak
+specs---the primary correctness failure mode---cause bugs to be missed
+silently. The spec-quality defenses (\S\ref{sec:impl}) are the intended
+mitigation and have not yet been run at scale.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Related Work}
+\label{sec:related}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+\noindent\textbf{LLM agents for verification.}
+\fmagent~\cite{fmagent} introduced top-down caller-driven specification
+generation and an LLM-based reasoner for natural-language specs. \tool adopts
+the top-down insight and replaces the LLM reasoner with CBMC, plus
+concretization-based classification. \preguss~\cite{preguss} uses LLMs to
+generate interprocedural specifications for Frama-C/Wp bottom-up. \tool
+differs in using BMC (enabling concrete counterexamples and direct loop
+handling), going top-down (making compositional propagation valuable), and
+the three-way classification. AutoSpec~\cite{autospec}, Lemur~\cite{lemur},
+and loop-invariant generation work~\cite{wu-invariants} each couple LLM
+generation with a solver in a generate-and-check loop, operating at finer
+granularity (single contracts, loop invariants) than \tool's system-level
+compositional structure.
+
+\noindent\textbf{Traditional driver and kernel verification.}
+SLAM/SDV~\cite{slam,sdv} and BLAST check a fixed catalog of API-usage
+properties over device drivers. Smatch~\cite{smatch} applies pattern-based
+static analysis to the Linux kernel. These tools check predefined properties;
+\tool's LLM-generated specs can in principle express semantic invariants that
+pattern-based analyzers cannot, at the cost of depending on LLM judgment.
+
+\noindent\textbf{Symbolic execution.}
+KLEE~\cite{klee} achieves high path coverage via symbolic execution but
+struggles with unbounded loops and large call graphs. Serval~\cite{serval}
+applies symbolic evaluation to verified system kernels within decidable
+fragments. Both differ from \tool in operating at the whole-function or
+whole-system level rather than per-function with caller-derived specs.
+
+\noindent\textbf{Deductive verification.}
+Frama-C/Wp~\cite{framac} and related tools support full functional
+correctness within deductive frameworks but require significant manual
+annotation effort. \tool targets the annotation-free, automated end of the
+spectrum, sacrificing completeness for scalability and concrete
+counterexamples.
+
+\noindent\textbf{CEGAR.}
+Counterexample-guided abstraction refinement~\cite{cegar} is a classical
+technique for iteratively refining abstract models when spurious
+counterexamples are found. \tool applies the CEGAR idea at the
+\emph{specification} level---refining LLM-generated specs rather than
+predicate abstractions---and extends it with compositional propagation to
+callers.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+%% ─────────────────────────────────────────────────────────────────────────────
+
+We have presented agentic model checking and \tool, a prototype
+implementation that pairs LLM agents for specification generation,
+counterexample classification, and precondition refinement with CBMC as a
+sound verification backend. The central architectural principle---\emph{agents
+propose, conventional tools dispose}---assigns tasks to LLMs where semantic
+reasoning is appropriate while reserving all soundness-relevant decisions for
+deterministic solvers.
+
+Evaluated on \vibeos, \tool reports 173 confirmed findings across 37 kernel
+modules, including 32 runtime-confirmed faults (SIGSEGV in compiled harnesses)
+and one finding that independently cross-validates an open issue in the
+\vibeos tracker. The FilteringOnly ablation shows that on this corpus,
+refinement acts as a precision filter (eliminating 18 findings vs.\ 59 for
+FilteringOnly) rather than a recall enhancer; resolving whether those
+eliminated findings represent genuine precision improvement or over-refinement
+artifacts is the most important next step.
+
+\smallskip\noindent\textbf{Future work.}
+The four most important open items are:
+(i) a manual precision audit of a sampled subset of the 173 findings to
+establish the classifier's false-positive rate;
+(ii) running the CBMCAlone and AMCAblation baselines on \vibeos to complete
+the quantitative comparison;
+(iii) evaluating \tool on a broader corpus of LLM-generated drivers and
+historical buggy kernel versions; and
+(iv) activating the spec-quality defenses at scale to bound the over-weak-spec
+failure mode.
+
+\begin{acks}
+  % Acknowledgments omitted for anonymous review.
+\end{acks}
+
+\balance
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}
