@@ -45,11 +45,6 @@ class Config:
     skip_refinement: bool = False    # filtering-only ablation: classify spurious but skip spec update + caller requeue
     max_requeue_per_function: int = 3  # global cap on how many times a single function can be re-queued
 
-    # Unwind-escalation filter
-    # When CBMC fires unwind.0, re-run at this bound to filter conservative-bound
-    # artifacts (loops that legitimately need >k iterations).  0 = auto (4 × cbmc_unwind).
-    cbmc_unwind_escalation: int = 0
-
     # Dynamic validation settings (Phase 3 Stage 3)
     enable_dynamic_validation: bool = False  # compile and run a GCC harness to confirm real faults
     dynamic_validation_timeout: int = 30     # seconds to allow the compiled harness to run
@@ -83,7 +78,6 @@ class Config:
             include_dirs=[d for d in os.environ.get("BMC_AGENT_INCLUDE_DIRS", "").split(":") if d],
             cc_path=os.environ.get("BMC_AGENT_CC_PATH", "cc"),
             preprocess=os.environ.get("BMC_AGENT_PREPROCESS", "false").lower() == "true",
-            cbmc_unwind_escalation=int(os.environ.get("BMC_AGENT_CBMC_UNWIND_ESCALATION", "0")),
             enable_dynamic_validation=os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION", "false").lower() == "true",
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),

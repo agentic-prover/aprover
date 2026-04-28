@@ -1236,99 +1236,57 @@ def test_propagate_upward_crosses_file_boundary_to_entry(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Test: unwind-escalation pre-filter
+# Test: unwind.N suppression
 # ---------------------------------------------------------------------------
 
 
-def test_unwind_escalation_conservative_artifact(tmp_path: Path):
-    """
-    A counterexample whose failing_property ends in .unwind.0, and whose
-    Phase 2 harness verifies at k'=16, is classified as SPURIOUS (conservative-
-    bound artifact) without entering the normal reachability path.
-    """
+def test_unwind_zero_is_suppressed(tmp_path: Path):
+    """unwind.0 findings are immediately classified SPURIOUS (not reportable)."""
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+
+    config = _make_config(tmp_path)
+    validator = CExValidator(config, _make_llm_mock(), _make_store(tmp_path), HarnessGenerator(config))
+    parsed = parse_c_file(EXAMPLE_C)
+    func = _make_func_info("rb_write", set())
+    spec = _make_spec("rb_write")
+
+    for prop in ("rb_write.unwind.0", "rb_write.unwind.1", "rb_write.unwind.2"):
+        cex = _make_counterexample(failing_property=prop, var_assignments={"i": "5"})
+        result = validator.validate(
+            func=func, spec=spec, counterexample=cex,
+            all_funcs={"rb_write": func}, all_specs={"rb_write": spec},
+            parsed_file=parsed, driver_name="test_driver",
+        )
+        assert result.outcome == CExOutcome.SPURIOUS, f"expected SPURIOUS for {prop}"
+        assert "loop-bound artifact suppressed" in result.reasoning
+
+
+def test_non_unwind_not_suppressed(tmp_path: Path):
+    """Non-unwind findings (e.g. pointer_dereference) are NOT suppressed."""
     from bmc_agent.cbmc import CBMCResult
     from bmc_agent.cex_validator import CExOutcome, CExValidator
     from bmc_agent.harness_generator import HarnessGenerator
     from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
-    store = _make_store(tmp_path)
-    llm = _make_llm_mock()
-    harness_gen = HarnessGenerator(config)
-    validator = CExValidator(config, llm, store, harness_gen)
-
+    validator = CExValidator(config, _make_llm_mock(), _make_store(tmp_path), HarnessGenerator(config))
     parsed = parse_c_file(EXAMPLE_C)
     func = _make_func_info("rb_write", set())
     spec = _make_spec("rb_write")
     cex = _make_counterexample(
-        failing_property="rb_write.unwind.0",
-        var_assignments={"i": "5"},
+        failing_property="rb_write.pointer_dereference.1",
+        var_assignments={"ptr": "NULL"},
     )
 
-    # Phase 2 harness verifies at escalation bound → conservative artifact
-    verified_result = CBMCResult(verified=True, counterexamples=[], raw_output="")
-
-    with patch("bmc_agent.cex_validator.run_cbmc", return_value=verified_result):
+    reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=reachable):
         with patch("shutil.which", return_value="/usr/bin/cbmc"):
             result = validator.validate(
-                func=func,
-                spec=spec,
-                counterexample=cex,
-                all_funcs={"rb_write": func},
-                all_specs={"rb_write": spec},
-                parsed_file=parsed,
-                driver_name="test_driver",
+                func=func, spec=spec, counterexample=cex,
+                all_funcs={"rb_write": func}, all_specs={"rb_write": spec},
+                parsed_file=parsed, driver_name="test_driver",
             )
 
-    assert result.outcome == CExOutcome.SPURIOUS
-    assert "conservative-bound artifact" in result.reasoning
-    assert "unwind.0" in result.reasoning
-
-
-def test_unwind_escalation_genuine_bug(tmp_path: Path):
-    """
-    A counterexample whose failing_property ends in .unwind.0, and whose
-    Phase 2 harness still fails at k'=16, is NOT filtered — it proceeds
-    through the normal reachability path (here mocked to confirm a real bug).
-    """
-    from bmc_agent.cbmc import CBMCResult, Counterexample
-    from bmc_agent.cex_validator import CExOutcome, CExValidator
-    from bmc_agent.harness_generator import HarnessGenerator
-    from bmc_agent.parser import parse_c_file
-
-    config = _make_config(tmp_path)
-    store = _make_store(tmp_path)
-    llm = _make_llm_mock()
-    harness_gen = HarnessGenerator(config)
-    validator = CExValidator(config, llm, store, harness_gen)
-
-    parsed = parse_c_file(EXAMPLE_C)
-    func = _make_func_info("rb_write", set())
-    spec = _make_spec("rb_write")
-    cex = _make_counterexample(
-        failing_property="rb_write.unwind.0",
-        var_assignments={"i": "5"},
-    )
-
-    # Phase 2 harness still fails at escalation bound → genuine unbounded loop
-    # Then reachability harness confirms the bug is reachable
-    still_fails = CBMCResult(
-        verified=False,
-        counterexamples=[cex],
-        raw_output="",
-    )
-
-    with patch("bmc_agent.cex_validator.run_cbmc", return_value=still_fails):
-        with patch("shutil.which", return_value="/usr/bin/cbmc"):
-            result = validator.validate(
-                func=func,
-                spec=spec,
-                counterexample=cex,
-                all_funcs={"rb_write": func},
-                all_specs={"rb_write": spec},
-                parsed_file=parsed,
-                driver_name="test_driver",
-            )
-
-    # Should NOT be filtered as conservative artifact; genuine bug path runs
-    assert result.outcome != CExOutcome.SPURIOUS or "conservative-bound artifact" not in result.reasoning
+    assert "loop-bound artifact suppressed" not in result.reasoning

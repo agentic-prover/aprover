@@ -43,7 +43,6 @@ _BUG_TYPE_PATTERNS: list[tuple[str, str]] = [
     ("bounds", "memory_safety"),
     ("memory", "memory_safety"),
     ("buffer", "memory_safety"),
-    ("unwind", "termination"),   # unwinding assertion — loop exceeds bound
     ("postcondition", "semantic"),
     ("post", "semantic"),
     ("assertion", "semantic"),
