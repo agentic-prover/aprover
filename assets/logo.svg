@@ -2,8 +2,8 @@
 <title>AProver</title>
 <desc>AProver full logo: iceberg-A icon with Prover wordmark</desc>
 <g transform="translate(5, 5)">
-  <!-- Iceberg-A: hollow dark-blue A (outer triangle minus inner cutout) -->
-  <path d="M 60 10 L 10 120 L 110 120 Z M 60 50 L 26.2 120 L 93.8 120 Z" fill="#1e40af" fill-rule="evenodd"/>
+  <!-- Iceberg-A: single polygon — traces both legs without a continuous base edge -->
+  <path d="M 60 10 L 10 120 L 26.2 120 L 60 50 L 93.8 120 L 110 120 Z" fill="#1e40af"/>
   <!-- Light-blue ice cap (the visible-above-waterline portion) -->
   <path d="M 28 80 L 60 10 L 82 58 L 50 95 Z M 41.2 89 L 60 50 L 70.4 71.5 L 50 95 Z" fill="#bae6fd" fill-rule="evenodd"/>
   <!-- Teal checkmark -->
