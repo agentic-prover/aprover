@@ -1,46 +1,74 @@
-# AProver — Agentic Prover
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+  <img alt="AProver" src="assets/logo.svg" height="80">
+</picture>
 
-AProver is a suite of LLM-driven formal verification agents. The first agent is **BMC-Agent**, a prototype implementation of agentic model checking: an architecture that combines an LLM agent for specification generation, counterexample classification, and spec refinement with a sound bounded model checking backend. The agent handles tasks where natural-language reasoning is appropriate (generating specifications from code, classifying counterexamples, proposing refinements); the BMC backend handles verification itself, preserving formal guarantees within the unwinding bound.
+**AProver** is a suite of LLM-driven formal verification agents. The first agent — **BMC-Agent** — is a prototype of *agentic model checking*: an architecture that pairs an LLM agent (for specification generation, counterexample classification, and spec refinement) with a sound bounded model checking backend. The agent handles semantic reasoning; the solver provides formal guarantees within the unwinding bound.
 
-The architecture is backend-agnostic by design: BMC-Agent defines a `BMCBackend` abstraction that any BMC tool can implement. The agentic layer — spec generation, counterexample classification, refinement — is independent of which solver is underneath.
-
-Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated specifications. The BMC backend then checks the function against its spec and those stubs. This makes verification tractable on real codebases without manual annotations.
-
-## What BMC-Agent is, and what it isn't
-
-BMC-Agent **is** a research prototype that:
-- Runs end-to-end on real-world C, including bare-metal OS kernels.
-- Gives you sound per-function verification *within the BMC backend's unwinding bound*, conditional on the LLM-generated specs being correct.
-- Produces concrete reproducible counterexamples, not natural-language bug descriptions.
-- Supports a filtering-only ablation mode, so you can compare "classify only" against "classify + refine."
-
-BMC-Agent **is not** (yet):
-- Production-ready. Expect rough edges, failed harnesses on trivial functions, and spec-quality issues that the LLM sometimes introduces.
-- A replacement for full formal verification. Soundness is bounded by the unwinding depth and by spec correctness, neither of which BMC-Agent proves.
-- Evaluated against baselines yet. Baseline comparisons are implemented but not yet reported.
+The design principle is *agents propose, conventional tools dispose*: every soundness-relevant decision the LLM produces passes through a conventional check (CBMC query, SMT soundness guard, or runtime confirmation) before affecting the verification verdict.
 
 ## How it works
 
 ```
-Phase 1    Spec Generator      [AGENTIC]      LLM generates pre/postconditions per function
-Phase 2    BMC Engine          [CONVENTIONAL] Checks each function against its spec
-Phase 3    CEx Confirmation    [AGENTIC]      LLM classifies: REAL_BUG / SPURIOUS / UNRESOLVED
-           Spec Refiner        [AGENTIC]      Refines preconditions on spurious counterexamples
-Phase 3 S2 Feasibility check  [CONVENTIONAL] Re-verifies violation with real callee bodies inlined
-Phase 3 S3 Dynamic validation [CONVENTIONAL] Compiles + runs GCC harness to confirm fault at runtime
-Phase 3b   Propagation        [CONVENTIONAL] Re-verifies callers after spec refinement
-Phase 3c   CEGAR loop         [CONVENTIONAL] Re-verifies refined functions (may unmask bugs)
-Phase 4    Spec Quality        [AGENTIC]      Coverage / mutation / consistency checks (optional)
+Phase 1    Spec Generator        [AGENTIC]       LLM generates pre/postconditions top-down per function
+Phase 2    BMC Engine            [CONVENTIONAL]  Checks each function against its spec via CBMC
+Phase 3 S1 CEx Classifier        [AGENTIC]       LLM + CBMC: REAL_BUG / SPURIOUS / UNRESOLVED
+Phase 3 S2 Feasibility check     [CONVENTIONAL]  Re-verifies violation with real callee bodies inlined
+Phase 3 S3 Dynamic validation    [CONVENTIONAL]  Compiles + runs GCC harness to confirm fault at runtime
+Phase 3b   Spec Refiner          [AGENTIC]       Refines preconditions on spurious counterexamples
+Phase 3c   Caller propagation    [CONVENTIONAL]  Re-verifies callers after spec refinement
+Phase 4    Spec Quality          [AGENTIC]       Coverage / mutation / consistency checks (optional)
 ```
 
-The agentic components handle semantic reasoning; the conventional BMC engine provides the formal guarantee. The design principle is *agents propose, conventional tools dispose* — every soundness-relevant decision the LLM proposes passes through a conventional check before affecting the verification verdict.
+Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated postconditions via `__CPROVER_assume`. The BMC backend then checks the function against its spec and those stubs. Cross-file callers are tracked via a two-pass global call-graph construction so that functions are not misclassified as system entry points.
+
+Confirmed real bugs are assigned one of four evidence tiers:
+
+| Tier | Meaning |
+|---|---|
+| `confirmed_dynamic` | Runtime fault (SIGSEGV/SIGABRT/SIGILL) directly observed in a GCC-compiled harness |
+| `confirmed_system_entry` | Full call chain traced back to a function with no callers anywhere in the corpus |
+| `confirmed_bmc` | Input reachability confirmed from at least one immediate caller via CBMC |
+| `likely` | Over-refinement guard triggered |
+
+## Results on VibeOS
+
+BMC-Agent was evaluated on [VibeOS](https://github.com/kaansenol5/VibeOS), a bare-metal ARM64 hobby OS of ~15,000 lines of C written with LLM assistance. Results are from a whole-codebase run (`verify-dir`) across all 38 unique kernel module stems (47 of 48 `.c` files).
+
+### Full kernel — 65 confirmed findings across 37 modules
+
+| Evidence tier | Count |
+|---|---|
+| `confirmed_dynamic` | **22** |
+| `confirmed_system_entry` | **38** |
+| `confirmed_bmc` | **5** |
+| **Total** | **65** |
+
+The 22 `confirmed_dynamic` findings each triggered a signal (SIGSEGV, SIGABRT, or SIGILL) in a GCC-compiled harness running the exact CBMC counterexample witness. They span 9 modules: `kapi`, `ttf`, `process`, `net`, `mouse`, `memory`, `fat32`, `keyboard`, and `uart`.
+
+BMC-Agent independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating one finding against an independent source.
+
+### RQ3 ablation — refinement vs. filtering (5 wrapper modules)
+
+| Module | AMC (full) | FilteringOnly | Δ |
+|---|---|---|---|
+| `vibeos_vfs.c` | 18 | 27 | +9 |
+| `vibeos_string.c` | 16 | 22 | +6 |
+| `vibeos_dtb.c` | 4 | 4 | 0 |
+| `vibeos_printf.c` | 3 | 6 | +3 |
+| `vibeos_klog.c` | 0 | 0 | 0 |
+| **Total** | **41** | **59** | **+18** |
+
+FilteringOnly (classify counterexamples but never update specs or re-queue callers) reports 44% more findings. Refinement acts as a precision filter on this corpus: it eliminates 18 findings, without adding any unique findings via caller re-queuing.
+
+For more detail see the [technical report](REPORT_AMC.md) and the [paper](paper/main.tex).
 
 ## Requirements
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- A BMC solver on `PATH` (the C backend uses the solver specified by `BMC_AGENT_BMC_PATH`)
-- An Anthropic API key
+- [CBMC](https://github.com/diffblue/cbmc) on `PATH`
+- An Anthropic API key (`ANTHROPIC_API_KEY`)
 
 ## Installation
 
@@ -55,207 +83,119 @@ uv sync
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
 
-# Verify a C source file
+# Verify a C source file (generate specs + run BMC + classify + refine)
 uv run bmc-agent verify --source examples/simple_driver.c \
-                  --driver simple_driver \
-                  --output artifacts/
+                        --driver simple_driver \
+                        --output artifacts/
 
-# Generate specs only (no BMC)
+# Generate specs only
 uv run bmc-agent generate --source examples/simple_driver.c --driver simple_driver
 
-# Run a corpus
-uv run bmc-agent eval --corpus path/to/corpus.json --output artifacts/
+# Verify every .c file in a directory (whole-codebase mode)
+uv run bmc-agent verify-dir \
+  --source-dir examples/vibeos/repo/kernel \
+  --driver vibeos_kernel \
+  --output artifacts/vibeos_kernel \
+  --include-dir examples/vibeos/repo/kernel
 
-# CBMC-alone baseline (no LLM, no spec generation — for comparison)
+# CBMC-alone baseline (no LLM, no spec generation)
 uv run bmc-agent baseline --source examples/simple_driver.c \
-                    --driver simple_driver \
-                    --output artifacts/baseline_simple_driver
+                          --driver simple_driver \
+                          --output artifacts/baseline/
 
-# Verify a two-file cross-file demo (confirmed_system_entry across files)
+# Two-file cross-file demo (confirmed_system_entry across files)
 uv run bmc-agent verify-dir \
   --source-dir examples/cross_file_demo \
   --driver cross_file_demo \
   --output artifacts/cross_file_demo
 ```
 
-Artifacts — generated specs, BMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and are intended to be inspected or diffed.
+Artifacts — generated specs, CBMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and can be inspected or diffed.
 
 ## Configuration
 
-All settings can be overridden via environment variables or as `Config` dataclass fields.
+All settings are available as environment variables or `Config` dataclass fields.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `BMC_AGENT_LLM_MODEL` | `claude-sonnet-4-6` | LLM model |
-| `BMC_AGENT_CBMC_PATH` | `cbmc` | Path to BMC solver binary |
+| `BMC_AGENT_CBMC_PATH` | `cbmc` | CBMC binary path |
 | `BMC_AGENT_CBMC_UNWIND` | `4` | Loop unwinding bound |
 | `BMC_AGENT_CBMC_TIMEOUT` | `120` | Solver timeout per function (seconds) |
-| `BMC_AGENT_MAX_REFINEMENT_ITERS` | `5` | Maximum CEGAR iterations |
+| `BMC_AGENT_MAX_REFINEMENT_ITERS` | `5` | Maximum CEGAR refinement iterations |
 | `BMC_AGENT_ENABLE_DUAL_SPEC` | `true` | Generate each spec twice, flag disagreements |
-| `BMC_AGENT_ENABLE_SPEC_QUALITY` | `false` | Run Phase 4 spec-quality checks |
-| `BMC_AGENT_SKIP_REFINEMENT` | `false` | Filtering-only mode (classify but don't refine) |
-| `BMC_AGENT_ENABLE_DYNAMIC_VALIDATION` | `false` | Phase 3 S3: compile + run a GCC harness to confirm real faults |
-| `BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT` | `30` | Seconds the compiled harness is allowed to run |
-| `BMC_AGENT_DYNAMIC_CC_PATH` | `gcc` | C compiler for dynamic harness compilation |
+| `BMC_AGENT_ENABLE_SPEC_QUALITY` | `false` | Phase 4 spec-quality checks (mutation, coverage) |
+| `BMC_AGENT_SKIP_REFINEMENT` | `false` | FilteringOnly mode: classify but don't refine |
+| `BMC_AGENT_ENABLE_DYNAMIC_VALIDATION` | `false` | Phase 3 S3: compile + run a GCC harness |
+| `BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT` | `30` | GCC harness run timeout (seconds) |
+| `BMC_AGENT_DYNAMIC_CC_PATH` | `gcc` | C compiler for dynamic harness |
 
-The `BMC_AGENT_SKIP_REFINEMENT` toggle is the control for the project's own ablation study: running BMC-Agent with and without refinement on the same input measures whether the refinement machinery contributes value beyond simple filtering of spurious counterexamples.
+`BMC_AGENT_SKIP_REFINEMENT=true` is the FilteringOnly ablation: running the same input with and without this flag measures whether the refinement loop adds value beyond simple counterexample filtering.
+
+## Specification DSL
+
+Specs are expressed in a small DSL that is reliably emittable by an LLM and directly translatable to CBMC constructs without interpreter intervention.
+
+| Predicate | Meaning | Translates to |
+|---|---|---|
+| `valid(ptr)` | Non-null pointer | `ptr != NULL` |
+| `valid_string(ptr)` | Non-null, null-terminated C string | `ptr != NULL` + bounded buffer in harness |
+| `valid_range(ptr, lo, hi)` | Non-null pointer, range `ptr[lo..hi)` in bounds | `ptr != NULL && lo >= 0 && hi >= lo` |
+| `in_bounds(arr, idx)` | Array index in bounds | `idx >= 0 && idx < sizeof(arr)/sizeof(arr[0])` |
+| `null(ptr)` | Null pointer | `ptr == NULL` |
+| `owns(ptr)` | Caller-owned allocation | `ptr != NULL` |
+| `locked(lock)` | Ghost lock state (skipped in harness) | `/* ghost */` |
+
+Return values use `\result`. Arithmetic operators and C comparisons are translated directly. Natural language conditions that don't match any pattern are emitted as `/* comments */`.
 
 ## Examples
-
-The `examples/` directory contains synthetic targets used to validate the pipeline plus VibeOS modules used for the real-world evaluation.
 
 | File | Description |
 |---|---|
 | `simple_driver.c` | Ring-buffer device — off-by-one in `rb_write` |
-| `sensor_hub.c` | CEGAR demo: spurious counterexample triggers refinement, reveals real bug |
+| `sensor_hub.c` | CEGAR demo: spurious counterexample → refinement → real bug |
 | `block_device.c` | Integer overflow in `blk_seek` |
 | `memory_allocator.c` | Null dereference in `alloc_free` |
-| `cross_file_demo/` | Two-file demo of cross-file `confirmed_system_entry`: `apply_op` (null fn-ptr in `libmath.c`) traced to `system_entry` (in `main.c`) |
-| `vibeos/vibeos_memory.c` | VibeOS kernel allocator — `calloc` overflow and `malloc` wraparound |
-| `vibeos/vibeos_string.c` | VibeOS string functions — 16 unbounded-loop findings |
-| `vibeos/vibeos_printf.c` | VibeOS printf — `print_signed` `INT64_MIN` UB |
-| `vibeos/vibeos_vfs.c` | VibeOS VFS — 18 unbounded-loop findings on path traversal |
-| `vibeos/vibeos_dtb.c` | VibeOS DTB parser — 4 findings on untrusted input |
-
-## Preliminary evaluation: VibeOS
-
-BMC-Agent was run against [VibeOS](https://github.com/kaansenol5/VibeOS), a bare-metal ARM64 hobby OS written with LLM assistance (about 8k LoC, 95% C). Two evaluation modes were exercised.
-
-### Wrapper mode — 70 findings across 7 modules
-
-Hand-crafted per-module wrappers inline cross-file includes and stub external dependencies. Seven kernel modules were verified under `examples/vibeos/`.
-
-| Module | Findings | Notes |
-|---|---|---|
-| `vibeos_vfs.c` | 18 | Unbounded loops in path and string traversal |
-| `vibeos_string.c` | 16 | Unbounded loops in string functions |
-| `vibeos_net.c` | 16 | TCP/UDP/DNS parsing bugs |
-| `vibeos_elf.c` | 13 | ELF segment offset arithmetic |
-| `vibeos_dtb.c` | 4 | Untrusted DTB input; null dereference |
-| `vibeos_printf.c` | 3 | `INT64_MIN` signed overflow; two unbounded loops |
-| `vibeos_klog.c` | 0 | Ring-buffer logic verified |
-
-### Raw-source mode — ~198 findings across 43 files (partial run, no dynamic validation)
-
-In raw-source mode BMC-Agent preprocesses the unmodified kernel source directly using `cc -E` and verifies each file without any manual wrapper preparation. A partial run across 43 of 48 kernel `.c` files (stopped before `ttf`, `vfs`, `virtio_blk`, `virtio_net`, `virtio_sound`) reported ~198 confirmed bugs, including HAL-layer findings in the SD card driver and interrupt controller.
-
-```bash
-amc verify-dir \
-  --source-dir examples/vibeos/repo/kernel \
-  --driver vibeos_kernel \
-  --output artifacts/vibeos_kernel_full \
-  --include-dir examples/vibeos/repo/kernel
-```
-
-### Raw-source mode with dynamic validation — 173 findings across 37 modules
-
-A full raw-source run with `BMC_AGENT_ENABLE_DYNAMIC_VALIDATION=true` exercised the complete dynamic validation pipeline across all 38 unique kernel modules (47 of 48 files — `font.c` was not processed; 7 stems appear in both HAL variants and their results are merged into one artifact directory per stem).
-
-**Enabling dynamic validation on bare-metal C** required four harness fixes to allow the GCC harness to compile and run against preprocessed ARM64 kernel sources on an x86 host:
-- Strip ARM64 inline ASM blocks (`asm volatile`, `__asm__`) that won't assemble on x86.
-- Strip `static inline` libc stubs that the kernel defines internally (e.g. `signal()`, `memcpy()`) and that conflict with the system headers the harness includes.
-- Strip glibc-internal typedefs (`__fsid_t`, `__dev_t`, `max_align_t`, etc.) from the preprocessed type declarations — the VibeOS in-tree libc headers redefine these identically to glibc, causing duplicate-type errors when the harness also includes `<signal.h>`.
-- Strip forward declarations of standard functions with non-standard signatures (e.g. `printf.h` declares `snprintf(char*, int, ...)` instead of `snprintf(char*, size_t, ...)`).
-- When kernel functions reference globals from other translation units (e.g. `fb_base` defined in `fb.c`), a third compile attempt uses `-Wl,--unresolved-symbols=ignore-all` so the harness still links and runs.
-
-**Results across 37 modules:**
-
-| Confidence tier | Count | Description |
-|---|---|---|
-| `confirmed_dynamic` | **32** | Runtime fault (SIGSEGV) directly observed |
-| `confirmed_system_entry` | **108** | Full call chain traced to kernel entry point |
-| `confirmed_bmc` | **33** | Reachability confirmed from a caller via BMC |
-| **Total** | **173** | |
-
-**`confirmed_dynamic` bugs (runtime SIGSEGV confirmed):**
-
-| Module | Functions |
-|---|---|
-| `irq` | `handle_serror`, `handle_sync_exception`, `uart_puthex`, `wsod_animate_ekg`, `wsod_draw_line`, `wsod_draw_sad_mac`, `wsod_draw_text`, `wsod_hex`, `wsod_int` |
-| `ttf` | `stbtt__sort_edges_ins_sort`, `stbtt__sort_edges_quicksort` |
-| `dma` | `hal_dma_copy`, `hal_dma_fb_copy` |
-| `fb` | `find_ramfb_selector`, `fw_cfg_read`, `local_strcmp` |
-| `usb_hid` | `kbd_ring_push`, `mouse_ring_push`, `usb_irq_handler` |
-| `vfs` | `readdir_callback`, `vfs_lookup` |
-| `elf` | `elf_load`, `elf_load_at` |
-| `cursor` | `draw_cursor_at`, `save_background` |
-| `console` | `scroll_up` |
-| `string` | `strlen` |
-| `kapi` | `kapi_print_hex`, `kapi_print_int` |
-| `kernel` | `uart_getc_blocking` |
-| `process` | `process_init` |
-| `usb_enum` | `usb_enumerate_hub` |
-
-To reproduce:
-```bash
-BMC_AGENT_ENABLE_DYNAMIC_VALIDATION=true bmc-agent verify-dir \
-  --source-dir examples/vibeos/repo/kernel \
-  --driver vibeos_dynamic \
-  --output artifacts/vibeos_dynamic2 \
-  --include-dir examples/vibeos/repo/kernel
-```
-
-**FilteringOnly baseline (RQ3).** On the five wrapper modules, the `--skip-refinement` ablation (classify only, no spec update, no caller re-queue) reported 59 findings vs. BMC-Agent's 41 — a 44% increase. Refinement acts as a precision filter on this corpus, not a recall enhancer.
-
-**How to read these numbers.** All finding counts are the tool's own classification — not an externally audited ground truth. Each finding comes with a concrete counterexample (specific input values) produced by the BMC solver: the witness is a real execution path, not a probabilistic estimate. Phase 3 applies a three-stage soundness check: (1) reachability harness stubs are constrained by callee postconditions via `__CPROVER_assume`, (2) a Stage 2 feasibility check re-verifies the violation with real local callee bodies inlined, and (3) an optional Stage 3 GCC harness directly confirms the fault at runtime. Each confirmed real bug is assigned one of four evidence tiers: `confirmed_dynamic` (runtime fault observed), `confirmed_system_entry` (full call chain traced back to a function with no callers in any file), `confirmed_bmc` (reachability confirmed from at least one caller via BMC), or `likely` (over-refinement guard triggered). In whole-codebase mode (`verify-dir`), BMC-Agent performs a two-pass global call-graph construction so that functions whose callers reside in other files are not misclassified as system entry points. The `confirmed_system_entry` tier is demonstrated end-to-end in `examples/cross_file_demo/`: `apply_op` (null function-pointer dereference in `libmath.c`) is confirmed reachable from `system_entry` in `main.c` via cross-file CBMC reachability, yielding `confirmed_system_entry` with chain `system_entry → apply_op`. A manual precision audit of a sampled subset is the immediate next step.
-
-BMC-Agent independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating at least one finding against an independent source.
-
-### Limitations
-
-- **Callee stub soundness (partial).** Phase 2 and Phase 3 reachability stubs are now constrained by callee postconditions, and Phase 3 Stage 2 inlines real local callee bodies for feasibility checking. External callees (hardware registers, OS syscalls) still use postcondition-constrained stubs; their postconditions are LLM-generated and may be over-permissive.
-- **No baseline comparisons reported yet.** The three ablation baselines are implemented but not yet exercised on VibeOS.
-- **HAL deduplication.** The kernel has 48 `.c` files across 38 unique stems; 7 stems (`dma`, `fb`, `irq`, `keyboard`, `mouse`, `platform`, `serial`) each appear in both `hal/pizero2w/` and `hal/qemu/`. `verify-dir` processes all files but writes results to per-stem artifact directories, so only the last-processed HAL variant's results are retained for those 7 stems. `font.c` was not processed in any run.
-- **Single-system evaluation.** Generalization beyond VibeOS is not yet demonstrated.
+| `cross_file_demo/` | Cross-file `confirmed_system_entry`: null fn-pointer in `libmath.c` traced to `system_entry` in `main.c` |
+| `vibeos/vibeos_memory.c` | VibeOS allocator — `calloc` overflow (cross-validates tracker issue #26) |
+| `vibeos/vibeos_string.c` | 16 unbounded-loop findings in string functions |
+| `vibeos/vibeos_printf.c` | `print_signed` `INT64_MIN` signed overflow |
+| `vibeos/vibeos_vfs.c` | 18 unbounded-loop findings in path traversal |
+| `vibeos/vibeos_dtb.c` | 4 findings on untrusted DTB input |
 
 ## Running tests
 
 ```bash
 uv run pytest tests/ -q
-# 211 passed, 1 skipped
+# 220 passed, 1 skipped
 ```
-
-## Usage — whole-codebase mode
-
-To verify an entire C source directory without manual wrapper preparation:
-
-```bash
-# Preprocess and verify every .c file in the kernel directory
-uv run bmc-agent verify-dir \
-  --source-dir path/to/kernel \
-  --driver my_project \
-  --output artifacts/ \
-  --include-dir path/to/kernel
-```
-
-BMC-Agent runs in two passes over the source directory. Pass 1 preprocesses and parses every `.c` file to build a global call graph, identifying which functions have callers in other files. Pass 2 runs the full verification pipeline per file, using the global graph to prevent HAL functions and other cross-file-called helpers from being misclassified as system entry points. The `-I` paths are forwarded to both the C preprocessor and the BMC solver so headers resolve correctly.
 
 ## Project structure
 
 ```
-aprover/                AProver top-level orchestrator package
-bmc_agent/              BMC-Agent: agentic bounded model checking
+bmc_agent/
   config.py             Configuration dataclass
-  pipeline.py           End-to-end orchestrator (BMCPipeline, PropagationEvent)
-  spec_generator.py     Phase 1: LLM spec generation
-  bmc_engine.py         Phase 2: BMC runner
-  cex_validator.py      Phase 3: counterexample classification and refinement
-  harness_generator.py  BMC harness synthesis
-  dsl_to_cbmc.py        Spec DSL → solver assume / assert calls
+  pipeline.py           End-to-end orchestrator
+  spec_generator.py     Phase 1: LLM spec generation (top-down, caller-driven)
+  bmc_engine.py         Phase 2: CBMC runner with parallel dispatch
+  cex_validator.py      Phase 3: counterexample classification + refinement loop
+  harness_generator.py  CBMC and GCC harness synthesis
+  dsl_to_cbmc.py        Spec DSL → __CPROVER_assume / assert translation
+  dynamic_validator.py  Phase 3 S3: GCC harness compile + run
+  spec_quality.py       Phase 4: mutation testing, coverage, consistency checks
   evaluation/           Baselines, metrics, corpus, report generation
-  backends/             BMCBackend ABC and concrete backend implementations
+  backends/             BMCBackend ABC + CBMCBackend (KaniBackend scaffolded)
 examples/               Synthetic and real-world C targets
-tests/                  Unit and integration tests
+tests/                  220 unit and integration tests
 ```
 
 ## Status
 
-BMC-Agent (AProver's first agent) is an active research prototype. The architecture and pipeline are stable; the evaluation and spec-quality components are under active development.
+BMC-Agent is an active research prototype. The pipeline and all four evidence tiers are stable; the evaluation and spec-quality components are under active development.
 
-- **Working:** C verification, all four agentic components, filtering-only ablation (`--skip-refinement`), parallel solver execution, propagation event tracking, whole-codebase raw-source mode (`verify-dir`), two-pass global call-graph construction for cross-file caller awareness, cross-file CBMC reachability queries (chain continues through caller files to a true system entry, promoting findings to `confirmed_system_entry`), callee stub postcondition constraints (`__CPROVER_assume`), Phase 3 Stage 2 feasibility check (real callee bodies inlined), Phase 3 Stage 3 dynamic validation (GCC harness confirms fault at runtime), four-tier confidence reporting (`confirmed_dynamic` > `confirmed_system_entry` > `confirmed_bmc` > `likely`), prompt caching.
-- **Working:** spec-quality module (`BMC_AGENT_ENABLE_SPEC_QUALITY=true`) with mutation testing, coverage checks, consistency checks, and executable sanity checks; `bmc-agent baseline` command for CBMC-alone comparison runs.
-- **Partial:** External callee postconditions are LLM-generated and may be over-permissive; spec-quality analysis has not yet been run at scale.
-- **Planned:** Full evaluation corpus beyond VibeOS; CBMCAloneBaseline and AMCAblationBaseline comparisons on VibeOS.
+**Working:** full C verification pipeline, whole-codebase `verify-dir` mode, cross-file call-graph construction, cross-file CBMC reachability, Phase 3 Stage 2 feasibility check (real callee inlining), Phase 3 Stage 3 dynamic validation (bare-metal-compatible GCC harness), four-tier confidence reporting, callee stub postcondition constraints, FilteringOnly ablation (`--skip-refinement`), spec-quality module (`BMC_AGENT_ENABLE_SPEC_QUALITY=true`), prompt caching.
+
+**Partial / planned:** spec-quality analysis at scale; CBMCAloneBaseline and AMCAblationBaseline comparisons on VibeOS; Kani (Rust) backend; evaluation corpus beyond VibeOS; manual precision audit of sampled findings.
 
 ## License
 
