@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AProver logo – dark-background variant (white wordmark) -->
+<svg width="480" height="140" viewBox="0 0 480 140"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-label="AProver – Agentic Prover">
+
+  <defs>
+    <linearGradient id="iconBgD" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%"   stop-color="#2d1b69"/>
+      <stop offset="100%" stop-color="#0f0a2e"/>
+    </linearGradient>
+    <linearGradient id="legGradD" x1="0" y1="30" x2="0" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#c7d2fe"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <filter id="apexGlowD" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Icon -->
+  <rect x="2" y="10" width="116" height="120" rx="20" fill="url(#iconBgD)"/>
+  <rect x="2" y="10" width="116" height="120" rx="20"
+        fill="none" stroke="#6366f1" stroke-width="1.5"/>
+
+  <!-- A / proof tree -->
+  <line x1="60" y1="30" x2="18" y2="112"
+        stroke="url(#legGradD)" stroke-width="7" stroke-linecap="round"/>
+  <line x1="60" y1="30" x2="102" y2="112"
+        stroke="url(#legGradD)" stroke-width="7" stroke-linecap="round"/>
+  <line x1="26" y1="76" x2="94" y2="76"
+        stroke="#a5b4fc" stroke-width="3" stroke-linecap="round"/>
+
+  <line x1="38" y1="77" x2="38" y2="87"
+        stroke="#818cf8" stroke-width="1.5" stroke-dasharray="2.5,2.5" opacity="0.7"/>
+  <line x1="60" y1="77" x2="60" y2="91"
+        stroke="#818cf8" stroke-width="1.5" stroke-dasharray="2.5,2.5" opacity="0.7"/>
+  <line x1="82" y1="77" x2="82" y2="87"
+        stroke="#818cf8" stroke-width="1.5" stroke-dasharray="2.5,2.5" opacity="0.7"/>
+
+  <circle cx="38" cy="93" r="5.5" fill="#818cf8"/>
+  <circle cx="60" cy="97" r="5.5" fill="#818cf8"/>
+  <circle cx="82" cy="93" r="5.5" fill="#818cf8"/>
+
+  <circle cx="60" cy="30" r="10" fill="#22c55e" filter="url(#apexGlowD)"/>
+  <circle cx="60" cy="30" r="5"  fill="#bbf7d0"/>
+
+  <!-- Wordmark – white for dark backgrounds -->
+  <text x="140" y="85"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="50" font-weight="700"
+        fill="#f5f3ff" letter-spacing="-1.5">AProver</text>
+
+  <text x="143" y="108"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="500"
+        fill="#a5b4fc" letter-spacing="4.5">AGENTIC PROVER</text>
+
+</svg>

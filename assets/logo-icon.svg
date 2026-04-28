@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AProver square icon — use for favicons, badges, GitHub social preview.
+  The "A" reads as a sequent-calculus derivation tree:
+    apex dot (green)  = the proved conclusion
+    inference bar     = the A crossbar
+    three nodes below = premises checked by the BMC engine
+-->
+<svg width="120" height="120" viewBox="0 0 120 120"
+     xmlns="http://www.w3.org/2000/svg"
+     role="img" aria-label="AProver icon">
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%"   stop-color="#2d1b69"/>
+      <stop offset="100%" stop-color="#0f0a2e"/>
+    </linearGradient>
+    <linearGradient id="legs" x1="0" y1="18" x2="0" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#c7d2fe"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <filter id="glow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6"
+                    flood-color="#4f46e5" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect x="4" y="4" width="112" height="112" rx="20"
+        fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="4" y="4" width="112" height="112" rx="20"
+        fill="none" stroke="#4338ca" stroke-width="1.5"/>
+
+  <!-- Left leg -->
+  <line x1="60" y1="20" x2="18" y2="103"
+        stroke="url(#legs)" stroke-width="7" stroke-linecap="round"/>
+  <!-- Right leg -->
+  <line x1="60" y1="20" x2="102" y2="103"
+        stroke="url(#legs)" stroke-width="7" stroke-linecap="round"/>
+
+  <!-- Inference bar -->
+  <line x1="26" y1="67" x2="94" y2="67"
+        stroke="#a5b4fc" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Drops from bar to nodes -->
+  <line x1="38" y1="68" x2="38" y2="78"
+        stroke="#818cf8" stroke-width="1.5" stroke-dasharray="2.5,2.5" opacity="0.7"/>
+  <line x1="60" y1="68" x2="60" y2="81"
+        stroke="#818cf8" stroke-width="1.5" stroke-dasharray="2.5,2.5" opacity="0.7"/>
+  <line x1="82" y1="68" x2="82" y2="78"
+        stroke="#818cf8" stroke-width="1.5" stroke-dasharray="2.5,2.5" opacity="0.7"/>
+
+  <!-- Premise nodes -->
+  <circle cx="38" cy="84" r="5.5" fill="#6366f1"/>
+  <circle cx="60" cy="88" r="5.5" fill="#6366f1"/>
+  <circle cx="82" cy="84" r="5.5" fill="#6366f1"/>
+
+  <!-- Proved apex -->
+  <circle cx="60" cy="20" r="10" fill="#22c55e" filter="url(#glow)"/>
+  <circle cx="60" cy="20" r="5"  fill="#bbf7d0"/>
+
+</svg>
