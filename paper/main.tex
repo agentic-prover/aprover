@@ -1,4 +1,4 @@
-%% AProver: Agentic Model Checking
+%% bmc-agent: Agentic Model Checking
 %% Conference paper draft — April 2026
 %%
 %% Build:
@@ -30,10 +30,8 @@
 \titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection}{1em}{}
 
 %% ── Tool names ───────────────────────────────────────────────────────────────
-\newcommand{\tool}{AProver\xspace}
-\newcommand{\toollong}{Agentic Prover\xspace}
+\newcommand{\tool}{bmc-agent\xspace}
 \newcommand{\fmagent}{FM-Agent\xspace}
-\newcommand{\preguss}{Preguss\xspace}
 \newcommand{\vibeos}{VibeOS\xspace}
 
 %% ── Confidence tiers (inline) ────────────────────────────────────────────────
@@ -59,9 +57,6 @@
 
 \title{\textbf{Agentic Model Checking}}
 
-\author[1]{Youcheng Sun}
-\affil[1]{Mohamed bin Zayed University of Artificial Intelligence, Abu Dhabi, UAE\\
-  \texttt{youcheng.sun@mbzuai.ac.ae}}
 \date{April 2026}
 
 \begin{document}
@@ -77,7 +72,8 @@ counterexample classification, and precondition refinement, but every
 soundness-relevant decision they produce is gated by a deterministic check
 before affecting the verification verdict.
 
-\tool, our prototype, operates in four phases: an LLM agent generates
+\tool, our prototype implemented in the AProver project
+(\url{https://github.com/theyoucheng/aprover}), operates in four phases: an LLM agent generates
 per-function pre/postconditions top-down along the call graph; CBMC checks
 each function in isolation against its spec with callee stubs constrained by
 their postconditions; a three-way classifier distinguishes confirmed real bugs,
@@ -86,7 +82,7 @@ refinement agent proposes precondition tightenings that pass an SMT soundness
 guard before triggering compositional re-verification of all callers.
 
 We evaluate \tool on \vibeos, a bare-metal ARM64 hobby operating system
-(\textasciitilde{}8{,}000 lines of LLM-generated C). In raw-source mode with
+(\textasciitilde{}15{,}000 lines of LLM-generated C). In raw-source mode with
 dynamic validation enabled, \tool reports \textbf{173 confirmed findings}
 across 37 kernel modules: 32 faults confirmed at runtime (\dynconf{}),
 108 findings with full call chains traced to kernel entry points
@@ -113,23 +109,28 @@ address poorly. Developers who deploy LLM-generated code frequently do not
 understand every function in detail; writing manual specifications is infeasible
 at scale; and the bugs that arise tend to be the low-level kind---integer
 overflow, off-by-one indexing, missing bounds checks on malformed input---that
-pure LLM-based reasoning handles badly.
+require exhaustive path analysis to verify: an LLM can flag suspicious
+patterns but cannot prove their absence across all inputs.
 
 Two recent lines of work bracket the problem.
-\fmagent{}~\cite{fmagent} generates natural-language specifications top-down
-from callers and uses an LLM to reason about code against those specs. It
-scales to large systems but its verification verdicts are unsound: low-level
-arithmetic and memory bugs routinely escape LLM natural-language reasoning.
-\preguss{}~\cite{preguss} uses LLMs to synthesize formal specifications for
-Frama-C/Wp bottom-up; verification is sound but depends on deductive
-infrastructure that does not produce concrete counterexamples and that
-struggles with loop-heavy systems code.
+\fmagent~\cite{fmagent} generates Hoare-style pre/postconditions top-down
+from caller context and uses an LLM to reason about each function against
+its specification, confirming bugs by running live test cases. It scales
+to large systems---applying to a 15k-LoC, 452-function operating
+system---and is effective at semantic and logic bugs. Because verification
+is performed by an LLM rather than a solver, it is not sound for low-level
+arithmetic and memory-safety properties: bugs that require exhaustive
+reasoning over all input ranges can escape undetected.
+AutoSpec~\cite{autospec} and Lemur~\cite{lemur} couple LLM-generated
+specifications with formal checkers but depend on deductive infrastructure
+that does not produce concrete counterexamples and struggles with
+loop-heavy systems code.
 
 \tool occupies a different point in this space. Like \fmagent, it generates
 specifications top-down so each function's expected behavior is derived from
-how its callers invoke it. Like \preguss, it uses a sound solver---CBMC---for
-the verification step. Unlike either, it uses \emph{bounded model checking}
-as the solver, which brings three structural advantages:
+its callers. Like AutoSpec and Lemur, it uses a sound solver for the checking
+step. Unlike all three, it uses \emph{bounded model checking} as the solver,
+which brings three structural advantages:
 
 \begin{enumerate}
 \item \textbf{Concrete counterexamples.} When BMC finds a property violation it
@@ -218,9 +219,8 @@ refined spec.
 LLM agents augment language models with tool use---the ability to invoke
 external programs and observe their outputs within a reasoning
 loop~\cite{react}. Recent work has explored LLM agents for verification tasks
-including specification generation~\cite{fmagent,preguss,autospec},
-loop invariant inference~\cite{wu-invariants,lemur}, and test
-generation~\cite{copilot-formal}. \tool contributes to this line by combining
+including specification generation~\cite{fmagent,autospec,lemur} and
+loop invariant inference~\cite{wu-invariants}. \tool contributes to this line by combining
 an agentic layer with a sound solver in a closed compositional refinement loop.
 
 %% ─────────────────────────────────────────────────────────────────────────────
@@ -371,74 +371,110 @@ A central design decision in \tool is that a CBMC counterexample is
 through a three-way classifier that produces one of:
 
 \begin{description}
-\item[\textbf{Real bug.}] Some caller can supply inputs that reach the
-  violating state; the violation is reported with one of four evidence tiers
-  (Table~\ref{tab:tiers}).
-\item[\textbf{Spurious.}] No caller can supply such inputs; the counterexample
-  is an artifact of the stub over-approximation. Passed to the refiner.
-\item[\textbf{Unresolved.}] After multiple concretization strategies, the
-  classifier cannot confirm in either direction. Reported as a candidate
-  requiring human review, not filtered out.
+\item[\textbf{Real bug.}] Reachability and feasibility checks confirm the
+  violation is reachable under the real program; reported with one of four
+  evidence tiers (Table~\ref{tab:tiers}).
+\item[\textbf{Spurious.}] No caller can supply inputs that produce the
+  violating state; the counterexample is an artifact of stub
+  over-approximation. Passed to the refiner.
+\item[\textbf{Unresolved.}] Checks are inconclusive in both directions.
+  Reported as a candidate for human review; never silently dropped.
 \end{description}
 
-The three-way structure is important for soundness. A two-way
-\emph{real-versus-spurious} classifier must commit on every counterexample;
-misclassifying a real bug as spurious silently suppresses it. The
-\emph{unresolved} category is the honest ``cannot confirm'' answer that
-preserves potentially-real bugs that would otherwise be lost.
+The three-way structure is important for soundness: a two-way classifier must
+commit on every counterexample, and misclassifying a real bug as spurious
+suppresses it silently. \emph{Unresolved} is the honest ``cannot confirm''
+verdict.
 
-\subsubsection{Input reachability check (Stage 1)}
+\subsubsection{Stage 1: Input reachability}
 
-The primary classification mechanism is a CBMC reachability harness. For a
-counterexample at function $F$ with witness input $\mathbf{x}$, the harness
-runs each caller $C$ of $F$ with stubs for $C$'s other callees constrained
-by their postconditions, and fixes $F$'s stub arguments to $\mathbf{x}$.
-If CBMC finds an execution of $C$ that produces $\mathbf{x}$ at the call
-site to $F$, the input is confirmed reachable. If CBMC verifies that no such
-execution exists, the counterexample is confirmed spurious. If $F$ has no
-in-file callers but has callers in other files (in whole-codebase mode), the
-reachability query is run against those cross-file callers using their parsed
-bodies.
+For a counterexample at function $F$ with witness input $\mathbf{x}$, Stage 1
+asks: \emph{can any caller of $F$ actually supply $\mathbf{x}$?}
+A CBMC harness runs each in-file caller $C$ with its other callees stubbed
+(constrained by their postconditions) and $F$'s argument fixed to
+$\mathbf{x}$; CBMC checks whether $C$ has an execution that produces
+$\mathbf{x}$ at the call site. If no in-file callers exist but cross-file
+callers are known (whole-codebase mode), the same harness is run against
+those callers in their own file context. If $F$ has no callers anywhere it is
+a system entry point and Stage 1 is skipped entirely.
 
-\subsubsection{Callee feasibility check (Stage 2)}
+After at least one caller confirms reachability, \tool runs
+\emph{upward propagation}: it recurses through the confirming caller's own
+callers, then their callers, and so on, trying to reach a function with no
+callers anywhere in the analyzed corpus (a true system entry point). Whether
+this propagation reaches the top determines the final tier.
 
-Input reachability is necessary but not sufficient: the callee return values
-$R_1, R_2, \ldots$ appearing in the counterexample trace must also be
-achievable by the real callees. Stage 2 addresses this by inlining the real
-bodies of locally-available callees into a feasibility harness, fixing $F$'s
-scalar inputs to the witness values, and re-running CBMC. If the violation
-still fires with real callee bodies, it is feasible under the real (not stub)
-callee model. If CBMC verifies, the violation is infeasible and the
-counterexample is reclassified as \emph{unresolved} (not silently dropped).
+\subsubsection{Stage 2: Callee feasibility}
 
-\subsubsection{Dynamic validation (Stage 3)}
+Stage 1 confirms that $F$'s inputs are caller-reachable, but the callee
+return values $R_1, R_2, \ldots$ in the witness trace may be unrealistic:
+a stub can return any value satisfying its postcondition, including values
+that no real implementation ever produces. Stage 2 checks this by inlining
+the real bodies of $F$'s locally-available callees, fixing $F$'s scalar
+inputs to the witness values, and re-running CBMC. If the violation still
+fires with real callee bodies it is feasible; if CBMC verifies instead, the
+violation cannot occur with real callees and the counterexample is
+reclassified as \emph{unresolved}.
 
-For bare-metal targets where CBMC reachability alone may be insufficient,
-\tool optionally compiles a GCC harness with the counterexample witness values
-hardcoded, runs it on the host machine, and observes any runtime fault
-directly. A SIGSEGV or other signal from the harness is ground-truth
-confirmation of the bug independent of any model assumptions.
+Stage 2 is applied in two situations: (i) $F$ is a system entry point (no
+callers anywhere, Stage 1 skipped), and (ii) Stage 1 confirmed reachability
+from at least one \emph{in-file} caller. It is \emph{not} applied when
+reachability was confirmed only via a cross-file caller.
 
-Bare-metal C sources require several compatibility transformations before
-compilation on a standard host: stripping ARM64 inline assembly blocks,
-removing static-inline libc stubs that conflict with system headers, removing
-glibc-internal typedef redefinitions, and stripping non-standard function
-re-declarations. A fallback compilation step with
-\verb|-Wl,--unresolved-symbols=ignore-all| handles functions that reference
-globals from other translation units.
+\subsubsection{Stage 3: Dynamic validation}
+
+After any real-bug verdict, \tool optionally compiles a GCC harness that
+uses the highest confirmed caller in the call chain as the entry point, with
+the witness input values hardcoded and signal handlers catching SIGSEGV,
+SIGABRT, SIGFPE, and SIGILL. Executing the harness on the host machine
+provides ground-truth confirmation independent of all model assumptions; a
+caught signal upgrades the finding to \dynconf regardless of its current
+tier.
+
+Bare-metal sources require compatibility transformations before host
+compilation: stripping ARM64 inline assembly, removing \texttt{static inline}
+libc stubs that conflict with system headers, removing glibc-internal typedef
+redefinitions, and stripping non-standard function re-declarations. A
+fallback link with \verb|-Wl,--unresolved-symbols=ignore-all| handles
+functions referencing globals from other translation units.
+
+\subsubsection{Tier assignment}
+
+Table~\ref{tab:tiers} summarises how the stage outcomes map to evidence
+tiers. The tier assignment rule (highest matching tier wins) is:
+\begin{enumerate}
+  \item Stage 3 caught a signal $\Rightarrow$ \dynconf.
+  \item Upward propagation reached a no-caller entry point
+        $\Rightarrow$ \sysconf.
+  \item Stage 1 (in-file) + Stage 2 passed, propagation stopped mid-chain
+        $\Rightarrow$ \bmcconf.
+  \item Over-refinement guard triggered $\Rightarrow$ \likelyconf.
+\end{enumerate}
 
 \begin{table}[t]
 \caption{Evidence tiers for confirmed real bugs.}
 \label{tab:tiers}
 \small
-\begin{tabular}{lp{5.5cm}}
+\begin{tabular}{p{2.6cm}p{4.9cm}}
 \toprule
-\textbf{Tier} & \textbf{Meaning} \\
+\textbf{Tier} & \textbf{Checks performed} \\
 \midrule
-\dynconf     & Runtime fault (SIGSEGV) directly observed in a compiled harness on the host. Ground-truth confirmation; no model assumptions. \\[3pt]
-\sysconf     & Full call chain traced from the violating function to a kernel entry point (no callers in any analyzed file) via in-file and cross-file CBMC reachability. \\[3pt]
-\bmcconf     & Input confirmed reachable from at least one immediate caller via CBMC; Stage 2 feasibility check passed. \\[3pt]
-\likelyconf  & Over-refinement guard triggered during the refinement loop; violation likely real but not formally confirmed. \\
+\dynconf
+  & Stage 3: GCC harness with hardcoded witness executed on host; signal
+    (SIGSEGV/SIGABRT/SIGFPE/SIGILL) caught. No model assumptions. \\[4pt]
+\sysconf
+  & Full call chain traced to a no-caller entry point.
+    \emph{Sub-case A} (entry function): Stage 2 callee inlining run and
+    passed; violation fires with real callees.
+    \emph{Sub-case B} (cross-file reachability): Stage 1 cross-file CBMC
+    harness confirms reachability; Stage 2 not run. \\[4pt]
+\bmcconf
+  & Stage 1 in-file CBMC reachability passed (at least one in-file caller
+    confirms) + Stage 2 callee inlining passed; upward propagation did not
+    reach a no-caller entry point. \\[4pt]
+\likelyconf
+  & No Stage 1/2 confirmation; over-refinement guard triggered, indicating
+    the violation is likely real but not formally confirmed. \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -519,20 +555,21 @@ counterexample state at any caller, the real, more-constrained callees also
 cannot. The \textsc{real\_bug} direction is conditionally sound: input
 reachability is a necessary but not sufficient condition. The missing piece
 is joint feasibility of the callee return values in the trace---whether all
-callees can simultaneously produce the values in the witness. Stage 2 (local
-callee inlining) addresses this for locally-available callees; Stage 3
-(dynamic execution) provides ground-truth confirmation for the subset that
-compiles and runs.
+callees can simultaneously produce the values in the witness. Stage 2 (local callee inlining) addresses this for findings classified via
+in-file callers or entry-point paths; it is not applied on the cross-file
+reachability sub-path of \sysconf{}. Stage 3 (dynamic execution) provides
+ground-truth confirmation for the subset that compiles and runs.
 
 %% ─────────────────────────────────────────────────────────────────────────────
 \section{Implementation}
 \label{sec:impl}
 %% ─────────────────────────────────────────────────────────────────────────────
 
-\tool is implemented in Python 3.11 using Claude~\cite{anthropic-claude}
-(claude-sonnet-4-6) as the LLM backend. The core pipeline is 4{,}000 lines;
-the harness generator, DSL translator, and dynamic validator add another
-4{,}000 lines. The test suite has 211 passing tests. Table~\ref{tab:components}
+\tool is implemented in the AProver project, available at
+\url{https://github.com/theyoucheng/aprover}. It is built in Python 3.11
+using Claude~\cite{anthropic-claude} (claude-sonnet-4-6) as the LLM backend. The core pipeline is 4{,}000 lines; the harness generator,
+DSL translator, and dynamic validator add another 4{,}000 lines. The test
+suite has 211 passing tests. Table~\ref{tab:components}
 summarizes the implementation status of each architectural component.
 
 \begin{table}[t]
@@ -585,8 +622,8 @@ entry function (no callers anywhere in the corpus), promotes the finding to
 %% ─────────────────────────────────────────────────────────────────────────────
 
 We evaluate \tool on \vibeos~\cite{vibeos}, a bare-metal ARM64 hobby
-operating system of approximately 8{,}000 lines of C written with substantial
-LLM assistance. We chose \vibeos because: (i) it is representative of the
+operating system of approximately 15{,}000 lines of C and 452 functions,
+written with substantial LLM assistance. We chose \vibeos because: (i) it is representative of the
 LLM-generated systems code that motivates the work; (ii) it is publicly
 available and independently developed, so our evaluation is not circular;
 and (iii) its bare-metal character stresses harness generation and
@@ -690,16 +727,30 @@ Others            & \texttt{scroll\_up} (console), \texttt{strlen} (string),
 \end{table}
 
 \noindent\textbf{Bug categories.}
-Findings fall into two categories. \emph{Unbounded loops}: CBMC finds that a
-loop does not terminate within unwinding bound $k=4$; the concrete witness
-demonstrates the triggering input. For example, passing a non-null-terminated
-buffer (e.g., \texttt{char buf[4] = \{'a','b','c','d'\}}) to any VibeOS
-string function causes an out-of-bounds read; in \texttt{dtb\_parse}, a
-malformed device-tree string field with length \texttt{UINT\_MAX} causes
-approximately $2^{32}$ iterations. These findings are real within the input
-space CBMC explores; their practical severity depends on whether callers can
-supply malformed inputs---a relevant concern for the DTB parser, which
-consumes externally-supplied hardware-description data.
+Findings fall into two categories. \emph{Unbounded loops}: CBMC's unwinding
+assertion (\texttt{unwind.0}) fires when a loop takes \emph{more than $k=4$
+iterations} for some concrete input---it does not, by itself, mean the loop is
+truly infinite.  Not all \texttt{unwind.0} firings are bugs: some loops
+terminate correctly but legitimately require more than four iterations (e.g.,
+\texttt{usb\_enumerate\_hub} iterating once per USB port needs five iterations
+for a five-port hub).  \tool filters such conservative-bound artifacts
+automatically by re-running the Phase~2 harness at a higher bound $k'=16$ with
+nondeterministic inputs: if CBMC verifies the function under all valid inputs at
+$k'$, the finding is discarded as a conservative-bound artifact; if the
+unwinding assertion persists, the loop is genuinely unbounded.
+
+Findings that survive the escalation check represent real bugs.
+Two VibeOS examples: passing a non-null-terminated buffer
+(e.g., \texttt{char buf[4]=\{'a','b','c','d'\}}) to any string function such
+as \texttt{strlen} causes the function to scan past the array end---yielding
+an out-of-bounds read and, in the dynamic harness, a
+\texttt{SIGSEGV}---because the null terminator is never found.
+In \texttt{dtb\_parse}, a malformed device-tree string field whose stored
+length is \texttt{UINT\_MAX} causes approximately $2^{32}$ iterations,
+effectively hanging the kernel.  Both cases persist at $k'=16$; their
+practical severity depends on whether callers can supply the triggering
+input---a relevant concern for \texttt{dtb\_parse}, which consumes
+externally-supplied firmware data.
 
 \emph{Memory-safety bugs}: the clearest example is signed integer overflow in
 \texttt{print\_signed}, where the expression \texttt{num = -num} is undefined
@@ -715,6 +766,36 @@ public issue tracker contained a filed defect (issue~\#26) describing a
 discovery of the same bug by a different method is a meaningful positive
 signal that the classifier is calibrated correctly on at least this finding.
 
+\noindent\textbf{Comparison with FM-Agent.}
+\fmagent~\cite{fmagent} also evaluates on \vibeos and reports 23 bugs,
+all confirmed by running generated test cases against the live system
+(up to 10 attempts per candidate). \tool reports 173 findings, but the
+two numbers are \emph{not directly comparable}.
+
+The tools target overlapping but distinct bug classes.
+\fmagent finds semantic and logic bugs---incorrect return values, wrong
+conditional logic, behavioral errors---confirmed by running test cases
+against the live system. \tool targets low-level C undefined
+behaviour---null dereference, integer overflow, unbounded
+loops---confirmed by BMC and optionally by GCC-harness execution.
+\fmagent's 23 bugs include 4 memory-corruption cases, 2 infinite loops,
+4 incorrect return values, and 12 logic errors. \tool's findings include
+loop-termination violations (e.g., passing a non-null-terminated buffer to
+a string function, or a malformed \texttt{UINT\_MAX} length field to
+\texttt{dtb\_parse}) and memory-safety violations; these are real bugs,
+but their practical severity depends on whether callers can supply the
+triggering inputs.
+
+The most comparable subset is \tool's 32 \dynconf findings (runtime
+SIGSEGV in a GCC-compiled harness) against \fmagent's 23 runtime-confirmed
+bugs; even here the confirmation mechanisms differ---\tool compiles an
+x86-64 harness around an isolated function, while \fmagent runs
+system-entry test cases against the full kernel. A meaningful head-to-head
+comparison would require auditing both result sets manually on the same
+modules. The tools are best understood as \emph{complementary}: \fmagent
+excels at semantic bugs observable through system execution; \tool excels
+at low-level memory-safety violations detectable by bounded model checking.
+
 \subsection{RQ3: Refinement vs.\ Filtering}
 
 To assess the value of the refinement loop (RQ3), we compare \tool in full
@@ -724,7 +805,7 @@ any spec and never re-queues any caller. We run both on five hand-prepared
 \vibeos wrapper modules.
 
 \begin{table}[t]
-\caption{Full AMC vs.\ FilteringOnly on five \vibeos modules.}
+\caption{Full \tool vs.\ FilteringOnly on five \vibeos modules.}
 \label{tab:ablation}
 \small
 \begin{tabular}{lrrr}
@@ -791,18 +872,29 @@ mitigation and have not yet been run at scale.
 %% ─────────────────────────────────────────────────────────────────────────────
 
 \noindent\textbf{LLM agents for verification.}
-\fmagent~\cite{fmagent} introduced top-down caller-driven specification
-generation and an LLM-based reasoner for natural-language specs. \tool adopts
-the top-down insight and replaces the LLM reasoner with CBMC, plus
-concretization-based classification. \preguss~\cite{preguss} uses LLMs to
-generate interprocedural specifications for Frama-C/Wp bottom-up. \tool
-differs in using BMC (enabling concrete counterexamples and direct loop
-handling), going top-down (making compositional propagation valuable), and
-the three-way classification. AutoSpec~\cite{autospec}, Lemur~\cite{lemur},
-and loop-invariant generation work~\cite{wu-invariants} each couple LLM
-generation with a solver in a generate-and-check loop, operating at finer
-granularity (single contracts, loop invariants) than \tool's system-level
-compositional structure.
+\fmagent~\cite{fmagent} is the closest prior work: it generates Hoare-style
+pre/postconditions top-down from caller context and uses LLM reasoning to
+verify each function against its spec, scaling to the same \vibeos kernel
+evaluated here (15k LoC, 452 functions). The key architectural difference
+is the verification oracle: \fmagent uses LLM reasoning (not sound for
+arithmetic and memory bugs); \tool uses CBMC (sound within the unwinding
+bound, producing concrete counterexamples). On \vibeos, \fmagent reports 23
+bugs confirmed by live test-case execution; \tool reports 173 findings of
+which 32 are runtime-confirmed (\dynconf). The counts are not directly
+comparable: the tools target different bug classes (semantic/logic bugs
+vs.\ low-level memory-safety and termination violations) and use different
+confirmation mechanisms. They are best understood as complementary.
+AutoSpec~\cite{autospec} synthesizes ACSL specifications for Frama-C/Wp by
+coupling LLM generation with static analysis and a deductive checker in a
+refinement loop. Lemur~\cite{lemur} integrates LLMs in automated program
+verification, using LLMs to generate verification artifacts that a solver then
+checks. Loop-invariant generation work~\cite{wu-invariants} similarly couples
+LLM generation with formal solvers at the level of individual invariants.
+\tool contributes to this line by targeting system-level verification with BMC
+as the solver---enabling concrete counterexamples and direct loop
+handling---using top-down call-graph traversal to derive caller-driven
+specifications, and adding three-way counterexample classification with
+compositional precondition refinement.
 
 \noindent\textbf{Traditional driver and kernel verification.}
 SLAM/SDV~\cite{slam,sdv} and BLAST check a fixed catalog of API-usage

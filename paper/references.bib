@@ -11,7 +11,7 @@
   volume    = {2988},
 }
 
-@article{bmc-survey,
+@inproceedings{bmc-survey,
   author    = {Armin Biere and Alessandro Cimatti and Edmund Clarke and Yunshan Zhu},
   title     = {Symbolic Model Checking without {BDDs}},
   booktitle = {TACAS},
@@ -23,7 +23,7 @@
 % ── Compositional / Assume-Guarantee Verification ────────────────────────────
 
 @inproceedings{assume-guarantee,
-  author    = {Sagar Chaki and Edmund Clarke and Alex Groce and Somesh Jha and Helmut Veith},
+  author    = {Sagar Chaki and Edmund M. Clarke and Alex Groce and Somesh Jha and Helmut Veith},
   title     = {Modular Verification of Software Components in {C}},
   booktitle = {ICSE},
   year      = {2003},
@@ -44,54 +44,49 @@
 
 % ── LLM-Based Verification / Spec Generation ─────────────────────────────────
 
-@inproceedings{fmagent,
-  author    = {Lei Ding and Hao Wang and Mingyu Chen},
-  title     = {{FM-Agent}: Top-Down Specification Generation and Verification with Large Language Models},
-  booktitle = {ICSE},
-  year      = {2026},
-  note      = {To appear},
-}
-
-@inproceedings{preguss,
-  author    = {Junjie Wang and others},
-  title     = {{Preguss}: {LLM}-Driven Interprocedural Specification Synthesis for Frama-{C}},
-  booktitle = {FSE},
-  year      = {2025},
-  note      = {To appear},
+@misc{fmagent,
+  author = {Haoran Ding and Zhaoguo Wang and Haibo Chen},
+  title  = {{FM-Agent}: Scaling Formal Methods to Large Systems via
+            {LLM}-Based {Hoare}-Style Reasoning},
+  year   = {2026},
+  note   = {arXiv:2604.11556},
 }
 
 @inproceedings{autospec,
-  author    = {Yuqi Wen and others},
-  title     = {{AutoSpec}: Automated Specification Generation for Program Verification},
-  booktitle = {ASE},
+  author    = {Cheng Wen and Jialun Cao and Jie Su and Zhiwu Xu and Shengchao Qin
+               and Mengda He and Haokun Li and Shing-Chi Cheung and Cong Tian},
+  title     = {Enchanting Program Specification Synthesis by Large Language Models
+               using Static Analysis and Program Verification},
+  booktitle = {CAV},
   year      = {2024},
+  pages     = {302--328},
+  publisher = {Springer},
+  series    = {LNCS},
+  volume    = {14682},
 }
 
 @inproceedings{lemur,
-  author    = {Haoze Wu and others},
+  author    = {Haoze Wu and Clark W. Barrett and Nina Narodytska},
   title     = {{Lemur}: Integrating Large Language Models in Automated Program Verification},
   booktitle = {ICLR},
   year      = {2024},
+  note      = {arXiv:2310.04870},
 }
 
-@inproceedings{wu-invariants,
-  author    = {Haoze Wu and others},
-  title     = {Large Language Models for Loop Invariant Generation},
-  booktitle = {ASE},
-  year      = {2024},
-}
-
-@inproceedings{copilot-formal,
-  author    = {Hasan Ferit Eniser and others},
-  title     = {Towards Automated Formal Verification with {LLMs}},
-  booktitle = {FMCAD},
-  year      = {2024},
+@article{wu-invariants,
+  author  = {Ruibang Liu and Minyu Chen and {Ling-I} Wu and Jingyu Ke and Guoqiang Li},
+  title   = {Enhancing Automated Loop Invariant Generation for Complex Programs
+             with Large Language Models},
+  journal = {Science of Computer Programming},
+  year    = {2025},
+  note    = {arXiv:2412.10483},
 }
 
 % ── LLM Agents ────────────────────────────────────────────────────────────────
 
 @article{react,
-  author  = {Shunyu Yao and Jeffrey Zhao and Dian Yu and Nan Du and Izhak Shafran and Karthik Narasimhan and Yuan Cao},
+  author  = {Shunyu Yao and Jeffrey Zhao and Dian Yu and Nan Du and Izhak Shafran
+             and Karthik Narasimhan and Yuan Cao},
   title   = {{ReAct}: Synergizing Reasoning and Acting in Language Models},
   journal = {ICLR},
   year    = {2023},
@@ -135,15 +130,18 @@
 
 @inproceedings{klee,
   author    = {Cristian Cadar and Daniel Dunbar and Dawson Engler},
-  title     = {{KLEE}: Unassisted and Automatic Generation of High-Coverage Tests for Complex Systems Programs},
+  title     = {{KLEE}: Unassisted and Automatic Generation of High-Coverage Tests
+               for Complex Systems Programs},
   booktitle = {OSDI},
   year      = {2008},
   pages     = {209--224},
 }
 
 @inproceedings{serval,
-  author    = {Luke Nelson and James Bornholt and Ronghui Gu and Andrew Baumann and Emina Torlak and Xi Wang},
-  title     = {Scaling Symbolic Evaluation for Automated Verification of Systems Code with {Serval}},
+  author    = {Luke Nelson and James Bornholt and Ronghui Gu and Andrew Baumann
+               and Emina Torlak and Xi Wang},
+  title     = {Scaling Symbolic Evaluation for Automated Verification of Systems
+               Code with {Serval}},
   booktitle = {SOSP},
   year      = {2019},
   pages     = {225--242},
@@ -159,19 +157,11 @@
   note   = {\url{https://github.com/kaansenol5/VibeOS}},
 }
 
-% ── Kani / Rust Verification ─────────────────────────────────────────────────
-
-@inproceedings{kani,
-  author    = {Adrian Palacios and others},
-  title     = {{Kani}: A {Rust} Verifier Based on {CBMC}},
-  booktitle = {HATRA},
-  year      = {2022},
-}
-
 % ── Deductive Verification ────────────────────────────────────────────────────
 
 @inproceedings{framac,
-  author    = {Pascal Cuoq and Florent Kirchner and Nikolai Kosmatov and Virgile Prevosto and Julien Signoles and Boris Yakobowski},
+  author    = {Pascal Cuoq and Florent Kirchner and Nikolai Kosmatov and Virgile Prevosto
+               and Julien Signoles and Boris Yakobowski},
   title     = {Frama-{C}: A Software Analysis Perspective},
   booktitle = {SEFM},
   year      = {2012},
