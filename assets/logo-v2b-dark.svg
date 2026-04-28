@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 120" width="460" height="120">
+  <!-- Icon badge: dark circle -->
+  <circle cx="60" cy="60" r="56" fill="#1e1b4b" stroke="#4338ca" stroke-width="1.5"/>
+
+  <!-- Vertical bar of turnstile ⊢: violet -->
+  <line x1="38" y1="20" x2="38" y2="100" stroke="#a78bfa" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Horizontal bar of turnstile ⊢: green -->
+  <line x1="38" y1="60" x2="84" y2="60" stroke="#4ade80" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Wordmark (dark variant) -->
+  <text x="134" y="72"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="50"
+        font-weight="700"
+        fill="#f5f3ff"
+        letter-spacing="-1.5">AProver</text>
+  <text x="134" y="94"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="13"
+        font-weight="500"
+        fill="#a5b4fc"
+        letter-spacing="4.5">AGENTIC PROVER</text>
+</svg>

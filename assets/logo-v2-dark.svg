@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 140" width="460" height="140">
+  <!-- Icon badge: dark rounded square -->
+  <rect x="2" y="10" width="116" height="120" rx="20" ry="20" fill="#1a1040" stroke="#4338ca" stroke-width="1.5"/>
+
+  <!-- Left leg: violet -->
+  <line x1="60" y1="28" x2="20" y2="110" stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Right leg: green -->
+  <line x1="60" y1="28" x2="100" y2="110" stroke="#4ade80" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Crossbar: light lavender -->
+  <line x1="30" y1="72" x2="90" y2="72" stroke="#ddd6fe" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Apex circle: covers leg junction cleanly -->
+  <circle cx="60" cy="28" r="5.5" fill="#ede9fe"/>
+
+  <!-- Wordmark (dark variant) -->
+  <text x="138" y="85"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="50"
+        font-weight="700"
+        fill="#f5f3ff"
+        letter-spacing="-1.5">AProver</text>
+  <text x="138" y="108"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="13"
+        font-weight="500"
+        fill="#a5b4fc"
+        letter-spacing="4.5">AGENTIC PROVER</text>
+</svg>
