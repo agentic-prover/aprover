@@ -31,38 +31,6 @@ Confirmed real bugs are assigned one of four evidence tiers:
 | `confirmed_bmc` | Input reachability confirmed from at least one immediate caller via CBMC |
 | `likely` | Over-refinement guard triggered |
 
-## Results on VibeOS
-
-BMC-Agent was evaluated on [VibeOS](https://github.com/kaansenol5/VibeOS), a bare-metal ARM64 hobby OS of ~15,000 lines of C written with LLM assistance. Results are from a whole-codebase run (`verify-dir`) across all 38 unique kernel module stems (47 of 48 `.c` files).
-
-### Full kernel — 65 confirmed findings across 37 modules
-
-| Evidence tier | Count |
-|---|---|
-| `confirmed_dynamic` | **22** |
-| `confirmed_system_entry` | **38** |
-| `confirmed_bmc` | **5** |
-| **Total** | **65** |
-
-The 22 `confirmed_dynamic` findings each triggered a signal (SIGSEGV, SIGABRT, or SIGILL) in a GCC-compiled harness running the exact CBMC counterexample witness. They span 9 modules: `kapi`, `ttf`, `process`, `net`, `mouse`, `memory`, `fat32`, `keyboard`, and `uart`.
-
-BMC-Agent independently reproduced the `calloc` integer-overflow issue filed in the VibeOS tracker (issue #26), cross-validating one finding against an independent source.
-
-### RQ3 ablation — refinement vs. filtering (5 wrapper modules)
-
-| Module | AMC (full) | FilteringOnly | Δ |
-|---|---|---|---|
-| `vibeos_vfs.c` | 18 | 27 | +9 |
-| `vibeos_string.c` | 16 | 22 | +6 |
-| `vibeos_dtb.c` | 4 | 4 | 0 |
-| `vibeos_printf.c` | 3 | 6 | +3 |
-| `vibeos_klog.c` | 0 | 0 | 0 |
-| **Total** | **41** | **59** | **+18** |
-
-FilteringOnly (classify counterexamples but never update specs or re-queue callers) reports 44% more findings. Refinement acts as a precision filter on this corpus: it eliminates 18 findings, without adding any unique findings via caller re-queuing.
-
-For more detail see the [technical report](REPORT_AMC.md) and the [paper](paper/main.tex).
-
 ## Requirements
 
 - Python 3.11+
@@ -73,7 +41,7 @@ For more detail see the [technical report](REPORT_AMC.md) and the [paper](paper/
 ## Installation
 
 ```bash
-git clone https://github.com/theyoucheng/aprover
+git clone https://github.com/agentic-prover/aprover
 cd aprover
 uv sync
 ```
@@ -167,7 +135,6 @@ Return values use `\result`. Arithmetic operators and C comparisons are translat
 
 ```bash
 uv run pytest tests/ -q
-# 220 passed, 1 skipped
 ```
 
 ## Project structure
