@@ -1000,67 +1000,136 @@ memory-safety violations detectable by bounded model checking.
 \subsection{Case Study: End-to-End Pipeline Trace}
 \label{sec:casestudy}
 
-We trace one finding end-to-end through all four pipeline phases to illustrate
-how the architecture works in practice. We choose
-\texttt{stbtt\_\_buf\_get} in VibeOS's TTF font renderer
-(\texttt{ttf.c}): it is confirmed at the highest evidence tier (\dynconf),
-involves a 13-level call chain that stresses the caller-reachability check,
-and the root cause---a signed integer overflow in buffer cursor arithmetic---is
-a class of bug that neither pattern-based tools nor manual inspection reliably
-catches.
+We trace one finding end-to-end through all four pipeline phases.
+The motivating example (\S\ref{sec:motivating}) illustrated the pipeline on a
+two-layer synthetic program; this trace adds three dimensions that only
+real evaluation can stress: a 14-function call chain (13 levels of upward
+propagation), a precondition that is syntactically correct yet semantically
+unsound due to signed-integer overflow, and dynamic confirmation by SIGSEGV
+on a compiled harness.  We choose \texttt{stbtt\_\_buf\_get} in
+\vibeos's TTF font renderer (\texttt{ttf.c}) because these three properties
+together make it the most informative single trace in the corpus.
 
-\smallskip\noindent\textbf{Phase 1: Specification generation.}
-The spec generator traverses the call graph top-down, starting from
-\texttt{stbtt\_PackFontRange} (a public TTF packing entry point with no
-in-corpus callers). For each of the 13 functions on the eventual chain, the
-LLM agent retrieves the function body and its callers' bodies, drafts a
-pre/postcondition pair in the DSL, and validates it against the parser.
-A representative generated spec for \texttt{stbtt\_\_buf\_get} states:
-\emph{precondition}: \texttt{valid(b) \&\& n >= 0 \&\& n <= 4};
-\emph{postcondition}: return value is a sequence of \texttt{n} bytes
-assembled from \texttt{b->data[b->cursor]} onwards.
+\smallskip\noindent\textbf{Why LLM reasoning cannot find this bug.}
+\texttt{stbtt\_\_buf\_get} assembles an $n$-byte big-endian integer from a byte
+buffer \texttt{b}.  The natural bounds check is
+\texttt{b->cursor + n <= b->size}---exactly what a careful reviewer would
+write, and exactly what the LLM generates.  The trap is that \texttt{cursor}
+and \texttt{size} are \texttt{signed int}.  When \texttt{cursor = INT\_MAX$-$1}
+and \texttt{n = 3}, the sub-expression \texttt{cursor + n} overflows to a large
+negative value, making the check trivially true even though the subsequent
+reads are past the end of the allocation.  Detecting this class of
+vulnerability requires exhaustive arithmetic reasoning over the full 32-bit
+integer range---exactly what BMC's SAT encoding provides, and which neither
+an LLM nor a pattern-based tool performs.
 
-\smallskip\noindent\textbf{Phase 2: BMC.}
+\smallskip\noindent\textbf{Phase~1: Specification generation.}
+The spec generator traverses the call chain top-down starting from
+\texttt{stbtt\_PackFontRange}, a public entry point with no in-corpus callers.
+For each of the 14 functions in the eventual chain, the LLM agent retrieves
+the function body and its callers' bodies, drafts a pre/postcondition pair in
+the DSL, and validates it against the parser.  The actual generated spec for
+\texttt{stbtt\_\_buf\_get} is:
+\begin{quote}\small
+\textit{Precondition}:
+\texttt{valid(b) \&\& b->cursor >= 0 \&\& n >= 1 \&\& n <= 4}\\
+\hspace*{1.8cm}\texttt{\&\& b->cursor + n <= b->size}\\[2pt]
+\textit{Postcondition}:
+\texttt{b->cursor == {\textbackslash}old(b->cursor) + n \&\& {\textbackslash}result >= 0}\\
+\hspace*{1.8cm}\texttt{\&\& {\textbackslash}result < (1 << (8 * n))}\\
+\hspace*{1.8cm}\texttt{\&\& {\textbackslash}result == big-endian n-byte integer}\\
+\hspace*{1.8cm}\texttt{\phantom{\&\& }from b->data[{\textbackslash}old(b->cursor)..]}
+\end{quote}
+The precondition is faithful to the function's intent and passes the DSL
+parser.  It does not, however, prevent the overflow case: the sub-expression
+\texttt{b->cursor + n} in the precondition itself overflows for cursor values
+near \texttt{INT\_MAX}, so \texttt{\_\_CPROVER\_assume(b->cursor + n <= b->size)}
+is satisfiable for inputs that violate the intended bound.  This is a semantic
+gap the LLM cannot foresee by reading the code.
+
+\smallskip\noindent\textbf{Phase~2: BMC.}
 CBMC is invoked on a harness for \texttt{stbtt\_\_buf\_get} that
-nondeterministically initializes the \texttt{stbtt\_\_buf} parameter
-subject to the precondition and asserts the postcondition at all return
-sites. With loop bound $k=4$, CBMC finds a counterexample:
-\texttt{cursor = 2147483646} (\texttt{INT\_MAX$-$1}), \texttt{size = 2147483646},
-\texttt{n = 3}. At these values \texttt{stbtt\_\_buf\_get8} is called three
-times; on each call \texttt{cursor >= size} is false (since
-\texttt{2147483646 < 2147483646} is false), so the bounds check
-passes---but the \texttt{data} pointer is backed by a nondeterministic
-one-byte object in the CBMC model, so the reads are out of bounds.
-The postcondition assertion fires at \texttt{main:992}.
+nondeterministically initializes \texttt{stbtt\_\_buf b} subject to the
+precondition and asserts the postcondition at all return sites.
+CBMC's bitvector arithmetic explores the overflow: it finds the witness
+\[
+  \texttt{cursor} = 2{,}147{,}483{,}646\ (\mathtt{INT\_MAX}{-}1),\quad
+  \texttt{size} = 2{,}147{,}483{,}646,\quad
+  \texttt{n} = 3.
+\]
+Under these values the precondition assume is satisfied (signed overflow
+makes \texttt{cursor + n} negative, so the comparison holds), yet the three
+calls to \texttt{stbtt\_\_buf\_get8} are issued with the cursor at the
+allocation boundary.  The postcondition assertion fires at \texttt{main:992}:
+the result cannot equal the expected big-endian bytes from
+\texttt{b->data[cursor..]} when \texttt{cursor} is near \texttt{INT\_MAX} and
+the backing allocation is a single nondeterministic byte.
 
-\smallskip\noindent\textbf{Phase 3 Stage 1: Caller reachability.}
-The classifier asks: can \texttt{stbtt\_\_cff\_int} (the immediate caller)
-supply \texttt{cursor = INT\_MAX$-$1}? A CBMC harness runs
-\texttt{stbtt\_\_cff\_int} with its own precondition and \texttt{stbtt\_\_buf\_get}'s
-argument fixed to the witness values; CBMC finds a satisfying execution.
-The upward propagation then iterates: each confirmed caller's own callers
-are queried in turn, traversing
-\texttt{stbtt\_\_cff\_int}$\to$\texttt{stbtt\_\_cff\_skip\_operand}$\to\cdots\to$%
-\texttt{stbtt\_\_run\_charstring}$\to\cdots\to$\texttt{stbtt\_PackFontRange}.
-\texttt{stbtt\_PackFontRange} has no callers anywhere in the analyzed corpus;
-upward propagation terminates with \sysconf.
+CBMC also produces a second counterexample, \texttt{stbtt\_\_buf\_get.unwind.0},
+a loop-bound artifact.  The classifier identifies it as spurious and suppresses
+it; \texttt{main.assertion.1} is the real finding.
 
-\smallskip\noindent\textbf{Phase 3 Stage 3: Dynamic validation.}
-The dynamic validator compiles a GCC harness that calls
-\texttt{stbtt\_PackFontRange} with the hardcoded witness inputs and catches
-SIGSEGV/SIGABRT/SIGFPE/SIGILL. Executing on the x86-64 host produces
-\textbf{SIGSEGV}---the GCC harness allocates a real heap object for \texttt{b->data}
-(a single byte), advances the cursor to \texttt{INT\_MAX$-$1} via the
-counterexample trace, and the out-of-bounds memory read produces a
-segmentation fault. The tier is upgraded to \dynconf.
+\smallskip\noindent\textbf{Phase~3 Stage~1: Caller reachability and upward
+propagation.}
+The classifier asks: can any real caller supply \texttt{cursor = INT\_MAX$-$1}?
+It issues a CBMC reachability harness against the immediate caller
+\texttt{stbtt\_\_cff\_int}; CBMC finds a satisfying execution.
+Upward propagation then iterates one level at a time, issuing a new CBMC
+reachability harness at each step, until it reaches a function with no
+callers anywhere in the corpus:
 
-\smallskip\noindent\textbf{Root cause.}
-The bug is that \texttt{stbtt\_\_buf\_get8} stores the cursor and size as
-\texttt{signed int}, so large valid-looking values near \texttt{INT\_MAX}
-pass the bounds check \texttt{cursor < size} but cause out-of-bounds
-reads when the backing allocation is small. Using \texttt{unsigned int}
-or \texttt{size\_t} would prevent the confusion between large positive
-cursor values and the actual allocation size.
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{rl}
+\toprule
+Level & Function \\
+\midrule
+1  & \texttt{stbtt\_\_buf\_get} \quad\emph{(violation)} \\
+2  & \texttt{stbtt\_\_cff\_int} \\
+3  & \texttt{stbtt\_\_cff\_skip\_operand} \\
+4  & \texttt{stbtt\_\_dict\_get} \\
+5  & \texttt{stbtt\_\_dict\_get\_ints} \\
+6  & \texttt{stbtt\_\_get\_subrs} \\
+7  & \texttt{stbtt\_\_cid\_get\_glyph\_subrs} \\
+8  & \texttt{stbtt\_\_run\_charstring} \\
+9  & \texttt{stbtt\_\_GetGlyphShapeT2} \\
+10 & \texttt{stbtt\_GetGlyphShape} \\
+11 & \texttt{stbtt\_MakeGlyphBitmapSubpixel} \\
+12 & \texttt{stbtt\_PackFontRangesRenderIntoRects} \\
+13 & \texttt{stbtt\_PackFontRanges} \\
+14 & \texttt{stbtt\_PackFontRange} \quad\emph{(no callers --- system entry)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{stbtt\_PackFontRange} has no callers anywhere in the analyzed corpus.
+Upward propagation terminates: 13 separate CBMC reachability queries confirmed
+that the violating cursor value propagates from the violation site all the way
+to the system entry point.  The finding is classified \sysconf.
+
+\smallskip\noindent\textbf{Phase~3 Stage~3: Dynamic validation and tier
+upgrade.}
+The dynamic validator compiles a GCC harness rooted at
+\texttt{stbtt\_PackFontRange}---the highest confirmed caller---with the
+witness values hardcoded and signal handlers catching
+SIGSEGV/SIGABRT/SIGFPE/SIGILL.
+Executing on the x86-64 host: GCC allocates a real single-byte heap object
+for \texttt{b->data}, the counterexample trace advances the cursor to
+\texttt{INT\_MAX$-$1}, and the out-of-bounds memory read produces
+\textbf{SIGSEGV}.  The tier upgrades from \sysconf\ to \dynconf---ground-truth
+confirmation independent of all CBMC model assumptions.
+
+\smallskip\noindent\textbf{Root cause and fix.}
+\texttt{stbtt\_\_buf\_get} stores \texttt{cursor} and \texttt{size} as
+\texttt{signed int}.  The intended bounds check \texttt{cursor + n <= size}
+silently becomes vacuous for values near \texttt{INT\_MAX} because the
+addition overflows---the guard-against-overflow check \emph{is} the overflow.
+The fix is to use \texttt{size\_t} or \texttt{unsigned int} for both fields,
+making the arithmetic unsigned and the check correct across the full value
+range.  This bug class is not caught by pattern-based or LLM-only tools
+because the code is locally syntactically correct; it requires BMC's
+exhaustive enumeration of the integer input space to surface.
 
 \subsection{RQ3: Refinement vs.\ Filtering}
 

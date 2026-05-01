@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -315,6 +316,7 @@ class SpecGenerator:
         source_file: str,
         driver_name: str,
         domain_knowledge: str = "",
+        source_text: Optional[str] = None,
     ) -> dict[str, Spec]:
         """
         Generate specs for all functions in source_file.
@@ -327,13 +329,17 @@ class SpecGenerator:
             Name of the driver (used for artifact storage).
         domain_knowledge:
             Optional domain knowledge string to pass to the LLM.
+        source_text:
+            If provided, parse this string instead of reading source_file from
+            disk (use to pass preprocessed / include-expanded source so struct
+            definitions and constructor bodies are visible to the spec generator).
 
         Returns
         -------
         Mapping of function_name -> Spec.
         """
         logger.info("Parsing source file: %s", source_file)
-        parsed = parse_c_file(source_file)
+        parsed = parse_c_file(source_file, source_text=source_text)
 
         self.store.init_driver(driver_name)
 
@@ -432,12 +438,14 @@ class SpecGenerator:
             if func_info is None:
                 return fn_name, _fallback_spec(fn_name, "function info not found")
 
+            struct_context = self._extract_struct_context(func_info, parsed)
+
             callers = callers_map.get(fn_name, [])
             if not callers or is_entry_layer:
                 if self.config.enable_dual_spec:
-                    spec = self._generate_dual_spec(func_info, domain_knowledge)
+                    spec = self._generate_dual_spec(func_info, domain_knowledge, struct_context)
                 else:
-                    spec = self._generate_entry_spec(func_info, domain_knowledge)
+                    spec = self._generate_entry_spec(func_info, domain_knowledge, struct_context)
             else:
                 # Collect expected specs from all callers
                 expected: list[Spec] = []
@@ -446,7 +454,7 @@ class SpecGenerator:
                     if caller_info is not None:
                         exp = self._generate_expected_spec(caller_info, fn_name)
                         expected.append(exp)
-                spec = self._generate_internal_spec(func_info, expected, domain_knowledge)
+                spec = self._generate_internal_spec(func_info, expected, domain_knowledge, struct_context)
 
             spec.status = SpecStatus.GENERATED
             return fn_name, spec
@@ -470,6 +478,93 @@ class SpecGenerator:
         return results
 
     # ------------------------------------------------------------------
+    # Struct context extraction
+    # ------------------------------------------------------------------
+
+    _BASIC_C_TYPES = frozenset({
+        "int", "char", "void", "float", "double", "long", "short",
+        "unsigned", "signed", "size_t", "ssize_t", "bool",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uintptr_t", "intptr_t", "ptrdiff_t",
+    })
+    _SKIP_TOKENS = frozenset({
+        "const", "volatile", "restrict", "static", "extern",
+        "struct", "union", "enum", "inline", "__inline__",
+    })
+
+    def _extract_struct_names(self, func: FunctionInfo) -> list[str]:
+        """Return struct-like type names used in func's parameters (heuristic)."""
+        names: list[str] = []
+        for ptype, _ in func.signature.parameters:
+            clean = re.sub(r"[*\[\]]", "", ptype)
+            for token in clean.split():
+                token = token.strip()
+                if (token
+                        and token not in self._BASIC_C_TYPES
+                        and token not in self._SKIP_TOKENS
+                        and not token.startswith("__")):
+                    names.append(token)
+        return list(dict.fromkeys(names))  # deduplicate, preserve order
+
+    def _extract_struct_context(self, func: FunctionInfo, parsed: ParsedCFile) -> str:
+        """
+        Build a prompt section describing struct definitions and constructors for
+        the struct types that appear in func's parameter list.
+
+        Providing this lets the LLM see invariants established by constructors
+        (e.g. assert(size < 0x40000000) in stbtt__new_buf) and include them in
+        the generated precondition.
+        """
+        struct_names = self._extract_struct_names(func)
+        if not struct_names:
+            return ""
+
+        source = parsed.preprocessed_source or ""
+        parts: list[str] = []
+
+        for sname in struct_names:
+            # --- struct definition ---
+            if source:
+                m = re.search(
+                    r"typedef\s+struct\s*\w*\s*\{[^}]*\}\s*"
+                    + re.escape(sname)
+                    + r"\s*;",
+                    source,
+                    re.DOTALL,
+                )
+                if m:
+                    parts.append(f"Struct definition for `{sname}`:\n{m.group(0).strip()}")
+
+            # --- constructor / factory functions ---
+            for fn_name, sig in parsed.functions.items():
+                if sname not in sig.return_type:
+                    continue
+                body = parsed.function_bodies.get(fn_name, "")
+                if not body:
+                    continue
+                params_str = ", ".join(
+                    f"{pt} {pn}".strip() for pt, pn in sig.parameters
+                )
+                body_preview = body[:600].rstrip()
+                if len(body) > 600:
+                    body_preview += "\n    /* ... */"
+                parts.append(
+                    f"Constructor `{sig.return_type} {fn_name}({params_str})`"
+                    f" — note any assert/bounds constraints:\n{body_preview}"
+                )
+
+        if not parts:
+            return ""
+
+        header = (
+            "Struct context (definitions and constructors for types used in this function).\n"
+            "Pay attention to any assert() or bounds constraints in constructors — they\n"
+            "reflect invariants that always hold on the struct fields:\n\n"
+        )
+        return header + "\n\n".join(parts)
+
+    # ------------------------------------------------------------------
     # Spec generation helpers
     # ------------------------------------------------------------------
 
@@ -485,6 +580,7 @@ class SpecGenerator:
         self,
         func: FunctionInfo,
         domain_knowledge: str,
+        struct_context: str = "",
     ) -> Spec:
         """Generate spec for an entry function using implementation + domain knowledge."""
         logger.debug("Generating entry spec for '%s'", func.name)
@@ -493,6 +589,7 @@ class SpecGenerator:
         user_prompt = ENTRY_SPEC_PROMPT.format(
             dsl_grammar=DSL_GRAMMAR,
             domain_knowledge=domain_knowledge or "No additional domain knowledge provided.",
+            struct_context=struct_context or "None.",
             signature=self._format_signature(func),
             body=func.body,
         )
@@ -521,6 +618,7 @@ class SpecGenerator:
         func: FunctionInfo,
         expected_specs: list[Spec],
         domain_knowledge: str,
+        struct_context: str = "",
     ) -> Spec:
         """Generate spec for internal function from caller expected specs + implementation."""
         logger.debug(
@@ -531,7 +629,7 @@ class SpecGenerator:
 
         if not expected_specs:
             # No caller information — treat like an entry function
-            return self._generate_entry_spec(func, domain_knowledge)
+            return self._generate_entry_spec(func, domain_knowledge, struct_context)
 
         # Format expected specs for the prompt
         expected_text_parts = []
@@ -550,6 +648,7 @@ class SpecGenerator:
             signature=self._format_signature(func),
             body=func.body,
             domain_knowledge=domain_knowledge or "No additional domain knowledge provided.",
+            struct_context=struct_context or "None.",
         )
 
         try:
@@ -636,6 +735,7 @@ class SpecGenerator:
         self,
         func: "FunctionInfo",
         domain_knowledge: str,
+        struct_context: str = "",
         caller_context: str = "",
     ) -> "Spec":
         """
@@ -644,7 +744,7 @@ class SpecGenerator:
         """
         if not self.config.enable_dual_spec:
             # Fall back to standard single generation
-            return self._generate_entry_spec(func, domain_knowledge)
+            return self._generate_entry_spec(func, domain_knowledge, struct_context)
 
         system_prompt = "You are a formal verification expert for C programs."
         sig = self._format_signature(func)

@@ -131,6 +131,7 @@ class AMCPipeline:
             source_file=source_file,
             driver_name=driver_name,
             domain_knowledge=domain_knowledge,
+            source_text=preprocessed_source,
         )
         logger.info("Phase 1 complete: %d specs generated", len(specs))
 

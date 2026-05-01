@@ -34,6 +34,11 @@ The specification should:
 Domain knowledge:
 {domain_knowledge}
 
+Struct context (constructors/definitions for struct parameters — check for assert() or
+bounds constraints; these reflect invariants that ALWAYS hold on the struct fields and
+MUST be included in the precondition so the verifier does not explore impossible inputs):
+{struct_context}
+
 Function signature:
 {signature}
 
@@ -75,6 +80,11 @@ Function body:
 
 Domain knowledge:
 {domain_knowledge}
+
+Struct context (constructors/definitions for struct parameters — check for assert() or
+bounds constraints; these reflect invariants that ALWAYS hold on the struct fields and
+MUST be included in the precondition so the verifier does not explore impossible inputs):
+{struct_context}
 
 Merging rule for caller specs:
 - precondition = disjunction (OR) of callers' expected preconditions
