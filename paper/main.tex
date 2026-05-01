@@ -84,7 +84,7 @@ soundness-relevant decision they produce is gated by a deterministic check
 before affecting the verification verdict.
 
 \tool, our prototype implemented in the AProver project
-(\url{https://github.com/theyoucheng/aprover}), operates in four phases: an LLM agent generates
+(\url{https://github.com/agentic-prover/aprover}), operates in four phases: an LLM agent generates
 per-function pre/postconditions top-down along the call graph; CBMC checks
 each function in isolation against its spec with callee stubs constrained by
 their postconditions; a three-way classifier distinguishes confirmed real bugs,
@@ -716,7 +716,7 @@ ground-truth confirmation for the subset that compiles and runs.
 %% ─────────────────────────────────────────────────────────────────────────────
 
 \tool is implemented in the AProver project, available at
-\url{https://github.com/theyoucheng/aprover}. It is built in Python 3.11
+\url{https://github.com/agentic-prover/aprover}. It is built in Python 3.11
 using Claude~\cite{anthropic-claude} (claude-sonnet-4-6) as the LLM backend. The core pipeline is 4{,}000 lines; the harness generator,
 DSL translator, and dynamic validator add another 4{,}000 lines. The test
 suite has 220 passing tests. Table~\ref{tab:components}
