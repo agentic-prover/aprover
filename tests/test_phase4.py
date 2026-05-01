@@ -395,6 +395,48 @@ def test_cbmc_alone_baseline_parse_error(tmp_path: Path):
     assert result.name == "cbmc_alone"
 
 
+def test_cbmc_alone_harness_uses_absolute_path(tmp_path: Path):
+    """The minimal harness must include the source file via an absolute path.
+
+    A relative path would fail when CBMC runs the harness from a temp directory
+    different from the working directory.
+    """
+    from pathlib import Path as _Path
+
+    from bmc_agent.cbmc import CBMCResult
+    from bmc_agent.evaluation.baselines import CBMCAloneBaseline
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+
+    captured_harnesses: list[str] = []
+
+    def _capture_cbmc(harness_path, **kwargs):
+        captured_harnesses.append(_Path(harness_path).read_text())
+        return CBMCResult(verified=True, counterexamples=[], raw_output="")
+
+    baseline = CBMCAloneBaseline()
+    with patch("bmc_agent.evaluation.baselines.run_cbmc", side_effect=_capture_cbmc):
+        baseline.run(
+            source_file=str(SIMPLE_DRIVER),
+            driver_name="simple_driver",
+            config=config,
+            store=store,
+        )
+
+    assert captured_harnesses, "No harnesses were generated"
+    for harness in captured_harnesses:
+        includes = [line for line in harness.splitlines() if line.startswith("#include")]
+        for inc in includes:
+            # Extract the path from #include "path"
+            if '"' in inc:
+                path_str = inc.split('"')[1]
+                assert _Path(path_str).is_absolute(), (
+                    f"Harness uses relative #include path: {path_str!r}. "
+                    "Must be absolute so CBMC can find it from a temp directory."
+                )
+
+
 # ---------------------------------------------------------------------------
 # Test 5: MetricsCollector.collect_driver_metrics() with mock data
 # ---------------------------------------------------------------------------

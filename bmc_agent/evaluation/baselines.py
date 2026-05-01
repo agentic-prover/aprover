@@ -281,8 +281,11 @@ def _make_minimal_harness(source_file: str, func_sig: "object") -> str:
 
     sig: FunctionSignature = func_sig  # type: ignore[assignment]
 
+    # Use absolute path so the harness compiles correctly from any working directory.
+    abs_source = str(Path(source_file).resolve())
+
     lines: list[str] = [
-        f'#include "{source_file}"',
+        f'#include "{abs_source}"',
         "",
         "/* CBMC-alone minimal harness (no spec assertions) */",
         "void __CPROVER_assume(_Bool cond);",
@@ -293,13 +296,14 @@ def _make_minimal_harness(source_file: str, func_sig: "object") -> str:
     param_vars: list[str] = []
     for idx, (ptype, pname) in enumerate(sig.parameters):
         var = pname if pname else f"arg{idx}"
-        # Generate a nondeterministic value for each parameter type
         ctype = ptype.strip().rstrip("*").strip()
         if "*" in ptype:
-            lines.append(f"    {ptype} {var} = 0; /* nondet pointer */")
+            # All pointer params: unconstrained (NULL or any address).
+            # CBMC explores both the NULL path (triggering NULL checks) and
+            # nondeterministic non-NULL paths.
+            lines.append(f"    {ptype} {var};")
         elif ctype in ("int", "unsigned int", "uint32_t", "int32_t"):
             lines.append(f"    {ptype} {var};")
-            lines.append(f"    __CPROVER_assume({var} >= 0);")
         elif ctype in ("size_t", "uint64_t", "unsigned long"):
             lines.append(f"    {ptype} {var};")
         else:

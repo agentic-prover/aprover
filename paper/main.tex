@@ -8,6 +8,8 @@
 
 \documentclass[11pt,a4paper]{article}
 
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
 \usepackage[margin=2.5cm]{geometry}
 \usepackage{microtype}
 \usepackage{booktabs}
@@ -51,6 +53,15 @@
   numberstyle=\tiny,
   xleftmargin=1.5em,
   framexleftmargin=1.5em,
+  inputencoding=utf8,
+  extendedchars=true,
+  literate=
+    {—}{{---}}1
+    {─}{{-}}1
+    {━}{{=}}1
+    {≤}{{$\leq$}}1
+    {≥}{{$\geq$}}1
+    {→}{{$\rightarrow$}}1,
 }
 
 %% ─────────────────────────────────────────────────────────────────────────────
@@ -428,16 +439,49 @@ ambiguous or that the LLM is uncertain.
 Specifications are expressed in a small DSL designed to be simultaneously
 expressive enough for driver- and OS-style bugs, reliably emittable by an LLM,
 and directly translatable to CBMC constructs without interpreter intervention.
-Core predicates include \lstinline{valid(ptr)} (non-null, allocated),
-\lstinline{valid_string(ptr)} (null-terminated), and
-\lstinline{valid_range(ptr, lo, hi)} (in-bounds range). Return-value
-constraints are first-order formulas over integers and pointer fields. The DSL
-excludes uninterpreted functions, which eliminates a common LLM failure
+Table~\ref{tab:dsl} lists the predicates. Return-value
+constraints are first-order formulas over integers and pointer fields, with
+\lstinline{\\result} bound to the function's return value.
+The DSL excludes uninterpreted functions, which eliminates a common LLM failure
 mode---generating specifications that refer to concepts the solver cannot
 evaluate.
 
+\begin{table}[t]
+\caption{Specification DSL predicates and their CBMC translations.
+\texttt{{\textbackslash}result} refers to the function's return value.}
+\label{tab:dsl}
+\small
+\begin{tabular}{p{3.5cm}p{3.0cm}p{4.5cm}}
+\toprule
+\textbf{Predicate} & \textbf{Meaning} & \textbf{Translates to (harness)} \\
+\midrule
+\texttt{valid(ptr)}
+  & non-null pointer
+  & \texttt{ptr != NULL} \\
+\texttt{valid\_string(ptr)}
+  & non-null, null-terminated string
+  & \texttt{ptr != NULL} + bounded buffer in harness \\
+\texttt{valid\_range(p,lo,hi)}
+  & non-null; \texttt{p[lo..hi)} in bounds
+  & \texttt{p!=NULL \&\& lo>=0 \&\& hi>=lo} \\
+\texttt{in\_bounds(arr,idx)}
+  & array index in bounds
+  & \texttt{idx>=0 \&\& idx<(sizeof(arr)/sizeof(arr[0]))} \\
+\texttt{null(ptr)}
+  & null pointer
+  & \texttt{ptr == NULL} \\
+\texttt{owns(ptr)}
+  & caller-owned allocation
+  & \texttt{ptr != NULL} \\
+\texttt{locked(lock)}
+  & ghost lock state (not checkable in C)
+  & \texttt{/* ghost: skipped */} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 The DSL translator converts each spec into \lstinline{__CPROVER_assume} and
-\lstinline{__CPROVER_assert} calls within the synthesized harness. This
+\lstinline{assert} calls within the synthesized harness. This
 translation is a deterministic template substitution, not an LLM call.
 
 \smallskip\noindent\textbf{Strongly connected components.}
@@ -787,6 +831,47 @@ All planted bugs are correctly found and none of the reported findings are
 false positives in the sense of not corresponding to any actual reachable
 violation. This is a pipeline sanity check, not a claim of precision on
 uncontrolled targets.
+
+\smallskip\noindent\textbf{Comparison with CBMCAlone.}
+Running CBMC directly on the same four programs without LLM-generated
+specifications produces 15 raw findings (Table~\ref{tab:cbmc-alone}).
+The contrast is threefold.
+(i) \emph{False positives from loop bounds.}
+\texttt{simple\_driver.c} generates 4 \texttt{unwind.N} assertions---loop
+unwinding artifacts suppressed by \tool---none of which correspond to the
+planted off-by-one bug.
+(ii) \emph{False positives from unconstrained inputs.}
+\texttt{block\_device.c} generates 6 pointer-validity violations that arise
+because the minimal harness passes unconstrained pointer arguments; a
+properly initialized device is never explored.
+(iii) \emph{Missed bugs.}
+CBMCAlone finds \emph{zero} findings in \texttt{block\_device.c} for the
+planted overflow (the overflow in \texttt{blk\_seek} requires a live, initialized
+\texttt{blk\_dev\_t} and specific field values that unconstrained inputs never
+supply) and zero findings in \texttt{memory\_allocator.c} (CBMC does not flag
+the derived-from-NULL write without explicit pointer-check instrumentation).
+\tool finds both.
+
+\begin{table}[t]
+\caption{CBMCAlone raw findings on the four synthetic programs. ``FP'' = false
+positive (not corresponding to the planted bug); ``TP'' = true positive. The
+planted bugs in \texttt{block\_device.c} and \texttt{memory\_allocator.c} are
+missed entirely.}
+\label{tab:cbmc-alone}
+\small
+\begin{tabular}{lrll}
+\toprule
+Source & Findings & Type & Planted bug found? \\
+\midrule
+\texttt{simple\_driver.c}     & 4 & FP (unwind.N) & No \\
+\texttt{sensor\_hub.c}        & 5 & Mix (TP + FP) & Partial \\
+\texttt{block\_device.c}      & 6 & FP (ptr validity) & No \\
+\texttt{memory\_allocator.c}  & 0 & --- & No \\
+\midrule
+\textbf{Total}                & \textbf{15} & & \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{RQ1 + RQ2: VibeOS Full Kernel}
 
