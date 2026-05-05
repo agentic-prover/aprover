@@ -17,6 +17,7 @@ from bmc_agent.cex_validator import CExOutcome, ValidationResult
 from bmc_agent.dynamic_validator import DynamicOutcome
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo
+from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
 
 logger = get_logger("bug_reporter")
 
@@ -84,6 +85,7 @@ class BugReport:
     cex_outcome: CExOutcome | None = None
     dynamic_outcome: DynamicOutcome | None = None
     dynamic_signal: str | None = None
+    realism_check: RealismCheckResult | None = None  # None when check is disabled
 
     def to_dict(self) -> dict:
         return {
@@ -103,6 +105,7 @@ class BugReport:
             "cex_outcome": self.cex_outcome.value if self.cex_outcome else None,
             "dynamic_outcome": self.dynamic_outcome.value if self.dynamic_outcome else None,
             "dynamic_signal": self.dynamic_signal,
+            "realism_check": self.realism_check.to_dict() if self.realism_check else None,
         }
 
 
@@ -123,11 +126,19 @@ class BugReporter:
         self,
         validation_result: ValidationResult,
         func: FunctionInfo,
+        realism_check: "RealismCheckResult | None" = None,
     ) -> BugReport:
         """
         Create a BugReport from a ValidationResult.
 
         Only call this when validation_result.is_real_bug is True.
+
+        Parameters
+        ----------
+        realism_check:
+            Optional result from the RealismChecker.  When the verdict is
+            UNREALISTIC the confidence tier is downgraded to "unlikely" so
+            the finding is still reported but clearly flagged.
         """
         cex = validation_result.counterexample
         bug_type = _classify_bug_type(cex.failing_property)
@@ -139,6 +150,7 @@ class BugReporter:
         #   confirmed_bmc           — at least one immediate caller can reach the CEx
         #                             state, but chain to system entry not fully traced
         #   likely                  — over-refinement guard triggered; assumed real bug
+        #   unlikely                — realism checker judged UNREALISTIC
         dynamic = validation_result.dynamic_result
         if dynamic and dynamic.outcome == DynamicOutcome.CONFIRMED:
             confidence = "confirmed_dynamic"
@@ -150,6 +162,18 @@ class BugReporter:
             confidence = "likely"
         else:
             confidence = "confirmed_bmc"
+
+        # Realism check downgrade: UNREALISTIC → "unlikely"
+        if (
+            realism_check is not None
+            and realism_check.verdict == RealismVerdict.UNREALISTIC
+            and realism_check.llm_confidence in ("high", "medium")
+        ):
+            confidence = "unlikely"
+            logger.info(
+                "Confidence downgraded to 'unlikely' for '%s': %s",
+                func.name, realism_check.key_concern[:100],
+            )
 
         # Build reasoning trail
         reasoning_parts: list[str] = [
@@ -181,6 +205,7 @@ class BugReporter:
             cex_outcome=validation_result.outcome,
             dynamic_outcome=dynamic.outcome if dynamic else None,
             dynamic_signal=dynamic.signal_name if dynamic else None,
+            realism_check=realism_check,
         )
         return report
 

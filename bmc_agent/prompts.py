@@ -18,11 +18,12 @@ The specification DSL:
 - parameters use their actual names from the function signature
 """
 
+# System prompt shared by all spec-generation calls.
+# Placed here so the spec generator can cache it across all LLM calls in a session
+# (the Anthropic cache_control:ephemeral has a 5-minute TTL).
+SPEC_SYSTEM_PROMPT = f"You are a formal verification expert for C programs.\n\n{DSL_GRAMMAR}"
+
 ENTRY_SPEC_PROMPT = """\
-You are a formal verification expert generating function specifications for C code.
-
-{dsl_grammar}
-
 Your task: Given a C function's implementation and domain knowledge, generate a precise
 formal specification (precondition and postcondition).
 
@@ -54,10 +55,6 @@ Respond with ONLY valid JSON in this exact format:
 """
 
 INTERNAL_SPEC_PROMPT = """\
-You are a formal verification expert generating function specifications for C code.
-
-{dsl_grammar}
-
 Your task: Generate a specification for an INTERNAL function, taking into account
 what its callers expect from it (caller-driven paradigm).
 
@@ -101,10 +98,6 @@ Respond with ONLY valid JSON in this exact format:
 """
 
 EXPECTED_SPEC_PROMPT = """\
-You are a formal verification expert analyzing C function calls.
-
-{dsl_grammar}
-
 Your task: From the perspective of a CALLER function, determine what it EXPECTS
 from a callee function it calls. This is called the "expected specification."
 
@@ -223,10 +216,6 @@ Respond with ONLY valid JSON in this exact format:
 """
 
 CALLER_HEAVY_SPEC_PROMPT = """\
-You are a formal verification expert generating function specifications for C code.
-
-{dsl_grammar}
-
 Generate a specification for this function, emphasizing what CALLERS REQUIRE from it.
 Focus on: what preconditions must hold for callers' intended usage, what postconditions
 callers depend on. Do not over-specify implementation details.
@@ -249,10 +238,6 @@ Respond with ONLY valid JSON:
 """
 
 IMPL_HEAVY_SPEC_PROMPT = """\
-You are a formal verification expert generating function specifications for C code.
-
-{dsl_grammar}
-
 Generate a specification for this function, emphasizing what the IMPLEMENTATION ACTUALLY DOES.
 Focus on: what the implementation guarantees based on its code, regardless of caller expectations.
 
@@ -315,6 +300,86 @@ Respond with ONLY valid JSON:
 {{
   "consistent": true or false,
   "reasoning": "<explanation of any mismatch>"
+}}
+"""
+
+REALISM_CHECK_PROMPT = """\
+You are a formal verification expert auditing a potential bug report for realistic exploitability.
+
+A tool found a property violation in a C function. Your task: determine whether this violation
+represents a bug that could occur in the real program, or whether it is a verification artifact
+(false positive).
+
+---
+FUNCTION UNDER TEST: {function_name}
+
+Signature:
+{function_signature}
+
+Body:
+{function_body}
+
+---
+VIOLATED PROPERTY: {violated_property}
+
+COUNTEREXAMPLE — variable assignments that trigger the violation:
+{counterexample_state}
+
+---
+CALL CHAIN (how the function is reached from the program entry):
+{call_chain}
+
+CALLER CONTEXT — bodies of the immediate callers:
+{caller_context}
+
+---
+DYNAMIC VALIDATION RESULT: {dynamic_result}
+
+HARNESS CODE (what was actually compiled and run):
+{harness_code}
+
+---
+CALL-SITE ANALYSIS — how this function is actually called in the codebase:
+{call_site_analysis}
+
+GLOBAL VARIABLE CONTEXT — where key globals used by this function are assigned:
+{global_context}
+
+---
+ANALYSIS GUIDANCE
+
+A finding is UNREALISTIC (likely false positive) when ANY of these apply:
+1. The counterexample requires a pointer argument to be NULL (or an impossible address),
+   but the call-site analysis shows every real caller passes a valid non-NULL pointer.
+2. The counterexample requires an integer/global to take an extreme value (e.g. UINT32_MAX,
+   2^31), but the global context shows that variable is only ever assigned small, bounded
+   values (e.g. a hardware-reported screen width, a loop counter initialized to 0).
+3. The violated property is a postcondition whose failure only occurs with artificially
+   extreme return values from callee stubs (e.g., malloc returns UINT_MAX) that are
+   impossible from the real callee implementation.
+4. The dynamic harness crashed solely because global state was zero-initialized (static
+   storage default) while the real program always populates that state before first call.
+5. The counterexample witness values require multiple concurrent callee failures that
+   could not co-occur in a real execution.
+6. The call-site analysis shows NO call sites in this file and the function appears to be
+   DEAD CODE (never called). Treat such findings as low confidence.
+
+A finding is REALISTIC when:
+1. The triggering input could plausibly arise from environment, user, network, or hardware
+   (especially for parsers, drivers, OS entry points, or functions that handle external data).
+2. The NULL or overflow occurs on a code path that is reachable with normal usage AND
+   the call-site analysis does not contradict it (no call sites always pass valid values).
+3. The dynamic harness triggered the same fault with inputs that mirror a real caller's
+   behavior (not just the minimum possible — NULL, zero, empty buffer).
+4. The call chain goes through a system entry that receives untrusted or unvalidated input.
+5. The global context shows the variable CAN take the counterexample value in practice.
+
+Respond with ONLY valid JSON:
+{{
+  "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
+  "reasoning": "<step-by-step analysis — reference specific variable values and call sites>",
+  "key_concern": "<if UNREALISTIC or UNCERTAIN: the specific scenario that makes this unrealistic>",
+  "confidence": "high" | "medium" | "low"
 }}
 """
 

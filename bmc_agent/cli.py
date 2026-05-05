@@ -15,6 +15,13 @@ import sys
 from pathlib import Path
 
 
+def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
+    """Override config.llm_model if --model was supplied on the command line."""
+    model = getattr(args, "model", None)
+    if model:
+        config.llm_model = model  # type: ignore[attr-defined]
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     """Phase 1: Generate specs for all functions in a C source file."""
     from bmc_agent.artifacts import ArtifactStore
@@ -25,6 +32,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     config = Config.from_env()
     if args.output:
         config.artifact_dir = args.output
+    _apply_model_arg(config, args)
 
     store = ArtifactStore(config.artifact_dir)
     llm = LLMClient(config)
@@ -273,6 +281,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.preprocess = True
     if getattr(args, "skip_refinement", False):
         config.skip_refinement = True
+    if getattr(args, "enable_realism_check", False):
+        config.enable_realism_check = True
+    if getattr(args, "enable_realism_thinking", False):
+        config.enable_realism_thinking = True
+    _apply_model_arg(config, args)
 
     domain_knowledge = ""
     if hasattr(args, "domain_knowledge") and args.domain_knowledge:
@@ -289,6 +302,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print("Mode: FilteringOnly (skip_refinement=True) — RQ3 ablation baseline")
     if config.preprocess:
         print(f"Include dirs: {config.include_dirs}")
+    if config.enable_realism_check:
+        thinking_tag = " (extended thinking)" if config.enable_realism_thinking else ""
+        print(f"Realism check: enabled{thinking_tag}")
 
     pipeline = AMCPipeline(config)
     bug_reports = pipeline.run(
@@ -355,6 +371,45 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ablation_baseline(args: argparse.Namespace) -> int:
+    """Run AMC-ablation baseline: bottom-up spec generation (no caller context)."""
+    from bmc_agent.config import Config
+    from bmc_agent.evaluation.baselines import AMCAblationBaseline
+
+    config = Config.from_env()
+    if args.output:
+        config.artifact_dir = args.output
+    _apply_model_arg(config, args)
+
+    baseline = AMCAblationBaseline()
+
+    print(f"AMC-ablation baseline for: {args.source}")
+    print(f"Driver:       {args.driver}")
+    print(f"Artifact dir: {config.artifact_dir}")
+    print(f"Model:        {config.llm_model}")
+    print("Mode: bottom-up spec generation (no caller context)")
+
+    result = baseline.run(
+        source_file=args.source,
+        driver_name=args.driver,
+        config=config,
+    )
+
+    if result.error:
+        print(f"\nWarning: {result.error}", file=sys.stderr)
+
+    print(f"\n=== AMC-Ablation Baseline Results ===")
+    if not result.bugs_found:
+        print("No bugs found.")
+    else:
+        print(f"Findings ({len(result.bugs_found)} total):")
+        for bug in result.bugs_found:
+            print(f"  {bug}")
+
+    print(f"\nRuntime: {result.runtime_seconds:.1f}s")
+    return 0
+
+
 def _cmd_verify_dir(args: argparse.Namespace) -> int:
     """Run the full pipeline on every .c file in a directory."""
     from bmc_agent.config import Config
@@ -365,6 +420,13 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.artifact_dir = args.output
     if getattr(args, "skip_refinement", False):
         config.skip_refinement = True
+    if getattr(args, "enable_dynamic_validation", False):
+        config.enable_dynamic_validation = True
+    if getattr(args, "enable_realism_check", False):
+        config.enable_realism_check = True
+    if getattr(args, "enable_realism_thinking", False):
+        config.enable_realism_thinking = True
+    _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
 
@@ -414,6 +476,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers.required = True
 
+    # Shared --model argument added to commands that call the LLM
+    def _add_model_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--model",
+            default="",
+            metavar="MODEL_ID",
+            help=(
+                "Override the LLM model (e.g. claude-opus-4-7, claude-sonnet-4-6). "
+                "Defaults to BMC_AGENT_LLM_MODEL env var or claude-sonnet-4-6."
+            ),
+        )
+
     # --- generate ---
     gen = subparsers.add_parser(
         "generate",
@@ -428,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TEXT_OR_FILE",
         help="Domain knowledge string or path to a file containing domain knowledge",
     )
+    _add_model_arg(gen)
     gen.set_defaults(func=_cmd_generate)
 
     # --- check ---
@@ -468,6 +543,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="FilteringOnly mode: classify counterexamples but skip spec update and caller re-queue (RQ3 ablation)",
     )
+    ver.add_argument(
+        "--enable-realism-check",
+        action="store_true",
+        default=False,
+        help="Run LLM realism audit on every REAL_BUG finding to reduce false positives",
+    )
+    ver.add_argument(
+        "--enable-realism-thinking",
+        action="store_true",
+        default=False,
+        help="Use extended thinking in the realism checker (higher quality, slower, implies --enable-realism-check)",
+    )
+    _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
     # --- baseline ---
@@ -479,6 +567,17 @@ def build_parser() -> argparse.ArgumentParser:
     bl.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
     bl.add_argument("--output", default="artifacts", help="Artifact output directory")
     bl.set_defaults(func=_cmd_baseline)
+
+    # --- ablation-baseline ---
+    ab = subparsers.add_parser(
+        "ablation-baseline",
+        help="Run AMC-ablation baseline: bottom-up spec generation without caller context",
+    )
+    ab.add_argument("--source", required=True, help="Path to C source file")
+    ab.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
+    ab.add_argument("--output", default="artifacts", help="Artifact output directory")
+    _add_model_arg(ab)
+    ab.set_defaults(func=_cmd_ablation_baseline)
 
     # --- verify-dir ---
     vd = subparsers.add_parser(
@@ -514,6 +613,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="FilteringOnly mode: classify counterexamples but skip spec update and caller re-queue (RQ3 ablation)",
     )
+    vd.add_argument(
+        "--enable-dynamic-validation",
+        action="store_true",
+        default=False,
+        help="Stage 3: compile and run a GCC harness to confirm bugs at runtime (confirmed_dynamic tier)",
+    )
+    vd.add_argument(
+        "--enable-realism-check",
+        action="store_true",
+        default=False,
+        help="Run LLM realism audit on every REAL_BUG finding to reduce false positives",
+    )
+    vd.add_argument(
+        "--enable-realism-thinking",
+        action="store_true",
+        default=False,
+        help="Use extended thinking in the realism checker (higher quality, slower)",
+    )
+    _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)
 
     # --- eval ---

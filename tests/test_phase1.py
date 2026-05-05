@@ -575,3 +575,178 @@ def test_cli_generate_with_mock(tmp_path: Path):
             "--output", str(tmp_path / "artifacts"),
         ])
         assert ret == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. Struct context extraction
+# ---------------------------------------------------------------------------
+
+_STRUCT_C = """\
+typedef struct {
+    int size;
+    unsigned char *data;
+} my_buf_t;
+
+typedef struct {
+    int count;
+    int capacity;
+} ring_t;
+
+my_buf_t make_buf(int sz) {
+    my_buf_t b;
+    b.size = sz;
+    return b;
+}
+
+void process(my_buf_t buf, int idx) {
+    (void)buf;
+    (void)idx;
+}
+
+void other(ring_t r) {
+    (void)r;
+}
+"""
+
+
+def test_extract_struct_names_identifies_struct_params(tmp_path: Path):
+    """_extract_struct_names should return type names that are not basic C types."""
+    from bmc_agent.parser import parse_c_file
+
+    src = tmp_path / "struct_test.c"
+    src.write_text(_STRUCT_C)
+
+    parsed = parse_c_file(str(src))
+
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient
+    from bmc_agent.spec_generator import SpecGenerator
+    from unittest.mock import MagicMock
+
+    config = Config(llm_api_key="test")
+    mock_llm = MagicMock()
+    store = ArtifactStore(str(tmp_path / "artifacts"))
+    gen = SpecGenerator(config, mock_llm, store)
+
+    process_info = parsed.get_function_info("process")
+    assert process_info is not None
+
+    names = gen._extract_struct_names(process_info)
+    assert "my_buf_t" in names, f"Expected my_buf_t in {names}"
+    # int should NOT appear — it's a basic type
+    assert "int" not in names
+
+
+def test_extract_struct_context_includes_typedef(tmp_path: Path):
+    """_extract_struct_context should find typedef struct definitions."""
+    from bmc_agent.parser import parse_c_file
+
+    src = tmp_path / "struct_test.c"
+    src.write_text(_STRUCT_C)
+    parsed = parse_c_file(str(src))
+    # Simulate preprocessed_source being set
+    parsed.preprocessed_source = _STRUCT_C
+
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
+    from unittest.mock import MagicMock
+
+    config = Config(llm_api_key="test")
+    mock_llm = MagicMock()
+    store = ArtifactStore(str(tmp_path / "artifacts"))
+    gen = SpecGenerator(config, mock_llm, store)
+
+    process_info = parsed.get_function_info("process")
+    assert process_info is not None
+
+    ctx = gen._extract_struct_context(process_info, parsed)
+    assert "my_buf_t" in ctx, "Struct definition should appear in context"
+    assert "size" in ctx or "data" in ctx, "Struct fields should appear in context"
+
+
+def test_extract_struct_context_includes_constructor(tmp_path: Path):
+    """_extract_struct_context should find factory functions returning the struct type."""
+    from bmc_agent.parser import parse_c_file
+
+    src = tmp_path / "struct_test.c"
+    src.write_text(_STRUCT_C)
+    parsed = parse_c_file(str(src))
+    parsed.preprocessed_source = _STRUCT_C
+
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
+    from unittest.mock import MagicMock
+
+    config = Config(llm_api_key="test")
+    mock_llm = MagicMock()
+    store = ArtifactStore(str(tmp_path / "artifacts"))
+    gen = SpecGenerator(config, mock_llm, store)
+
+    process_info = parsed.get_function_info("process")
+    assert process_info is not None
+
+    ctx = gen._extract_struct_context(process_info, parsed)
+    # make_buf returns my_buf_t — should appear as constructor
+    assert "make_buf" in ctx, "Constructor function should appear in struct context"
+
+
+def test_extract_struct_context_empty_for_basic_types(tmp_path: Path):
+    """_extract_struct_context should return empty string when all params are basic types."""
+    c_src = "int add(int a, int b) { return a + b; }\n"
+
+    src = tmp_path / "basic.c"
+    src.write_text(c_src)
+
+    from bmc_agent.parser import parse_c_file
+
+    parsed = parse_c_file(str(src))
+    parsed.preprocessed_source = c_src
+
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
+    from unittest.mock import MagicMock
+
+    config = Config(llm_api_key="test")
+    mock_llm = MagicMock()
+    store = ArtifactStore(str(tmp_path / "artifacts"))
+    gen = SpecGenerator(config, mock_llm, store)
+
+    add_info = parsed.get_function_info("add")
+    assert add_info is not None
+
+    ctx = gen._extract_struct_context(add_info, parsed)
+    assert ctx == "", f"Expected empty context for basic types, got: {ctx!r}"
+
+
+def test_spec_system_prompt_contains_dsl_grammar():
+    """SPEC_SYSTEM_PROMPT should embed the full DSL grammar for prompt caching."""
+    from bmc_agent import prompts
+
+    assert hasattr(prompts, "SPEC_SYSTEM_PROMPT")
+    # DSL grammar content should be present in the system prompt
+    assert "requires" in prompts.SPEC_SYSTEM_PROMPT
+    assert "ensures" in prompts.SPEC_SYSTEM_PROMPT
+    assert "valid(ptr)" in prompts.SPEC_SYSTEM_PROMPT
+    # The system prompt should NOT contain prompt template placeholders
+    assert "{dsl_grammar}" not in prompts.SPEC_SYSTEM_PROMPT
+
+
+def test_spec_prompts_no_dsl_grammar_placeholder():
+    """Spec prompts should not have {dsl_grammar} placeholder after refactoring."""
+    from bmc_agent import prompts
+
+    for name in (
+        "ENTRY_SPEC_PROMPT",
+        "INTERNAL_SPEC_PROMPT",
+        "EXPECTED_SPEC_PROMPT",
+        "CALLER_HEAVY_SPEC_PROMPT",
+        "IMPL_HEAVY_SPEC_PROMPT",
+    ):
+        prompt = getattr(prompts, name)
+        assert "{dsl_grammar}" not in prompt, (
+            f"{name} still contains {{dsl_grammar}} — should be in system prompt"
+        )

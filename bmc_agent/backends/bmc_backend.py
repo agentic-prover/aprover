@@ -14,6 +14,7 @@ class BMCBackend(ABC):
         spec,           # Spec
         callee_specs: dict,
         parsed_file,    # ParsedCFile
+        all_funcs: "dict | None" = None,
     ) -> str:
         """Generate harness source code. Returns C (or Rust) source as string."""
         ...

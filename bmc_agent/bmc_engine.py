@@ -69,6 +69,7 @@ class BMCEngine:
         spec: Spec,
         parsed_file: ParsedCFile,
         driver_name: str,
+        all_funcs: "dict | None" = None,
     ) -> BMCVerdict:
         """
         Check a single function against its spec using CBMC.
@@ -84,7 +85,7 @@ class BMCEngine:
 
         # ---- Step 1: generate harness ----
         try:
-            harness_src = self.backend.generate_harness(func, spec, {}, parsed_file)
+            harness_src = self.backend.generate_harness(func, spec, {}, parsed_file, all_funcs=all_funcs)
         except Exception as exc:
             logger.error("Harness generation failed for '%s': %s", fn_name, exc)
             return BMCVerdict(
@@ -150,6 +151,7 @@ class BMCEngine:
         specs: dict[str, Spec],
         parsed_file: ParsedCFile,
         driver_name: str,
+        all_funcs: "dict | None" = None,
     ) -> dict[str, BMCVerdict]:
         """
         Check all functions in parallel (ThreadPoolExecutor).
@@ -197,6 +199,7 @@ class BMCEngine:
                     specs[name],
                     parsed_file,
                     driver_name,
+                    all_funcs,
                 ): name
                 for name, func in to_check.items()
             }

@@ -53,6 +53,7 @@ class DynamicValidationResult:
     compile_error: Optional[str] = None
     run_error: Optional[str] = None
     reasoning: str = ""
+    harness_source: Optional[str] = None  # the C source that was compiled and run
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +62,7 @@ class DynamicValidationResult:
             "compile_error": self.compile_error,
             "run_error": self.run_error,
             "reasoning": self.reasoning,
+            "harness_source": self.harness_source,
         }
 
 
@@ -109,6 +111,9 @@ class DynamicValidator:
                 reasoning=f"C compiler '{cc}' not found on PATH — skipping dynamic validation.",
             )
 
+        # winning_harness: the C source that successfully compiled (for realism checker)
+        winning_harness: Optional[str] = None
+
         # --- Attempt 0: system-entry reproducer (LLM-generated, call chain intact) ---
         if system_entry_reproducer and _looks_like_c_code(system_entry_reproducer):
             se_harness = _wrap_reproducer_with_signal_handlers(system_entry_reproducer)
@@ -118,6 +123,7 @@ class DynamicValidator:
                     result = self._run(binary_path_se)
                 finally:
                     _unlink(binary_path_se)
+                result.harness_source = se_harness
                 logger.info(
                     "System-entry dynamic validation for '%s': %s%s",
                     entry_func.name,
@@ -143,6 +149,8 @@ class DynamicValidator:
             )
 
         binary_path, compile_err = self._compile(harness_src, cc)
+        if binary_path is not None:
+            winning_harness = harness_src
 
         if binary_path is None:
             # --- Attempt 2: without global state injection ---
@@ -161,6 +169,8 @@ class DynamicValidator:
                     reasoning="Harness generation failed on second attempt.",
                 )
             binary_path, compile_err2 = self._compile(harness_src2, cc)
+            if binary_path is not None:
+                winning_harness = harness_src2
             if binary_path is None:
                 # --- Attempt 3: relax linker — ignore undefined external symbols ---
                 # Bare-metal functions often reference globals from other translation
@@ -177,6 +187,8 @@ class DynamicValidator:
                         harness_src2, cc,
                         extra_flags=["-Wl,--unresolved-symbols=ignore-all"],
                     )
+                    if binary_path is not None:
+                        winning_harness = harness_src2
                 else:
                     compile_err3 = compile_err2
                     binary_path = None
@@ -196,6 +208,7 @@ class DynamicValidator:
         finally:
             _unlink(binary_path)
 
+        result.harness_source = winning_harness
         logger.info(
             "Dynamic validation for '%s': %s%s",
             entry_func.name,

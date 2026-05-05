@@ -37,6 +37,7 @@ from bmc_agent.prompts import (
     IMPL_HEAVY_SPEC_PROMPT,
     INTERNAL_SPEC_PROMPT,
     SPEC_DISAGREEMENT_PROMPT,
+    SPEC_SYSTEM_PROMPT,
 )
 from bmc_agent.spec import Spec, SpecStatus, merge_specs
 
@@ -585,9 +586,7 @@ class SpecGenerator:
         """Generate spec for an entry function using implementation + domain knowledge."""
         logger.debug("Generating entry spec for '%s'", func.name)
 
-        system_prompt = "You are a formal verification expert for C programs."
         user_prompt = ENTRY_SPEC_PROMPT.format(
-            dsl_grammar=DSL_GRAMMAR,
             domain_knowledge=domain_knowledge or "No additional domain knowledge provided.",
             struct_context=struct_context or "None.",
             signature=self._format_signature(func),
@@ -595,7 +594,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(system_prompt, user_prompt)
+            response = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt)
             result = _parse_llm_spec_response(response, func.name)
             if result is not None:
                 pre, post = result
@@ -641,9 +640,7 @@ class SpecGenerator:
             )
         expected_text = "\n\n".join(expected_text_parts)
 
-        system_prompt = "You are a formal verification expert for C programs."
         user_prompt = INTERNAL_SPEC_PROMPT.format(
-            dsl_grammar=DSL_GRAMMAR,
             expected_specs=expected_text,
             signature=self._format_signature(func),
             body=func.body,
@@ -652,7 +649,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(system_prompt, user_prompt)
+            response = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt)
             result = _parse_llm_spec_response(response, func.name)
             if result is not None:
                 pre, post = result
@@ -685,9 +682,7 @@ class SpecGenerator:
             caller.name,
         )
 
-        system_prompt = "You are a formal verification expert for C programs."
         user_prompt = EXPECTED_SPEC_PROMPT.format(
-            dsl_grammar=DSL_GRAMMAR,
             caller_name=caller.name,
             caller_signature=self._format_signature(caller),
             caller_body=caller.body,
@@ -695,7 +690,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(system_prompt, user_prompt)
+            response = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt)
             result = _parse_llm_spec_response(response, callee_name)
             if result is not None:
                 pre, post = result
@@ -746,18 +741,16 @@ class SpecGenerator:
             # Fall back to standard single generation
             return self._generate_entry_spec(func, domain_knowledge, struct_context)
 
-        system_prompt = "You are a formal verification expert for C programs."
         sig = self._format_signature(func)
 
         # Caller-heavy emphasis
         try:
             user_prompt_a = CALLER_HEAVY_SPEC_PROMPT.format(
-                dsl_grammar=DSL_GRAMMAR,
                 signature=sig,
                 caller_context=caller_context or "No caller context available.",
                 body=func.body,
             )
-            response_a = self.llm.complete(system_prompt, user_prompt_a)
+            response_a = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt_a)
             result_a = _parse_llm_spec_response(response_a, func.name)
         except Exception:
             result_a = None
@@ -765,11 +758,10 @@ class SpecGenerator:
         # Implementation-heavy emphasis
         try:
             user_prompt_b = IMPL_HEAVY_SPEC_PROMPT.format(
-                dsl_grammar=DSL_GRAMMAR,
                 signature=sig,
                 body=func.body,
             )
-            response_b = self.llm.complete(system_prompt, user_prompt_b)
+            response_b = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt_b)
             result_b = _parse_llm_spec_response(response_b, func.name)
         except Exception:
             result_b = None
@@ -789,7 +781,7 @@ class SpecGenerator:
                     pre_a=result_a[0], post_a=result_a[1],
                     pre_b=result_b[0], post_b=result_b[1],
                 )
-                disagree_response = self.llm.complete(system_prompt, disagree_prompt)
+                disagree_response = self.llm.complete(SPEC_SYSTEM_PROMPT, disagree_prompt)
                 import json as _json
                 parsed = _json.loads(disagree_response.strip())
                 disagree = bool(parsed.get("disagree", False))

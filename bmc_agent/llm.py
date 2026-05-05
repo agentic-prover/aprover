@@ -56,12 +56,24 @@ class LLMClient:
         user_prompt: str,
         max_tokens: int = 4096,
         temperature: float = 0.2,
+        thinking: bool = False,
+        thinking_budget: int = 8000,
     ) -> str:
         """
         Send a request to the LLM and return the response text.
 
         Retries up to ``config.max_spec_retries`` times on transient errors
         (rate limits, server errors) with exponential backoff.
+
+        Parameters
+        ----------
+        thinking:
+            Enable extended thinking (Claude's internal reasoning before responding).
+            Improves quality on complex spec-generation and disagreement-resolution tasks.
+            When True, temperature is forced to 1 (API requirement) and max_tokens is
+            auto-expanded to at least thinking_budget + 1024.
+        thinking_budget:
+            Token budget for the thinking phase.  Ignored when thinking=False.
 
         Raises
         ------
@@ -70,6 +82,13 @@ class LLMClient:
         """
         client = self._get_client()
         last_error: Optional[Exception] = None
+
+        # Extended thinking requires temperature=1 and enough token headroom.
+        api_kwargs: dict = {}
+        if thinking:
+            api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            temperature = 1.0
+            max_tokens = max(max_tokens, thinking_budget + 1024)
 
         for attempt in range(self.config.max_spec_retries):
             try:
@@ -83,6 +102,7 @@ class LLMClient:
                         "cache_control": {"type": "ephemeral"},
                     }],
                     messages=[{"role": "user", "content": user_prompt}],
+                    **api_kwargs,
                 )
                 # Log token usage
                 usage = getattr(response, "usage", None)
@@ -95,9 +115,11 @@ class LLMClient:
                         getattr(usage, "cache_creation_input_tokens", 0),
                         getattr(usage, "cache_read_input_tokens", 0),
                     )
-                # Extract text
+                # Extract text (skip thinking blocks)
                 text = ""
                 for block in response.content:
+                    if getattr(block, "type", None) == "thinking":
+                        continue
                     if hasattr(block, "text"):
                         text += block.text
                 return text

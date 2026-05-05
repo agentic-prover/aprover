@@ -16,8 +16,8 @@ class CBMCBackend(BMCBackend):
     def language(self) -> str:
         return "c"
 
-    def generate_harness(self, func, spec, callee_specs, parsed_file) -> str:
-        return self._harness_gen.generate_harness(func, spec, parsed_file)
+    def generate_harness(self, func, spec, callee_specs, parsed_file, all_funcs=None) -> str:
+        return self._harness_gen.generate_harness(func, spec, parsed_file, all_funcs=all_funcs)
 
     def check(self, harness_path) -> object:
         from bmc_agent.cbmc import run_cbmc

@@ -26,6 +26,7 @@ from bmc_agent.harness_generator import HarnessGenerator
 from bmc_agent.llm import LLMClient
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
+from bmc_agent.realism_checker import RealismChecker
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.spec_generator import SpecGenerator
 
@@ -72,6 +73,7 @@ class AMCPipeline:
             harness_gen=self.harness_gen,
         )
         self.reporter = BugReporter(self.store)
+        self.realism_checker = RealismChecker(config, self.llm)
         self.propagation_events: list[PropagationEvent] = []
 
     # ------------------------------------------------------------------
@@ -161,6 +163,7 @@ class AMCPipeline:
             specs=specs,
             parsed_file=parsed,
             driver_name=driver_name,
+            all_funcs=all_funcs,
         )
         logger.info("Phase 2 complete: %d verdicts", len(verdicts))
 
@@ -223,7 +226,7 @@ class AMCPipeline:
                     self.reporter._unresolved.append(validation)
                 elif validation.is_real_bug:
                     logger.info("REAL BUG confirmed in '%s'", fn_name)
-                    report = self.reporter.create_report(validation, func)
+                    report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
                     self.reporter.save_report(report, driver_name)
                     bug_reports.append(report)
                 else:
@@ -290,6 +293,7 @@ class AMCPipeline:
                 specs=current_specs,
                 parsed_file=parsed,
                 driver_name=driver_name,
+                all_funcs=all_funcs,
             )
             for fn_name, verdict in self_recheck_verdicts.items():
                 if verdict.verified:
@@ -319,7 +323,7 @@ class AMCPipeline:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
                         logger.info("REAL BUG (Phase 3c) confirmed in '%s'", fn_name)
-                        report = self.reporter.create_report(validation, func)
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
                     else:
@@ -356,6 +360,7 @@ class AMCPipeline:
                 specs=current_specs,
                 parsed_file=parsed,
                 driver_name=driver_name,
+                all_funcs=all_funcs,
             )
 
             # RQ3: per-function bugs found in Phase 3b (for PropagationEvent)
@@ -386,7 +391,7 @@ class AMCPipeline:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
                         logger.info("REAL BUG (recheck) confirmed in '%s'", fn_name)
-                        report = self.reporter.create_report(validation, func)
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
                         phase3b_bugs_by_fn.setdefault(fn_name, []).append(
@@ -457,6 +462,31 @@ class AMCPipeline:
             len(self.reporter._unresolved),
         )
         return bug_reports
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _make_report(
+        self,
+        validation: ValidationResult,
+        func: FunctionInfo,
+        spec: Spec,
+        parsed: ParsedCFile,
+        all_funcs: "dict[str, FunctionInfo]",
+        driver_name: str,
+    ) -> BugReport:
+        """Run realism check then create and save a BugReport."""
+        realism = self.realism_checker.check(
+            func=func,
+            counterexample=validation.counterexample,
+            validation_result=validation,
+            parsed_file=parsed,
+            all_funcs=all_funcs,
+            spec=spec,
+        )
+        realism_arg = realism if self.config.enable_realism_check else None
+        return self.reporter.create_report(validation, func, realism_check=realism_arg)
 
     # ------------------------------------------------------------------
     # Multi-file / whole-codebase entry point

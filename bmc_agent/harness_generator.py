@@ -298,7 +298,68 @@ def _substitute_callee_calls(body: str, callees: set[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _generate_nd_decls(func: FunctionInfo, cbmc_unwind: int = 4) -> list[str]:
+def _infer_nonnull_params(
+    func: FunctionInfo,
+    all_funcs: Optional[dict],
+    parsed_file: Optional[ParsedCFile],
+) -> set:
+    """
+    Return the set of pointer parameter names that are NEVER passed NULL at any
+    call site found in the current file.  Only includes params for which at least
+    one call site was found (so params with no call sites are left unconstrained).
+    """
+    ptr_params: list[str] = []
+    for ptype, pname in func.signature.parameters:
+        if not pname:
+            continue
+        ptype_stripped = ptype.strip()
+        if (ptype_stripped.endswith("*") or "*" in pname):
+            base = ptype_stripped.rstrip("*").strip()
+            if base.lower() not in ("void", "const void") and ptype_stripped.count("*") == 1:
+                ptr_params.append(pname)
+
+    if not ptr_params:
+        return set()
+
+    call_pattern = re.compile(
+        r"(?<![a-zA-Z0-9_])" + re.escape(func.name) + r"\s*\(([^;)]{0,400})\)",
+        re.DOTALL,
+    )
+    null_re = re.compile(r"^(NULL|0|0x0+|\(\s*\w[\w\s*]*\s*\)\s*0)$")
+
+    found_site: dict[str, bool] = {p: False for p in ptr_params}
+    null_seen: dict[str, bool] = {p: False for p in ptr_params}
+
+    all_bodies: list[str] = []
+    for fname, finfo in (all_funcs or {}).items():
+        if fname != func.name and finfo.body:
+            all_bodies.append(finfo.body)
+    if parsed_file:
+        for fname in list((parsed_file.functions or {}).keys()):
+            if fname != func.name:
+                fi = parsed_file.get_function_info(fname)
+                if fi and fi.body:
+                    all_bodies.append(fi.body)
+
+    for body in all_bodies:
+        for m in call_pattern.finditer(body):
+            raw_args = m.group(1)
+            args = [a.strip() for a in re.split(r",(?![^(]*\))", raw_args)]
+            for i, arg in enumerate(args):
+                if i < len(ptr_params):
+                    pname = ptr_params[i]
+                    found_site[pname] = True
+                    if null_re.match(arg):
+                        null_seen[pname] = True
+
+    return {p for p in ptr_params if found_site[p] and not null_seen[p]}
+
+
+def _generate_nd_decls(
+    func: FunctionInfo,
+    cbmc_unwind: int = 4,
+    nonnull_params: Optional[set] = None,
+) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
 
@@ -306,7 +367,13 @@ def _generate_nd_decls(func: FunctionInfo, cbmc_unwind: int = 4) -> list[str]:
     point to it. char* and const char* parameters receive a bounded
     null-terminated string (max length = cbmc_unwind) so that string-traversal
     loops always terminate within the unwinding bound.
+
+    Parameters that are never passed NULL at any call site in the codebase
+    (as determined by _infer_nonnull_params) receive an explicit
+    __CPROVER_assume(param != NULL) guard so CBMC explores only realistic paths.
     """
+    if nonnull_params is None:
+        nonnull_params = set()
     lines: list[str] = []
     for ptype, pname in func.signature.parameters:
         if not pname:
@@ -337,12 +404,16 @@ def _generate_nd_decls(func: FunctionInfo, cbmc_unwind: int = 4) -> list[str]:
                 lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){cbmc_unwind});")
                 lines.append(f"    {buf_name}[{len_name}] = '\\0';")
                 lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
+                if pname in nonnull_params:
+                    lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
             elif "const" in ptype_stripped.lower():
                 lines.append(f"    {clean_base} {local_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
             else:
                 lines.append(f"    {base_type} {local_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
+                if pname in nonnull_params:
+                    lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
         else:
             # Value parameter
             lines.append(f"    {ptype_stripped} {pname};")
@@ -1037,6 +1108,7 @@ class HarnessGenerator:
         spec: Spec,
         parsed_file: ParsedCFile,
         extern_sigs: Optional[dict] = None,
+        all_funcs: Optional[dict] = None,
     ) -> str:
         """
         Generate a CBMC harness for *func* against *spec*.
@@ -1047,6 +1119,11 @@ class HarnessGenerator:
             Optional mapping of function-name → FunctionSignature for
             functions defined in *other* source files (multi-file mode).
             Used to generate proper stubs for cross-file callees.
+        all_funcs:
+            Optional mapping of function-name → FunctionInfo for all
+            functions in the current file.  Used to infer which pointer
+            parameters are never passed NULL at any call site so that
+            __CPROVER_assume constraints can be added to the harness.
 
         Returns the harness as a C source string.
         """
@@ -1089,7 +1166,8 @@ class HarnessGenerator:
         func_def = f"{sig.return_type} {fn_name}({params_str})\n{body_with_stubs}"
 
         # --- 5. Generate nondeterministic input declarations ---
-        nd_decls = _generate_nd_decls(func, self.config.cbmc_unwind)
+        nonnull = _infer_nonnull_params(func, all_funcs, parsed_file)
+        nd_decls = _generate_nd_decls(func, self.config.cbmc_unwind, nonnull_params=nonnull)
 
         # --- 6. Precondition assumptions ---
         param_names = [pname for _, pname in sig.parameters if pname]

@@ -15,6 +15,7 @@ Phase 2    BMC Engine            [CONVENTIONAL]  Checks each function against it
 Phase 3 S1 CEx Classifier        [AGENTIC]       LLM + CBMC: REAL_BUG / SPURIOUS / UNRESOLVED
 Phase 3 S2 Feasibility check     [CONVENTIONAL]  Re-verifies violation with real callee bodies inlined
 Phase 3 S3 Dynamic validation    [CONVENTIONAL]  Compiles + runs GCC harness to confirm fault at runtime
+Phase 3 S4 Realism Checker       [AGENTIC]       LLM audits every REAL_BUG finding for realistic exploitability
 Phase 3b   Spec Refiner          [AGENTIC]       Refines preconditions on spurious counterexamples
 Phase 3c   Caller propagation    [CONVENTIONAL]  Re-verifies callers after spec refinement
 Phase 4    Spec Quality          [AGENTIC]       Coverage / mutation / consistency checks (optional)
@@ -30,6 +31,9 @@ Confirmed real bugs are assigned one of four evidence tiers:
 | `confirmed_system_entry` | Full call chain traced back to a function with no callers anywhere in the corpus |
 | `confirmed_bmc` | Input reachability confirmed from at least one immediate caller via CBMC |
 | `likely` | Over-refinement guard triggered |
+| `unlikely` | Finding downgraded by the realism checker (verdict: UNREALISTIC) |
+
+The **realism checker** (Phase 3 S4) runs an LLM audit on every `REAL_BUG` finding after dynamic validation. It asks whether real program execution could produce the counterexample's input state. Findings rated `UNREALISTIC` are downgraded to `unlikely` rather than discarded, preserving the full audit trail.
 
 ## Requirements
 
@@ -59,12 +63,15 @@ uv run bmc-agent verify --source examples/simple_driver.c \
 # Generate specs only
 uv run bmc-agent generate --source examples/simple_driver.c --driver simple_driver
 
-# Verify every .c file in a directory (whole-codebase mode)
+# Verify every .c file in a directory — all validation tiers enabled
 uv run bmc-agent verify-dir \
   --source-dir examples/vibeos/repo/kernel \
   --driver vibeos_kernel \
   --output artifacts/vibeos_kernel \
-  --include-dir examples/vibeos/repo/kernel
+  --enable-dynamic-validation \
+  --enable-realism-check \
+  --enable-realism-thinking \
+  --domain-knowledge "any domain notes for the LLM"
 
 # CBMC-alone baseline (no LLM, no spec generation)
 uv run bmc-agent baseline --source examples/simple_driver.c \
@@ -97,6 +104,8 @@ All settings are available as environment variables or `Config` dataclass fields
 | `BMC_AGENT_ENABLE_DYNAMIC_VALIDATION` | `false` | Phase 3 S3: compile + run a GCC harness |
 | `BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT` | `30` | GCC harness run timeout (seconds) |
 | `BMC_AGENT_DYNAMIC_CC_PATH` | `gcc` | C compiler for dynamic harness |
+| `BMC_AGENT_ENABLE_REALISM_CHECK` | `false` | Phase 3 S4: LLM realism audit on every REAL_BUG finding |
+| `BMC_AGENT_ENABLE_REALISM_THINKING` | `false` | Use extended thinking in the realism checker (higher quality, slower) |
 
 `BMC_AGENT_SKIP_REFINEMENT=true` is the FilteringOnly ablation: running the same input with and without this flag measures whether the refinement loop adds value beyond simple counterexample filtering.
 
@@ -116,6 +125,28 @@ Specs are expressed in a small DSL that is reliably emittable by an LLM and dire
 
 Return values use `\result`. Arithmetic operators and C comparisons are translated directly. Natural language conditions that don't match any pattern are emitted as `/* comments */`.
 
+## Evaluation — VibeOS
+
+BMC-Agent was evaluated on [VibeOS](https://github.com/notgull/vibeos), a bare-metal ARM64 hobby OS of ~15,000 lines written with substantial LLM assistance. Running `verify-dir` over all 37 kernel modules (675 functions) with all validation tiers enabled confirmed **13 realistic bugs** after the realism filter eliminated 48 unrealistic counterexamples.
+
+| Function | Module | Tier | Signal | Root cause |
+|---|---|---|---|---|
+| `net_get_mac` | net.c | `confirmed_dynamic` | SIGSEGV | Null output pointer, no guard |
+| `stbtt__buf_get` | ttf.c | `confirmed_dynamic` | SIGSEGV | CFF buffer OOB read (crafted font) |
+| `stbtt__h_prefilter` | ttf.c | `confirmed_dynamic` | SIGABRT | Stack OOB write, user-controlled filter width |
+| `stbtt_PackEnd` | ttf.c | `confirmed_dynamic` | SIGABRT | Double-free of font pack state |
+| `hal_usb_keyboard_poll` | usb_hid.c | `confirmed_dynamic` | SIGSEGV | Null report buffer dereference |
+| `vfs_lookup` | vfs.c | `confirmed_system_entry` | — | `parts[32]` stack overflow on deep path; `strtok_r` misuse on non-ASCII input |
+| `vfs_open_handle` | vfs.c | `confirmed_system_entry` | — | `strcpy` overflow in path normalisation |
+| `vfs_close_handle` | vfs.c | `confirmed_system_entry` | — | Use-after-free on node data |
+| `strtok_r` | string.c | `confirmed_system_entry` | — | Tokenizer misuse |
+| `hal_serial_getc` | serial.c | `confirmed_system_entry` | — | Null dereference in serial input |
+| `align4` | dtb.c | `confirmed_system_entry` | — | Alignment violation in DTB parsing |
+| `stbtt_GetPackedQuad` | ttf.c | `confirmed_system_entry` | — | Font atlas bounds (realism: uncertain) |
+| `stbtt__csctx_rmove_to` | ttf.c | `confirmed_bmc` | — | CFF charstring NaN→int UB (CFF/OTF fonts only) |
+
+The `calloc` integer overflow (CWE-190, `nmemb * size` wraps to zero) was confirmed in an earlier run and independently cross-validates [VibeOS issue #26](https://github.com/notgull/vibeos/issues/26).
+
 ## Examples
 
 | File | Description |
@@ -125,11 +156,7 @@ Return values use `\result`. Arithmetic operators and C comparisons are translat
 | `block_device.c` | Integer overflow in `blk_seek` |
 | `memory_allocator.c` | Null dereference in `alloc_free` |
 | `cross_file_demo/` | Cross-file `confirmed_system_entry`: null fn-pointer in `libmath.c` traced to `system_entry` in `main.c` |
-| `vibeos/vibeos_memory.c` | VibeOS allocator — `calloc` overflow (cross-validates tracker issue #26) |
-| `vibeos/vibeos_string.c` | 16 unbounded-loop findings in string functions |
-| `vibeos/vibeos_printf.c` | `print_signed` `INT64_MIN` signed overflow |
-| `vibeos/vibeos_vfs.c` | 18 unbounded-loop findings in path traversal |
-| `vibeos/vibeos_dtb.c` | 4 findings on untrusted DTB input |
+| `vibeos/repo/kernel/` | Full VibeOS kernel — 13 confirmed realistic bugs (see table above) |
 
 ## Running tests
 
@@ -145,24 +172,25 @@ bmc_agent/
   pipeline.py           End-to-end orchestrator
   spec_generator.py     Phase 1: LLM spec generation (top-down, caller-driven)
   bmc_engine.py         Phase 2: CBMC runner with parallel dispatch
-  cex_validator.py      Phase 3: counterexample classification + refinement loop
+  cex_validator.py      Phase 3 S1/S2: counterexample classification + feasibility check
   harness_generator.py  CBMC and GCC harness synthesis
   dsl_to_cbmc.py        Spec DSL → __CPROVER_assume / assert translation
   dynamic_validator.py  Phase 3 S3: GCC harness compile + run
+  realism_checker.py    Phase 3 S4: LLM realism audit (REALISTIC / UNREALISTIC / UNCERTAIN)
   spec_quality.py       Phase 4: mutation testing, coverage, consistency checks
   evaluation/           Baselines, metrics, corpus, report generation
   backends/             BMCBackend ABC + CBMCBackend (KaniBackend scaffolded)
 examples/               Synthetic and real-world C targets
-tests/                  220 unit and integration tests
+tests/                  Unit and integration tests
 ```
 
 ## Status
 
-BMC-Agent is an active research prototype. The pipeline and all four evidence tiers are stable; the evaluation and spec-quality components are under active development.
+BMC-Agent is an active research prototype. The pipeline and all confidence tiers are stable.
 
-**Working:** full C verification pipeline, whole-codebase `verify-dir` mode, cross-file call-graph construction, cross-file CBMC reachability, Phase 3 Stage 2 feasibility check (real callee inlining), Phase 3 Stage 3 dynamic validation (bare-metal-compatible GCC harness), four-tier confidence reporting, callee stub postcondition constraints, FilteringOnly ablation (`--skip-refinement`), spec-quality module (`BMC_AGENT_ENABLE_SPEC_QUALITY=true`), prompt caching.
+**Working:** full C verification pipeline, whole-codebase `verify-dir` mode, cross-file call-graph construction, Phase 3 S1 counterexample classification, Phase 3 S2 feasibility check (real callee inlining), Phase 3 S3 dynamic validation (bare-metal-compatible GCC harness), Phase 3 S4 realism checker (LLM audit with optional extended thinking), five-tier confidence reporting (`confirmed_dynamic` / `confirmed_system_entry` / `confirmed_bmc` / `likely` / `unlikely`), CEGAR spec refinement loop, callee stub postcondition constraints, FilteringOnly ablation (`--skip-refinement`), domain knowledge injection (`--domain-knowledge`), spec-quality module, prompt caching.
 
-**Partial / planned:** spec-quality analysis at scale; CBMCAloneBaseline and AMCAblationBaseline comparisons on VibeOS; Kani (Rust) backend; evaluation corpus beyond VibeOS; manual precision audit of sampled findings.
+**Partial / planned:** spec-quality analysis at scale; Kani (Rust) backend; evaluation corpus beyond VibeOS; manual precision audit of sampled findings.
 
 ## License
 

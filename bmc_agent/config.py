@@ -50,6 +50,10 @@ class Config:
     dynamic_validation_timeout: int = 30     # seconds to allow the compiled harness to run
     dynamic_cc_path: str = "gcc"             # C compiler for dynamic harness compilation
 
+    # Realism checker settings (Phase 3 post-validation LLM audit)
+    enable_realism_check: bool = False       # LLM agent that audits REAL_BUG findings for realistic exploitability
+    enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
+
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly."""
         if self.llm_api_key:
@@ -78,7 +82,9 @@ class Config:
             include_dirs=[d for d in os.environ.get("BMC_AGENT_INCLUDE_DIRS", "").split(":") if d],
             cc_path=os.environ.get("BMC_AGENT_CC_PATH", "cc"),
             preprocess=os.environ.get("BMC_AGENT_PREPROCESS", "false").lower() == "true",
-            enable_dynamic_validation=os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION", "false").lower() == "true",
+            enable_dynamic_validation=os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION", os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION", "false")).lower() == "true",
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
+            enable_realism_check=os.environ.get("AMC_ENABLE_REALISM_CHECK", "false").lower() == "true",
+            enable_realism_thinking=os.environ.get("AMC_ENABLE_REALISM_THINKING", "false").lower() == "true",
         )
