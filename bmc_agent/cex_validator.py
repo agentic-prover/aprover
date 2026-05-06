@@ -180,25 +180,25 @@ class CExValidator:
         logger.info("Validating counterexample for '%s'", func_name)
 
         # Unwind filter: CBMC unwinding assertions (.unwind.N) indicate that a loop
-        # exceeded the BMC bound.  These are not reportable bugs: the harness provides
-        # minimally-constrained inputs (e.g. a single nondeterministic byte for a char*
-        # parameter), so the loop firing unwind.N at k=4 tells us nothing meaningful
-        # about whether the loop is genuinely unbounded in real program contexts.
-        # Suppress all unwind.N findings unconditionally.
+        # exceeded the BMC bound.  These are not directly reportable as bugs, but we
+        # must not suppress them outright: falling through to _handle_spurious lets the
+        # refiner tighten the precondition (e.g. constrain loop-input ranges) and puts
+        # the function back on the CEGAR re-check queue.  Suppressing with
+        # final_precondition=None bypasses that queue and can mask real bugs (e.g. the
+        # calloc integer-overflow found only after the refiner constrains nmemb/size).
         if re.search(r"\.unwind\.\d+$", counterexample.failing_property):
-            return ValidationResult(
-                function_name=func_name,
+            logger.info(
+                "Loop-bound artifact '%s' for '%s' — delegating to spec refiner via CEGAR",
+                counterexample.failing_property,
+                func_name,
+            )
+            return self._handle_spurious(
+                func=func,
+                spec=spec,
                 counterexample=counterexample,
-                caller_path=[],
-                system_entry_input=None,
-                refinement_history=[],
-                final_precondition=None,
-                reasoning=(
-                    f"loop-bound artifact suppressed: '{counterexample.failing_property}' "
-                    f"fires at k={self.config.cbmc_unwind} but is not reportable without "
-                    f"a spec that constrains loop-input ranges"
-                ),
-                outcome=CExOutcome.SPURIOUS,
+                callers=self._find_callers(func_name, all_funcs),
+                all_specs=all_specs,
+                parsed_file=parsed_file,
             )
 
         # Step 1: find all callers of func_name in all_funcs

@@ -1241,7 +1241,7 @@ def test_propagate_upward_crosses_file_boundary_to_entry(tmp_path: Path):
 
 
 def test_unwind_zero_is_suppressed(tmp_path: Path):
-    """unwind.0 findings are immediately classified SPURIOUS (not reportable)."""
+    """unwind.N findings are classified SPURIOUS and fed to the spec refiner via CEGAR."""
     from bmc_agent.cex_validator import CExOutcome, CExValidator
     from bmc_agent.harness_generator import HarnessGenerator
     from bmc_agent.parser import parse_c_file
@@ -1259,8 +1259,11 @@ def test_unwind_zero_is_suppressed(tmp_path: Path):
             all_funcs={"rb_write": func}, all_specs={"rb_write": spec},
             parsed_file=parsed, driver_name="test_driver",
         )
+        # Must be SPURIOUS and must have gone through the refiner (not hard-suppressed)
         assert result.outcome == CExOutcome.SPURIOUS, f"expected SPURIOUS for {prop}"
-        assert "loop-bound artifact suppressed" in result.reasoning
+        assert result.final_precondition is not None, (
+            f"unwind artifact for {prop} must produce a refined precondition for CEGAR"
+        )
 
 
 def test_non_unwind_not_suppressed(tmp_path: Path):
