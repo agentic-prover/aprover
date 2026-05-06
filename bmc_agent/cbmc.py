@@ -53,6 +53,7 @@ def run_cbmc(
     timeout: int = 120,
     cbmc_path: str = "cbmc",
     include_dirs: list[str] | None = None,
+    unsigned_overflow_check: bool = False,
 ) -> CBMCResult:
     """
     Run CBMC on *harness_path* and return a structured result.
@@ -92,6 +93,8 @@ def run_cbmc(
         str(unwind),
         "--unwinding-assertions",
     ]
+    if unsigned_overflow_check:
+        cmd.append("--unsigned-overflow-check")
     for d in (include_dirs or []):
         cmd += ["-I", d]
 

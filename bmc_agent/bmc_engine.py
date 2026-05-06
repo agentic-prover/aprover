@@ -70,6 +70,7 @@ class BMCEngine:
         parsed_file: ParsedCFile,
         driver_name: str,
         all_funcs: "dict | None" = None,
+        flag_selection: "object | None" = None,
     ) -> BMCVerdict:
         """
         Check a single function against its spec using CBMC.
@@ -99,12 +100,24 @@ class BMCEngine:
         logger.debug("Harness saved to: %s", harness_path)
 
         # ---- Step 3: run CBMC ----
+        # Per-function flag selection can only add flags, never suppress the global flag.
+        # global_uoc=True means "always enable"; per_fn_uoc=True means "enable for this fn".
+        global_uoc = getattr(self.config, "cbmc_unsigned_overflow_check", False)
+        per_fn_uoc = getattr(flag_selection, "unsigned_overflow_check", False)
+        unsigned_overflow_check = global_uoc or bool(per_fn_uoc)
+        if per_fn_uoc:
+            logger.debug(
+                "Flag selection: --unsigned-overflow-check enabled for '%s' (%s)",
+                fn_name,
+                getattr(flag_selection, "reasoning", ""),
+            )
         cbmc_result = run_cbmc(
             harness_path=harness_path,
             unwind=self.config.cbmc_unwind,
             timeout=self.config.cbmc_timeout,
             cbmc_path=self.config.cbmc_path,
             include_dirs=getattr(self.config, "include_dirs", None),
+            unsigned_overflow_check=unsigned_overflow_check,
         )
 
         # ---- Step 4: build verdict ----
@@ -152,6 +165,7 @@ class BMCEngine:
         parsed_file: ParsedCFile,
         driver_name: str,
         all_funcs: "dict | None" = None,
+        flag_selections: "dict | None" = None,
     ) -> dict[str, BMCVerdict]:
         """
         Check all functions in parallel (ThreadPoolExecutor).
@@ -200,6 +214,7 @@ class BMCEngine:
                     parsed_file,
                     driver_name,
                     all_funcs,
+                    (flag_selections or {}).get(name),
                 ): name
                 for name, func in to_check.items()
             }

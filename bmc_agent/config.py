@@ -21,6 +21,7 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
+    cbmc_unsigned_overflow_check: bool = False  # add --unsigned-overflow-check (detects integer overflow bugs like calloc nmemb*size wrap)
 
     # Artifact settings
     artifact_dir: str = "artifacts"
@@ -50,6 +51,9 @@ class Config:
     dynamic_validation_timeout: int = 30     # seconds to allow the compiled harness to run
     dynamic_cc_path: str = "gcc"             # C compiler for dynamic harness compilation
 
+    # Flag selector settings (Phase 1.5: per-function CBMC flag selection)
+    enable_flag_selection: bool = False      # LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check)
+
     # Realism checker settings (Phase 3 post-validation LLM audit)
     enable_realism_check: bool = False       # LLM agent that audits REAL_BUG findings for realistic exploitability
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
@@ -71,6 +75,7 @@ class Config:
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
+            cbmc_unsigned_overflow_check=os.environ.get("BMC_AGENT_CBMC_UNSIGNED_OVERFLOW_CHECK", "false").lower() == "true",
             artifact_dir=os.environ.get("BMC_AGENT_ARTIFACT_DIR", "artifacts"),
             max_spec_retries=int(os.environ.get("BMC_AGENT_MAX_SPEC_RETRIES", "3")),
             max_refinement_iters=int(os.environ.get("BMC_AGENT_MAX_REFINEMENT_ITERS", "5")),
@@ -87,4 +92,5 @@ class Config:
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
             enable_realism_check=os.environ.get("AMC_ENABLE_REALISM_CHECK", "false").lower() == "true",
             enable_realism_thinking=os.environ.get("AMC_ENABLE_REALISM_THINKING", "false").lower() == "true",
+            enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "false").lower() == "true",
         )

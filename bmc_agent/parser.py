@@ -24,6 +24,7 @@ class FunctionSignature:
     name: str
     return_type: str
     parameters: list[tuple[str, str]]  # [(type, name), ...]
+    is_static: bool = False             # True if declared with `static` storage class
 
 
 @dataclass
@@ -228,7 +229,8 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
     if pointer_stars:
         ret_type = ret_type + " " + pointer_stars
 
-    return FunctionSignature(name=fn_name, return_type=ret_type, parameters=params)
+    is_static = "static" in ret_type.split()
+    return FunctionSignature(name=fn_name, return_type=ret_type, parameters=params, is_static=is_static)
 
 
 def _extract_param_ts(param_node, src_bytes: bytes) -> tuple[str, str]:
@@ -303,6 +305,7 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
         ret_type = m.group("ret").strip()
         raw_params = m.group("params").strip()
         params = _parse_params_regex(raw_params)
+        is_static = "static" in ret_type.split()
 
         # Extract body: from { to matching }
         body_start = m.end() - 1  # points at the '{'
@@ -312,6 +315,7 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
             name=fn_name,
             return_type=ret_type,
             parameters=params,
+            is_static=is_static,
         )
         function_bodies[fn_name] = body_text
 

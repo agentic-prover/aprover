@@ -333,6 +333,10 @@ def _sanitize_condition(condition: str) -> str:
     condition = condition.replace('\result', 'result')   # CR+esult → result
     condition = condition.replace('\\result', 'result')  # literal \result → result
 
+    # Lowercase `null` used as a constant (e.g. `result == null`) → NULL
+    # Only replace when NOT followed by '(' to avoid clobbering null(ptr) predicates.
+    condition = re.sub(r'\bnull\b(?!\s*\()', 'NULL', condition)
+
     # \old(expr) → expr  (best-effort; avoids parse error)
     condition = re.sub(r"\\old\s*\(([^)]*)\)", r"\1", condition)
     # Also handle old(expr) without backslash

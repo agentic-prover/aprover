@@ -155,6 +155,16 @@ class AMCPipeline:
                 callee_to_callers.setdefault(callee, set()).add(fn_name)
 
         # ------------------------------------------------------------------
+        # Phase 1.5: Per-function CBMC flag selection [AGENTIC]
+        # ------------------------------------------------------------------
+        flag_selections: dict = {}
+        if getattr(self.config, "enable_flag_selection", False):
+            from bmc_agent.flag_selector import FlagSelector
+            logger.info("--- Phase 1.5: Selecting per-function CBMC flags ---")
+            selector = FlagSelector(self.config, self.llm)
+            flag_selections = selector.select_all(all_funcs)
+
+        # ------------------------------------------------------------------
         # Phase 2: Run BMC on all functions
         # ------------------------------------------------------------------
         logger.info("--- Phase 2: Running BMC on %d functions ---", len(all_funcs))
@@ -164,6 +174,7 @@ class AMCPipeline:
             parsed_file=parsed,
             driver_name=driver_name,
             all_funcs=all_funcs,
+            flag_selections=flag_selections if flag_selections else None,
         )
         logger.info("Phase 2 complete: %d verdicts", len(verdicts))
 

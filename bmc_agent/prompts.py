@@ -348,36 +348,52 @@ GLOBAL VARIABLE CONTEXT — where key globals used by this function are assigned
 ---
 ANALYSIS GUIDANCE
 
-A finding is UNREALISTIC (likely false positive) when ANY of these apply:
-1. The counterexample requires a pointer argument to be NULL (or an impossible address),
-   but the call-site analysis shows every real caller passes a valid non-NULL pointer.
-2. The counterexample requires an integer/global to take an extreme value (e.g. UINT32_MAX,
-   2^31), but the global context shows that variable is only ever assigned small, bounded
-   values (e.g. a hardware-reported screen width, a loop counter initialized to 0).
-3. The violated property is a postcondition whose failure only occurs with artificially
-   extreme return values from callee stubs (e.g., malloc returns UINT_MAX) that are
-   impossible from the real callee implementation.
-4. The dynamic harness crashed solely because global state was zero-initialized (static
-   storage default) while the real program always populates that state before first call.
-5. The counterexample witness values require multiple concurrent callee failures that
-   could not co-occur in a real execution.
-6. The call-site analysis shows NO call sites in this file and the function appears to be
-   DEAD CODE (never called). Treat such findings as low confidence.
+CRITICAL DISTINCTION — witness vs. vulnerability class:
+A CBMC counterexample is just ONE witness path to a violation. The specific variable
+values in the counterexample may be a CBMC artifact (aliasing that is impossible in
+real C, an extreme symbolic value, etc.) while the UNDERLYING VULNERABILITY CLASS
+(null dereference, buffer overflow, integer overflow, use-after-free) is real and
+triggerable by different inputs.
+
+Ask two separate questions:
+  Q1. Could ANY realistic input trigger this TYPE of violation in the real program?
+  Q2. Are the specific counterexample witness values achievable in real execution?
+
+Decision rules:
+  • Q1=YES, Q2=YES → REALISTIC
+  • Q1=YES, Q2=NO  → UNCERTAIN (witness is a CBMC artifact, but bug class is real)
+  • Q1=NO,  Q2=any → UNREALISTIC
+
+UNREALISTIC should only be returned when the violation TYPE is impossible in practice
+(e.g., pure loop-unwind bound with no real termination issue, violation that requires
+a mathematical impossibility, or call-site analysis proves all callers guard the path).
+Do NOT return UNREALISTIC merely because the specific witness values are unrealistic.
+
+A finding is UNREALISTIC when:
+1. The violation is a loop-unwinding bound (*.unwind.*) AND the loop always terminates
+   in real execution for every realistic input — no real infinite-loop scenario exists.
+2. The counterexample requires a pointer argument to be NULL, but the call-site analysis
+   shows ALL real callers always pass a valid non-NULL pointer with no exception path.
+3. The violated postcondition only fails with callee stub return values that are
+   mathematically impossible from the real callee (e.g. size_t returning negative).
+4. The violation requires multiple simultaneous hardware/callee failures that cannot
+   co-occur in any real execution scenario.
 
 A finding is REALISTIC when:
-1. The triggering input could plausibly arise from environment, user, network, or hardware
-   (especially for parsers, drivers, OS entry points, or functions that handle external data).
-2. The NULL or overflow occurs on a code path that is reachable with normal usage AND
-   the call-site analysis does not contradict it (no call sites always pass valid values).
-3. The dynamic harness triggered the same fault with inputs that mirror a real caller's
-   behavior (not just the minimum possible — NULL, zero, empty buffer).
-4. The call chain goes through a system entry that receives untrusted or unvalidated input.
-5. The global context shows the variable CAN take the counterexample value in practice.
+1. The triggering input class could plausibly arise from environment, user, network, or
+   hardware (parsers, drivers, OS entry points, functions handling external data).
+2. The NULL or overflow occurs on a code path reachable with normal usage AND the
+   call-site analysis does not contradict it.
+3. The dynamic harness triggered the same fault (confirmed signal in dynamic result).
+4. The call chain goes through a system entry that receives untrusted/unvalidated input.
+5. The global context shows the variable CAN take the problematic value in practice.
+6. Even if this specific CBMC witness is an aliasing artifact or symbolic extreme —
+   if the same violation TYPE is reachable via other inputs, lean UNCERTAIN not UNREALISTIC.
 
 Respond with ONLY valid JSON:
 {{
   "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
-  "reasoning": "<step-by-step analysis — reference specific variable values and call sites>",
+  "reasoning": "<step-by-step: first answer Q1 (can the violation TYPE occur?), then Q2 (is this witness realistic?)>",
   "key_concern": "<if UNREALISTIC or UNCERTAIN: the specific scenario that makes this unrealistic>",
   "confidence": "high" | "medium" | "low"
 }}

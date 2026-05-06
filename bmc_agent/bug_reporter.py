@@ -164,14 +164,27 @@ class BugReporter:
             confidence = "confirmed_bmc"
 
         # Realism check downgrade: UNREALISTIC → "unlikely"
+        # confirmed_dynamic is immune only when the crash came from a source-level
+        # property (e.g. overflow, null-deref, OOB).  When the failing property is
+        # main.assertion.N the crash was caused by a harness-injected assert() that
+        # encodes the LLM-generated postcondition — that is harness noise, not ground
+        # truth, and the realism checker must be allowed to filter it.
+        _harness_assertion = cex.failing_property.startswith("main.assertion")
+        _immune = confidence == "confirmed_dynamic" and not _harness_assertion
         if (
             realism_check is not None
             and realism_check.verdict == RealismVerdict.UNREALISTIC
             and realism_check.llm_confidence in ("high", "medium")
+            and not _immune
         ):
             confidence = "unlikely"
             logger.info(
                 "Confidence downgraded to 'unlikely' for '%s': %s",
+                func.name, realism_check.key_concern[:100],
+            )
+        elif _immune and realism_check is not None and realism_check.verdict == RealismVerdict.UNREALISTIC:
+            logger.info(
+                "Realism downgrade suppressed for '%s' (confirmed_dynamic is immune): %s",
                 func.name, realism_check.key_concern[:100],
             )
 

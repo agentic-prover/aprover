@@ -324,25 +324,40 @@ class CExValidator:
                 all_specs=all_specs,
             )
             if feasible is False:
-                logger.info(
-                    "Feasibility check: violation absent with real callees for '%s' → UNRESOLVED",
-                    func_name,
-                )
-                return ValidationResult(
-                    function_name=func_name,
-                    counterexample=counterexample,
-                    caller_path=[func_name],
-                    system_entry_input=None,
-                    refinement_history=[],
-                    final_precondition=None,
-                    reasoning=(
-                        f"'{func_name}' is an entry function. "
-                        "CEx inputs are reachable but the violation does not occur "
-                        "with real callee implementations — callee return values "
-                        "assumed by the stubs are not achievable. Marking UNRESOLVED."
-                    ),
-                    outcome=CExOutcome.UNRESOLVED,
-                )
+                if not func.signature.is_static:
+                    # Non-static function: external linkage means it IS callable from
+                    # outside the corpus with arbitrary inputs.  INFEASIBLE from the
+                    # feasibility check is not grounds for UNRESOLVED — it may simply
+                    # reflect that the feasibility harness couldn't reproduce the exact
+                    # callee state (e.g. unsigned-overflow assertion not re-enabled, or
+                    # the violation occurs before any callee is invoked).
+                    logger.info(
+                        "Feasibility check INFEASIBLE for non-static '%s' — "
+                        "external linkage means it is a system entry point; "
+                        "treating as confirmed_system_entry",
+                        func_name,
+                    )
+                    feasible = None  # fall through to confirmed_system_entry below
+                else:
+                    logger.info(
+                        "Feasibility check: violation absent with real callees for '%s' → UNRESOLVED",
+                        func_name,
+                    )
+                    return ValidationResult(
+                        function_name=func_name,
+                        counterexample=counterexample,
+                        caller_path=[func_name],
+                        system_entry_input=None,
+                        refinement_history=[],
+                        final_precondition=None,
+                        reasoning=(
+                            f"'{func_name}' is a static entry function. "
+                            "CEx inputs are reachable but the violation does not occur "
+                            "with real callee implementations — callee return values "
+                            "assumed by the stubs are not achievable. Marking UNRESOLVED."
+                        ),
+                        outcome=CExOutcome.UNRESOLVED,
+                    )
             reproducer = self._generate_system_entry_reproducer(
                 call_chain=[func_name],
                 counterexample=counterexample,
@@ -552,6 +567,7 @@ class CExValidator:
                 timeout=self.config.cbmc_timeout,
                 cbmc_path=self.config.cbmc_path,
                 include_dirs=getattr(self.config, "include_dirs", None),
+                unsigned_overflow_check=getattr(self.config, "cbmc_unsigned_overflow_check", False),
             )
         except Exception as exc:
             logger.warning(

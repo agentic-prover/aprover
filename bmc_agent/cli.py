@@ -290,6 +290,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_realism_check = True
     if getattr(args, "enable_realism_thinking", False):
         config.enable_realism_thinking = True
+    if getattr(args, "unsigned_overflow_check", False):
+        config.cbmc_unsigned_overflow_check = True
+    if getattr(args, "enable_flag_selection", False):
+        config.enable_flag_selection = True
+    if getattr(args, "enable_dynamic_validation", False):
+        config.enable_dynamic_validation = True
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -425,6 +431,10 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_realism_check = True
     if getattr(args, "enable_realism_thinking", False):
         config.enable_realism_thinking = True
+    if getattr(args, "unsigned_overflow_check", False):
+        config.cbmc_unsigned_overflow_check = True
+    if getattr(args, "enable_flag_selection", False):
+        config.enable_flag_selection = True
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -537,6 +547,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="FilteringOnly mode: classify counterexamples but skip spec update and caller re-queue (RQ3 ablation)",
     )
     ver.add_argument(
+        "--enable-dynamic-validation",
+        action="store_true",
+        default=False,
+        help="Stage 3: compile and run a GCC harness to confirm bugs at runtime (confirmed_dynamic tier)",
+    )
+    ver.add_argument(
         "--enable-realism-check",
         action="store_true",
         default=False,
@@ -547,6 +563,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Use extended thinking in the realism checker (higher quality, slower, implies --enable-realism-check)",
+    )
+    ver.add_argument(
+        "--unsigned-overflow-check",
+        action="store_true",
+        default=False,
+        help="Pass --unsigned-overflow-check to CBMC (detects integer overflow bugs such as calloc nmemb*size wrap)",
+    )
+    ver.add_argument(
+        "--enable-flag-selection",
+        action="store_true",
+        default=False,
+        help="Phase 1.5: LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check for allocation-size arithmetic)",
     )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
@@ -623,6 +651,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Use extended thinking in the realism checker (higher quality, slower)",
+    )
+    vd.add_argument(
+        "--unsigned-overflow-check",
+        action="store_true",
+        default=False,
+        help="Pass --unsigned-overflow-check to CBMC (detects integer overflow bugs such as calloc nmemb*size wrap)",
+    )
+    vd.add_argument(
+        "--enable-flag-selection",
+        action="store_true",
+        default=False,
+        help="Phase 1.5: LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check for allocation-size arithmetic)",
     )
     _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)
