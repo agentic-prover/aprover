@@ -15,6 +15,17 @@ import sys
 from pathlib import Path
 
 
+def _resolve_domain_knowledge(raw: str) -> str:
+    """Return domain knowledge text: read from file if raw is a valid existing path, else use as-is."""
+    try:
+        p = Path(raw)
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return raw
+
+
 def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
     """Override config.llm_model if --model was supplied on the command line."""
     model = getattr(args, "model", None)
@@ -38,13 +49,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     llm = LLMClient(config)
     generator = SpecGenerator(config, llm, store)
 
-    domain_knowledge = ""
-    if args.domain_knowledge:
-        dk_path = Path(args.domain_knowledge)
-        if dk_path.exists():
-            domain_knowledge = dk_path.read_text(encoding="utf-8")
-        else:
-            domain_knowledge = args.domain_knowledge
+    domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if args.domain_knowledge else ""
 
     print(f"Generating specs for: {args.source}")
     print(f"Driver name: {args.driver}")
@@ -287,13 +292,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_realism_thinking = True
     _apply_model_arg(config, args)
 
-    domain_knowledge = ""
-    if hasattr(args, "domain_knowledge") and args.domain_knowledge:
-        dk_path = Path(args.domain_knowledge)
-        if dk_path.exists():
-            domain_knowledge = dk_path.read_text(encoding="utf-8")
-        else:
-            domain_knowledge = args.domain_knowledge
+    domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
     print(f"Full verification pipeline for: {args.source}")
     print(f"Driver: {args.driver}")
@@ -430,13 +429,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
 
     include_dirs = args.include_dir or []
 
-    domain_knowledge = ""
-    if args.domain_knowledge:
-        dk_path = Path(args.domain_knowledge)
-        if dk_path.exists():
-            domain_knowledge = dk_path.read_text(encoding="utf-8")
-        else:
-            domain_knowledge = args.domain_knowledge
+    domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if args.domain_knowledge else ""
 
     exclude = args.exclude or []
 
