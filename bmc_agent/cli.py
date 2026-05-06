@@ -290,8 +290,6 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_realism_check = True
     if getattr(args, "enable_realism_thinking", False):
         config.enable_realism_thinking = True
-    if getattr(args, "unsigned_overflow_check", False):
-        config.cbmc_unsigned_overflow_check = True
     if getattr(args, "enable_flag_selection", False):
         config.enable_flag_selection = True
     if getattr(args, "enable_dynamic_validation", False):
@@ -431,8 +429,6 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_realism_check = True
     if getattr(args, "enable_realism_thinking", False):
         config.enable_realism_thinking = True
-    if getattr(args, "unsigned_overflow_check", False):
-        config.cbmc_unsigned_overflow_check = True
     if getattr(args, "enable_flag_selection", False):
         config.enable_flag_selection = True
     _apply_model_arg(config, args)
@@ -565,16 +561,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use extended thinking in the realism checker (higher quality, slower, implies --enable-realism-check)",
     )
     ver.add_argument(
-        "--unsigned-overflow-check",
-        action="store_true",
-        default=False,
-        help="Pass --unsigned-overflow-check to CBMC (detects integer overflow bugs such as calloc nmemb*size wrap)",
-    )
-    ver.add_argument(
         "--enable-flag-selection",
         action="store_true",
         default=False,
-        help="Phase 1.5: LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check for allocation-size arithmetic)",
+        help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
     )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
@@ -653,16 +643,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use extended thinking in the realism checker (higher quality, slower)",
     )
     vd.add_argument(
-        "--unsigned-overflow-check",
-        action="store_true",
-        default=False,
-        help="Pass --unsigned-overflow-check to CBMC (detects integer overflow bugs such as calloc nmemb*size wrap)",
-    )
-    vd.add_argument(
         "--enable-flag-selection",
         action="store_true",
         default=False,
-        help="Phase 1.5: LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check for allocation-size arithmetic)",
+        help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
     )
     _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)

@@ -100,11 +100,8 @@ class BMCEngine:
         logger.debug("Harness saved to: %s", harness_path)
 
         # ---- Step 3: run CBMC ----
-        # Per-function flag selection can only add flags, never suppress a global flag.
-        global_uoc = getattr(self.config, "cbmc_unsigned_overflow_check", False)
-        per_fn_uoc = getattr(flag_selection, "unsigned_overflow_check", False)
-        unsigned_overflow_check = global_uoc or bool(per_fn_uoc)
-
+        # All CBMC flags come exclusively from per-function flag selection.
+        unsigned_overflow_check = bool(getattr(flag_selection, "unsigned_overflow_check", False))
         signed_overflow_check   = bool(getattr(flag_selection, "signed_overflow_check", False))
         conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
         pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))

@@ -567,7 +567,6 @@ class CExValidator:
                 timeout=self.config.cbmc_timeout,
                 cbmc_path=self.config.cbmc_path,
                 include_dirs=getattr(self.config, "include_dirs", None),
-                unsigned_overflow_check=getattr(self.config, "cbmc_unsigned_overflow_check", False),
             )
         except Exception as exc:
             logger.warning(

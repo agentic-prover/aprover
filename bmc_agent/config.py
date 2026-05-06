@@ -21,8 +21,6 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
-    cbmc_unsigned_overflow_check: bool = False  # add --unsigned-overflow-check (detects integer overflow bugs like calloc nmemb*size wrap)
-
     # Artifact settings
     artifact_dir: str = "artifacts"
 
@@ -75,7 +73,6 @@ class Config:
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
-            cbmc_unsigned_overflow_check=os.environ.get("BMC_AGENT_CBMC_UNSIGNED_OVERFLOW_CHECK", "false").lower() == "true",
             artifact_dir=os.environ.get("BMC_AGENT_ARTIFACT_DIR", "artifacts"),
             max_spec_retries=int(os.environ.get("BMC_AGENT_MAX_SPEC_RETRIES", "3")),
             max_refinement_iters=int(os.environ.get("BMC_AGENT_MAX_REFINEMENT_ITERS", "5")),
