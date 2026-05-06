@@ -100,15 +100,20 @@ class BMCEngine:
         logger.debug("Harness saved to: %s", harness_path)
 
         # ---- Step 3: run CBMC ----
-        # Per-function flag selection can only add flags, never suppress the global flag.
-        # global_uoc=True means "always enable"; per_fn_uoc=True means "enable for this fn".
+        # Per-function flag selection can only add flags, never suppress a global flag.
         global_uoc = getattr(self.config, "cbmc_unsigned_overflow_check", False)
         per_fn_uoc = getattr(flag_selection, "unsigned_overflow_check", False)
         unsigned_overflow_check = global_uoc or bool(per_fn_uoc)
-        if per_fn_uoc:
+
+        signed_overflow_check   = bool(getattr(flag_selection, "signed_overflow_check", False))
+        conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
+        pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
+
+        if flag_selection and flag_selection.any_enabled():
             logger.debug(
-                "Flag selection: --unsigned-overflow-check enabled for '%s' (%s)",
+                "Flag selection for '%s': %s (%s)",
                 fn_name,
+                ", ".join(flag_selection.enabled_flags()),
                 getattr(flag_selection, "reasoning", ""),
             )
         cbmc_result = run_cbmc(
@@ -118,6 +123,9 @@ class BMCEngine:
             cbmc_path=self.config.cbmc_path,
             include_dirs=getattr(self.config, "include_dirs", None),
             unsigned_overflow_check=unsigned_overflow_check,
+            signed_overflow_check=signed_overflow_check,
+            conversion_check=conversion_check,
+            pointer_overflow_check=pointer_overflow_check,
         )
 
         # ---- Step 4: build verdict ----

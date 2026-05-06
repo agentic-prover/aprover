@@ -7,9 +7,14 @@ semantically meaningful — enabling them only where they catch real bugs, not
 everywhere (which would drown real findings in noise).
 
 Currently selects:
-  --unsigned-overflow-check  — for functions where unsigned integer overflow has
-                               security-relevant consequences (allocation-size
-                               computation, size arithmetic on external inputs).
+  --unsigned-overflow-check  — unsigned integer overflow (allocation-size math,
+                               network/filesystem length arithmetic).
+  --signed-overflow-check    — signed integer overflow (index/offset arithmetic
+                               on external data where wrap-around is exploitable).
+  --conversion-check         — unsafe type conversions / truncation (wide→narrow
+                               casts on packet fields, register values).
+  --pointer-overflow-check   — pointer arithmetic overflow (buffer indexing,
+                               stride-based address computation).
 
 Design principle: agents propose, conventional tools dispose.  The LLM decides
 which checks are meaningful; CBMC executes them soundly.
@@ -41,29 +46,51 @@ BODY:
 {body}
 
 ---
-DECISION: Should --unsigned-overflow-check be enabled for this function?
+For each flag below decide true/false. Only enable a flag when it is \
+semantically meaningful for THIS function — enabling flags everywhere creates \
+noise that hides real bugs.
 
-Enable --unsigned-overflow-check when the function:
-1. Multiplies two size/count/length parameters together \
-(e.g. nmemb*size, width*height, count*stride, rows*cols*bpp).
-2. Computes an allocation size that feeds into malloc/calloc/realloc/mmap.
-3. Does arithmetic on values arriving from external sources: network packets, \
-filesystem data, hardware registers, user/driver input.
-4. Has an integer overflow that could cause a security-relevant outcome \
-(under-allocation, buffer shorter than expected, wrap-around to a small value).
+FLAG 1: --unsigned-overflow-check
+Enable when the function:
+- Multiplies two size/count/length values (nmemb*size, width*height, rows*cols).
+- Computes an allocation size feeding into malloc/calloc/realloc/mmap.
+- Does arithmetic on lengths/sizes from network packets, filesystem data, \
+hardware registers, or user input.
+Do NOT enable for plain loop counters or provably-bounded index increments.
 
-Do NOT enable --unsigned-overflow-check when:
-1. Arithmetic is only index increments (i++, i += stride, loop counters) \
-where no security-relevant downstream use occurs.
-2. All integer operations are on values provably bounded by the program \
-structure (e.g. small enum, fixed-size array index).
-3. The function only reads, compares, or does bitwise operations — no \
-multiplication or addition of user-influenced values.
+FLAG 2: --signed-overflow-check
+Enable when the function:
+- Does signed arithmetic on values from external sources (packet fields, \
+file offsets, ioctl parameters) where wrap-around would be exploitable.
+- Computes array offsets or buffer positions using signed integers derived \
+from untrusted input.
+Do NOT enable for simple loop counters or comparisons with no downstream \
+security consequence.
+
+FLAG 3: --conversion-check
+Enable when the function:
+- Explicitly casts a wider integer type to a narrower one (uint32->uint16, \
+int64->int32, long->int) on values from external sources.
+- Truncates packet length fields, register values, or filesystem sizes \
+when assigning to smaller types.
+Do NOT enable when all casts are between same-width types or involve only \
+internal constants.
+
+FLAG 4: --pointer-overflow-check
+Enable when the function:
+- Computes buffer addresses via pointer arithmetic with externally-controlled \
+offsets (base + offset, ptr + count*stride).
+- Walks memory regions using pointer increments where the step size or count \
+comes from external data.
+Do NOT enable for simple array iteration with provably-bounded indices.
 
 Respond with ONLY valid JSON — no markdown, no extra text:
 {{
   "unsigned_overflow_check": true | false,
-  "reasoning": "<one concise sentence>"
+  "signed_overflow_check": true | false,
+  "conversion_check": true | false,
+  "pointer_overflow_check": true | false,
+  "reasoning": "<one concise sentence covering all enabled flags>"
 }}
 """
 
@@ -73,17 +100,43 @@ class FlagSelection:
     """Per-function CBMC flag selections chosen by the LLM."""
 
     unsigned_overflow_check: bool = False
+    signed_overflow_check: bool = False
+    conversion_check: bool = False
+    pointer_overflow_check: bool = False
     reasoning: str = ""
 
     def to_dict(self) -> dict:
         return {
             "unsigned_overflow_check": self.unsigned_overflow_check,
+            "signed_overflow_check": self.signed_overflow_check,
+            "conversion_check": self.conversion_check,
+            "pointer_overflow_check": self.pointer_overflow_check,
             "reasoning": self.reasoning,
         }
 
+    def any_enabled(self) -> bool:
+        return (
+            self.unsigned_overflow_check
+            or self.signed_overflow_check
+            or self.conversion_check
+            or self.pointer_overflow_check
+        )
+
+    def enabled_flags(self) -> list[str]:
+        flags = []
+        if self.unsigned_overflow_check:
+            flags.append("--unsigned-overflow-check")
+        if self.signed_overflow_check:
+            flags.append("--signed-overflow-check")
+        if self.conversion_check:
+            flags.append("--conversion-check")
+        if self.pointer_overflow_check:
+            flags.append("--pointer-overflow-check")
+        return flags
+
 
 # Default when flag selection is disabled or the LLM fails.
-_DEFAULT = FlagSelection(unsigned_overflow_check=False, reasoning="default (flag selection skipped)")
+_DEFAULT = FlagSelection(reasoning="default (flag selection skipped)")
 
 
 class FlagSelector:
@@ -134,14 +187,18 @@ class FlagSelector:
                     logger.warning("Flag selection failed for '%s': %s — using defaults", name, exc)
                     results[name] = _DEFAULT
 
-        enabled = [n for n, s in results.items() if s.unsigned_overflow_check]
+        enabled = [n for n, s in results.items() if s.any_enabled()]
         if enabled:
             logger.info(
-                "Flag selection: --unsigned-overflow-check enabled for %d/%d function(s): %s",
+                "Flag selection: extra flags enabled for %d/%d function(s): %s",
                 len(enabled), len(funcs), ", ".join(sorted(enabled)),
             )
+            for name in sorted(enabled):
+                logger.debug(
+                    "  %s: %s", name, ", ".join(results[name].enabled_flags()),
+                )
         else:
-            logger.debug("Flag selection: no functions selected for --unsigned-overflow-check")
+            logger.debug("Flag selection: no functions selected for extra flags")
 
         return results
 
@@ -190,10 +247,22 @@ def _parse_response(raw: str, func_name: str) -> FlagSelection:
         logger.warning("Flag selection: could not parse JSON for '%s' — using defaults", func_name)
         return _DEFAULT
 
-    enabled = bool(data.get("unsigned_overflow_check", False))
+    uoc = bool(data.get("unsigned_overflow_check", False))
+    soc = bool(data.get("signed_overflow_check", False))
+    cc  = bool(data.get("conversion_check", False))
+    poc = bool(data.get("pointer_overflow_check", False))
     reasoning = str(data.get("reasoning", "")).strip()
 
-    if enabled:
-        logger.debug("Flag selection '%s': unsigned_overflow_check=True — %s", func_name, reasoning)
-
-    return FlagSelection(unsigned_overflow_check=enabled, reasoning=reasoning)
+    sel = FlagSelection(
+        unsigned_overflow_check=uoc,
+        signed_overflow_check=soc,
+        conversion_check=cc,
+        pointer_overflow_check=poc,
+        reasoning=reasoning,
+    )
+    if sel.any_enabled():
+        logger.debug(
+            "Flag selection '%s': %s — %s",
+            func_name, ", ".join(sel.enabled_flags()), reasoning,
+        )
+    return sel

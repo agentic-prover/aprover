@@ -54,6 +54,9 @@ def run_cbmc(
     cbmc_path: str = "cbmc",
     include_dirs: list[str] | None = None,
     unsigned_overflow_check: bool = False,
+    signed_overflow_check: bool = False,
+    conversion_check: bool = False,
+    pointer_overflow_check: bool = False,
 ) -> CBMCResult:
     """
     Run CBMC on *harness_path* and return a structured result.
@@ -95,6 +98,12 @@ def run_cbmc(
     ]
     if unsigned_overflow_check:
         cmd.append("--unsigned-overflow-check")
+    if signed_overflow_check:
+        cmd.append("--signed-overflow-check")
+    if conversion_check:
+        cmd.append("--conversion-check")
+    if pointer_overflow_check:
+        cmd.append("--pointer-overflow-check")
     for d in (include_dirs or []):
         cmd += ["-I", d]
 
