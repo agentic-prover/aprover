@@ -33,6 +33,44 @@ from bmc_agent.spec_generator import SpecGenerator
 logger = get_logger("pipeline")
 
 
+def _dedup_counterexamples(cexs: list) -> list:
+    """Keep one counterexample per property type, preserving order.
+
+    CBMC emits a separate property ID for every loop unrolling and every
+    dereference site, so a single root bug can produce dozens of
+    pointer_arithmetic.N / overflow.N / unwind.N entries.  We keep only the
+    first representative per type.  'assertion' properties are kept in full
+    because each index corresponds to a distinct spec postcondition.
+    """
+    seen: set[str] = set()
+    result = []
+    for cex in cexs:
+        parts = cex.failing_property.split(".")
+        # property type is the second-to-last segment (e.g. "pointer_arithmetic")
+        prop_type = parts[-2] if len(parts) >= 2 else cex.failing_property
+        if prop_type == "assertion":
+            result.append(cex)
+        elif prop_type not in seen:
+            seen.add(prop_type)
+            result.append(cex)
+    if len(result) < len(cexs):
+        logger.debug(
+            "Deduped %d counterexamples → %d (by property type)",
+            len(cexs), len(result),
+        )
+    return result
+
+
+def _prop_type(failing_property: str) -> str:
+    """Extract the property-type segment from a CBMC property name.
+
+    E.g. 'find_virtio_input.pointer_arithmetic.5' → 'pointer_arithmetic'
+         'main.assertion.2'                        → 'assertion'
+    """
+    parts = failing_property.split(".")
+    return parts[-2] if len(parts) >= 2 else failing_property
+
+
 @dataclass
 class PropagationEvent:
     """Records one compositional propagation: a spec refinement and its downstream effect.
@@ -190,6 +228,9 @@ class AMCPipeline:
         recheck_triggered_by: dict[str, set[str]] = {}
         # Global re-queue bound: tracks how many times each function has been re-queued
         requeue_counts: dict[str, int] = {}
+        # Tracks (fn_name, prop_type) pairs already confirmed as real bugs so
+        # CEGAR re-runs don't re-validate and re-report the same root bug.
+        confirmed_real_bugs: set[tuple[str, str]] = set()
 
         for fn_name, verdict in verdicts.items():
             if verdict.verified:
@@ -209,7 +250,7 @@ class AMCPipeline:
             if spec is None:
                 continue
 
-            for cex in verdict.counterexamples:
+            for cex in _dedup_counterexamples(verdict.counterexamples):
                 logger.info(
                     "Validating counterexample for '%s' (property=%s)",
                     fn_name, cex.failing_property,
@@ -236,10 +277,18 @@ class AMCPipeline:
                     )
                     self.reporter._unresolved.append(validation)
                 elif validation.is_real_bug:
-                    logger.info("REAL BUG confirmed in '%s'", fn_name)
-                    report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
-                    self.reporter.save_report(report, driver_name)
-                    bug_reports.append(report)
+                    bug_key = (fn_name, _prop_type(cex.failing_property))
+                    if bug_key in confirmed_real_bugs:
+                        logger.debug(
+                            "Skipping duplicate real bug for '%s' (property type '%s' already confirmed)",
+                            fn_name, bug_key[1],
+                        )
+                    else:
+                        confirmed_real_bugs.add(bug_key)
+                        logger.info("REAL BUG confirmed in '%s'", fn_name)
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
+                        self.reporter.save_report(report, driver_name)
+                        bug_reports.append(report)
                 else:
                     logger.info(
                         "Spurious counterexample for '%s' — refined precondition: %s",
@@ -316,7 +365,7 @@ class AMCPipeline:
                 spec = current_specs.get(fn_name)
                 if func is None or spec is None:
                     continue
-                for cex in verdict.counterexamples:
+                for cex in _dedup_counterexamples(verdict.counterexamples):
                     logger.info(
                         "Phase 3c: new counterexample for '%s' (property=%s)",
                         fn_name, cex.failing_property,
@@ -333,10 +382,18 @@ class AMCPipeline:
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
-                        logger.info("REAL BUG (Phase 3c) confirmed in '%s'", fn_name)
-                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
-                        self.reporter.save_report(report, driver_name)
-                        bug_reports.append(report)
+                        bug_key = (fn_name, _prop_type(cex.failing_property))
+                        if bug_key in confirmed_real_bugs:
+                            logger.debug(
+                                "Phase 3c: skipping duplicate real bug for '%s' (type '%s')",
+                                fn_name, bug_key[1],
+                            )
+                        else:
+                            confirmed_real_bugs.add(bug_key)
+                            logger.info("REAL BUG (Phase 3c) confirmed in '%s'", fn_name)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
+                            self.reporter.save_report(report, driver_name)
+                            bug_reports.append(report)
                     else:
                         logger.info(
                             "Phase 3c: spurious (further refined) for '%s': %s",
@@ -384,7 +441,7 @@ class AMCPipeline:
                 spec = current_specs.get(fn_name)
                 if func is None or spec is None:
                     continue
-                for cex in verdict.counterexamples:
+                for cex in _dedup_counterexamples(verdict.counterexamples):
                     logger.info(
                         "Recheck: validating counterexample for '%s' (property=%s)",
                         fn_name, cex.failing_property,
@@ -401,13 +458,21 @@ class AMCPipeline:
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
-                        logger.info("REAL BUG (recheck) confirmed in '%s'", fn_name)
-                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
-                        self.reporter.save_report(report, driver_name)
-                        bug_reports.append(report)
-                        phase3b_bugs_by_fn.setdefault(fn_name, []).append(
-                            f"{fn_name}:{cex.failing_property}"
-                        )
+                        bug_key = (fn_name, _prop_type(cex.failing_property))
+                        if bug_key in confirmed_real_bugs:
+                            logger.debug(
+                                "Recheck: skipping duplicate real bug for '%s' (type '%s')",
+                                fn_name, bug_key[1],
+                            )
+                        else:
+                            confirmed_real_bugs.add(bug_key)
+                            logger.info("REAL BUG (recheck) confirmed in '%s'", fn_name)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
+                            self.reporter.save_report(report, driver_name)
+                            bug_reports.append(report)
+                            phase3b_bugs_by_fn.setdefault(fn_name, []).append(
+                                f"{fn_name}:{cex.failing_property}"
+                            )
 
             # RQ3: build PropagationEvent objects grouped by which refinement
             # triggered each caller recheck.
