@@ -4,9 +4,11 @@
 (May 7–8 2026) on the [VibeOS](https://github.com/notgull/vibeos) kernel.
 
 Filter applied: every entry's realism checker verdict is `realistic`
-(`unrealistic` and `uncertain` reports excluded). Confirmed-dynamic findings
-where the realism check came back `uncertain` are NOT in this folder; see
-[`../vibeos/`](../vibeos/) for the earlier curated subset.
+(`unrealistic` and `uncertain` reports excluded).
+
+Sibling views of the same run:
+- [`../vibeos_full_check10_uncertain/`](../vibeos_full_check10_uncertain/) — 26 reports the realism checker flagged `uncertain` and need triage
+- [`../vibeos/`](../vibeos/) — earlier 13-bug curation from a prior run (not consistent with this one; see commit history)
 
 ## Summary
 
