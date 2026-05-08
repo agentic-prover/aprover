@@ -4,6 +4,34 @@ Prompt templates for BMC-Agent Phase 1 spec generation and Phase 3 validation.
 
 from __future__ import annotations
 
+# Threat model context injected into spec and realism prompts.
+THREAT_MODEL_CONTEXT: dict[str, str] = {
+    "security": (
+        "Threat model: SECURITY. "
+        "Assume inputs may be attacker-controlled. "
+        "Preconditions must guard against: null/invalid pointers, integer overflow in "
+        "size/offset arithmetic, out-of-bounds buffer accesses, and type-confusion from "
+        "unsafe casts. Postconditions must guarantee memory safety and the absence of "
+        "exploitable undefined behaviour. Flag any unchecked arithmetic on lengths, "
+        "counts, or offsets derived from external data."
+    ),
+    "safety": (
+        "Threat model: SAFETY. "
+        "Focus on functional correctness and no-crash properties under valid system state. "
+        "Preconditions should capture the invariants that callers are expected to maintain. "
+        "Postconditions should guarantee the function terminates without crashing and leaves "
+        "shared state consistent. Flag division-by-zero, null dereferences, and violated "
+        "data-structure invariants."
+    ),
+    "functional": (
+        "Threat model: FUNCTIONAL. "
+        "Focus on verifying that the function satisfies its specified interface contract. "
+        "Preconditions should capture the minimal valid input domain. "
+        "Postconditions should capture the exact return-value and side-effect guarantees. "
+        "No additional security or safety emphasis beyond the spec."
+    ),
+}
+
 DSL_GRAMMAR = """\
 The specification DSL:
 - precondition: "requires <formula>"
@@ -31,6 +59,8 @@ The specification should:
 - Capture what the function REQUIRES of its inputs (precondition)
 - Capture what the function GUARANTEES about its outputs and side effects (postcondition)
 - Be tight enough to be useful for verification, not just "true"
+
+{threat_model_context}
 
 Domain knowledge:
 {domain_knowledge}
@@ -68,6 +98,8 @@ Caller expected specifications (what callers need from this function):
 IMPORTANT: The callee function's actual signature is below. Use the parameter
 names from THIS signature in your spec (e.g. if the parameter is `rb`, write
 `valid(rb)` not `valid(dev->rb)` or `valid(dev)`).
+
+{threat_model_context}
 
 Function signature:
 {signature}
@@ -344,6 +376,9 @@ CALL-SITE ANALYSIS — how this function is actually called in the codebase:
 
 GLOBAL VARIABLE CONTEXT — where key globals used by this function are assigned:
 {global_context}
+
+---
+{threat_model_context}
 
 ---
 ANALYSIS GUIDANCE

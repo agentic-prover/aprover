@@ -38,6 +38,7 @@ from bmc_agent.prompts import (
     INTERNAL_SPEC_PROMPT,
     SPEC_DISAGREEMENT_PROMPT,
     SPEC_SYSTEM_PROMPT,
+    THREAT_MODEL_CONTEXT,
 )
 from bmc_agent.spec import Spec, SpecStatus, merge_specs
 
@@ -586,7 +587,9 @@ class SpecGenerator:
         """Generate spec for an entry function using implementation + domain knowledge."""
         logger.debug("Generating entry spec for '%s'", func.name)
 
+        tm = getattr(self.config, "threat_model", "security")
         user_prompt = ENTRY_SPEC_PROMPT.format(
+            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             domain_knowledge=domain_knowledge or "No additional domain knowledge provided.",
             struct_context=struct_context or "None.",
             signature=self._format_signature(func),
@@ -640,7 +643,9 @@ class SpecGenerator:
             )
         expected_text = "\n\n".join(expected_text_parts)
 
+        tm = getattr(self.config, "threat_model", "security")
         user_prompt = INTERNAL_SPEC_PROMPT.format(
+            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             expected_specs=expected_text,
             signature=self._format_signature(func),
             body=func.body,

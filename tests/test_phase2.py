@@ -494,7 +494,7 @@ def test_check_all_with_mocked_cbmc(tmp_path: Path):
 
     call_count = {"n": 0}
 
-    def fake_run_cbmc(harness_path, unwind=4, timeout=120, cbmc_path="cbmc", include_dirs=None, unsigned_overflow_check=False):
+    def fake_run_cbmc(harness_path, unwind=4, timeout=120, cbmc_path="cbmc", include_dirs=None, **kwargs):
         call_count["n"] += 1
         # Fail for rb_is_empty, pass for rb_is_full
         if "rb_is_empty" in str(harness_path):

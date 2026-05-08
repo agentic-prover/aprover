@@ -294,6 +294,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_flag_selection = True
     if getattr(args, "enable_dynamic_validation", False):
         config.enable_dynamic_validation = True
+    if getattr(args, "threat_model", None):
+        config.threat_model = args.threat_model
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -431,6 +433,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_realism_thinking = True
     if getattr(args, "enable_flag_selection", False):
         config.enable_flag_selection = True
+    if getattr(args, "threat_model", None):
+        config.threat_model = args.threat_model
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -566,6 +570,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
     )
+    ver.add_argument(
+        "--threat-model",
+        choices=["security", "safety", "functional"],
+        default="security",
+        help="Threat model: shapes CBMC baseline flags, spec prompts, and realism context (default: security)",
+    )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -647,6 +657,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
+    )
+    vd.add_argument(
+        "--threat-model",
+        choices=["security", "safety", "functional"],
+        default="security",
+        help="Threat model: shapes CBMC baseline flags, spec prompts, and realism context (default: security)",
     )
     _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)

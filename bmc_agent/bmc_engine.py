@@ -100,7 +100,13 @@ class BMCEngine:
         logger.debug("Harness saved to: %s", harness_path)
 
         # ---- Step 3: run CBMC ----
-        # All CBMC flags come exclusively from per-function flag selection.
+        # Baseline flags come from the threat model; per-function flag selection
+        # adds on top (OR-merged so either source can enable a check).
+        threat_model = getattr(self.config, "threat_model", "security")
+        pointer_check    = threat_model in ("security", "safety")
+        bounds_check     = threat_model in ("security", "safety")
+        div_by_zero_check = threat_model == "safety"
+
         unsigned_overflow_check = bool(getattr(flag_selection, "unsigned_overflow_check", False))
         signed_overflow_check   = bool(getattr(flag_selection, "signed_overflow_check", False))
         conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
@@ -123,6 +129,9 @@ class BMCEngine:
             signed_overflow_check=signed_overflow_check,
             conversion_check=conversion_check,
             pointer_overflow_check=pointer_overflow_check,
+            pointer_check=pointer_check,
+            bounds_check=bounds_check,
+            div_by_zero_check=div_by_zero_check,
         )
 
         # ---- Step 4: build verdict ----

@@ -56,6 +56,12 @@ class Config:
     enable_realism_check: bool = False       # LLM agent that audits REAL_BUG findings for realistic exploitability
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
 
+    # Threat model — shapes CBMC baseline flags, spec prompts, and realism context.
+    # "security"   (default): memory safety + integer overflow, attacker-controlled inputs.
+    # "safety"     : functional correctness + no-crash, valid system state.
+    # "functional" : spec correctness only, no extra CBMC checks.
+    threat_model: str = "security"
+
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly."""
         if self.llm_api_key:
@@ -90,4 +96,5 @@ class Config:
             enable_realism_check=os.environ.get("AMC_ENABLE_REALISM_CHECK", "false").lower() == "true",
             enable_realism_thinking=os.environ.get("AMC_ENABLE_REALISM_THINKING", "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "false").lower() == "true",
+            threat_model=os.environ.get("AMC_THREAT_MODEL", "security").lower(),
         )

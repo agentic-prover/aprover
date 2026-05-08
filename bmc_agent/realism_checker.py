@@ -26,7 +26,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from bmc_agent.logger import get_logger
-from bmc_agent.prompts import REALISM_CHECK_PROMPT, SPEC_SYSTEM_PROMPT
+from bmc_agent.prompts import REALISM_CHECK_PROMPT, SPEC_SYSTEM_PROMPT, THREAT_MODEL_CONTEXT
 
 if TYPE_CHECKING:
     from bmc_agent.cbmc import Counterexample
@@ -177,7 +177,9 @@ class RealismChecker:
         )
         global_context = _extract_global_context(func, all_funcs, parsed_file)
 
+        tm = getattr(self.config, "threat_model", "security")
         return REALISM_CHECK_PROMPT.format(
+            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             function_name=func.name,
             function_signature=sig,
             function_body=body[:2000],

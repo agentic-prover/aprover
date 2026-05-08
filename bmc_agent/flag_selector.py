@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from bmc_agent.logger import get_logger
+from bmc_agent.prompts import THREAT_MODEL_CONTEXT
 
 if TYPE_CHECKING:
     from bmc_agent.config import Config
@@ -39,6 +40,8 @@ logger = get_logger("flag_selector")
 _FLAG_SELECTION_PROMPT = """\
 You are analyzing a C function to decide which optional CBMC verification \
 flags are semantically meaningful for it.
+
+{threat_model_context}
 
 FUNCTION: {name}
 SIGNATURE: {signature}
@@ -214,7 +217,9 @@ class FlagSelector:
         signature_str = f"{sig.return_type} {sig.name}({params})"
         body = (func.body or "")[:1500]
 
+        tm = getattr(self.config, "threat_model", "security")
         prompt = _FLAG_SELECTION_PROMPT.format(
+            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             name=func.name,
             signature=signature_str,
             body=body,
