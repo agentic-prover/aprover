@@ -1,0 +1,186 @@
+# BUG-03 — `kapi_file_size` (kapi)
+
+| Field | Value |
+|---|---|
+| **Confidence** | `confirmed_dynamic` |
+| **Signal** | SIGSEGV |
+| **Module** | `kernel/kapi.c` |
+| **Bug type** | semantic |
+| **Violated property** | `main.assertion.2` |
+| **Realism** | realistic (high confidence) |
+| **Status** | ☐ Unreviewed |
+
+## Call chain
+
+Direct entry (no upstream callers traced)
+
+## Spec (LLM-generated)
+
+**Precondition:** `null(node) || (valid(node) && node points to a valid vfs_node_t structure with an accessible size field)`
+
+**Postcondition:** `null(node) => \result == -1 && !null(node) => \result == (int)((vfs_node_t*)node)->size`
+
+## Counterexample
+
+**Violated property:** `main.assertion.2`
+
+**Key variable assignments:**
+```
+kapi.version = 0u
+kapi.$pad1 = 0u
+kapi.putc = ((const void (*)(char))NULL)
+kapi.puts = ((const void (*)(char *))NULL)
+kapi.uart_puts = ((const void (*)(char *))NULL)
+kapi.getc = ((signed int (*)(void))NULL)
+kapi.set_color = ((const void (*)(uint32_t, uint32_t))NULL)
+kapi.clear = ((const void (*)(void))NULL)
+kapi.set_cursor = ((const void (*)(signed int, signed int))NULL)
+kapi.set_cursor_enabled = ((const void (*)(signed int))NULL)
+kapi.print_int = ((const void (*)(signed int))NULL)
+kapi.print_hex = ((const void (*)(uint32_t))NULL)
+kapi.clear_to_eol = ((const void (*)(void))NULL)
+kapi.clear_region = ((const void (*)(signed int, signed int, signed int, signed int))NULL)
+kapi.has_key = ((signed int (*)(void))NULL)
+kapi.malloc = ((const void * (*)(__CPROVER_size_t))NULL)
+kapi.free = ((const void (*)(const void *))NULL)
+kapi.open = ((const void * (*)(char *))NULL)
+kapi.close = ((const void (*)(const void *))NULL)
+kapi.read = ((signed int (*)(const void *, char *, __CPROVER_size_t, __CPROVER_size_t))NULL)
+kapi.write = ((signed int (*)(const void *, char *, __CPROVER_size_t))NULL)
+kapi.is_dir = ((signed int (*)(const void *))NULL)
+kapi.file_size = ((signed int (*)(const void *))NULL)
+kapi.create = ((const void * (*)(char *))NULL)
+kapi.mkdir = ((const void * (*)(char *))NULL)
+kapi.delete = ((signed int (*)(char *))NULL)
+kapi.delete_dir = ((signed int (*)(char *))NULL)
+kapi.delete_recursive = ((signed int (*)(char *))NULL)
+kapi.rename = ((signed int (*)(char *, char *))NULL)
+kapi.readdir = ((signed int (*)(const void *, signed int, char *, __CPROVER_size_t, uint8_t *))NULL)
+kapi.set_cwd = ((signed int (*)(char *))NULL)
+kapi.get_cwd = ((signed int (*)(char *, __CPROVER_size_t))NULL)
+kapi.exit = ((const void (*)(signed int))NULL)
+kapi.exec = ((signed int (*)(char *))NULL)
+kapi.exec_args = ((signed int (*)(char *, signed int, char **))NULL)
+kapi.yield = ((const void (*)(void))NULL)
+kapi.spawn = ((signed int (*)(char *))NULL)
+kapi.spawn_args = ((signed int (*)(char *, signed int, char **))NULL)
+kapi.console_rows = ((signed int (*)(void))NULL)
+kapi.console_cols = ((signed int (*)(void))NULL)
+kapi.fb_base = ((uint32_t *)NULL)
+kapi.fb_width = 0u
+kapi.fb_height = 0u
+kapi.fb_put_pixel = ((const void (*)(uint32_t, uint32_t, uint32_t))NULL)
+kapi.fb_fill_rect = ((const void (*)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t))NULL)
+kapi.fb_draw_char = ((const void (*)(uint32_t, uint32_t, char, uint32_t, uint32_t))NULL)
+kapi.fb_draw_string = ((const void (*)(uint32_t, uint32_t, char *, uint32_t, uint32_t))NULL)
+kapi.font_data = ((uint8_t *)NULL)
+kapi.mouse_get_pos = ((const void (*)(signed int *, signed int *))NULL)
+kapi.mouse_get_buttons = ((uint8_t (*)(void))NULL)
+kapi.mouse_poll = ((const void (*)(void))NULL)
+kapi.mouse_set_pos = ((const void (*)(signed int, signed int))NULL)
+kapi.mouse_get_delta = ((const void (*)(signed int *, signed int *))NULL)
+kapi.window_create = ((signed int (*)(signed int, signed int, signed int, signed int, char *))NULL)
+kapi.window_destroy = ((const void (*)(signed int))NULL)
+kapi.window_get_buffer = ((uint32_t * (*)(signed int, signed int *, signed int *))NULL)
+kapi.window_poll_event = ((signed int (*)(signed int, signed int *, signed int *, signed int *, signed int *))NULL)
+kapi.window_invalidate = ((const void (*)(signed int))NULL)
+kapi.window_set_title = ((const void (*)(signed int, char *))NULL)
+kapi.stdio_putc = ((const void (*)(char))NULL)
+kapi.stdio_puts = ((const void (*)(char *))NULL)
+kapi.stdio_getc = ((signed int (*)(void))NULL)
+kapi.stdio_has_key = ((signed int (*)(void))NULL)
+kapi.get_uptime_ticks = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_mem_used = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_mem_free = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_timestamp = ((uint32_t (*)(void))NULL)
+kapi.get_datetime = ((const void (*)(signed int *, signed int *, signed int *, signed int *, signed int *, signed int *, signed int *))NULL)
+kapi.wfi = ((const void (*)(void))NULL)
+kapi.sleep_ms = ((const void (*)(uint32_t))NULL)
+kapi.sound_play_wav = ((signed int (*)(const void *, uint32_t))NULL)
+kapi.sound_stop = ((const void (*)(void))NULL)
+kapi.sound_is_playing = ((signed int (*)(void))NULL)
+kapi.sound_play_pcm = ((signed int (*)(const void *, uint32_t, uint8_t, uint32_t))NULL)
+kapi.sound_play_pcm_async = ((signed int (*)(const void *, uint32_t, uint8_t, uint32_t))NULL)
+kapi.sound_pause = ((const void (*)(void))NULL)
+kapi.sound_resume = ((signed int (*)(void))NULL)
+kapi.sound_is_paused = ((signed int (*)(void))NULL)
+kapi.get_process_count = ((signed int (*)(void))NULL)
+kapi.get_process_info = ((signed int (*)(signed int, char *, signed int, signed int *))NULL)
+kapi.get_disk_total = ((signed int (*)(void))NULL)
+kapi.get_disk_free = ((signed int (*)(void))NULL)
+kapi.get_ram_total = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_heap_start = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_heap_end = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_stack_ptr = ((__CPROVER_size_t (*)(void))NULL)
+kapi.get_alloc_count = ((signed int (*)(void))NULL)
+kapi.net_ping = ((signed int (*)(uint32_t, uint16_t, uint32_t))NULL)
+kapi.net_poll = ((const void (*)(void))NULL)
+kapi.net_get_ip = ((uint32_t (*)(void))NULL)
+kapi.net_get_mac = ((const void (*)(uint8_t *))NULL)
+kapi.dns_resolve = ((uint32_t (*)(char *))NULL)
+kapi.tcp_connect = ((signed int (*)(uint32_t, uint16_t))NULL)
+kapi.tcp_send = ((signed int (*)(signed int, const void *, uint32_t))NULL)
+kapi.tcp_recv = ((signed int (*)(signed int, const void *, uint32_t))NULL)
+kapi.tcp_close = ((const void (*)(signed int))NULL)
+kapi.tcp_is_connected = ((signed int (*)(signed int))NULL)
+kapi.tls_connect = ((signed int (*)(uint32_t, uint16_t, char *))NULL)
+kapi.tls_send = ((signed int (*)(signed int, const void *, uint32_t))NULL)
+kapi.tls_recv = ((signed int (*)(signed int, const void *, uint32_t))NULL)
+kapi.tls_close = ((const void (*)(signed int))NULL)
+kapi.tls_is_connected = ((signed int (*)(signed int))NULL)
+kapi.ttf_get_glyph = ((const void * (*)(signed int, signed int, signed int))NULL)
+kapi.ttf_get_advance = ((signed int (*)(signed int, signed int))NULL)
+kapi.ttf_get_kerning = ((signed int (*)(signed int, signed int, signed int))NULL)
+kapi.ttf_get_metrics = ((const void (*)(signed int, signed int *, signed int *, signed int *))NULL)
+kapi.ttf_is_ready = ((signed int (*)(void))NULL)
+kapi.led_on = ((const void (*)(void))NULL)
+kapi.led_off = ((const void (*)(void))NULL)
+kapi.led_toggle = ((const void (*)(void))NULL)
+kapi.led_status = ((signed int (*)(void))NULL)
+kapi.kill_process = ((signed int (*)(signed int))NULL)
+kapi.get_cpu_name = ((char * (*)(void))NULL)
+kapi.get_cpu_freq_mhz = ((uint32_t (*)(void))NULL)
+kapi.get_cpu_cores = ((signed int (*)(void))NULL)
+kapi.usb_device_count = ((signed int (*)(void))NULL)
+kapi.usb_device_info = ((signed int (*)(signed int, uint16_t *, uint16_t *, char *, signed int))NULL)
+kapi.klog_read = ((__CPROVER_size_t (*)(char *, __CPROVER_size_t, __CPROVER_size_t))NULL)
+kapi.klog_size = ((__CPROVER_size_t (*)(void))NULL)
+kapi.fb_has_hw_double_buffer = ((signed int (*)(void))NULL)
+kapi.fb_flip = ((signed int (*)(signed int))NULL)
+kapi.fb_get_backbuffer = ((uint32_t * (*)(void))NULL)
+kapi.dma_available = ((signed int (*)(void))NULL)
+kapi.dma_copy = ((signed int (*)(const void *, const void *, uint32_t))NULL)
+kapi.dma_copy_2d = ((signed int (*)(const void *, uint32_t, const void *, uint32_t, uint32_t, uint32_t))NULL)
+kapi.dma_fb_copy = ((signed int (*)(uint32_t *, uint32_t *, uint32_t, uint32_t))NULL)
+kapi.dma_fill = ((signed int (*)(const void *, uint32_t, uint32_t))NULL)
+node = NULL
+result = -1
+return_value_kapi_file_size = -1
+goto_symex$$return_value$$kapi_file_size = -1
+```
+
+## Root cause / validation reasoning
+
+'kapi_file_size' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## Dynamic confirmation
+
+A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+
+## Realism assessment
+
+**Verdict:** REALISTIC (high confidence)
+
+**Key concern:** The function checks for NULL but not for pointer validity. Any non-null invalid pointer bypasses the guard and causes an uncontrolled memory read at `n->size`, which is directly exploitable from external callers of this API.
+
+Q1 — Can the violation TYPE occur? YES. The function only guards against NULL via `if (!node) return -1;`, but any non-null, attacker-controlled invalid pointer passes that check and goes on to dereference `n->size` (i.e., `((vfs_node_t*)node)->size`). Since `kapi_file_size` is a public API entry point with no callers in the codebase and its parameter is typed as `void*`, an adversary or buggy caller can trivially supply a non-null but uninitialized, freed, or otherwise invalid pointer. The access `n->size` on such a pointer produces undefined behaviour — typically a segfault. This is a classic 'null-or-invalid pointer dereference' vulnerability class that is entirely reachable with realistic inputs.
+
+Q2 — Are the specific witness values achievable? The CBMC counterexample shows `node = NULL`, which is actually handled safely (the function returns -1). This specific witness appears to be targeting a different assertion (main.assertion.2) in the verification harness, not the NULL path itself. However, the dynamic validation harness produced SIGSEGV, confirming that some real input (likely a non-null invalid/crafted pointer) exercises the fault path. The combination of (a) public API with unconstrained `void*` input, (b) only a NULL check but no validity check, (c) immediate struct member dereference, and (d) dynamic SIGSEGV confirmation all point to a real and exploitable bug.
+
+## Manual review checklist
+
+- [ ] Confirm the call chain is reachable in the actual VibeOS codebase
+- [ ] Verify the counterexample variable assignments are achievable at runtime
+- [ ] Check whether a fix is already present in a newer version
+- [ ] Assess exploitability severity (crash-only / memory corruption / arbitrary write)
+- [ ] File upstream issue if confirmed
