@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/fat32.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `read32.overflow.3` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kapi_write → vfs_write → fat32_write_file → find_entry_in_dir → read32
+```
+kapi_write -> vfs_write -> fat32_write_file -> find_entry_in_dir -> read32
+```
 
 ## Spec (LLM-generated)
 
@@ -32,15 +32,19 @@ result = 0u
 return_value_read32 = 0u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['find_entry_in_dir', 'fat32_list_dir']. Call chain: ['kapi_write', 'vfs_write', 'fat32_write_file', 'find_entry_in_dir', 'read32']. Full chain traced to system entry.
+CBMC reports a `read32.overflow.3` failure — a arithmetic / overflow violation in `read32`.
+
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['find_entry_in_dir', 'fat32_list_dir']. Call chain: ['kapi_write', 'vfs_write', 'fat32_write_file', 'find_entry_in_dir', 'read32']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `read32` via the call chain `kapi_write → vfs_write → fat32_write_file → find_entry_in_dir → read32` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 
 **Verdict:** REALISTIC (high confidence)
-
-**Key concern:** None — both the violation type (signed integer overflow via uint8_t promotion before shift) and the specific triggering value (byte value 128+ at position 3) are realistic and easily produced by normal FAT32 filesystem data.
 
 Q1 — Can the violation TYPE occur? Yes. The violation is signed integer overflow. In `p[3] << 24`, `p[3]` is `uint8_t` which undergoes integer promotion to `int` (signed 32-bit). If `p[3]` is any value in 128–255 (bit 7 set), shifting left by 24 bits pushes a 1 into the sign bit of a 32-bit signed int (e.g., 128 << 24 = 0x80000000, which is INT_MIN). This is undefined behavior under C's signed integer overflow rules, regardless of the fact that the return type is `uint32_t`. The correct fix is to cast before shifting: `(uint32_t)p[3] << 24`.
 

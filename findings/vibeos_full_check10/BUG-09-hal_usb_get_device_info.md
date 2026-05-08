@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/platform.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -31,7 +29,7 @@ _vid_val = 0
 vid = _vid_val!0@1
 _pid_val = 0
 pid = _pid_val!0@1
-_name_buf = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_name_buf = <symbolic struct/array — see classification.json>
 _name_len = 0u
 _name_buf[0l] = 0
 _name_buf[1l] = 0
@@ -45,19 +43,21 @@ return_value_hal_usb_get_device_info = -1
 goto_symex$$return_value$$hal_usb_get_device_info = -1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'hal_usb_get_device_info' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `hal_usb_get_device_info`.
 
-## Dynamic confirmation
+**Validator reasoning:** 'hal_usb_get_device_info' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+## How to trigger
+
+`hal_usb_get_device_info` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 
 **Verdict:** REALISTIC (high confidence)
-
-**Key concern:** None — this is a realistic out-of-bounds array access vulnerability due to missing bounds validation on the `idx` parameter in a public API function with no input sanitization.
 
 Q1 (Can the violation TYPE occur?): YES. The function signature accepts an unconstrained integer `idx` that is intended to index into a fixed-size USB device table. The harness models the realistic implementation pattern where `idx` is used as an array subscript without bounds checking. With `idx = 1073741824` (or any value >= MAX_USB_DEVICES), the array access `usb_devices[idx]` goes far out of bounds. This is a classic CWE-129 (Improper Validation of Array Index) vulnerability. Since the function is a public HAL API entry point with no callers enforcing bounds, attacker-controlled inputs are entirely plausible.
 

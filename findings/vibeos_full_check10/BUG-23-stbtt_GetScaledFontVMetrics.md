@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_ScaleForMappingEmToPixels_stub.overflow.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -51,17 +49,17 @@ return_value_stbtt_ScaleForMappingEmToPixels_stub = 0
 pixels = -NaN
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_GetScaledFontVMetrics' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `stbtt_ScaleForMappingEmToPixels_stub.overflow.1` failure — a arithmetic / overflow violation in `stbtt_GetScaledFontVMetrics`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** No input validation on `size` (NaN triggers wrong code path) and no bounds checking on `fontdata`/`index` in a public API that processes potentially untrusted font data.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_GetScaledFontVMetrics'. Error: /tmp/tmp884bh4e_.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmp884bh4e_.c:952:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
-  952 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmp884bh4e_.c:971:25: error: incompati
+**Validator reasoning:** 'stbtt_GetScaledFontVMetrics' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`stbtt_GetScaledFontVMetrics` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

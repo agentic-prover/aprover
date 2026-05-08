@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbrp_pack_rects_stub.pointer_dereference.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesPackRects
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_PackFontRangesPackRects
+```
 
 ## Spec (LLM-generated)
 
@@ -26,25 +26,25 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesPackRects
 
 **Key variable assignments:**
 ```
-_spc_val = {'members': [{'name': 'user_allocator_context', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'pack_info', 'value': {'name': 'unknown'}}, {'name': 'width', 'value'...
+_spc_val = <symbolic struct/array — see classification.json>
 spc = _spc_val!0@1
-_rects_val = {'members': [{'name': 'x', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'y', 'value': {'binary': '0000000000...
+_rects_val = <symbolic struct/array — see classification.json>
 rects = _rects_val!0@1
 num_rects = 33554432
-con = {'name': 'unknown'}
+con = <symbolic struct/array — see classification.json>
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_PackFontRanges']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesPackRects']. Full chain traced to system entry. Callee feasibility confirmed.
+CBMC reports a `stbrp_pack_rects_stub.pointer_dereference.1` failure — a memory-safety violation in `stbtt_PackFontRangesPackRects`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** CBMC's witness treats pack_info as fully unconstrained, which is a verification artifact. In real execution, pack_info is NULL only if stbtt_PackBegin was not called or returned failure (memory allocation failed) without the caller checking the return value. This is a real but relatively low-probability scenario that is more of a robustness bug than a direct attacker-exploitable path, unless the stbtt_pack_context struct is externally serialized/deserialized from untrusted input.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_PackFontRange'. Error: /tmp/tmpm9j3zefl.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmpm9j3zefl.c:1197:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
- 1197 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmpm9j3zefl.c:1216:25: error: incompa
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_PackFontRanges']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesPackRects']. Full chain traced to system entry. Callee feasibility confirmed.
+
+## How to trigger
+
+Reach `stbtt_PackFontRangesPackRects` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesPackRects` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

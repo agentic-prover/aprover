@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/string.c` |
-| **Bug type** | semantic |
-| **Violated property** | `strncpy.unwind.0` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_dest_buf = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_dest_buf = <symbolic struct/array — see classification.json>
 _dest_len = 2u
 _dest_buf[2l] = 16
 _dest_buf[0l] = ' '
@@ -34,7 +32,7 @@ _dest_buf[1l] = ' '
 _dest_buf[3l] = ' '
 _dest_buf[4l] = 0
 dest = _dest_buf!0@1
-_src_buf = {'elements': [{'index': 0, 'value': {'binary': '00100000', 'data': "' '", 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00100000', 'data': "' '", 'name': 'integ...
+_src_buf = <symbolic struct/array — see classification.json>
 _src_len = 4u
 _src_buf[4l] = 0
 _src_buf[0l] = ' '
@@ -48,9 +46,17 @@ return_value_strncpy = ((char *)NULL)
 i = 4ul
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `strncpy.unwind.0` failure — a semantic / contract violation in `strncpy`.
+
+**Realism checker's key concern:** The specific n=2^63 witness is a CBMC artifact from unconstrained symbolic execution of dead code. However, the underlying vulnerability class (OOB write when n greatly exceeds dest's actual allocation) is real and exploitable if this function is ever called with an externally-derived, unchecked n value.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`strncpy` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

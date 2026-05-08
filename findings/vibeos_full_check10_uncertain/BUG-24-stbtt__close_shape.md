@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt__close_shape.pointer_arithmetic.5` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_vertices_val = {'members': [{'name': 'x', 'value': {'binary': '0000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed short int', 'width': 16}}, {'name': 'y', 'value': {'binary': '0000000000000000', '...
+_vertices_val = <symbolic struct/array — see classification.json>
 vertices = _vertices_val!0@1
 num_vertices = 1811939328
 was_off = 1
@@ -42,9 +40,17 @@ return_value_stbtt__close_shape = 0
 tmp_post_num_vertices = 1811939327
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `stbtt__close_shape.pointer_arithmetic.5` failure — a arithmetic / overflow violation in `stbtt__close_shape`.
+
+**Realism checker's key concern:** The specific witness requires num_vertices=1.8 billion against a 1-element buffer — a CBMC symbolic artifact. In real code, the two-pass design of stbtt__GetGlyphShapeTT should bound num_vertices, but a crafted font could potentially create a discrepancy between the count and fill passes, making the violation type (OOB write) plausible but not confirmed by this witness.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`stbtt__close_shape` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

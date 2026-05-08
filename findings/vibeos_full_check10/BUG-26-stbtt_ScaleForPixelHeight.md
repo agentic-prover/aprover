@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_ScaleForPixelHeight.pointer_arithmetic.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoRects → stbtt_ScaleForPixelHeight
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_PackFontRangesRenderIntoRects -> stbtt_ScaleForPixelHeight
+```
 
 ## Spec (LLM-generated)
 
@@ -26,7 +26,7 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoR
 
 **Key variable assignments:**
 ```
-_info_val = {'members': [{'name': 'userdata', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'fontstart', 'value': {'binary': '0...
+_info_val = <symbolic struct/array — see classification.json>
 info = _info_val!0@1
 height = 2.756410e-40
 result = 0
@@ -35,17 +35,17 @@ fheight = 0
 return_value_ttSHORT_stub = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_PackFontRangesRenderIntoRects', 'stbtt_PackFontRangesGatherRects', 'stbtt_BakeFontBitmap_internal']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesRenderIntoRects', 'stbtt_ScaleForPixelHeight']. Full chain traced to system entry.
+CBMC reports a `stbtt_ScaleForPixelHeight.pointer_arithmetic.1` failure — a arithmetic / overflow violation in `stbtt_ScaleForPixelHeight`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** A maliciously crafted font file with a large 'hhea' table offset could cause `info->data + info->hhea + 6` to read beyond the allocated font data buffer, yielding an exploitable out-of-bounds read via pointer arithmetic on attacker-controlled offset data.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_PackFontRange'. Error: /tmp/tmp29cq1351.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmp29cq1351.c:1197:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
- 1197 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmp29cq1351.c:1216:25: error: incompa
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_PackFontRangesRenderIntoRects', 'stbtt_PackFontRangesGatherRects', 'stbtt_BakeFontBitmap_internal']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesRenderIntoRects', 'stbtt_ScaleForPixelHeight']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt_ScaleForPixelHeight` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoRects → stbtt_ScaleForPixelHeight` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

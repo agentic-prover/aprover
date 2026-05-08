@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_ScaleForMappingEmToPixels.pointer_arithmetic.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoRects → stbtt_ScaleForMappingEmToPixels
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_PackFontRangesRenderIntoRects -> stbtt_ScaleForMappingEmToPixels
+```
 
 ## Spec (LLM-generated)
 
@@ -26,7 +26,7 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoR
 
 **Key variable assignments:**
 ```
-_info_val = {'members': [{'name': 'userdata', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'fontstart', 'value': {'binary': '0...
+_info_val = <symbolic struct/array — see classification.json>
 info = _info_val!0@1
 pixels = -2.802597e-45
 result = 0
@@ -35,17 +35,17 @@ unitsPerEm = 0
 return_value_ttUSHORT_stub = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_PackFontRangesRenderIntoRects', 'stbtt_PackFontRangesGatherRects']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesRenderIntoRects', 'stbtt_ScaleForMappingEmToPixels']. Full chain traced to system entry.
+CBMC reports a `stbtt_ScaleForMappingEmToPixels.pointer_arithmetic.1` failure — a arithmetic / overflow violation in `stbtt_ScaleForMappingEmToPixels`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The attacker can craft a font file where `stbtt__find_table` returns a `head` table offset such that `info->data + info->head + 18` points outside the allocated font buffer, causing an exploitable out-of-bounds read — classic in font parsing security vulnerabilities.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_PackFontRange'. Error: /tmp/tmpjnyaf8gv.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmpjnyaf8gv.c:1197:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
- 1197 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmpjnyaf8gv.c:1216:25: error: incompa
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_PackFontRangesRenderIntoRects', 'stbtt_PackFontRangesGatherRects']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesRenderIntoRects', 'stbtt_ScaleForMappingEmToPixels']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt_ScaleForMappingEmToPixels` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoRects → stbtt_ScaleForMappingEmToPixels` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

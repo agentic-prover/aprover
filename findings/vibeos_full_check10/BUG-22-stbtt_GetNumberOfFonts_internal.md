@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | not_triggered |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_GetNumberOfFonts_internal.pointer_arithmetic.17` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_GetNumberOfFonts → stbtt_GetNumberOfFonts_internal
+```
+stbtt_GetNumberOfFonts -> stbtt_GetNumberOfFonts_internal
+```
 
 ## Spec (LLM-generated)
 
@@ -35,13 +35,17 @@ font = _font_collection_val!0@1
 goto_symex$$return_value$$stbtt__isfont_stub = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_GetNumberOfFonts']. Call chain: ['stbtt_GetNumberOfFonts', 'stbtt_GetNumberOfFonts_internal']. Full chain traced to system entry.
+CBMC reports a `stbtt_GetNumberOfFonts_internal.pointer_arithmetic.17` failure — a arithmetic / overflow violation in `stbtt_GetNumberOfFonts_internal`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** No concern about false-positiveness — the real concern is that stbtt_GetNumberOfFonts_internal lacks both a length parameter and any bounds-check before accessing up to 12 bytes of the supplied pointer, making it trivially triggerable with a short or NULL-padded attacker-supplied buffer.
 
-Dynamic harness outcome: `not_triggered`. Dynamic harness ran to completion without triggering a fault.
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_GetNumberOfFonts']. Call chain: ['stbtt_GetNumberOfFonts', 'stbtt_GetNumberOfFonts_internal']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt_GetNumberOfFonts_internal` via the call chain `stbtt_GetNumberOfFonts → stbtt_GetNumberOfFonts_internal` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

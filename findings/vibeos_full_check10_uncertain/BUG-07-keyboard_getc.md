@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/keyboard.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kernel_main → shell_run → keyboard_getc
+```
+kernel_main -> shell_run -> keyboard_getc
+```
 
 ## Spec (LLM-generated)
 
@@ -30,7 +30,7 @@ irq_count = 0
 kbd_base = ((volatile uint32_t *)NULL)
 key_buf_read = 0
 key_buf_write = 0
-key_buffer = {'elements': [{'index': 0, 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'index': 1, 'value': {'binary': '00000000000...
+key_buffer = <symbolic struct/array — see classification.json>
 key_buffer[0l] = 0
 key_buffer[1l] = 0
 key_buffer[2l] = 0
@@ -69,9 +69,17 @@ return_value_hal_keyboard_getc = -2147483648
 goto_symex$$return_value$$keyboard_getc = -2147483648
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'shell_run' can reach the CEx state. Call chain: ['kernel_main', 'shell_run', 'keyboard_getc']. Full chain traced to system entry.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `keyboard_getc`.
+
+**Realism checker's key concern:** The specific INT_MIN return from hal_keyboard_getc() is a CBMC symbolic artifact. However, whether hal_keyboard_getc() dereferences kbd_base (NULL) internally is unknown without its body — if it does, the bug is real; if not, this is a false positive about return-value range.
+
+**Validator reasoning:** Cross-file caller 'shell_run' can reach the CEx state. Call chain: ['kernel_main', 'shell_run', 'keyboard_getc']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `keyboard_getc` via the call chain `kernel_main → shell_run → keyboard_getc` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

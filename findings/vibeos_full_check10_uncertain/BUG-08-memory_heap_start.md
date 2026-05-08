@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | not_triggered |
+| **Signal** | — |
 | **Module** | `kernel/memory.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.2` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -35,13 +33,17 @@ return_value_memory_heap_start = 0ul
 goto_symex$$return_value$$memory_heap_start = 0ul
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'memory_heap_start' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.assertion.2` failure — a semantic / contract violation in `memory_heap_start`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** CBMC analyzes the function in isolation without constraining heap_start to be post-initialization non-zero, producing a symbolic witness (heap_start=0) that could only occur in real execution if memory_heap_start() is called before memory_init(). Whether such a call ordering is possible depends on initialization sequencing guarantees not visible in this analysis scope.
 
-Dynamic harness outcome: `not_triggered`. Dynamic harness ran to completion without triggering a fault.
+**Validator reasoning:** 'memory_heap_start' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`memory_heap_start` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

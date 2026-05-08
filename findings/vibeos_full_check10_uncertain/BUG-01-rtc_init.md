@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/rtc.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `rtc_init.pointer_dereference.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,16 +24,22 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-(none reported)
+(no human-readable assignments — see classification.json)
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'rtc_init' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `rtc_init.pointer_dereference.1` failure — a memory-safety violation in `rtc_init`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The hardcoded MMIO addresses are architecturally valid only on the target embedded SoC. Running the function on x86 Linux (as the dynamic harness did) causes SIGSEGV due to unmapped memory—this is an environment mismatch, not an attacker-exploitable bug. Since the function takes no parameters and uses no external data, there is no attack surface.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** 'rtc_init' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`rtc_init` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

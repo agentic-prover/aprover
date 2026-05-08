@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbtt__isfont.pointer_dereference.11` |
-| **Realism** | realistic (medium confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_FindMatchingFont → stbtt_FindMatchingFont_internal → stbtt__matches → stbtt__isfont
+```
+stbtt_FindMatchingFont -> stbtt_FindMatchingFont_internal -> stbtt__matches -> stbtt__isfont
+```
 
 ## Spec (LLM-generated)
 
@@ -32,17 +32,17 @@ result = 0
 return_value_stbtt__isfont = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt__matches', 'stbtt_GetNumberOfFonts_internal', 'stbtt_GetFontOffsetForIndex_internal']. Call chain: ['stbtt_FindMatchingFont', 'stbtt_FindMatchingFont_internal', 'stbtt__matches', 'stbtt__isfont']. Full chain traced to system entry.
+CBMC reports a `stbtt__isfont.pointer_dereference.11` failure — a memory-safety violation in `stbtt__isfont`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific CBMC witness (1-byte allocation) is a symbolic artifact; in practice the exploitable scenario is a truncated/crafted font file where fc+offset leaves fewer than 4 bytes remaining, causing an out-of-bounds read of 1–3 bytes past the buffer end.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_FindMatchingFont'. Error: /tmp/tmpztsthm1t.c:1079:13: error: redefinition of ‘ttLONG’
- 1079 | stbtt_int32 ttLONG(stbtt_uint8* p)
-      |             ^~~~~~
-/tmp/tmpztsthm1t.c:700:20: note: previous definition of ‘ttLONG’ with type ‘stbtt_int32(stbtt_uint8 *)’ {aka ‘int(unsigned char *)’}
-  700 | static stbtt_int32 ttLONG(stb
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt__matches', 'stbtt_GetNumberOfFonts_internal', 'stbtt_GetFontOffsetForIndex_internal']. Call chain: ['stbtt_FindMatchingFont', 'stbtt_FindMatchingFont_internal', 'stbtt__matches', 'stbtt__isfont']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt__isfont` via the call chain `stbtt_FindMatchingFont → stbtt_FindMatchingFont_internal → stbtt__matches → stbtt__isfont` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/irq.c` |
-| **Bug type** | semantic |
-| **Violated property** | `wsod_draw_line.unwind.0` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,16 +24,24 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-fb_base = {'name': 'unknown'}
+fb_base = <symbolic struct/array — see classification.json>
 fb_height = 1u
 fb_width = 1u
 y = 0
 x = 44u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `wsod_draw_line.unwind.0` failure — a semantic / contract violation in `wsod_draw_line`.
+
+**Realism checker's key concern:** Integer underflow in `fb_width - 40` when fb_width < 40 (unsigned wrap-around) causes the loop bound to become ~2^32, resulting in a near-infinite loop. This is especially dangerous in exception/fault handlers where fb_width may not be initialized.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`wsod_draw_line` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

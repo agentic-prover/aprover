@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_bmc` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `ttf_init.overflow.1` |
-| **Realism** | uncertain (— confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -60,7 +58,7 @@ font_info.fontdicts.size = 0
 font_info.fdselect.data = ((uint8_t *)NULL)
 font_info.fdselect.cursor = 0
 font_info.fdselect.size = 0
-size_cache_sizes = {'elements': [{'index': 0, 'value': {'binary': '00000000000000000000000000001100', 'data': '12', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'index': 1, 'value': {'binary': '0000000000...
+size_cache_sizes = <symbolic struct/array — see classification.json>
 size_cache_sizes[0l] = 12
 size_cache_sizes[1l] = 14
 size_cache_sizes[2l] = 16
@@ -69,53 +67,53 @@ size_cache_sizes[4l] = 20
 size_cache_sizes[5l] = 24
 size_cache_sizes[6l] = 28
 size_cache_sizes[7l] = 32
-size_caches = {'elements': [{'index': 0, 'value': {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name...
-size_caches[0l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches = <symbolic struct/array — see classification.json>
+size_caches[0l] = <symbolic struct/array — see classification.json>
 size_caches[0l].size = 0
 size_caches[0l].scale = 0
-size_caches[0l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[0l].entries = <symbolic struct/array — see classification.json>
 size_caches[0l].count = 0
 size_caches[0l].$pad4 = 0
-size_caches[1l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[1l] = <symbolic struct/array — see classification.json>
 size_caches[1l].size = 0
 size_caches[1l].scale = 0
-size_caches[1l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[1l].entries = <symbolic struct/array — see classification.json>
 size_caches[1l].count = 0
 size_caches[1l].$pad4 = 0
-size_caches[2l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[2l] = <symbolic struct/array — see classification.json>
 size_caches[2l].size = 0
 size_caches[2l].scale = 0
-size_caches[2l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[2l].entries = <symbolic struct/array — see classification.json>
 size_caches[2l].count = 0
 size_caches[2l].$pad4 = 0
-size_caches[3l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[3l] = <symbolic struct/array — see classification.json>
 size_caches[3l].size = 0
 size_caches[3l].scale = 0
-size_caches[3l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[3l].entries = <symbolic struct/array — see classification.json>
 size_caches[3l].count = 0
 size_caches[3l].$pad4 = 0
-size_caches[4l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[4l] = <symbolic struct/array — see classification.json>
 size_caches[4l].size = 0
 size_caches[4l].scale = 0
-size_caches[4l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[4l].entries = <symbolic struct/array — see classification.json>
 size_caches[4l].count = 0
 size_caches[4l].$pad4 = 0
-size_caches[5l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[5l] = <symbolic struct/array — see classification.json>
 size_caches[5l].size = 0
 size_caches[5l].scale = 0
-size_caches[5l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[5l].entries = <symbolic struct/array — see classification.json>
 size_caches[5l].count = 0
 size_caches[5l].$pad4 = 0
-size_caches[6l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[6l] = <symbolic struct/array — see classification.json>
 size_caches[6l].size = 0
 size_caches[6l].scale = 0
-size_caches[6l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[6l].entries = <symbolic struct/array — see classification.json>
 size_caches[6l].count = 0
 size_caches[6l].$pad4 = 0
-size_caches[7l] = {'members': [{'name': 'size', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'scale', 'value': {'binary': '000...
+size_caches[7l] = <symbolic struct/array — see classification.json>
 size_caches[7l].size = 0
 size_caches[7l].scale = 0
-size_caches[7l].entries = {'elements': [{'index': 0, 'value': {'members': [{'name': 'codepoint', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {...
+size_caches[7l].entries = <symbolic struct/array — see classification.json>
 size_caches[7l].count = 0
 size_caches[7l].$pad4 = 0
 temp_bitmap = ((uint8_t *)NULL)
@@ -123,17 +121,19 @@ temp_bitmap_size = 0
 ttf_ready = 0
 result = 0
 return_value_ttf_init = 0
-font_file = {'name': 'unknown'}
-return_value_vfs_lookup = {'name': 'unknown'}
+font_file = <symbolic struct/array — see classification.json>
+return_value_vfs_lookup = <symbolic struct/array — see classification.json>
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'ttf_init' has cross-file callers but no reachability was confirmed via CBMC — reporting as confirmed_bmc.
+CBMC reports a `ttf_init.overflow.1` failure — a arithmetic / overflow violation in `ttf_init`.
 
-## Dynamic confirmation
+**Validator reasoning:** 'ttf_init' has cross-file callers but no reachability was confirmed via CBMC — reporting as confirmed_bmc.
 
-Dynamic harness outcome: `inconclusive`. Harness generation failed.
+## How to trigger
+
+`ttf_init` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

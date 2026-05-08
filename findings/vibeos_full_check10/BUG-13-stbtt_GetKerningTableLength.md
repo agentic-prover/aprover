@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_GetKerningTableLength.pointer_arithmetic.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,20 +24,26 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_info_val = {'members': [{'name': 'userdata', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'fontstart', 'value': {'binary': '0...
+_info_val = <symbolic struct/array — see classification.json>
 info = _info_val!0@1
 result = 0
 return_value_stbtt_GetKerningTableLength = 0
 data = ((unsigned char *)NULL)
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_GetKerningTableLength' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `stbtt_GetKerningTableLength.pointer_arithmetic.1` failure — a arithmetic / overflow violation in `stbtt_GetKerningTableLength`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific CBMC witness with NULL data pointer is likely a symbolic artifact, but the underlying bug class — out-of-bounds pointer arithmetic from an attacker-controlled kern table offset in a malicious font file — is real and confirmed by the dynamic harness (SIGSEGV).
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** 'stbtt_GetKerningTableLength' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`stbtt_GetKerningTableLength` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

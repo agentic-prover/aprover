@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGABRT |
 | **Module** | `kernel/platform.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `main.pointer_arithmetic.2` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -34,13 +32,19 @@ width = 2415919136u
 height = 16u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'hal_dma_fb_copy' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.pointer_arithmetic.2` failure — a arithmetic / overflow violation in `hal_dma_fb_copy`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** No concern — this is a genuine integer overflow in untrusted size arithmetic in a public DMA API with no input validation, confirmed by dynamic execution.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGABRT`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGABRT
+**Validator reasoning:** 'hal_dma_fb_copy' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`hal_dma_fb_copy` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGABRT`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

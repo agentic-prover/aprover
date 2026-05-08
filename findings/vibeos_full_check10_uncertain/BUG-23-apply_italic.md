@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -37,9 +35,17 @@ _new_w_val = -2147483648
 new_w = _new_w_val!0@1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `apply_italic`.
+
+**Realism checker's key concern:** The specific CBMC witness requires temp_bitmap=NULL (causing early return, so the function body never executes the overflow) — this exact path is a harness artifact. However, the same overflow class IS exploitable when temp_bitmap is non-NULL with an attacker-controlled large h from a malformed font file.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`apply_italic` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

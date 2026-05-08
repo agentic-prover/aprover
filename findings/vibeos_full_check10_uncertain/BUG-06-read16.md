@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/fat32.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `read16.pointer_dereference.11` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kapi_write → vfs_write → fat32_write_file → find_entry_in_dir → read16
+```
+kapi_write -> vfs_write -> fat32_write_file -> find_entry_in_dir -> read16
+```
 
 ## Spec (LLM-generated)
 
@@ -32,9 +32,17 @@ result = 0
 return_value_read16 = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['find_entry_in_dir']. Call chain: ['kapi_write', 'vfs_write', 'fat32_write_file', 'find_entry_in_dir', 'read16']. Full chain traced to system entry.
+CBMC reports a `read16.pointer_dereference.11` failure — a memory-safety violation in `read16`.
+
+**Realism checker's key concern:** The specific counterexample pointer value (_p_val!0@1) is a CBMC symbolic artifact and not literally achievable. However, if cluster_buf is not null-checked after allocation, or if cluster_buf_size is smaller than 32*(i+1)+27 bytes (e.g., due to attacker-controlled FAT metadata), the same dereference violation type is achievable.
+
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['find_entry_in_dir']. Call chain: ['kapi_write', 'vfs_write', 'fat32_write_file', 'find_entry_in_dir', 'read16']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `read16` via the call chain `kapi_write → vfs_write → fat32_write_file → find_entry_in_dir → read16` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

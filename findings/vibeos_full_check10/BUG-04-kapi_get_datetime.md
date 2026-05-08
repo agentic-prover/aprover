@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/kapi.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -55,7 +53,7 @@ kapi.delete = ((signed int (*)(char *))NULL)
 kapi.delete_dir = ((signed int (*)(char *))NULL)
 kapi.delete_recursive = ((signed int (*)(char *))NULL)
 kapi.rename = ((signed int (*)(char *, char *))NULL)
-kapi.readdir = ((signed int (*)(const void *, signed int, char *, __CPROVER_size_t, uint8_t *))NULL)
+kapi.readdir = <symbolic struct/array — see classification.json>
 kapi.set_cwd = ((signed int (*)(char *))NULL)
 kapi.get_cwd = ((signed int (*)(char *, __CPROVER_size_t))NULL)
 kapi.exit = ((const void (*)(signed int))NULL)
@@ -82,7 +80,7 @@ kapi.mouse_get_delta = ((const void (*)(signed int *, signed int *))NULL)
 kapi.window_create = ((signed int (*)(signed int, signed int, signed int, signed int, char *))NULL)
 kapi.window_destroy = ((const void (*)(signed int))NULL)
 kapi.window_get_buffer = ((uint32_t * (*)(signed int, signed int *, signed int *))NULL)
-kapi.window_poll_event = ((signed int (*)(signed int, signed int *, signed int *, signed int *, signed int *))NULL)
+kapi.window_poll_event = <symbolic struct/array — see classification.json>
 kapi.window_invalidate = ((const void (*)(signed int))NULL)
 kapi.window_set_title = ((const void (*)(signed int, char *))NULL)
 kapi.stdio_putc = ((const void (*)(char))NULL)
@@ -93,7 +91,7 @@ kapi.get_uptime_ticks = ((__CPROVER_size_t (*)(void))NULL)
 kapi.get_mem_used = ((__CPROVER_size_t (*)(void))NULL)
 kapi.get_mem_free = ((__CPROVER_size_t (*)(void))NULL)
 kapi.get_timestamp = ((uint32_t (*)(void))NULL)
-kapi.get_datetime = ((const void (*)(signed int *, signed int *, signed int *, signed int *, signed int *, signed int *, signed int *))NULL)
+kapi.get_datetime = <symbolic struct/array — see classification.json>
 kapi.wfi = ((const void (*)(void))NULL)
 kapi.sleep_ms = ((const void (*)(uint32_t))NULL)
 kapi.sound_play_wav = ((signed int (*)(const void *, uint32_t))NULL)
@@ -150,7 +148,7 @@ kapi.fb_flip = ((signed int (*)(signed int))NULL)
 kapi.fb_get_backbuffer = ((uint32_t * (*)(void))NULL)
 kapi.dma_available = ((signed int (*)(void))NULL)
 kapi.dma_copy = ((signed int (*)(const void *, const void *, uint32_t))NULL)
-kapi.dma_copy_2d = ((signed int (*)(const void *, uint32_t, const void *, uint32_t, uint32_t, uint32_t))NULL)
+kapi.dma_copy_2d = <symbolic struct/array — see classification.json>
 kapi.dma_fb_copy = ((signed int (*)(uint32_t *, uint32_t *, uint32_t, uint32_t))NULL)
 kapi.dma_fill = ((signed int (*)(const void *, uint32_t, uint32_t))NULL)
 _year_val = 0
@@ -167,22 +165,24 @@ _second_val = 0
 second = _second_val!0@1
 _weekday_val = 0
 weekday = _weekday_val!0@1
-dt = {'members': [{'name': 'year', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'month', 'value': {'binary': '000...
+dt = <symbolic struct/array — see classification.json>
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'kapi_get_datetime' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `kapi_get_datetime`.
 
-## Dynamic confirmation
+**Validator reasoning:** 'kapi_get_datetime' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+## How to trigger
+
+`kapi_get_datetime` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 
 **Verdict:** REALISTIC (high confidence)
-
-**Key concern:** None — both the violation type and the specific path are realistic given the confirmed SIGSEGV in the dynamic harness.
 
 Q1 — Can the violation TYPE occur? Yes. The function under test calls `rtc_get_datetime(&dt)` unconditionally before any guards. If `rtc_get_datetime` is implemented as a function pointer (as suggested by the `kapi` struct pattern in the codebase) that could be NULL, or if it accesses memory-mapped hardware registers that are not properly initialized or mapped, a null/invalid pointer dereference is possible. This is a public API entry point with no precondition validation, and all `kapi` function pointers are NULL in the counterexample, suggesting the broader codebase heavily uses nullable function pointers. In the real program, `rtc_get_datetime` could be backed by such a pointer that is NULL when the RTC peripheral is not initialized. Q2 — Are the witness values realistic? The dynamic harness independently confirmed a SIGSEGV, which is strong evidence the fault is reproducible in practice. The SIGSEGV is consistent with calling through a NULL function pointer or accessing unmapped hardware registers. The counterexample shows all `kapi` function pointers as NULL, which in an uninitialized or incorrectly initialized kernel API context is entirely plausible. The confirmed signal in the dynamic validation makes this a high-confidence real fault: the violation type (dereference of an invalid/NULL function pointer or uninitialized hardware region via `rtc_get_datetime`) is triggerable when called before the RTC subsystem is properly initialized.
 

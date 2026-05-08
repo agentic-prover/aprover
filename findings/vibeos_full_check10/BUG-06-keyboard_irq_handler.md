@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/keyboard.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -27,7 +25,7 @@ Direct entry (no upstream callers traced)
 **Key variable assignments:**
 ```
 irq_count = 1
-key_buffer = {'elements': [{'index': 0, 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'index': 1, 'value': {'binary': '00000000000...
+key_buffer = <symbolic struct/array — see classification.json>
 key_buffer[0l] = 0
 key_buffer[1l] = 0
 key_buffer[2l] = 0
@@ -60,22 +58,28 @@ key_buffer[28l] = 0
 key_buffer[29l] = 0
 key_buffer[30l] = 0
 key_buffer[31l] = 0
-format = {'name': 'unknown'}
+format = <symbolic struct/array — see classification.json>
 va_arg = 1
 result = 0
 return_value___VERIFIER_nondet_int = 0
 list = ((va_list)NULL)
-va_args = {'elements': [{'index': 0, 'value': {'data': 'va_arg!0', 'name': 'pointer', 'type': 'const void *'}}], 'name': 'array'}
+va_args = <symbolic struct/array — see classification.json>
 va_args[0l] = va_arg!0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'keyboard_irq_handler' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `keyboard_irq_handler`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific assertion violated (main.assertion.1) is not shown, and the harness introduces a synthetic log_key function to reproduce the va_list misuse. The real bug may lie inside process_events() rather than in keyboard_irq_handler itself — but the call is unconditional and the crash class is real.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** 'keyboard_irq_handler' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`keyboard_irq_handler` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/usb_hid.c` |
-| **Bug type** | semantic |
-| **Violated property** | `hal_usb_mouse_poll.precondition_instance.3` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -31,7 +29,7 @@ usb_state.num_channels = 0
 usb_state.device_connected = 134217728
 usb_state.device_speed = 0
 usb_state.next_address = 0
-usb_state.data_toggle = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'uint8_t', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'intege...
+usb_state.data_toggle = <symbolic struct/array — see classification.json>
 usb_state.data_toggle[0l] = 0
 usb_state.data_toggle[1l] = 0
 usb_state.data_toggle[2l] = 0
@@ -48,8 +46,8 @@ usb_state.data_toggle[12l] = 0
 usb_state.data_toggle[13l] = 0
 usb_state.data_toggle[14l] = 0
 usb_state.data_toggle[15l] = 0
-usb_state.devices = {'elements': [{'index': 0, 'value': {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'n...
-usb_state.devices[0l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices = <symbolic struct/array — see classification.json>
+usb_state.devices[0l] = <symbolic struct/array — see classification.json>
 usb_state.devices[0l].address = 0
 usb_state.devices[0l].speed = 0
 usb_state.devices[0l].max_packet_size = 0
@@ -57,7 +55,7 @@ usb_state.devices[0l].is_hub = 0
 usb_state.devices[0l].hub_ports = 0
 usb_state.devices[0l].parent_hub = 0
 usb_state.devices[0l].parent_port = 0
-usb_state.devices[1l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[1l] = <symbolic struct/array — see classification.json>
 usb_state.devices[1l].address = 0
 usb_state.devices[1l].speed = 0
 usb_state.devices[1l].max_packet_size = 0
@@ -65,7 +63,7 @@ usb_state.devices[1l].is_hub = 0
 usb_state.devices[1l].hub_ports = 0
 usb_state.devices[1l].parent_hub = 0
 usb_state.devices[1l].parent_port = 0
-usb_state.devices[2l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[2l] = <symbolic struct/array — see classification.json>
 usb_state.devices[2l].address = 0
 usb_state.devices[2l].speed = 0
 usb_state.devices[2l].max_packet_size = 0
@@ -73,7 +71,7 @@ usb_state.devices[2l].is_hub = 0
 usb_state.devices[2l].hub_ports = 0
 usb_state.devices[2l].parent_hub = 0
 usb_state.devices[2l].parent_port = 0
-usb_state.devices[3l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[3l] = <symbolic struct/array — see classification.json>
 usb_state.devices[3l].address = 0
 usb_state.devices[3l].speed = 0
 usb_state.devices[3l].max_packet_size = 0
@@ -81,7 +79,7 @@ usb_state.devices[3l].is_hub = 0
 usb_state.devices[3l].hub_ports = 0
 usb_state.devices[3l].parent_hub = 0
 usb_state.devices[3l].parent_port = 0
-usb_state.devices[4l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[4l] = <symbolic struct/array — see classification.json>
 usb_state.devices[4l].address = 0
 usb_state.devices[4l].speed = 0
 usb_state.devices[4l].max_packet_size = 0
@@ -89,7 +87,7 @@ usb_state.devices[4l].is_hub = 0
 usb_state.devices[4l].hub_ports = 0
 usb_state.devices[4l].parent_hub = 0
 usb_state.devices[4l].parent_port = 0
-usb_state.devices[5l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[5l] = <symbolic struct/array — see classification.json>
 usb_state.devices[5l].address = 0
 usb_state.devices[5l].speed = 0
 usb_state.devices[5l].max_packet_size = 0
@@ -97,7 +95,7 @@ usb_state.devices[5l].is_hub = 0
 usb_state.devices[5l].hub_ports = 0
 usb_state.devices[5l].parent_hub = 0
 usb_state.devices[5l].parent_port = 0
-usb_state.devices[6l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[6l] = <symbolic struct/array — see classification.json>
 usb_state.devices[6l].address = 0
 usb_state.devices[6l].speed = 0
 usb_state.devices[6l].max_packet_size = 0
@@ -105,7 +103,7 @@ usb_state.devices[6l].is_hub = 0
 usb_state.devices[6l].hub_ports = 0
 usb_state.devices[6l].parent_hub = 0
 usb_state.devices[6l].parent_port = 0
-usb_state.devices[7l] = {'members': [{'name': 'address', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width': 32}}, {'name': 'speed', 'value': {'binary': '...
+usb_state.devices[7l] = <symbolic struct/array — see classification.json>
 usb_state.devices[7l].address = 0
 usb_state.devices[7l].speed = 0
 usb_state.devices[7l].max_packet_size = 0
@@ -130,19 +128,25 @@ report = ring_report!0@1
 report_len = 7
 result = 1073741824
 return_value_hal_usb_mouse_poll = 0
-ring_report = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'uint8_t', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'intege...
+ring_report = <symbolic struct/array — see classification.json>
 return_value_mouse_ring_pop_stub = 1073741824
 goto_symex$$return_value$$mouse_ring_pop_stub = 1073741824
 len = 7
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'hal_usb_mouse_poll' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `hal_usb_mouse_poll.precondition_instance.3` failure — a semantic / contract violation in `hal_usb_mouse_poll`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The `report` pointer parameter is never validated before being passed to `memcpy`. A NULL or invalid pointer passed by any caller (including an adversary) will cause a SIGSEGV when `mouse_ring_pop` returns non-zero. The dynamic harness confirmed this crash.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** 'hal_usb_mouse_poll' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`hal_usb_mouse_poll` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

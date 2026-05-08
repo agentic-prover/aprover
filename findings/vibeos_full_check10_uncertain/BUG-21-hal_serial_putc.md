@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/serial.c` |
-| **Bug type** | semantic |
-| **Violated property** | `hal_serial_putc.unwind.0` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -29,9 +27,17 @@ Direct entry (no upstream callers traced)
 c = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `hal_serial_putc.unwind.0` failure — a semantic / contract violation in `hal_serial_putc`.
+
+**Realism checker's key concern:** The loop termination depends on hardware register state (not attacker-controlled input), so while a genuine infinite-loop is possible under hardware malfunction, it is not directly exploitable as a security vulnerability. The function also has no call sites (dead code), further limiting real exposure.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`hal_serial_putc` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

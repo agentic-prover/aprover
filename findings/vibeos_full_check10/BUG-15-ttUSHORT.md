@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `ttUSHORT.pointer_dereference.11` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_GetKerningTableLength → ttUSHORT
+```
+stbtt_GetKerningTableLength -> ttUSHORT
+```
 
 ## Spec (LLM-generated)
 
@@ -32,13 +32,19 @@ result = 0
 return_value_ttUSHORT = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_GetKerningTableLength', 'stbtt_GetFontNameString', 'stbtt_InitFont_internal', 'stbtt__GetGlyphShapeTT', 'stbtt_FindSVGDoc', 'stbtt__GetCoverageIndex', 'stbtt_FindGlyphIndex', 'stbtt__GetGlyphGPOSInfoAdvance', 'stbtt__matchpair', 'stbtt__matches', 'stbtt_GetKerningTable', 'stbtt__GetGlyfOffset', 'stbtt_ScaleForMappingEmToPixels', 'stbtt__GetGlyphKernInfoAdvance', 'stbtt__find_table', 'stbtt__GetGlyphClass', 'stbtt_GetGlyphHMetrics']. Call chain: ['stbtt_GetKerningTableLength', 'ttUSHORT']. Full chain traced to system entry.
+CBMC reports a `ttUSHORT.pointer_dereference.11` failure — a memory-safety violation in `ttUSHORT`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific counterexample witness value (p=1) is a CBMC artifact, but the dynamic harness confirmed SIGSEGV in real execution, meaning the underlying out-of-bounds pointer dereference is real and reachable through malformed font input.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_GetKerningTableLength', 'stbtt_GetFontNameString', 'stbtt_InitFont_internal', 'stbtt__GetGlyphShapeTT', 'stbtt_FindSVGDoc', 'stbtt__GetCoverageIndex', 'stbtt_FindGlyphIndex', 'stbtt__GetGlyphGPOSInfoAdvance', 'stbtt__matchpair', 'stbtt__matches', 'stbtt_GetKerningTable', 'stbtt__GetGlyfOffset', 'stbtt_ScaleForMappingEmToPixels', 'stbtt__GetGlyphKernInfoAdvance', 'stbtt__find_table', 'stbtt__GetGlyphClass', 'stbtt_GetGlyphHMetrics']. Call chain: ['stbtt_GetKerningTableLength', 'ttUSHORT']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `ttUSHORT` via the call chain `stbtt_GetKerningTableLength → ttUSHORT` and supply inputs that match the counterexample variable assignments above.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

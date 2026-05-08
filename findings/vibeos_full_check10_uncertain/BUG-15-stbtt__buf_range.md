@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.3` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFont_internal → stbtt__buf_range
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_InitFont -> stbtt_InitFont_internal -> stbtt__buf_range
+```
 
 ## Spec (LLM-generated)
 
@@ -26,20 +26,20 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFo
 
 **Key variable assignments:**
 ```
-_b_val = {'members': [{'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width'...
+_b_val = <symbolic struct/array — see classification.json>
 b = _b_val!0@1
 o = 260046783
 s = 0
-result = {'members': [{'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width'...
-return_value_stbtt__buf_range = {'members': [{'name': 'data', 'value': {'data': '((unsigned char *)NULL)', 'name': 'pointer', 'type': 'unsigned char *'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000',...
-r = {'members': [{'name': 'data', 'value': {'data': '((unsigned char *)NULL)', 'name': 'pointer', 'type': 'unsigned char *'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000',...
-return_value_stbtt__new_buf_stub = {'members': [{'name': 'data', 'value': {'data': '((unsigned char *)NULL)', 'name': 'pointer', 'type': 'unsigned char *'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000',...
+result = <symbolic struct/array — see classification.json>
+return_value_stbtt__buf_range = <symbolic struct/array — see classification.json>
+r = <symbolic struct/array — see classification.json>
+return_value_stbtt__new_buf_stub = <symbolic struct/array — see classification.json>
 p = NULL
 size = 0ul
-goto_symex$$return_value$$stbtt__new_buf_stub.data = {'name': 'unknown'}
+goto_symex$$return_value$$stbtt__new_buf_stub.data = <symbolic struct/array — see classification.json>
 goto_symex$$return_value$$stbtt__new_buf_stub.cursor = 0
 goto_symex$$return_value$$stbtt__new_buf_stub.size = 0
-return_value_stbtt__new_buf_stub.data = {'name': 'unknown'}
+return_value_stbtt__new_buf_stub.data = <symbolic struct/array — see classification.json>
 return_value_stbtt__new_buf_stub.cursor = 0
 return_value_stbtt__new_buf_stub.size = 0
 r.data = ((unsigned char *)NULL)
@@ -56,17 +56,17 @@ result.cursor = 0
 result.size = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_InitFont_internal', 'stbtt__dict_get', 'stbtt__cff_index_get', 'stbtt__get_subrs', 'stbtt__cff_get_index']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_InitFont', 'stbtt_InitFont_internal', 'stbtt__buf_range']. Full chain traced to system entry.
+CBMC reports a `main.assertion.3` failure — a semantic / contract violation in `stbtt__buf_range`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific witness values (data=NULL with size=402652670) are a CBMC artifact — real stbtt__buf construction prevents this combination. However, the broader vulnerability class of out-of-bounds pointer arithmetic from attacker-controlled font offsets/sizes remains a genuine concern, though the existing bounds checks in this function provide substantial protection.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_PackFontRange'. Error: /tmp/tmpvz6prz2m.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmpvz6prz2m.c:1197:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
- 1197 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmpvz6prz2m.c:1216:25: error: incompa
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_InitFont_internal', 'stbtt__dict_get', 'stbtt__cff_index_get', 'stbtt__get_subrs', 'stbtt__cff_get_index']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_InitFont', 'stbtt_InitFont_internal', 'stbtt__buf_range']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt__buf_range` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFont_internal → stbtt__buf_range` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

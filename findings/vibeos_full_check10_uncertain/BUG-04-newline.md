@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/console.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `scroll_up_stub.overflow.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kernel_main → console_puts → console_putc → newline
+```
+kernel_main -> console_puts -> console_putc -> newline
+```
 
 ## Spec (LLM-generated)
 
@@ -35,9 +35,17 @@ scroll_offset = 0u
 virtual_height = 0u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['console_putc']. Call chain: ['kernel_main', 'console_puts', 'console_putc', 'newline']. Full chain traced to system entry.
+CBMC reports a `scroll_up_stub.overflow.1` failure — a arithmetic / overflow violation in `newline`.
+
+**Realism checker's key concern:** The CBMC witness is inconsistent (fb_height=2147516416 but num_rows=0 cannot co-exist given num_rows=fb_height/16), making this a CBMC artifact for the specific witness. However, num_rows=0 is reachable when fb_height<16, and the underflow is a real vulnerability class on that path.
+
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['console_putc']. Call chain: ['kernel_main', 'console_puts', 'console_putc', 'newline']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `newline` via the call chain `kernel_main → console_puts → console_putc → newline` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

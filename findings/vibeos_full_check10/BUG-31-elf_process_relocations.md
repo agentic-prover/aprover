@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/elf.c` |
-| **Bug type** | semantic |
-| **Violated property** | `elf_process_relocations.unwind.0` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -27,23 +25,27 @@ Direct entry (no upstream callers traced)
 **Key variable assignments:**
 ```
 load_base = 73183493944770560ul
-_dynamic_val = {'members': [{'name': 'd_tag', 'value': {'binary': '0000000000000000000000000000000000000000000000000000000000000111', 'data': '7l', 'name': 'integer', 'type': 'int64_t', 'width': 64}}, {'name': 'd...
+_dynamic_val = <symbolic struct/array — see classification.json>
 dynamic = _dynamic_val!0@1
 rela_addr = 0ul
 rela_size = 11176474785116848128ul
 rela_ent = 94567198519296ul
-dyn = {'name': 'unknown'}
+dyn = <symbolic struct/array — see classification.json>
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `elf_process_relocations.unwind.0` failure — a semantic / contract violation in `elf_process_relocations`.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`elf_process_relocations` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 
 **Verdict:** REALISTIC (high confidence)
-
-**Key concern:** None — the loop termination depends on attacker-controlled ELF data (DT_NULL terminator), and a crafted ELF file without a null terminator causes the loop to read out-of-bounds with no protection.
 
 Q1 — Can the violation TYPE occur? YES. The loop `for (const Elf64_Dyn *dyn = dynamic; dyn->d_tag != 0; dyn++)` has no bounds check and relies solely on finding a DT_NULL terminator (d_tag == 0) to stop. In the ELF format, the dynamic array MUST be null-terminated, but this is a structural property of the input data, not enforced by the code. An attacker can craft a malicious ELF binary whose `.dynamic` section lacks a DT_NULL terminator. Without any length limit or valid-range check, the loop would walk off the end of the dynamic array into unmapped or attacker-controlled memory, causing an out-of-bounds read. This is a well-known ELF loader attack vector. Q2 — Is the witness realistic? The counterexample shows a single dynamic entry with d_tag=7 and no terminating entry with d_tag=0. This directly models a truncated or maliciously crafted dynamic section — a realistic input from an attacker-supplied ELF binary. The call site (`elf_load_at`) processes ELF binaries that could be untrusted. The loop-unwind violation (.unwind.0) here corresponds to a real non-termination / out-of-bounds scenario, not merely a CBMC bound artifact. Since the function operates as an ELF loader and parses data from external binaries with no bounds enforcement, both the violation type and witness scenario are plausible in a real attacker-controlled input setting.
 

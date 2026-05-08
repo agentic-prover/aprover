@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_GetFontVMetrics.pointer_arithmetic.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_GetScaledFontVMetrics → stbtt_GetFontVMetrics
+```
+stbtt_GetScaledFontVMetrics -> stbtt_GetFontVMetrics
+```
 
 ## Spec (LLM-generated)
 
@@ -26,7 +26,7 @@ stbtt_GetScaledFontVMetrics → stbtt_GetFontVMetrics
 
 **Key variable assignments:**
 ```
-_info_val = {'members': [{'name': 'userdata', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'fontstart', 'value': {'binary': '0...
+_info_val = <symbolic struct/array — see classification.json>
 info = _info_val!0@1
 _ascent_val = 0
 ascent = _ascent_val!0@1
@@ -37,13 +37,19 @@ lineGap = _lineGap_val!0@1
 return_value_ttSHORT_stub = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_GetScaledFontVMetrics']. Call chain: ['stbtt_GetScaledFontVMetrics', 'stbtt_GetFontVMetrics']. Full chain traced to system entry.
+CBMC reports a `stbtt_GetFontVMetrics.pointer_arithmetic.1` failure — a arithmetic / overflow violation in `stbtt_GetFontVMetrics`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** Attacker-controlled font data can set an arbitrarily large hhea table offset, causing stbtt_GetFontVMetrics to perform an out-of-bounds read via unchecked pointer arithmetic on info->data + info->hhea + {4,6,8}. This is confirmed by dynamic execution (SIGSEGV).
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_GetScaledFontVMetrics']. Call chain: ['stbtt_GetScaledFontVMetrics', 'stbtt_GetFontVMetrics']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt_GetFontVMetrics` via the call chain `stbtt_GetScaledFontVMetrics → stbtt_GetFontVMetrics` and supply inputs that match the counterexample variable assignments above.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

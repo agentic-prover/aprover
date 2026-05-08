@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `main.overflow.1` |
-| **Realism** | uncertain (— confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_spc_val = {'members': [{'name': 'user_allocator_context', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'pack_info', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'co...
+_spc_val = <symbolic struct/array — see classification.json>
 spc = _spc_val!0@1
 _pixels_val = 0
 pixels = _pixels_val!0@1
@@ -37,13 +35,15 @@ padding = 0
 alloc_context = NULL
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_PackBegin' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.overflow.1` failure — a arithmetic / overflow violation in `stbtt_PackBegin`.
 
-## Dynamic confirmation
+**Validator reasoning:** 'stbtt_PackBegin' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
 
-Dynamic harness outcome: `inconclusive`. Harness generation failed.
+## How to trigger
+
+`stbtt_PackBegin` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

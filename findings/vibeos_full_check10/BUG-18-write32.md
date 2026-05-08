@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/fat32.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `write32.pointer_dereference.11` |
-| **Realism** | realistic (medium confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kapi_write → vfs_write → fat32_write_file → create_dir_entry → write32
+```
+kapi_write -> vfs_write -> fat32_write_file -> create_dir_entry -> write32
+```
 
 ## Spec (LLM-generated)
 
@@ -31,9 +31,17 @@ p = _p_val!0@1
 val = 0u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['create_dir_entry', 'update_dir_entry']. Call chain: ['kapi_write', 'vfs_write', 'fat32_write_file', 'create_dir_entry', 'write32']. Full chain traced to system entry.
+CBMC reports a `write32.pointer_dereference.11` failure — a memory-safety violation in `write32`.
+
+**Realism checker's key concern:** In create_dir_entry, the pointer `e` pointing to a directory entry buffer is likely obtained from a cluster/sector read function. If that function can return NULL and the result is used without a NULL check before calling write32(e + 28, ...), the dereference of an invalid pointer is a real memory-safety vulnerability reachable from attacker-controlled file path inputs.
+
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['create_dir_entry', 'update_dir_entry']. Call chain: ['kapi_write', 'vfs_write', 'fat32_write_file', 'create_dir_entry', 'write32']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `write32` via the call chain `kapi_write → vfs_write → fat32_write_file → create_dir_entry → write32` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

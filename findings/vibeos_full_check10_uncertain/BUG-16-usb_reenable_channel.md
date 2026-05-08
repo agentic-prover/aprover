@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/usb_transfer.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `usb_reenable_channel.overflow.3` |
-| **Realism** | uncertain (— confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kernel_main → hal_usb_init → usb_enumerate_device → usb_enumerate_device_at → usb_get_device_descriptor → usb_control_transfer → usb_wait_for_dma_complete → usb_reenable_channel
+```
+kernel_main -> hal_usb_init -> usb_enumerate_device -> usb_enumerate_device_at -> usb_get_device_descriptor -> usb_control_transfer -> usb_wait_for_dma_complete -> usb_reenable_channel
+```
 
 ## Spec (LLM-generated)
 
@@ -30,9 +30,15 @@ ch = 1
 hcchar = 536870912u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['usb_wait_for_dma_complete']. Call chain: ['kernel_main', 'hal_usb_init', 'usb_enumerate_device', 'usb_enumerate_device_at', 'usb_get_device_descriptor', 'usb_control_transfer', 'usb_wait_for_dma_complete', 'usb_reenable_channel']. Full chain traced to system entry.
+CBMC reports a `usb_reenable_channel.overflow.3` failure — a arithmetic / overflow violation in `usb_reenable_channel`.
+
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['usb_wait_for_dma_complete']. Call chain: ['kernel_main', 'hal_usb_init', 'usb_enumerate_device', 'usb_enumerate_device_at', 'usb_get_device_descriptor', 'usb_control_transfer', 'usb_wait_for_dma_complete', 'usb_reenable_channel']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `usb_reenable_channel` via the call chain `kernel_main → hal_usb_init → usb_enumerate_device → usb_enumerate_device_at → usb_get_device_descriptor → usb_control_transfer → usb_wait_for_dma_complete → usb_reenable_channel` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

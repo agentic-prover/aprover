@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_GetGlyphHMetrics.overflow.7` |
-| **Realism** | uncertain (— confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoRects → stbtt_GetGlyphHMetrics
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_PackFontRangesRenderIntoRects -> stbtt_GetGlyphHMetrics
+```
 
 ## Spec (LLM-generated)
 
@@ -26,7 +26,7 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoR
 
 **Key variable assignments:**
 ```
-_info_val = {'members': [{'name': 'userdata', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'data', 'value': {'name': 'pointer', 'type': 'unsigned char *'}}, {'name': 'fontsta...
+_info_val = <symbolic struct/array — see classification.json>
 info = _info_val!0@1
 glyph_index = 1610629127
 _advanceWidth_val = 0
@@ -35,7 +35,7 @@ _leftSideBearing_val = 0
 leftSideBearing = _leftSideBearing_val!0@1
 numOfLongHorMetrics = 32768
 return_value_ttUSHORT_stub = 32768
-p = {'name': 'pointer', 'type': 'unsigned char *'}
+p = <symbolic struct/array — see classification.json>
 result = 0
 goto_symex$$return_value$$ttUSHORT_stub = 32768
 return_value_ttSHORT_stub$1 = 0
@@ -43,17 +43,15 @@ goto_symex$$return_value$$ttSHORT_stub = 0
 return_value_ttSHORT_stub$2 = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_PackFontRangesRenderIntoRects', 'stbtt_GetCodepointHMetrics', 'stbtt_BakeFontBitmap_internal']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesRenderIntoRects', 'stbtt_GetGlyphHMetrics']. Full chain traced to system entry.
+CBMC reports a `stbtt_GetGlyphHMetrics.overflow.7` failure — a arithmetic / overflow violation in `stbtt_GetGlyphHMetrics`.
 
-## Dynamic confirmation
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_PackFontRangesRenderIntoRects', 'stbtt_GetCodepointHMetrics', 'stbtt_BakeFontBitmap_internal']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_PackFontRangesRenderIntoRects', 'stbtt_GetGlyphHMetrics']. Full chain traced to system entry.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_PackFontRange'. Error: /tmp/tmpuon6xdq6.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmpuon6xdq6.c:1197:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
- 1197 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmpuon6xdq6.c:1216:25: error: incompa
+## How to trigger
+
+Reach `stbtt_GetGlyphHMetrics` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_PackFontRangesRenderIntoRects → stbtt_GetGlyphHMetrics` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

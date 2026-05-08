@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/fat32.c` |
-| **Bug type** | semantic |
-| **Violated property** | `fat_name_to_str.unwind.0` |
-| **Realism** | uncertain (— confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_fat_name_buf = {'elements': [{'index': 0, 'value': {'binary': '01000010', 'data': "'B'", 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '01000001', 'data': "'A'", 'name': 'integ...
+_fat_name_buf = <symbolic struct/array — see classification.json>
 _fat_name_len = 4u
 _fat_name_buf[4l] = 0
 _fat_name_buf[0l] = 'B'
@@ -34,7 +32,7 @@ _fat_name_buf[1l] = 'A'
 _fat_name_buf[2l] = 'A'
 _fat_name_buf[3l] = 0
 fat_name = _fat_name_buf!0@1
-_out_buf = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_out_buf = <symbolic struct/array — see classification.json>
 _out_len = 4u
 _out_buf[4l] = 0
 _out_buf[0l] = 'B'
@@ -47,9 +45,15 @@ j = 4
 tmp_post_j = 3
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample is spurious — no caller can produce the state {'__CPROVER_dead_object': 'NULL', '__CPROVER_deallocated': 'NULL', '__CPROVER_max_malloc_size': '36028797018963968ul', '__CPROVER_memory_leak': 'NULL', '__CPROVER_rounding_mode': '0', '_fat_name_buf': '{\'elements\': [{\'index\': 0, \'value\': {\'binary\': \'01000010\', \'data\': "\'B\'", \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 1, \'value\': {\'binary\': \'01000001\', \'data\': "\'A\'", \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 2, \'value\': {\'binary\': \'01000001\', \'data\': "\'A\'", \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 3, \'value\': {\'binary\': \'00000000\', \'data\': \'0\', \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 4, \'value\': {\'binary\': \'00000000\', \'data\': \'0\', \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}], \'name\': \'array\'}', '_fat_name_len': '4u', '_fat_name_buf[4l]': '0', '_fat_name_buf[0l]': "'B'", '_fat_name_buf[1l]': "'A'", '_fat_name_buf[2l]': "'A'", '_fat_name_buf[3l]': '0', 'fat_name': '_fat_name_buf!0@1', '_out_buf': "{'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 2, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 3, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 4, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}], 'name': 'array'}", '_out_len': '4u', '_out_buf[4l]': '0', '_out_buf[0l]': "'B'", '_out_buf[1l]': "'A'", '_out_buf[2l]': "'A'", '_out_buf[3l]': '0', 'out': '_out_buf!0@1', 'i': '4', 'j': '4', 'tmp_post_j': '3'}. Precondition refined over 0 iteration(s).
+CBMC reports a `fat_name_to_str.unwind.0` failure — a semantic / contract violation in `fat_name_to_str`.
+
+**Validator reasoning:** Counterexample is spurious — no caller can produce the state {'__CPROVER_dead_object': 'NULL', '__CPROVER_deallocated': 'NULL', '__CPROVER_max_malloc_size': '36028797018963968ul', '__CPROVER_memory_leak': 'NULL', '__CPROVER_rounding_mode': '0', '_fat_name_buf': '{\'elements\': [{\'index\': 0, \'value\': {\'binary\': \'01000010\', \'data\': "\'B\'", \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 1, \'value\': {\'binary\': \'01000001\', \'data\': "\'A\'", \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 2, \'value\': {\'binary\': \'01000001\', \'data\': "\'A\'", \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 3, \'value\': {\'binary\': \'00000000\', \'data\': \'0\', \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}, {\'index\': 4, \'value\': {\'binary\': \'00000000\', \'data\': \'0\', \'name\': \'integer\', \'type\': \'char\', \'width\': 8}}], \'name\': \'array\'}', '_fat_name_len': '4u', '_fat_name_buf[4l]': '0', '_fat_name_buf[0l]': "'B'", '_fat_name_buf[1l]': "'A'", '_fat_name_buf[2l]': "'A'", '_fat_name_buf[3l]': '0', 'fat_name': '_fat_name_buf!0@1', '_out_buf': "{'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 2, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 3, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 4, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}], 'name': 'array'}", '_out_len': '4u', '_out_buf[4l]': '0', '_out_buf[0l]': "'B'", '_out_buf[1l]': "'A'", '_out_buf[2l]': "'A'", '_out_buf[3l]': '0', 'out': '_out_buf!0@1', 'i': '4', 'j': '4', 'tmp_post_j': '3'}. Precondition refined over 0 iteration(s).
+
+## How to trigger
+
+`fat_name_to_str` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

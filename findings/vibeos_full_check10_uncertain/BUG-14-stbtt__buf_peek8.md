@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbtt__buf_peek8.pointer_dereference.25` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFont_internal → stbtt__dict_get_ints → stbtt__dict_get → stbtt__cff_skip_operand → stbtt__buf_peek8
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_InitFont -> stbtt_InitFont_internal -> stbtt__dict_get_ints -> stbtt__dict_get -> stbtt__cff_skip_operand -> stbtt__buf_peek8
+```
 
 ## Spec (LLM-generated)
 
@@ -26,23 +26,23 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFo
 
 **Key variable assignments:**
 ```
-_b_val = {'members': [{'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width'...
+_b_val = <symbolic struct/array — see classification.json>
 b = _b_val!0@1
 result = 0
 return_value_stbtt__buf_peek8 = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt__cff_skip_operand', 'stbtt__dict_get']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_InitFont', 'stbtt_InitFont_internal', 'stbtt__dict_get_ints', 'stbtt__dict_get', 'stbtt__cff_skip_operand', 'stbtt__buf_peek8']. Full chain traced to system entry.
+CBMC reports a `stbtt__buf_peek8.pointer_dereference.25` failure — a memory-safety violation in `stbtt__buf_peek8`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific CBMC witness has `data` as a symbolic/unknown pointer (a CBMC artifact), making the exact counterexample unrealistic. However, the vulnerability class (out-of-bounds read from `b->data[b->cursor]` when `size` from a malformed CFF table exceeds the true buffer allocation) is realistic for attacker-supplied font files.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_PackFontRange'. Error: /tmp/tmpitrc6bqa.c: In function ‘stbtt_InitFont_internal’:
-/tmp/tmpitrc6bqa.c:1197:16: error: incompatible types when assigning to type ‘stbtt__buf’ from type ‘int’
- 1197 |    info->cff = stbtt__new_buf(((void *)0), 0);
-      |                ^~~~~~~~~~~~~~
-/tmp/tmpitrc6bqa.c:1216:25: error: incompa
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt__cff_skip_operand', 'stbtt__dict_get']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_InitFont', 'stbtt_InitFont_internal', 'stbtt__dict_get_ints', 'stbtt__dict_get', 'stbtt__cff_skip_operand', 'stbtt__buf_peek8']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt__buf_peek8` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFont_internal → stbtt__dict_get_ints → stbtt__dict_get → stbtt__cff_skip_operand → stbtt__buf_peek8` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

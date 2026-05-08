@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/platform.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `hal_get_time_us.overflow.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kernel_main → hal_usb_init → usb_core_reset → usleep → hal_get_time_us
+```
+kernel_main -> hal_usb_init -> usb_core_reset -> usleep -> hal_get_time_us
+```
 
 ## Spec (LLM-generated)
 
@@ -32,9 +32,17 @@ cnt = 288230376151711744ul
 freq = 0ul
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'usleep' can reach the CEx state. Call chain: ['kernel_main', 'hal_usb_init', 'usb_core_reset', 'usleep', 'hal_get_time_us']. Full chain traced to system entry.
+CBMC reports a `hal_get_time_us.overflow.1` failure — a arithmetic / overflow violation in `hal_get_time_us`.
+
+**Realism checker's key concern:** No guard against freq==0 before the division; on uninitialized or emulated ARM hardware cntfrq_el0 returns 0, triggering division by zero in a security-critical early-boot code path.
+
+**Validator reasoning:** Cross-file caller 'usleep' can reach the CEx state. Call chain: ['kernel_main', 'hal_usb_init', 'usb_core_reset', 'usleep', 'hal_get_time_us']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `hal_get_time_us` via the call chain `kernel_main → hal_usb_init → usb_core_reset → usleep → hal_get_time_us` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

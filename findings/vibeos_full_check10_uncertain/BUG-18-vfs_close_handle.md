@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/vfs.c` |
-| **Bug type** | semantic |
-| **Violated property** | `vfs_close_handle.precondition_instance.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kapi_close → vfs_close_handle
+```
+kapi_close -> vfs_close_handle
+```
 
 ## Spec (LLM-generated)
 
@@ -26,13 +26,21 @@ kapi_close → vfs_close_handle
 
 **Key variable assignments:**
 ```
-_node_val = {'members': [{'name': 'name', 'value': {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '000...
+_node_val = <symbolic struct/array — see classification.json>
 node = _node_val!0@1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'kapi_close' can reach the CEx state. Call chain: ['kapi_close', 'vfs_close_handle']. Full chain traced to system entry.
+CBMC reports a `vfs_close_handle.precondition_instance.1` failure — a semantic / contract violation in `vfs_close_handle`.
+
+**Realism checker's key concern:** The harness tests a simulated buggy version that differs from the actual function (which has a null check for data). The realistic concern is whether node->data or node itself could point to non-heap memory (e.g., stored_path assigned to data in vfs_lookup could be a static/stack string), making free() calls undefined behaviour — but this cannot be confirmed without seeing kapi_close's full body and how vfs_node_t instances are constructed.
+
+**Validator reasoning:** Cross-file caller 'kapi_close' can reach the CEx state. Call chain: ['kapi_close', 'vfs_close_handle']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `vfs_close_handle` via the call chain `kapi_close → vfs_close_handle` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

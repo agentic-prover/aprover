@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | semantic |
-| **Violated property** | `stbtt__CompareUTF8toUTF16_bigendian_prefix.unwind.0` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -30,7 +28,7 @@ _s1_val = 0
 s1 = _s1_val!0@1
 len1 = 33554435
 _s2_val = 0
-s2 = {'name': 'unknown'}
+s2 = <symbolic struct/array — see classification.json>
 len2 = 1073741818
 result = 0
 return_value_stbtt__CompareUTF8toUTF16_bigendian_prefix = 0
@@ -39,9 +37,17 @@ ch = 0
 tmp_post_i = 3
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `stbtt__CompareUTF8toUTF16_bigendian_prefix.unwind.0` failure — a semantic / contract violation in `stbtt__CompareUTF8toUTF16_bigendian_prefix`.
+
+**Realism checker's key concern:** No validation that len2 is even: an odd attacker-controlled len2 causes signed-integer underflow and an infinite loop; additionally, extremely large even values cause a denial-of-service, and odd values cause an out-of-bounds read on s2.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`stbtt__CompareUTF8toUTF16_bigendian_prefix` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/console.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kernel_main → console_init
+```
+kernel_main -> console_init
+```
 
 ## Spec (LLM-generated)
 
@@ -39,9 +39,17 @@ scroll_offset = 0u
 virtual_height = 0u
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'kernel_main' can reach the CEx state. Call chain: ['kernel_main', 'console_init']. Full chain traced to system entry.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `console_init`.
+
+**Realism checker's key concern:** The specific CBMC witness has `fb_base=NULL` triggering early return, which is a symbolic initial-state artifact. However, the real concern is that no lower-bound check exists on `fb_height` or `fb_width` before division; a hardware-supplied height < 16 with valid `fb_base` yields `num_rows=0`, causing unsigned underflow (`num_rows-1`) in `newline` and potential out-of-bounds framebuffer writes.
+
+**Validator reasoning:** Cross-file caller 'kernel_main' can reach the CEx state. Call chain: ['kernel_main', 'console_init']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `console_init` via the call chain `kernel_main → console_init` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

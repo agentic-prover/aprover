@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/mouse.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-cursor_update → mouse_get_screen_pos
+```
+cursor_update -> mouse_get_screen_pos
+```
 
 ## Spec (LLM-generated)
 
@@ -37,9 +37,17 @@ _y_val = 0
 y = _y_val!0@1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'cursor_update' can reach the CEx state. Call chain: ['cursor_update', 'mouse_get_screen_pos']. Full chain traced to system entry.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `mouse_get_screen_pos`.
+
+**Realism checker's key concern:** The specific CBMC assertion (main.assertion.1) is not shown directly in the source, and the witness values result in mouse_base=NULL taking the hal_mouse_get_state path where x/y are valid — not null. The real concern (inconsistent null-guard across code branches + potential integer overflow) exists but the exact violated property is ambiguous, making it uncertain whether CBMC triggered on a real bug or a stub-modeling artifact.
+
+**Validator reasoning:** Cross-file caller 'cursor_update' can reach the CEx state. Call chain: ['cursor_update', 'mouse_get_screen_pos']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `mouse_get_screen_pos` via the call chain `cursor_update → mouse_get_screen_pos` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

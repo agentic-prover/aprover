@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/kapi.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -55,7 +53,7 @@ kapi.delete = ((signed int (*)(char *))NULL)
 kapi.delete_dir = ((signed int (*)(char *))NULL)
 kapi.delete_recursive = ((signed int (*)(char *))NULL)
 kapi.rename = ((signed int (*)(char *, char *))NULL)
-kapi.readdir = ((signed int (*)(const void *, signed int, char *, __CPROVER_size_t, uint8_t *))NULL)
+kapi.readdir = <symbolic struct/array — see classification.json>
 kapi.set_cwd = ((signed int (*)(char *))NULL)
 kapi.get_cwd = ((signed int (*)(char *, __CPROVER_size_t))NULL)
 kapi.exit = ((const void (*)(signed int))NULL)
@@ -82,7 +80,7 @@ kapi.mouse_get_delta = ((const void (*)(signed int *, signed int *))NULL)
 kapi.window_create = ((signed int (*)(signed int, signed int, signed int, signed int, char *))NULL)
 kapi.window_destroy = ((const void (*)(signed int))NULL)
 kapi.window_get_buffer = ((uint32_t * (*)(signed int, signed int *, signed int *))NULL)
-kapi.window_poll_event = ((signed int (*)(signed int, signed int *, signed int *, signed int *, signed int *))NULL)
+kapi.window_poll_event = <symbolic struct/array — see classification.json>
 kapi.window_invalidate = ((const void (*)(signed int))NULL)
 kapi.window_set_title = ((const void (*)(signed int, char *))NULL)
 kapi.stdio_putc = ((const void (*)(char))NULL)
@@ -93,7 +91,7 @@ kapi.get_uptime_ticks = ((__CPROVER_size_t (*)(void))NULL)
 kapi.get_mem_used = ((__CPROVER_size_t (*)(void))NULL)
 kapi.get_mem_free = ((__CPROVER_size_t (*)(void))NULL)
 kapi.get_timestamp = ((uint32_t (*)(void))NULL)
-kapi.get_datetime = ((const void (*)(signed int *, signed int *, signed int *, signed int *, signed int *, signed int *, signed int *))NULL)
+kapi.get_datetime = <symbolic struct/array — see classification.json>
 kapi.wfi = ((const void (*)(void))NULL)
 kapi.sleep_ms = ((const void (*)(uint32_t))NULL)
 kapi.sound_play_wav = ((signed int (*)(const void *, uint32_t))NULL)
@@ -150,10 +148,10 @@ kapi.fb_flip = ((signed int (*)(signed int))NULL)
 kapi.fb_get_backbuffer = ((uint32_t * (*)(void))NULL)
 kapi.dma_available = ((signed int (*)(void))NULL)
 kapi.dma_copy = ((signed int (*)(const void *, const void *, uint32_t))NULL)
-kapi.dma_copy_2d = ((signed int (*)(const void *, uint32_t, const void *, uint32_t, uint32_t, uint32_t))NULL)
+kapi.dma_copy_2d = <symbolic struct/array — see classification.json>
 kapi.dma_fb_copy = ((signed int (*)(uint32_t *, uint32_t *, uint32_t, uint32_t))NULL)
 kapi.dma_fill = ((signed int (*)(const void *, uint32_t, uint32_t))NULL)
-_path_buf = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_path_buf = <symbolic struct/array — see classification.json>
 _path_len = 1u
 _path_buf[1l] = 0
 _path_buf[0l] = 0
@@ -167,19 +165,21 @@ return_value_vfs_delete = 1
 goto_symex$$return_value$$kapi_delete = 1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'kapi_delete' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `kapi_delete`.
 
-## Dynamic confirmation
+**Validator reasoning:** 'kapi_delete' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+## How to trigger
+
+`kapi_delete` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 
 **Verdict:** REALISTIC (high confidence)
-
-**Key concern:** None — both the violation class (null function pointer dereference through uninitialized kapi vtable) and the dynamic confirmation (SIGSEGV) are consistent and realistic.
 
 Q1 (Can the violation TYPE occur?): Yes. `kapi_delete` calls `vfs_delete(path)`, and from the counterexample context, `vfs_delete` appears to dispatch through the `kapi` global function-pointer table. The counterexample shows `kapi.delete = NULL`. If `vfs_delete` internally calls through `kapi.delete` (or any other NULL function pointer in the struct), a null function pointer dereference (SIGSEGV) will occur at runtime. Since `kapi_delete` is a public/system entry point with no callers shown — meaning there is no guaranteed initialization guard — this path is reachable whenever `kapi` is not properly initialized before `kapi_delete` is invoked. Q2 (Is this witness realistic?): Yes. The dynamic harness independently confirmed SIGSEGV, removing any doubt about whether this is a CBMC artifact. The scenario of calling `kapi_delete` before or without initializing the `kapi` vtable is realistic in OS/embedded contexts where initialization ordering may not be enforced. An attacker or erroneous caller triggering this via the public API before initialization completes is a plausible exploitation scenario.
 

@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbtt_PackEnd.pointer_dereference.39` |
-| **Realism** | realistic (medium confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,19 +24,23 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_spc_val = {'members': [{'name': 'user_allocator_context', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'pack_info', 'value': {'name': 'pointer', 'type': 'const void *'}}, {...
+_spc_val = <symbolic struct/array — see classification.json>
 spc = _spc_val!0@1
-ptr = {'name': 'unknown'}
+ptr = <symbolic struct/array — see classification.json>
 return_value___VERIFIER_nondet___CPROVER_bool = True
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_PackEnd' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `stbtt_PackEnd.pointer_dereference.39` failure — a memory-safety violation in `stbtt_PackEnd`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** No null check on `spc` before dereference; no guard against calling PackEnd without a successful PackBegin; double-free possible if called twice on same context — all realistic for a public API endpoint.
 
-Dynamic harness outcome: `inconclusive`. Harness generation failed.
+**Validator reasoning:** 'stbtt_PackEnd' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`stbtt_PackEnd` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

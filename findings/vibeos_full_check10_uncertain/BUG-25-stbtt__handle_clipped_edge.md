@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_bmc` |
 | **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbtt__handle_clipped_edge.pointer_dereference.23` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -29,7 +27,7 @@ Direct entry (no upstream callers traced)
 _scanline_val = 1.084202e-19
 scanline = _scanline_val!0@1
 x = 1073741807
-_e_val = {'members': [{'name': 'next', 'value': {'data': '((stbtt__active_edge *)NULL)', 'name': 'pointer', 'type': 'stbtt__active_edge *'}}, {'name': 'fx', 'value': {'binary': '0000000000000000000000000000...
+_e_val = <symbolic struct/array — see classification.json>
 e = _e_val!0@1
 x0 = 1.816387
 y0 = +inf
@@ -37,9 +35,17 @@ x1 = -5.028774e+36
 y1 = 1.474560e+5
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+CBMC reports a `stbtt__handle_clipped_edge.pointer_dereference.23` failure — a memory-safety violation in `stbtt__handle_clipped_edge`.
+
+**Realism checker's key concern:** The specific counterexample witness (x ≈ 1 billion, ey = +inf) is a CBMC artifact from analyzing the function as an unconstrained entry point. In real execution, x is bounded by the rasterization width passed from stbtt__fill_active_edges_new. Whether that bounding is strict enough to prevent all out-of-bounds x values from malformed fonts is the real question — not addressed by this witness.
+
+**Validator reasoning:** Refinement was over-restrictive at iteration 1 — would exclude states that callers can actually produce. Treating as real bug to be safe.
+
+## How to trigger
+
+`stbtt__handle_clipped_edge` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

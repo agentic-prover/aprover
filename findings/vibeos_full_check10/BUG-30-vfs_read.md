@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/vfs.c` |
-| **Bug type** | semantic |
-| **Violated property** | `vfs_read.precondition_instance.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kapi_read → vfs_read
+```
+kapi_read -> vfs_read
+```
 
 ## Spec (LLM-generated)
 
@@ -27,9 +27,9 @@ kapi_read → vfs_read
 **Key variable assignments:**
 ```
 use_fat32 = 0
-_file_val = {'members': [{'name': 'name', 'value': {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '000...
+_file_val = <symbolic struct/array — see classification.json>
 file = _file_val!0@1
-_buf_buf = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_buf_buf = <symbolic struct/array — see classification.json>
 _buf_len = 0
 _buf_buf[0l] = 0
 _buf_buf[1l] = 0
@@ -44,9 +44,17 @@ return_value_vfs_read = 0
 to_read = 10416249831166781030ul
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'kapi_read' can reach the CEx state. Call chain: ['kapi_read', 'vfs_read']. Full chain traced to system entry.
+CBMC reports a `vfs_read.precondition_instance.1` failure — a semantic / contract violation in `vfs_read`.
+
+**Realism checker's key concern:** The specific CBMC witness uses astronomically large symbolic values for size and offset; realistic exploitation would use moderate values targeting a file with data==NULL or a buf smaller than size, but the vulnerability class (null-dereference / buffer-overflow via memcpy with unchecked file->data and unchecked buf capacity) is unambiguously reachable through the kapi_read entry point.
+
+**Validator reasoning:** Cross-file caller 'kapi_read' can reach the CEx state. Call chain: ['kapi_read', 'vfs_read']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `vfs_read` via the call chain `kapi_read → vfs_read` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

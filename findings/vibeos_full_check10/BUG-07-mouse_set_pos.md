@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGABRT |
 | **Module** | `kernel/mouse.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `mouse_set_pos.overflow.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -34,13 +32,19 @@ x = 65536
 y = 65536
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'mouse_set_pos' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `mouse_set_pos.overflow.1` failure — a arithmetic / overflow violation in `mouse_set_pos`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The fb_width=UINT_MAX in the counterexample is unrealistic, but this is irrelevant because the signed integer overflow occurs in `x * 32768` before any use of fb_width. Any x >= 65536 triggers the overflow regardless of fb_width.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGABRT`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGABRT
+**Validator reasoning:** 'mouse_set_pos' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`mouse_set_pos` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGABRT`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

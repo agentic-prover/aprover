@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbtt_GetPackedQuad.pointer_dereference.11` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_chardata_val = {'members': [{'name': 'x0', 'value': {'binary': '0000000000000000', 'data': '0', 'name': 'integer', 'type': 'unsigned short int', 'width': 16}}, {'name': 'y0', 'value': {'binary': '1110001000100110...
+_chardata_val = <symbolic struct/array — see classification.json>
 chardata = _chardata_val!0@1
 pw = 8388608
 ph = 16388033
@@ -35,23 +33,29 @@ _xpos_val = -0.021272
 xpos = _xpos_val!0@1
 _ypos_val = 2
 ypos = _ypos_val!0@1
-_q_val = {'members': [{'name': 'x0', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'float', 'width': 32}}, {'name': 'y0', 'value': {'binary': '00000000000000000000000000000000...
+_q_val = <symbolic struct/array — see classification.json>
 q = _q_val!0@1
 align_to_integer = 4194304
 ipw = 1.192093e-7
 iph = 6.102014e-8
-b = {'name': 'unknown'}
+b = <symbolic struct/array — see classification.json>
 x = 0
 return_value_floor = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_GetPackedQuad' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `stbtt_GetPackedQuad.pointer_dereference.11` failure — a memory-safety violation in `stbtt_GetPackedQuad`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** Unchecked `char_index` used directly in pointer arithmetic: `b = chardata + char_index` with no validation that `char_index < array_length`, confirmed by dynamic SIGSEGV.
 
-A standalone GCC-compiled reproducer was executed and crashed with `SIGSEGV`. Dynamic harness confirmed fault: DYNAMIC:CONFIRMED signal=SIGSEGV
+**Validator reasoning:** 'stbtt_GetPackedQuad' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`stbtt_GetPackedQuad` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
+
+A standalone GCC-compiled reproducer was generated and executed; it crashed with `SIGSEGV`. The reproducer source is preserved in the run's `classification.json` under `dynamic_result.harness_source`.
 
 ## Realism assessment
 

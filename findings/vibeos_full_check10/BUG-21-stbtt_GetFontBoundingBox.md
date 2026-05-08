@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | inconclusive |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_GetFontBoundingBox.pointer_arithmetic.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_info_val = {'members': [{'name': 'userdata', 'value': {'data': 'NULL', 'name': 'pointer', 'type': 'const void *'}}, {'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'fontstart', 'value': {'binary': '0...
+_info_val = <symbolic struct/array — see classification.json>
 info = _info_val!0@1
 _x0_val = 0
 x0 = _x0_val!0@1
@@ -39,17 +37,17 @@ y1 = _y1_val!0@1
 return_value_ttSHORT_stub = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_GetFontBoundingBox' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `stbtt_GetFontBoundingBox.pointer_arithmetic.1` failure — a arithmetic / overflow violation in `stbtt_GetFontBoundingBox`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** No buffer length tracking exists in stbtt_fontinfo; there is no check that info->data[info->head + 42] is within bounds before dereferencing, making out-of-bounds reads from crafted font files straightforwardly exploitable.
 
-Dynamic harness outcome: `inconclusive`. Dynamic harness compilation failed even without global state injection for 'stbtt_GetFontBoundingBox'. Error: /tmp/tmpv622kep5.c:910:13: error: redefinition of ‘ttSHORT’
-  910 | stbtt_int16 ttSHORT(stbtt_uint8* p)
-      |             ^~~~~~~
-/tmp/tmpv622kep5.c:698:20: note: previous definition of ‘ttSHORT’ with type ‘stbtt_int16(stbtt_uint8 *)’ {aka ‘short int(unsigned char *)’}
-  698 | static stbtt_int16 t
+**Validator reasoning:** 'stbtt_GetFontBoundingBox' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`stbtt_GetFontBoundingBox` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

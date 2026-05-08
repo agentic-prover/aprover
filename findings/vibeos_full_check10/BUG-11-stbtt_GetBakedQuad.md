@@ -5,14 +5,12 @@
 | **Confidence** | `confirmed_dynamic` |
 | **Signal** | SIGSEGV |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `main.pointer_dereference.12` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -26,7 +24,7 @@ Direct entry (no upstream callers traced)
 
 **Key variable assignments:**
 ```
-_chardata_val = {'members': [{'name': 'x0', 'value': {'binary': '0000000000000000', 'data': '0', 'name': 'integer', 'type': 'unsigned short int', 'width': 16}}, {'name': 'y0', 'value': {'binary': '0000000000000000...
+_chardata_val = <symbolic struct/array — see classification.json>
 chardata = _chardata_val!0@1
 pw = 1
 ph = 571887488
@@ -35,13 +33,13 @@ _xpos_val = 0.000931
 xpos = _xpos_val!0@1
 _ypos_val = -5.957554e-8
 ypos = _ypos_val!0@1
-_q_val = {'members': [{'name': 'x0', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'float', 'width': 32}}, {'name': 'y0', 'value': {'binary': '00000000000000000000000000000000...
+_q_val = <symbolic struct/array — see classification.json>
 q = _q_val!0@1
 opengl_fillrule = 32768
 d3d_bias = 0
 ipw = 1
 iph = 1.748596e-9
-b = {'name': 'unknown'}
+b = <symbolic struct/array — see classification.json>
 round_x = 0
 return_value_floor = 0
 x = 17.246704
@@ -71,13 +69,17 @@ _q_val.t1 = 0.00003
 tmp_if_expr$0 = 0
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'stbtt_GetBakedQuad' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `main.pointer_dereference.12` failure — a memory-safety violation in `stbtt_GetBakedQuad`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** No bounds check on `char_index` relative to the size of the `chardata` array; attacker-controlled character values can produce arbitrary out-of-bounds pointer dereferences, confirmed by SIGSEGV in dynamic testing.
 
-Dynamic harness outcome: `inconclusive`. Harness generation failed.
+**Validator reasoning:** 'stbtt_GetBakedQuad' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`stbtt_GetBakedQuad` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

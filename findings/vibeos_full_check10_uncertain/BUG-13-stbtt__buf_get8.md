@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | not_triggered |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `stbtt__buf_get8.pointer_dereference.25` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFont_internal → stbtt__buf_get8
+```
+stbtt_PackFontRange -> stbtt_PackFontRanges -> stbtt_InitFont -> stbtt_InitFont_internal -> stbtt__buf_get8
+```
 
 ## Spec (LLM-generated)
 
@@ -26,7 +26,7 @@ stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFo
 
 **Key variable assignments:**
 ```
-_b_val = {'members': [{'name': 'data', 'value': {'name': 'unknown'}}, {'name': 'cursor', 'value': {'binary': '00000000000000000000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed int', 'width'...
+_b_val = <symbolic struct/array — see classification.json>
 b = _b_val!0@1
 result = 0
 return_value_stbtt__buf_get8 = 0
@@ -34,13 +34,17 @@ tmp_post = 0
 _b_val.cursor = 1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt_InitFont_internal', 'stbtt__cff_skip_operand', 'stbtt__dict_get', 'stbtt__cff_int', 'stbtt__buf_get', 'stbtt__run_charstring', 'stbtt__cff_index_get', 'stbtt__cid_get_glyph_subrs', 'stbtt__cff_get_index']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_InitFont', 'stbtt_InitFont_internal', 'stbtt__buf_get8']. Full chain traced to system entry.
+CBMC reports a `stbtt__buf_get8.pointer_dereference.25` failure — a memory-safety violation in `stbtt__buf_get8`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific counterexample with data='unknown' (symbolic/NULL) is a CBMC artifact — real callers always provide a non-null data pointer. However, the underlying bug class (reading past the actual font data buffer because `size` is set from untrusted font content without bounds-checking the underlying allocation) is realistic and security-relevant for a font parser.
 
-Dynamic harness outcome: `not_triggered`. Dynamic harness ran to completion without triggering a fault.
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt_InitFont_internal', 'stbtt__cff_skip_operand', 'stbtt__dict_get', 'stbtt__cff_int', 'stbtt__buf_get', 'stbtt__run_charstring', 'stbtt__cff_index_get', 'stbtt__cid_get_glyph_subrs', 'stbtt__cff_get_index']. Call chain: ['stbtt_PackFontRange', 'stbtt_PackFontRanges', 'stbtt_InitFont', 'stbtt_InitFont_internal', 'stbtt__buf_get8']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `stbtt__buf_get8` via the call chain `stbtt_PackFontRange → stbtt_PackFontRanges → stbtt_InitFont → stbtt_InitFont_internal → stbtt__buf_get8` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

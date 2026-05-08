@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_bmc` |
-| **Dynamic outcome** | not_triggered |
+| **Signal** | — |
 | **Module** | `kernel/ttf.c` |
-| **Bug type** | arithmetic |
-| **Violated property** | `stbtt_setvertex.overflow.1` |
-| **Realism** | realistic (high confidence) |
+| **Realism** | realistic |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-stbtt__csctx_v → stbtt_setvertex
+```
+stbtt__csctx_v -> stbtt_setvertex
+```
 
 ## Spec (LLM-generated)
 
@@ -26,7 +26,7 @@ stbtt__csctx_v → stbtt_setvertex
 
 **Key variable assignments:**
 ```
-_v_val = {'members': [{'name': 'x', 'value': {'binary': '0000000000000000', 'data': '0', 'name': 'integer', 'type': 'signed short int', 'width': 16}}, {'name': 'y', 'value': {'binary': '0000000000000000', '...
+_v_val = <symbolic struct/array — see classification.json>
 v = _v_val!0@1
 type = 1
 x = 32768
@@ -36,13 +36,17 @@ cy = 34816
 _v_val.type = 1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Counterexample state is reachable from caller(s): ['stbtt__csctx_v', 'stbtt__GetGlyphShapeTT']. Call chain: ['stbtt__csctx_v', 'stbtt_setvertex'].
+CBMC reports a `stbtt_setvertex.overflow.1` failure — a arithmetic / overflow violation in `stbtt_setvertex`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The violation is a silent truncation rather than a crash, explaining the dynamic harness not triggering a signal. However, the underlying bug class — unguarded narrowing cast of font-file-derived int32 to int16 — is real and exploitable: crafted fonts can silently corrupt vertex geometry, with potential downstream memory-safety implications in rasterization code.
 
-Dynamic harness outcome: `not_triggered`. Dynamic harness ran to completion without triggering a fault.
+**Validator reasoning:** Counterexample state is reachable from caller(s): ['stbtt__csctx_v', 'stbtt__GetGlyphShapeTT']. Call chain: ['stbtt__csctx_v', 'stbtt_setvertex'].
+
+## How to trigger
+
+Reach `stbtt_setvertex` via the call chain `stbtt__csctx_v → stbtt_setvertex` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 

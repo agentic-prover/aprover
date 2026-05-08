@@ -3,16 +3,14 @@
 | Field | Value |
 |---|---|
 | **Confidence** | `confirmed_system_entry` |
-| **Dynamic outcome** | not_triggered |
+| **Signal** | — |
 | **Module** | `kernel/vfs.c` |
-| **Bug type** | memory_safety |
-| **Violated property** | `vfs_append.pointer_dereference.99` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-Direct entry (no upstream callers traced)
+System entry point (no upstream callers traced)
 
 ## Spec (LLM-generated)
 
@@ -27,9 +25,9 @@ Direct entry (no upstream callers traced)
 **Key variable assignments:**
 ```
 use_fat32 = 0
-_file_val = {'members': [{'name': 'name', 'value': {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '000...
+_file_val = <symbolic struct/array — see classification.json>
 file = _file_val!0@1
-_buf_buf = {'elements': [{'index': 0, 'value': {'binary': '00000001', 'data': '1', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_buf_buf = <symbolic struct/array — see classification.json>
 _buf_len = 1
 _buf_buf[1l] = 0
 _buf_buf[0l] = 1
@@ -48,29 +46,33 @@ malloc_size = 16120114370612188909ul
 malloc_res = dynamic_object
 malloc_value = dynamic_object
 dynamic_object_size = 16120114370612188909ul
-dynamic_object = {'name': 'unknown'}
+dynamic_object = <symbolic struct/array — see classification.json>
 record_malloc = False
 return_value___VERIFIER_nondet___CPROVER_bool$1 = False
 record_may_leak = False
 return_value___VERIFIER_nondet___CPROVER_bool$2 = False
 goto_symex$$return_value$$malloc = dynamic_object
 dst = dynamic_object
-src = {'name': 'unknown'}
+src = <symbolic struct/array — see classification.json>
 n = 16120114370612188845ul
 src_n$array_size = 16120114370612188845ul
-src_n = {'name': 'unknown'}
-byte_extract_little_endian(dynamic_object, 0l, char [src_n$array_size]) = {'name': 'unknown'}
-ptr = {'name': 'unknown'}
+src_n = <symbolic struct/array — see classification.json>
+byte_extract_little_endian(dynamic_object, 0l, char [src_n$array_size]) = <symbolic struct/array — see classification.json>
+ptr = <symbolic struct/array — see classification.json>
 return_value___VERIFIER_nondet___CPROVER_bool = True
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-'vfs_append' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+CBMC reports a `vfs_append.pointer_dereference.99` failure — a memory-safety violation in `vfs_append`.
 
-## Dynamic confirmation
+**Realism checker's key concern:** The specific witness requires a vfs_node_t with an astronomically large `file->size` and invalid `file->data` simultaneously — this combination is a CBMC symbolic extreme, not a realistic initialized struct state. However, the integer overflow path in `file->size + size` and the lack of bounds checking on `file->data` relative to `file->size` represent a real (if harder to trigger) vulnerability class for attacker-controlled inputs.
 
-Dynamic harness outcome: `not_triggered`. Dynamic harness ran to completion without triggering a fault.
+**Validator reasoning:** 'vfs_append' is an entry function (no callers in any file). The counterexample is directly reachable from the system boundary.
+
+## How to trigger
+
+`vfs_append` is reachable as a system-entry point — call it directly with the counterexample's variable assignments.
 
 ## Realism assessment
 

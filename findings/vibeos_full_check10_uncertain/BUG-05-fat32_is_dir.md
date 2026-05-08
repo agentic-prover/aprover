@@ -5,14 +5,14 @@
 | **Confidence** | `confirmed_system_entry` |
 | **Signal** | — |
 | **Module** | `kernel/fat32.c` |
-| **Bug type** | semantic |
-| **Violated property** | `main.assertion.1` |
-| **Realism** | uncertain (medium confidence) |
+| **Realism** | uncertain |
 | **Status** | ☐ Unreviewed |
 
 ## Call chain
 
-kernel_main → vfs_init → fat32_is_dir
+```
+kernel_main -> vfs_init -> fat32_is_dir
+```
 
 ## Spec (LLM-generated)
 
@@ -27,7 +27,7 @@ kernel_main → vfs_init → fat32_is_dir
 **Key variable assignments:**
 ```
 fs_initialized = 0
-_path_buf = {'elements': [{'index': 0, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer', 'type': 'char', 'width': 8}}, {'index': 1, 'value': {'binary': '00000000', 'data': '0', 'name': 'integer',...
+_path_buf = <symbolic struct/array — see classification.json>
 _path_len = 1u
 _path_buf[1l] = 0
 _path_buf[0l] = 0
@@ -37,18 +37,26 @@ _path_buf[4l] = 0
 path = _path_buf!0@1
 result = -1
 return_value_fat32_is_dir = -1
-format = {'name': 'unknown'}
+format = <symbolic struct/array — see classification.json>
 va_arg = _path_buf!0@1
 return_value___VERIFIER_nondet_int = 0
 list = ((va_list)NULL)
-va_args = {'elements': [{'index': 0, 'value': {'data': 'va_arg!0', 'name': 'pointer', 'type': 'const void *'}}], 'name': 'array'}
+va_args = <symbolic struct/array — see classification.json>
 va_args[0l] = va_arg!0
 goto_symex$$return_value$$fat32_is_dir = -1
 ```
 
-## Root cause / validation reasoning
+## Root cause
 
-Cross-file caller 'vfs_init' can reach the CEx state. Call chain: ['kernel_main', 'vfs_init', 'fat32_is_dir']. Full chain traced to system entry.
+CBMC reports a `main.assertion.1` failure — a semantic / contract violation in `fat32_is_dir`.
+
+**Realism checker's key concern:** The harness introduces an artificial NULL dereference that does not exist in the real function. The real bug class (null path passed to printf) exists but is a different code path than what the counterexample demonstrates.
+
+**Validator reasoning:** Cross-file caller 'vfs_init' can reach the CEx state. Call chain: ['kernel_main', 'vfs_init', 'fat32_is_dir']. Full chain traced to system entry.
+
+## How to trigger
+
+Reach `fat32_is_dir` via the call chain `kernel_main → vfs_init → fat32_is_dir` and supply inputs that match the counterexample variable assignments above.
 
 ## Realism assessment
 
