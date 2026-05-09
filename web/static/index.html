@@ -3,33 +3,88 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AProver — chat with an agentic model checker</title>
+<title>AProver — agentic model checker</title>
+<link rel="preconnect" href="https://rsms.me/" />
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
 <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+
 <header>
   <div class="brand">
-    <strong>AProver</strong>
-    <span class="tag">agentic model checker for C</span>
+    <span class="logo-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 21V3h7l4 6 4-6h3v18h-4v-9l-3 4-3-4v9z"/></svg>
+    </span>
+    <strong>APROVER</strong>
+    <span class="agent-status" id="agent-status">
+      <span class="status-dot idle"></span>
+      <span class="status-text">idle</span>
+    </span>
   </div>
-  <a class="repo-link" href="https://github.com/agentic-prover/aprover" target="_blank" rel="noopener">github</a>
+  <a class="repo-link" href="https://github.com/agentic-prover/aprover" target="_blank" rel="noopener">github ↗</a>
 </header>
 
-<main id="chat" aria-live="polite"></main>
+<main id="chat" aria-live="polite">
+  <section id="hero">
+    <div class="hero-tag">agentic model checker · for C</div>
+    <h1>Verify code by chatting<span class="cursor">▮</span></h1>
+    <p class="hero-sub">
+      I generate function specs, run <span class="kbd">CBMC</span> against them,
+      classify counterexamples, and report confirmed bugs with evidence tiers.
+      Drop a paste, a GitHub URL, or just say <em>"show me a demo"</em>.
+    </p>
+
+    <div class="quick-actions">
+      <button class="chip" data-prompt="show me a demo">
+        <span class="chip-key">▶</span> run a demo bug
+      </button>
+      <button class="chip" data-prompt="explain how AProver works">
+        <span class="chip-key">▣</span> how it works
+      </button>
+      <button class="chip" data-prompt="I want to verify a public file at this URL: ">
+        <span class="chip-key">↗</span> verify from URL
+      </button>
+    </div>
+
+    <div class="cap-grid">
+      <div class="cap">
+        <div class="cap-h">paste C source</div>
+        <div class="cap-d">self-contained file, ≤64KB</div>
+      </div>
+      <div class="cap">
+        <div class="cap-h">fetch http(s) URLs</div>
+        <div class="cap-d">github blob URLs auto-rewrite to raw</div>
+      </div>
+      <div class="cap">
+        <div class="cap-h">target a function</div>
+        <div class="cap-d">or verify all functions in the file</div>
+      </div>
+      <div class="cap">
+        <div class="cap-h">live phase progress</div>
+        <div class="cap-d">spec → bmc → classify → report</div>
+      </div>
+    </div>
+  </section>
+
+  <div id="thread"></div>
+</main>
 
 <form id="composer" autocomplete="off">
-  <textarea
-    id="input"
-    rows="3"
-    placeholder="Paste C code, or ask me to verify a tiny example…"
-    spellcheck="false"></textarea>
-  <button id="send" type="submit">Send</button>
+  <div class="composer-wrap">
+    <textarea
+      id="input"
+      rows="1"
+      placeholder="paste C, drop a github URL, or just chat…"
+      spellcheck="false"></textarea>
+    <button id="send" type="submit" aria-label="Send">
+      <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 10l16-7-7 16-2-7z"/></svg>
+    </button>
+  </div>
+  <div class="composer-hint">
+    <span>⏎ send · ⇧⏎ newline</span>
+    <span class="composer-host">claude · cbmc · 64KB cap</span>
+  </div>
 </form>
-
-<footer>
-  <span id="status">ready</span>
-  <span class="hint">Shift+Enter = newline · Enter = send</span>
-</footer>
 
 <template id="msg-tpl">
   <div class="msg">
@@ -42,11 +97,19 @@
   <div class="msg run">
     <div class="role">aprover</div>
     <div class="body">
-      <div class="run-head">
-        <span class="run-label">running pipeline…</span>
-        <span class="run-spinner"></span>
+      <div class="phases">
+        <div class="phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
+        <div class="phase-line"></div>
+        <div class="phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
+        <div class="phase-line"></div>
+        <div class="phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
+        <div class="phase-line"></div>
+        <div class="phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
       </div>
-      <ol class="run-log"></ol>
+      <details class="log-disc">
+        <summary>pipeline log</summary>
+        <ol class="run-log"></ol>
+      </details>
     </div>
   </div>
 </template>
