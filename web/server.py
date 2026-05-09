@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from web.fetch import fetch_source
 from web.runner import run_aprover_streaming
 
 
@@ -37,7 +38,9 @@ SYSTEM_PROMPT = """You are AProver Assistant — the conversational front-end fo
 Your job is to let visitors USE AProver without configuring it. They just chat.
 
 When a user wants their code analyzed:
-1. Make sure you have C source code (paste, attached snippet, or a tiny example you offer them).
+1. Make sure you have C source code. The user can paste it, link to it, or accept a tiny example you offer.
+   - If they paste a URL (GitHub blob, raw, gist, or any http(s) link to a text file), call the `fetch_source` tool first, then pass the returned content to `run_aprover`. github.com/<owner>/<repo>/blob/... links work — `fetch_source` rewrites them to raw automatically.
+   - If they paste code directly, skip straight to `run_aprover`.
 2. Optionally accept a target function name and any domain-knowledge hints.
 3. Call the `run_aprover` tool. The pipeline takes 30s–3min — that's normal.
 4. When results come back, summarize plainly: how many bugs were confirmed, the bug type and confidence tier of each, and one or two sentences on what each bug means in human terms.
@@ -61,6 +64,25 @@ Be concise. Don't show internal pipeline phases unless the user asks. Don't spec
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
+    {
+        "name": "fetch_source",
+        "description": (
+            "Fetch a text file from an http(s) URL — typically a C source file the "
+            "user wants verified. Handles GitHub blob URLs by rewriting them to "
+            "raw.githubusercontent.com automatically. Returns the file content as "
+            "a string, or an error message. Capped at 64KB."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Public http(s) URL pointing at a text file (raw GitHub URL, github.com blob URL, gist raw, etc.).",
+                }
+            },
+            "required": ["url"],
+        },
+    },
     {
         "name": "run_aprover",
         "description": (
@@ -86,7 +108,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
             "required": ["source_code"],
         },
-    }
+    },
 ]
 
 
@@ -161,36 +183,63 @@ async def chat(request: Request) -> StreamingResponse:
 
                 tool_results: list[dict[str, Any]] = []
                 for tu in tool_uses:
-                    if tu.name != "run_aprover":
+                    yield _sse("tool_call", {"name": tu.name, "input": tu.input})
+
+                    if tu.name == "fetch_source":
+                        url = (tu.input or {}).get("url", "")
+                        ok, body = fetch_source(url)
+                        yield _sse(
+                            "tool_progress",
+                            {
+                                "type": "fetch_result",
+                                "ok": ok,
+                                "url": url,
+                                "bytes": len(body) if ok else 0,
+                                "error": None if ok else body,
+                            },
+                        )
                         tool_results.append(
                             {
                                 "type": "tool_result",
                                 "tool_use_id": tu.id,
-                                "content": f"Unknown tool: {tu.name}",
-                                "is_error": True,
+                                "content": (
+                                    body
+                                    if ok
+                                    else json.dumps({"ok": False, "error": body})
+                                ),
+                                "is_error": not ok,
                             }
                         )
                         continue
 
-                    yield _sse("tool_call", {"name": tu.name, "input": tu.input})
+                    if tu.name == "run_aprover":
+                        final_payload: dict[str, Any] | None = None
+                        for ev in run_aprover_streaming(
+                            source_code=tu.input.get("source_code", ""),
+                            function=(tu.input.get("function") or None),
+                            domain_knowledge=tu.input.get("domain_knowledge", ""),
+                        ):
+                            yield _sse("tool_progress", ev)
+                            if ev.get("type") == "result":
+                                final_payload = ev["result"]
+                            elif ev.get("type") == "error" and final_payload is None:
+                                final_payload = {"ok": False, "error": ev.get("message", "")}
 
-                    final_payload: dict[str, Any] | None = None
-                    for ev in run_aprover_streaming(
-                        source_code=tu.input.get("source_code", ""),
-                        function=(tu.input.get("function") or None),
-                        domain_knowledge=tu.input.get("domain_knowledge", ""),
-                    ):
-                        yield _sse("tool_progress", ev)
-                        if ev.get("type") == "result":
-                            final_payload = ev["result"]
-                        elif ev.get("type") == "error" and final_payload is None:
-                            final_payload = {"ok": False, "error": ev.get("message", "")}
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tu.id,
+                                "content": json.dumps(final_payload or {"ok": False, "error": "no result"}),
+                            }
+                        )
+                        continue
 
                     tool_results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": tu.id,
-                            "content": json.dumps(final_payload or {"ok": False, "error": "no result"}),
+                            "content": f"Unknown tool: {tu.name}",
+                            "is_error": True,
                         }
                     )
 
