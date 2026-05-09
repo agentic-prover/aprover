@@ -19,12 +19,21 @@ import threading
 from pathlib import Path
 from typing import Iterator
 
+import bmc_agent.logger as _bmc_log_mod
 from bmc_agent.config import Config
 from bmc_agent.pipeline import AMCPipeline
 
 
 _MAX_SOURCE_BYTES = 64 * 1024  # 64KB cap for pasted source
 _WALL_TIMEOUT_SEC = 300        # hard ceiling on a single web run
+
+# bmc_agent loggers set propagate=False, so a handler attached to the
+# package root does not receive child records. We attach the queue handler
+# to each "bmc_agent.*" logger directly, plus monkey-patch get_logger so
+# lazily-created component loggers also pick up the handler.
+#
+# This mutates global logging state, so runs are serialised through a lock.
+_RUN_LOCK = threading.Lock()
 
 
 def run_aprover_streaming(
@@ -85,44 +94,66 @@ def run_aprover_streaming(
 
     handler = _QueueHandler(level=logging.INFO)
     handler.setFormatter(logging.Formatter("%(message)s"))
-    bmc_logger = logging.getLogger("bmc_agent")
-    bmc_logger.addHandler(handler)
-    prior_level = bmc_logger.level
-    if bmc_logger.level == logging.NOTSET or bmc_logger.level > logging.INFO:
-        bmc_logger.setLevel(logging.INFO)
+
+    def _attach_to_existing() -> list[logging.Logger]:
+        attached: list[logging.Logger] = []
+        for name, lg in list(logging.Logger.manager.loggerDict.items()):
+            if name.startswith("bmc_agent.") and isinstance(lg, logging.Logger):
+                if handler not in lg.handlers:
+                    lg.addHandler(handler)
+                    attached.append(lg)
+        return attached
 
     holder: dict = {}
 
-    def worker() -> None:
-        try:
-            pipeline = AMCPipeline(config)
-            holder["reports"] = pipeline.run(
-                source_file=str(src_path),
-                driver_name="webdemo",
-                domain_knowledge=domain_knowledge,
-            )
-        except Exception as exc:  # pragma: no cover - surfaced to user
-            holder["error"] = f"{type(exc).__name__}: {exc}"
-        finally:
-            events.put(sentinel)
+    with _RUN_LOCK:
+        attached = _attach_to_existing()
+        original_get_logger = _bmc_log_mod.get_logger
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    yield {"type": "started", "function": function or ""}
+        def _wrapped_get_logger(component: str, *a, **kw):  # type: ignore[no-untyped-def]
+            lg = original_get_logger(component, *a, **kw)
+            if handler not in lg.handlers:
+                lg.addHandler(handler)
+                attached.append(lg)
+            return lg
 
-    timed_out = False
-    while True:
-        try:
-            ev = events.get(timeout=_WALL_TIMEOUT_SEC)
-        except queue.Empty:
-            timed_out = True
-            break
-        if ev is sentinel:
-            break
-        yield ev
+        _bmc_log_mod.get_logger = _wrapped_get_logger  # type: ignore[assignment]
 
-    bmc_logger.removeHandler(handler)
-    bmc_logger.setLevel(prior_level)
+        def worker() -> None:
+            try:
+                pipeline = AMCPipeline(config)
+                holder["reports"] = pipeline.run(
+                    source_file=str(src_path),
+                    driver_name="webdemo",
+                    domain_knowledge=domain_knowledge,
+                )
+            except Exception as exc:  # pragma: no cover - surfaced to user
+                holder["error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                events.put(sentinel)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        yield {"type": "started", "function": function or ""}
+
+        timed_out = False
+        while True:
+            try:
+                ev = events.get(timeout=_WALL_TIMEOUT_SEC)
+            except queue.Empty:
+                timed_out = True
+                break
+            if ev is sentinel:
+                break
+            yield ev
+
+        for lg in attached:
+            try:
+                lg.removeHandler(handler)
+            except ValueError:
+                pass
+        _bmc_log_mod.get_logger = original_get_logger  # type: ignore[assignment]
+
     t.join(timeout=5)
     shutil.rmtree(work_dir, ignore_errors=True)
 
