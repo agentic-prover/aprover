@@ -81,15 +81,41 @@ function appendRunCard() {
   const node = runTpl.content.firstElementChild.cloneNode(true);
   threadEl.appendChild(node);
   scrollToBottom();
+  const logDisc = node.querySelector(".log-disc");
+  // Open the log during a run; we'll auto-collapse once the result arrives.
+  logDisc.open = true;
   activeRun = {
     rootEl: node,
     bodyEl: node.querySelector(".body"),
     logEl: node.querySelector(".run-log"),
+    logDiscEl: logDisc,
     phaseEls: Array.from(node.querySelectorAll(".phase")),
+    phaseLineEls: Array.from(node.querySelectorAll(".phase-line")),
+    nowLineEl: node.querySelector(".now-line"),
+    nowTextEl: node.querySelector(".now-text"),
+    elapsedEl: node.querySelector(".run-elapsed"),
+    elapsedNumEl: node.querySelector(".run-elapsed-num"),
+    startedAt: performance.now(),
+    timerId: null,
     currentPhase: null,
     completedPhases: new Set(),
   };
+  // start elapsed timer (10Hz, tabular-nums keeps width stable)
+  activeRun.timerId = setInterval(() => {
+    if (!activeRun) return;
+    const t = (performance.now() - activeRun.startedAt) / 1000;
+    activeRun.elapsedNumEl.textContent = t.toFixed(1);
+  }, 100);
   return activeRun;
+}
+
+function stopRunTimer(state) {
+  if (!activeRun) return;
+  if (activeRun.timerId) {
+    clearInterval(activeRun.timerId);
+    activeRun.timerId = null;
+  }
+  if (state) activeRun.elapsedEl.classList.add(state);
 }
 
 function scrollToBottom() {
@@ -100,13 +126,18 @@ function setPhase(phaseName) {
   if (!activeRun) return;
   const order = PHASES.indexOf(phaseName);
   if (order < 0) return;
-  // Mark all earlier phases done, current as active, later as idle.
   activeRun.phaseEls.forEach((el) => {
     const p = el.getAttribute("data-phase");
     const idx = PHASES.indexOf(p);
     el.classList.remove("active", "done");
     if (idx < order) el.classList.add("done");
     else if (idx === order) el.classList.add("active");
+  });
+  // Connector lines: lines before `order` are done; line just before active flows.
+  activeRun.phaseLineEls.forEach((el, i) => {
+    el.classList.remove("flowing", "done");
+    if (i < order - 1) el.classList.add("done");
+    else if (i === order - 1) el.classList.add("flowing");
   });
   activeRun.currentPhase = phaseName;
 }
@@ -118,9 +149,48 @@ function completePhase(phaseName) {
   el.classList.remove("active");
   el.classList.add("done");
   activeRun.completedPhases.add(phaseName);
+  // Line right after the just-finished phase becomes flowing if the next
+  // phase hasn't kicked in yet (so the user sees motion *between* phases too).
+  const idx = PHASES.indexOf(phaseName);
+  const nextLine = activeRun.phaseLineEls[idx];
+  if (nextLine && !nextLine.classList.contains("done")) {
+    nextLine.classList.add("flowing");
+  }
 }
 
-// Parse pipeline log lines into phase transitions.
+// Pull a short, human-friendly headline out of a log line so the now-line
+// reads less like a debug dump and more like "what is the agent doing".
+function extractActivity(message) {
+  const m = String(message);
+  if (/Phase 1: Generating specs/.test(m)) return "generating function specs";
+  if (/Phase 1 complete/.test(m)) return "specs generated";
+  if (/Phase 2: Running BMC on (\d+)/.test(m)) {
+    const [, n] = m.match(/Phase 2: Running BMC on (\d+)/);
+    return `running CBMC on ${n} function${n === "1" ? "" : "s"}`;
+  }
+  if (/Phase 2 complete/.test(m)) return "bounded model checking done";
+  if (/Phase 3: Validating/.test(m)) return "classifying counterexamples";
+  let mm = m.match(/Checking function '([^']+)'/);
+  if (mm) return `bmc · ${mm[1]}`;
+  mm = m.match(/Generating spec for '([^']+)'/i);
+  if (mm) return `spec · ${mm[1]}`;
+  mm = m.match(/CBMC verdict for '([^']+)':\s*(.+)/);
+  if (mm) return `verdict · ${mm[1]} · ${mm[2]}`;
+  mm = m.match(/Validating counterexample for '([^']+)'/);
+  if (mm) return `classifying · ${mm[1]}`;
+  if (/REAL BUG confirmed in '([^']+)'/.test(m)) {
+    const [, fn] = m.match(/REAL BUG confirmed in '([^']+)'/);
+    return `real bug confirmed in ${fn}`;
+  }
+  if (/AMC Pipeline END/.test(m)) return "wrapping up";
+  return null;
+}
+
+function setNowLine(text) {
+  if (!activeRun) return;
+  activeRun.nowTextEl.textContent = text;
+}
+
 function inspectLogLine(message) {
   const m = String(message);
   if (/Phase 1: Generating specs/.test(m)) setPhase("spec");
@@ -132,6 +202,8 @@ function inspectLogLine(message) {
     completePhase("classify");
     setPhase("report");
   }
+  const headline = extractActivity(m);
+  if (headline) setNowLine(headline);
 }
 
 function logRunLine(level, message) {
@@ -148,16 +220,33 @@ function renderResult(result) {
   if (!activeRun) return;
   if (!result.ok) {
     setStatus("error", "failed");
+    stopRunTimer();
     activeRun.phaseEls.forEach((e) => e.classList.remove("active"));
+    activeRun.phaseLineEls.forEach((e) => e.classList.remove("flowing"));
+    activeRun.nowLineEl.classList.remove("done");
+    activeRun.nowLineEl.classList.add("idle");
+    setNowLine("pipeline failed");
     const err = document.createElement("div");
     err.className = "bug-summary";
     err.innerHTML = `<div class="verdict bad">▲ pipeline failed</div><pre>${escapeHtml(result.error || "unknown error")}</pre>`;
     activeRun.bodyEl.appendChild(err);
     return;
   }
-  // mark report phase done
   completePhase("report");
   activeRun.phaseEls.forEach((e) => e.classList.remove("active"));
+  activeRun.phaseLineEls.forEach((e) => {
+    e.classList.remove("flowing");
+    e.classList.add("done");
+  });
+  stopRunTimer("done");
+  activeRun.nowLineEl.classList.add("done");
+  setNowLine(
+    !result.bugs || result.bugs.length === 0
+      ? "no bugs confirmed"
+      : `${result.bugs.length} bug${result.bugs.length === 1 ? "" : "s"} confirmed`
+  );
+  // Auto-collapse the verbose log once the result is in view.
+  if (activeRun.logDiscEl) activeRun.logDiscEl.open = false;
 
   const wrap = document.createElement("div");
   wrap.className = "bug-summary";

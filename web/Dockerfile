@@ -48,6 +48,7 @@ RUN uv pip install --system \
 # Project source.
 COPY --chown=user:user bmc_agent /home/user/app/bmc_agent
 COPY --chown=user:user aprover /home/user/app/aprover
+COPY --chown=user:user assets /home/user/app/assets
 COPY --chown=user:user web /home/user/app/web
 
 USER user

@@ -32,13 +32,21 @@ STATIC_DIR = WEB_DIR / "static"
 app = FastAPI(title="AProver chat")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Brand assets live at the repo root in assets/ — mount only if present so the
+# Docker image (which copies assets/) and local runs both work.
+_ASSETS_DIR = WEB_DIR.parent / "assets"
+if _ASSETS_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
 
-SYSTEM_PROMPT = """You are AProver Assistant — the conversational front-end for AProver, an agentic model checker for C programs that pairs a Claude-driven LLM agent with the CBMC bounded model checker.
+
+SYSTEM_PROMPT = """You are AProver Assistant — the conversational front-end for AProver, an agentic prover for AI-generated code. AProver is a suite of LLM-driven formal-verification agents. The first agent — BMC-Agent — pairs a Claude-driven LLM agent with the CBMC bounded model checker to verify C programs end-to-end. Other languages and backends (e.g. Rust via Kani) are pluggable and on the roadmap.
+
+Today, the live demo verifies C source via BMC-Agent. If a user asks about another language, say so honestly and offer to run on a C example, or to take their description / pseudocode and reason about it conversationally even if the verifier itself can't run on it yet.
 
 Your job is to let visitors USE AProver without configuring it. They just chat.
 
 When a user wants their code analyzed:
-1. Make sure you have C source code. The user can paste it, link to it, or accept a tiny example you offer.
+1. Make sure you have C source. The user can paste it, link to it, or accept a tiny example you offer.
    - If they paste a URL (GitHub blob, raw, gist, or any http(s) link to a text file), call the `fetch_source` tool first, then pass the returned content to `run_aprover`. github.com/<owner>/<repo>/blob/... links work — `fetch_source` rewrites them to raw automatically.
    - If they paste code directly, skip straight to `run_aprover`.
 2. Optionally accept a target function name and any domain-knowledge hints.

@@ -39,6 +39,8 @@ rsync -a --delete \
 rsync -a --delete \
   --exclude '__pycache__' --exclude '*.pyc' \
   "$SRC/web/" "$DEST/web/"
+rsync -a --delete \
+  "$SRC/assets/" "$DEST/assets/"
 
 # Drop the staged-files-only Dockerfile/README from the inner web/ copy so
 # the Space root copies remain authoritative.

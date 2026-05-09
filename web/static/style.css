@@ -85,17 +85,22 @@ header {
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
-.brand .logo-mark {
-  color: var(--accent);
+.logo-link {
   display: inline-flex;
   align-items: center;
+  text-decoration: none;
+  transition: opacity 150ms;
 }
-.brand strong {
-  font-size: 13px;
-  letter-spacing: 1.5px;
-  font-weight: 700;
+.logo-link:hover { opacity: 0.85; }
+.logo-img {
+  height: 28px;
+  width: auto;
+  display: block;
+}
+@media (max-width: 700px) {
+  .logo-img { height: 24px; }
 }
 
 .agent-status {
@@ -164,10 +169,29 @@ main#chat {
 /* ---------- Hero ---------- */
 
 #hero {
-  padding: 56px 0 40px;
+  padding: 48px 0 40px;
   text-align: left;
+  animation: hero-in 500ms ease-out;
 }
 #hero.hidden { display: none; }
+
+@keyframes hero-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.hero-mark {
+  height: 64px;
+  width: auto;
+  display: block;
+  margin-bottom: 18px;
+  filter: drop-shadow(0 4px 16px rgba(79, 195, 247, 0.18));
+  animation: float 4s ease-in-out infinite;
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
 
 .hero-tag {
   display: inline-block;
@@ -338,15 +362,22 @@ main#chat {
 }
 .body ul, .body ol { margin: 8px 0; padding-left: 22px; }
 
-/* ---------- Pipeline phase indicator ---------- */
+/* ---------- Run card head: phases + elapsed ---------- */
 
+.run-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 12px;
+}
 .phases {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-soft);
-  margin-bottom: 10px;
+  flex: 1;
   overflow-x: auto;
 }
 .phase {
@@ -359,7 +390,7 @@ main#chat {
   text-transform: uppercase;
   letter-spacing: 1px;
   border-radius: 6px;
-  transition: all 200ms;
+  transition: color 200ms, background 200ms;
   white-space: nowrap;
 }
 .phase-dot {
@@ -368,7 +399,7 @@ main#chat {
   border-radius: 50%;
   background: var(--muted-2);
   border: 1px solid var(--muted-2);
-  transition: all 200ms;
+  transition: background 250ms, border-color 250ms, transform 200ms;
 }
 .phase.active {
   color: var(--accent);
@@ -377,7 +408,8 @@ main#chat {
 .phase.active .phase-dot {
   background: var(--accent);
   border-color: var(--accent);
-  animation: phase-pulse 1s infinite ease-in-out;
+  transform: scale(1.15);
+  animation: phase-ring 1.4s infinite ease-out;
 }
 .phase.done {
   color: var(--ok);
@@ -387,13 +419,121 @@ main#chat {
   border-color: var(--ok);
 }
 .phase-line {
-  flex: 0 0 14px;
+  flex: 0 0 16px;
   height: 1px;
-  background: var(--border);
+  background: linear-gradient(to right, var(--border) 0%, var(--border) 100%);
+  background-size: 200% 100%;
+  background-position: right;
+  transition: background-position 600ms ease-out, background 200ms;
 }
-@keyframes phase-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); }
-  50% { box-shadow: 0 0 0 6px transparent; }
+.phase-line.flowing {
+  background: linear-gradient(to right, var(--ok) 0%, var(--accent) 50%, var(--border) 100%);
+  background-size: 200% 100%;
+  animation: phase-flow 1.2s infinite linear;
+}
+.phase-line.done {
+  background: var(--ok);
+}
+
+@keyframes phase-ring {
+  0% { box-shadow: 0 0 0 0 var(--accent); opacity: 1; }
+  70% { box-shadow: 0 0 0 8px transparent; opacity: 0.9; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+@keyframes phase-flow {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.run-elapsed {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  padding: 3px 10px;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font: 12px ui-monospace, "JetBrains Mono", SFMono-Regular, monospace;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.run-elapsed-num {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-weight: 600;
+}
+.run-elapsed-unit {
+  color: var(--muted);
+  margin-left: 2px;
+  font-size: 11px;
+}
+.run-elapsed.done { border-color: var(--ok); color: var(--ok); }
+.run-elapsed.done .run-elapsed-num { color: var(--ok); }
+
+/* ---------- Now-line (live activity) ---------- */
+
+.now-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  font-size: 13.5px;
+  color: var(--text-2);
+  position: relative;
+  overflow: hidden;
+  min-height: 38px;
+}
+.now-line::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--accent-soft), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  background-position: -50% 0;
+  animation: now-sweep 2.4s infinite linear;
+  pointer-events: none;
+}
+.now-line.idle::before { animation: none; }
+.now-line.done {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.now-line.done::before { animation: none; }
+@keyframes now-sweep {
+  0% { background-position: -50% 0; }
+  100% { background-position: 150% 0; }
+}
+.now-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: now-pulse 1s infinite ease-in-out;
+  box-shadow: 0 0 8px var(--accent);
+}
+.now-line.done .now-icon {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  animation: none;
+}
+@keyframes now-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.3); opacity: 1; }
+}
+.now-text {
+  flex: 1;
+  font: 13.5px ui-monospace, "JetBrains Mono", SFMono-Regular, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+  z-index: 1;
 }
 
 .log-disc {
@@ -431,9 +571,28 @@ main#chat {
   border: 1px solid var(--border-soft);
   border-radius: 6px;
 }
-.run-log li { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.run-log li {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: log-in 220ms ease-out;
+  position: relative;
+  padding-left: 12px;
+}
+.run-log li::before {
+  content: "›";
+  position: absolute;
+  left: 0;
+  color: var(--muted-2);
+}
 .run-log li.warn { color: var(--warn); }
+.run-log li.warn::before { color: var(--warn); }
 .run-log li.error { color: var(--bad); }
+.run-log li.error::before { color: var(--bad); }
+@keyframes log-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
 
 /* ---------- Bug summary ---------- */
 
@@ -465,6 +624,15 @@ main#chat {
   border-radius: 8px;
   padding: 12px 14px;
   margin: 8px 0;
+  animation: bug-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.bug-card:nth-child(1) { animation-delay: 60ms; }
+.bug-card:nth-child(2) { animation-delay: 120ms; }
+.bug-card:nth-child(3) { animation-delay: 180ms; }
+.bug-card:nth-child(4) { animation-delay: 240ms; }
+@keyframes bug-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 .bug-card .row {
   display: flex;

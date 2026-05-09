@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AProver — agentic model checker</title>
+<title>AProver — agentic prover for AI-generated code</title>
+<link rel="icon" type="image/svg+xml" href="/assets/logo-icon.svg" />
 <link rel="preconnect" href="https://rsms.me/" />
 <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
 <link rel="stylesheet" href="/static/style.css" />
@@ -12,10 +13,12 @@
 
 <header>
   <div class="brand">
-    <span class="logo-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 21V3h7l4 6 4-6h3v18h-4v-9l-3 4-3-4v9z"/></svg>
-    </span>
-    <strong>APROVER</strong>
+    <a class="logo-link" href="/" aria-label="AProver">
+      <picture>
+        <source srcset="/assets/logo-dark.svg" media="(prefers-color-scheme: dark)" />
+        <img src="/assets/logo.svg" alt="AProver" class="logo-img" />
+      </picture>
+    </a>
     <span class="agent-status" id="agent-status">
       <span class="status-dot idle"></span>
       <span class="status-text">idle</span>
@@ -26,12 +29,14 @@
 
 <main id="chat" aria-live="polite">
   <section id="hero">
-    <div class="hero-tag">agentic model checker · for C</div>
-    <h1>Verify code by chatting<span class="cursor">▮</span></h1>
+    <img src="/assets/logo-icon.svg" alt="" class="hero-mark" aria-hidden="true" />
+    <div class="hero-tag">agentic prover · for AI-generated code</div>
+    <h1>Verify your code by chatting<span class="cursor">▮</span></h1>
     <p class="hero-sub">
-      I generate function specs, run <span class="kbd">CBMC</span> against them,
-      classify counterexamples, and report confirmed bugs with evidence tiers.
-      Drop a paste, a GitHub URL, or just say <em>"show me a demo"</em>.
+      AProver is a suite of LLM-driven verification agents.
+      The live demo runs <span class="kbd">BMC-Agent</span> — Claude generates function specs,
+      <span class="kbd">CBMC</span> proves or refutes them, the agent classifies counterexamples,
+      and confirmed bugs come back with evidence tiers. Today: C. On the roadmap: Rust (Kani) and beyond.
     </p>
 
     <div class="quick-actions">
@@ -48,8 +53,8 @@
 
     <div class="cap-grid">
       <div class="cap">
-        <div class="cap-h">paste C source</div>
-        <div class="cap-d">self-contained file, ≤64KB</div>
+        <div class="cap-h">paste source</div>
+        <div class="cap-d">self-contained file, ≤64KB · today: C</div>
       </div>
       <div class="cap">
         <div class="cap-h">fetch http(s) URLs</div>
@@ -57,7 +62,7 @@
       </div>
       <div class="cap">
         <div class="cap-h">target a function</div>
-        <div class="cap-d">or verify all functions in the file</div>
+        <div class="cap-d">or verify the whole file at once</div>
       </div>
       <div class="cap">
         <div class="cap-h">live phase progress</div>
@@ -97,14 +102,21 @@
   <div class="msg run">
     <div class="role">aprover</div>
     <div class="body">
-      <div class="phases">
-        <div class="phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
-        <div class="phase-line"></div>
-        <div class="phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
-        <div class="phase-line"></div>
-        <div class="phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
-        <div class="phase-line"></div>
-        <div class="phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+      <div class="run-head">
+        <div class="phases">
+          <div class="phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+        </div>
+        <div class="run-elapsed"><span class="run-elapsed-num">0.0</span><span class="run-elapsed-unit">s</span></div>
+      </div>
+      <div class="now-line">
+        <span class="now-icon"></span>
+        <span class="now-text">starting…</span>
       </div>
       <details class="log-disc">
         <summary>pipeline log</summary>
