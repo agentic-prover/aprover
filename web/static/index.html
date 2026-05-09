@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AProver — chat with an agentic model checker</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <strong>AProver</strong>
+    <span class="tag">agentic model checker for C</span>
+  </div>
+  <a class="repo-link" href="https://github.com/agentic-prover/aprover" target="_blank" rel="noopener">github</a>
+</header>
+
+<main id="chat" aria-live="polite"></main>
+
+<form id="composer" autocomplete="off">
+  <textarea
+    id="input"
+    rows="3"
+    placeholder="Paste C code, or ask me to verify a tiny example…"
+    spellcheck="false"></textarea>
+  <button id="send" type="submit">Send</button>
+</form>
+
+<footer>
+  <span id="status">ready</span>
+  <span class="hint">Shift+Enter = newline · Enter = send</span>
+</footer>
+
+<template id="msg-tpl">
+  <div class="msg">
+    <div class="role"></div>
+    <div class="body"></div>
+  </div>
+</template>
+
+<template id="run-tpl">
+  <div class="msg run">
+    <div class="role">aprover</div>
+    <div class="body">
+      <div class="run-head">
+        <span class="run-label">running pipeline…</span>
+        <span class="run-spinner"></span>
+      </div>
+      <ol class="run-log"></ol>
+    </div>
+  </div>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

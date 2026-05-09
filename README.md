@@ -87,6 +87,17 @@ uv run bmc-agent verify-dir \
 
 Artifacts — generated specs, CBMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and can be inspected or diffed.
 
+### Web chat (no setup)
+
+For a zero-configuration experience, `web/` contains a chat front-end that lets visitors run AProver by talking to it. The page streams pipeline progress (parse → spec → CBMC → classify → report) live as the agent works.
+
+```bash
+ANTHROPIC_API_KEY=sk-... uv run uvicorn web.server:app --port 7860
+# open http://localhost:7860
+```
+
+Deploy as a Hugging Face Space with `web/deploy_to_space.sh` — see `web/README.md` for the full guide.
+
 ## Configuration
 
 All settings are available as environment variables or `Config` dataclass fields.
