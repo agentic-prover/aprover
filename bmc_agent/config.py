@@ -21,6 +21,13 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
+
+    # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
+    # than CBMC's; the unwind is left at None so kani picks its own when
+    # absent (we still surface the field to give the pipeline a single knob).
+    kani_path: str = "kani"
+    kani_unwind: int = 4
+    kani_timeout: int = 120  # seconds
     # Artifact settings
     artifact_dir: str = "artifacts"
 
@@ -79,6 +86,9 @@ class Config:
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
+            kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
+            kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
+            kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),
             artifact_dir=os.environ.get("BMC_AGENT_ARTIFACT_DIR", "artifacts"),
             max_spec_retries=int(os.environ.get("BMC_AGENT_MAX_SPEC_RETRIES", "3")),
             max_refinement_iters=int(os.environ.get("BMC_AGENT_MAX_REFINEMENT_ITERS", "5")),
