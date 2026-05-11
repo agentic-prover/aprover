@@ -39,6 +39,46 @@
       and confirmed bugs come back with evidence tiers. Today: C. On the roadmap: Rust (Kani) and beyond.
     </p>
 
+    <div class="hero-demo" id="hero-demo" role="button" tabindex="0"
+         aria-label="Live pipeline preview — click to load this demo into the composer">
+      <div class="hero-demo-tag">
+        <span class="hd-pulse"></span>
+        <span>live preview · click to run it yourself</span>
+      </div>
+      <div class="demo-grid">
+        <div class="demo-code">
+          <div class="demo-code-head">
+            <span class="demo-file">demo.c</span>
+            <span class="demo-lang">C</span>
+          </div>
+<pre class="demo-src"><span class="ln">1</span> <span class="kw">#include</span> <span class="str">&lt;stdint.h&gt;</span>
+<span class="ln">2</span> <span class="kw">int</span> <span class="fn">add</span>(<span class="kw">int</span> a, <span class="kw">int</span> b) {
+<span class="ln">3</span>     <span class="kw">return</span> a + b;
+<span class="ln">4</span> }</pre>
+          <div class="demo-caret"></div>
+        </div>
+        <div class="demo-pipe">
+          <div class="demo-phases" aria-hidden="true">
+            <div class="demo-phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
+            <div class="phase-line"></div>
+            <div class="demo-phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
+            <div class="phase-line"></div>
+            <div class="demo-phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
+            <div class="phase-line"></div>
+            <div class="demo-phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+          </div>
+          <div class="demo-now">
+            <span class="now-icon"></span>
+            <span class="demo-now-text">parsing source…</span>
+          </div>
+          <div class="demo-result" hidden>
+            <span class="demo-verdict">▲ real bug · signed overflow</span>
+            <span class="demo-detail">a = INT_MAX, b = 1 &nbsp;⟶&nbsp; <code>a + b</code> overflows</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="quick-actions">
       <button class="chip" data-prompt="show me a demo">
         <span class="chip-key">▶</span> run a demo bug

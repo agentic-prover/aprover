@@ -162,24 +162,36 @@ function completePhase(phaseName) {
 // reads less like a debug dump and more like "what is the agent doing".
 function extractActivity(message) {
   const m = String(message);
+  if (/Parsing source file/.test(m)) return "parsing source";
   if (/Phase 1: Generating specs/.test(m)) return "generating function specs";
+  let mm = m.match(/Processing layer (\d+): \[?([^\]\n]+)/);
+  if (mm) return `spec layer ${mm[1]} · ${mm[2].split(",")[0].trim()}`;
   if (/Phase 1 complete/.test(m)) return "specs generated";
+  if (/Phase 1\.5: Selecting per-function CBMC flags/.test(m))
+    return "selecting CBMC flags per function";
   if (/Phase 2: Running BMC on (\d+)/.test(m)) {
     const [, n] = m.match(/Phase 2: Running BMC on (\d+)/);
     return `running CBMC on ${n} function${n === "1" ? "" : "s"}`;
   }
   if (/Phase 2 complete/.test(m)) return "bounded model checking done";
   if (/Phase 3: Validating/.test(m)) return "classifying counterexamples";
-  let mm = m.match(/Checking function '([^']+)'/);
+  if (/Phase 3c:/.test(m)) return "refining specs";
+  mm = m.match(/Checking function '([^']+)'/);
   if (mm) return `bmc · ${mm[1]}`;
   mm = m.match(/Generating spec for '([^']+)'/i);
   if (mm) return `spec · ${mm[1]}`;
-  mm = m.match(/CBMC verdict for '([^']+)':\s*(.+)/);
-  if (mm) return `verdict · ${mm[1]} · ${mm[2]}`;
+  mm = m.match(/CBMC verdict for '([^']+)':\s*verified=(\w+)/);
+  if (mm) return `verdict · ${mm[1]} · ${mm[2] === "True" ? "verified" : "counterexample"}`;
+  mm = m.match(/Recheck: validating counterexample for '([^']+)'/);
+  if (mm) return `recheck · ${mm[1]}`;
   mm = m.match(/Validating counterexample for '([^']+)'/);
   if (mm) return `classifying · ${mm[1]}`;
-  if (/REAL BUG confirmed in '([^']+)'/.test(m)) {
-    const [, fn] = m.match(/REAL BUG confirmed in '([^']+)'/);
+  if (/REAL BUG \(Phase 3c\) confirmed in '([^']+)'/.test(m)) {
+    const [, fn] = m.match(/REAL BUG \(Phase 3c\) confirmed in '([^']+)'/);
+    return `real bug (refined) confirmed in ${fn}`;
+  }
+  if (/REAL BUG (?:\(recheck\) )?confirmed in '([^']+)'/.test(m)) {
+    const [, fn] = m.match(/REAL BUG (?:\(recheck\) )?confirmed in '([^']+)'/);
     return `real bug confirmed in ${fn}`;
   }
   if (/AMC Pipeline END/.test(m)) return "wrapping up";
@@ -195,9 +207,13 @@ function inspectLogLine(message) {
   const m = String(message);
   if (/Phase 1: Generating specs/.test(m)) setPhase("spec");
   else if (/Phase 1 complete/.test(m)) completePhase("spec");
+  // Phase 1.5 (flag selection) sits between spec and bmc; keep the spec→bmc
+  // connector "flowing" so the UI feels alive while flags are picked.
   else if (/Phase 2: Running BMC/.test(m)) setPhase("bmc");
   else if (/Phase 2 complete/.test(m)) completePhase("bmc");
   else if (/Phase 3: Validating/.test(m)) setPhase("classify");
+  // Phase 3c (refinement) loops back inside classify — don't bounce the phase,
+  // just let the now-line headline change to "refining specs".
   else if (/=== AMC Pipeline END/.test(m)) {
     completePhase("classify");
     setPhase("report");
@@ -261,6 +277,7 @@ function renderResult(result) {
       const card = document.createElement("div");
       card.className = "bug-card";
       const chain = (b.call_chain || []).join(" → ");
+      const reasoning = (b.reasoning || "").trim();
       card.innerHTML = `
         <div class="row">
           <span class="fn-name">${escapeHtml(b.function || "?")}</span>
@@ -269,6 +286,11 @@ function renderResult(result) {
         </div>
         <div class="prop">${escapeHtml(b.violated_property || "")}</div>
         ${chain ? `<div class="chain">via ${escapeHtml(chain)}</div>` : ""}
+        ${reasoning ? `
+          <details class="bug-reason">
+            <summary>why this is a bug</summary>
+            <div class="reason-body">${escapeHtml(reasoning)}</div>
+          </details>` : ""}
       `;
       wrap.appendChild(card);
     }
@@ -418,6 +440,128 @@ document.querySelectorAll(".chip").forEach((chip) => {
     }
   });
 });
+
+// ---- Hero live-preview demo ----
+// Drives a looping fake run on the hero so visitors see the agent in motion
+// before they ever type anything. Hover pauses; click loads the snippet into
+// the composer so they can run it for real.
+
+const DEMO_SOURCE = `#include <stdint.h>
+int add(int a, int b) {
+    return a + b;
+}`;
+
+function startHeroDemo() {
+  const demoEl = document.getElementById("hero-demo");
+  if (!demoEl) return;
+
+  const PHASES = ["spec", "bmc", "classify", "report"];
+  const phaseEls = Array.from(demoEl.querySelectorAll(".demo-phase"));
+  const lineEls = Array.from(demoEl.querySelectorAll(".phase-line"));
+  const nowEl = demoEl.querySelector(".demo-now");
+  const nowText = demoEl.querySelector(".demo-now-text");
+  const resultEl = demoEl.querySelector(".demo-result");
+  const caretEl = demoEl.querySelector(".demo-caret");
+
+  // The caret hops between source lines so the user sees the agent "reading"
+  // the code while specs are being generated. Line offsets are tuned to
+  // line-height 1.7 × 12.5px ≈ 21px, with a head offset that lines the caret
+  // up with the file header.
+  const CARET_TOP_BASE = 56; // px — top of first line after the file header
+  const LINE_H = 21.25;
+
+  const script = [
+    { phase: "spec", text: "parsing source…", ms: 1100, line: 0 },
+    { phase: "spec", text: "generating spec for add()", ms: 1500, line: 1 },
+    { phase: "spec", text: "spec ready · int, int → bounded add", ms: 1000, line: 1, done: ["spec"] },
+    { phase: "bmc",  text: "running CBMC on add()", ms: 1500, line: 2 },
+    { phase: "bmc",  text: "counterexample · a = INT_MAX, b = 1", ms: 1700, line: 2, done: ["spec"] },
+    { phase: "classify", text: "validating counterexample", ms: 1500, line: 2, done: ["spec","bmc"] },
+    { phase: "classify", text: "real bug · signed integer overflow", ms: 1400, line: 2, done: ["spec","bmc"] },
+    { phase: "report", text: "bug report written", ms: 2600, line: 2, done: ["spec","bmc","classify"], showResult: true, finished: true },
+    { reset: true, ms: 1400 },
+  ];
+
+  function applyStep(step) {
+    if (step.reset) {
+      phaseEls.forEach((e) => e.classList.remove("active", "done"));
+      lineEls.forEach((e) => e.classList.remove("flowing", "done"));
+      resultEl.hidden = true;
+      nowEl.classList.remove("done");
+      nowText.textContent = "ready · paste C to run for real";
+      if (caretEl) caretEl.classList.remove("visible");
+      return;
+    }
+    const order = PHASES.indexOf(step.phase);
+    const doneSet = new Set(step.done || []);
+    phaseEls.forEach((el) => {
+      const p = el.getAttribute("data-phase");
+      el.classList.remove("active", "done");
+      if (doneSet.has(p)) el.classList.add("done");
+      else if (p === step.phase && !step.finished) el.classList.add("active");
+      else if (p === step.phase && step.finished) el.classList.add("done");
+    });
+    lineEls.forEach((el, i) => {
+      el.classList.remove("flowing", "done");
+      const prevPhase = PHASES[i];
+      if (doneSet.has(prevPhase) && doneSet.has(PHASES[i + 1])) el.classList.add("done");
+      else if (doneSet.has(prevPhase)) el.classList.add("flowing");
+    });
+    nowText.textContent = step.text;
+    nowEl.classList.toggle("done", !!step.finished);
+    resultEl.hidden = !step.showResult;
+    if (caretEl) {
+      if (typeof step.line === "number") {
+        caretEl.style.top = CARET_TOP_BASE + step.line * LINE_H + "px";
+        caretEl.classList.add("visible");
+      } else {
+        caretEl.classList.remove("visible");
+      }
+    }
+  }
+
+  let idx = 0;
+  let timerId = null;
+  let paused = false;
+
+  function tick() {
+    if (!demoEl.isConnected) return;
+    if (document.getElementById("hero")?.classList.contains("hidden")) return;
+    if (paused) {
+      timerId = setTimeout(tick, 300);
+      return;
+    }
+    const step = script[idx];
+    applyStep(step);
+    idx = (idx + 1) % script.length;
+    timerId = setTimeout(tick, step.ms);
+  }
+  tick();
+
+  demoEl.addEventListener("mouseenter", () => {
+    paused = true;
+    demoEl.classList.add("paused");
+  });
+  demoEl.addEventListener("mouseleave", () => {
+    paused = false;
+    demoEl.classList.remove("paused");
+  });
+
+  function loadDemoIntoComposer() {
+    input.value = `verify this:\n\n\`\`\`c\n${DEMO_SOURCE}\n\`\`\``;
+    autoGrow();
+    input.focus();
+  }
+  demoEl.addEventListener("click", loadDemoIntoComposer);
+  demoEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      loadDemoIntoComposer();
+    }
+  });
+}
+
+startHeroDemo();
 
 // Initial state: hero shown, idle status.
 setStatus("idle", "idle");
