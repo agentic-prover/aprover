@@ -128,6 +128,7 @@ class BMCEngine:
                 timeout=self.config.cbmc_timeout,
                 cbmc_path=self.config.cbmc_path,
                 include_dirs=getattr(self.config, "include_dirs", None),
+                defines=getattr(self.config, "cbmc_defines", None),
                 unsigned_overflow_check=unsigned_overflow_check,
                 signed_overflow_check=signed_overflow_check,
                 conversion_check=conversion_check,

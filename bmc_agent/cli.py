@@ -307,6 +307,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.strict_dsl = True
     if getattr(args, "raw_bytes", False):
         config.raw_bytes = True
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)
     if getattr(args, "skip_refinement", False):
         config.skip_refinement = True
     if getattr(args, "enable_realism_check", False):
@@ -610,6 +612,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Treat single char* / const char* params as raw byte buffers (no NUL termination) in the harness. Required for wire-format parsers (protobuf upb, length-prefixed blobs) that read N raw bytes regardless of NULs.",
+    )
+    ver.add_argument(
+        "-D", "--define",
+        action="append",
+        default=[],
+        dest="defines",
+        help="Pass a preprocessor define to CBMC (repeatable). Use NAME or NAME=VALUE form, e.g. -D HAVE_CONFIG_H -D BUILDING_LIBCURL. Required for build-config-driven C codebases (curl, OpenSSL) where headers gate on autoconf-style flags.",
     )
     ver.add_argument(
         "--threat-model",

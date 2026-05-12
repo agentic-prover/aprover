@@ -643,16 +643,44 @@ def _generate_nd_decls(
                 # to get the element type ("const unsigned char" or
                 # "unsigned char").  Const promotes on assignment so the
                 # backing buffer can drop const.
+                #
+                # Termination mirrors the single char* policy:
+                #  - raw_bytes=True: no NUL — wire-format readers (protobuf
+                #    varint, ASN.1 DER) bound reads by an explicit size param
+                #    rather than NUL.
+                #  - raw_bytes=False (default): emit a NUL terminator at a
+                #    nondet position within the buffer so string-style
+                #    traversal loops (`while (ISBLANK(*p)) p++`) terminate
+                #    within the unwinding bound. This is the right policy
+                #    for curl's strparse.c, jq utf8 helpers, etc.
+                #
+                # ``char`` is heuristic for "string-shaped" — same trigger
+                # as the single-char* path.
                 inner_type = ptype_stripped.rstrip("*").rstrip().rstrip("*").rstrip()
                 backing_base = re.sub(r"\bconst\b", "", inner_type).strip() or inner_type
                 buf_size = cbmc_unwind + 1
                 backing_name = f"_{pname}_backing"
                 cursor_name = f"_{pname}_cursor"
+                # C convention: ``char *`` means text (NUL-terminated);
+                # ``unsigned char *`` / ``uint8_t *`` means raw bytes.
+                # Restrict the NUL emission to plain ``char`` so wire-format
+                # parsers (ASN.1, protobuf upb, etc.) using ``unsigned char *``
+                # don't get artificially NUL-bounded reads.
+                is_text_string = backing_base.strip() == "char"
+                emit_nul = (not raw_bytes) and is_text_string
                 lines.append(
                     f"    /* in-out cursor for '{pname}': "
-                    f"backing buffer + advanceable cursor + addr-of-cursor */"
+                    f"backing buffer + advanceable cursor + addr-of-cursor"
+                    f"{' (NUL-terminated)' if emit_nul else ''} */"
                 )
                 lines.append(f"    {backing_base} {backing_name}[{buf_size}];")
+                if emit_nul:
+                    nul_name = f"_{pname}_nul_at"
+                    lines.append(f"    unsigned int {nul_name};")
+                    lines.append(
+                        f"    __CPROVER_assume({nul_name} <= (unsigned int){cbmc_unwind});"
+                    )
+                    lines.append(f"    {backing_name}[{nul_name}] = '\\0';")
                 lines.append(f"    {inner_type} *{cursor_name} = {backing_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{cursor_name};")
                 if pname in nonnull_params:

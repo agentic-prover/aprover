@@ -27,4 +27,5 @@ class CBMCBackend(BMCBackend):
             timeout=self._config.cbmc_timeout,
             cbmc_path=self._config.cbmc_path,
             include_dirs=getattr(self._config, "include_dirs", None),
+            defines=getattr(self._config, "cbmc_defines", None),
         )

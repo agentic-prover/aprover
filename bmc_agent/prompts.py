@@ -42,7 +42,7 @@ The specification DSL:
 - valid_range(ptr, lo, hi): ptr is non-null and the range ptr[lo..hi) is in bounds (lo >= 0 and hi >= lo)
 - arithmetic: +, -, *, /, %, <, <=, >, >=, ==, !=
 - you may also write natural language conditions if formal DSL is insufficient
-- return value is referred to as \\result
+- return value is referred to as result
 - parameters use their actual names from the function signature
 """
 
@@ -75,7 +75,7 @@ Allowed predicates (rewritten to C by the harness generator):
   * valid_range(p,l,h)→ p != NULL && l>=0 && h>=l
   * in_bounds(a, i)   → i>=0 && i<sizeof(a)/sizeof(a[0])
   * null(ptr)         → ptr == NULL
-  * \\result           → C variable holding the return value
+  * result           → C variable holding the return value
 
 C-specific reminders:
   * Pointers can be NULL — write valid(p) when callers may pass NULL
@@ -88,9 +88,9 @@ C-specific reminders:
 
 EXAMPLES of correct vs. incorrect:
   GOOD pre:  valid(p) && valid_range(buf, 0, length) && length >= 0
-  GOOD post: \\result == 0 || \\result == -1
+  GOOD post: result == 0 || result == -1
   BAD  pre:  p has been initialized by parser_init(); p->curr_buf is NULL …
-  BAD  post: \\result == 0 if successful; otherwise \\result is an error pointer
+  BAD  post: result == 0 if successful; otherwise result is an error pointer
 
 If a property is genuinely too rich for a single C boolean expression
 (temporal state-machine invariants, owned-vs-borrowed, etc.), emit the
@@ -132,7 +132,7 @@ Allowed predicates (rewritten to Rust by the harness generator):
   * in_bounds(slice, idx)   → (idx) < slice.len()
   * (A ==> B)               → (!(A) || (B))   — must be paren-wrapped
   * valid(ptr) / null(ptr)  → ptr.is_null() / !ptr.is_null()   (raw ptrs only)
-  * \\result                 → result (Rust binding)
+  * result                 → result (Rust binding)
 
 Rust-specific reminders (informational, not new syntax):
   * Safe references (&T, &mut T) are non-null by language guarantee —

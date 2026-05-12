@@ -53,6 +53,7 @@ def run_cbmc(
     timeout: int = 120,
     cbmc_path: str = "cbmc",
     include_dirs: list[str] | None = None,
+    defines: list[str] | None = None,
     unsigned_overflow_check: bool = False,
     signed_overflow_check: bool = False,
     conversion_check: bool = False,
@@ -115,6 +116,8 @@ def run_cbmc(
         cmd.append("--div-by-zero-check")
     for d in (include_dirs or []):
         cmd += ["-I", d]
+    for d in (defines or []):
+        cmd += ["-D", d]
 
     # 3. Execute
     try:

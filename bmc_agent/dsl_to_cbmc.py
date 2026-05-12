@@ -384,9 +384,14 @@ def _sanitize_condition(condition: str) -> str:
     - Invented struct fields like ``foo->count_before`` → commented out
     """
     # Fix \result mangled by JSON parsing: Python reads \r as CR (0x0D),
-    # so \result → CR + "esult". Normalise both forms to plain "result".
+    # so \result → CR + "esult". Normalise all forms to plain "result".
+    # Also defensively map bare "esult" (LLM typo, observed in real spec
+    # output) to "result" — esult is not a known C symbol anywhere in
+    # bmc-agent's generated harnesses, so this is safe.
     condition = condition.replace('\result', 'result')   # CR+esult → result
     condition = condition.replace('\\result', 'result')  # literal \result → result
+    # Word-boundary match so we don't clobber e.g. "best_result".
+    condition = re.sub(r'\besult\b', 'result', condition)
 
     # Lowercase `null` used as a constant (e.g. `result == null`) → NULL
     # Only replace when NOT followed by '(' to avoid clobbering null(ptr) predicates.

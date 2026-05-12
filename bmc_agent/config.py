@@ -67,6 +67,7 @@ class Config:
 
     # Multi-file / whole-codebase support
     include_dirs: list = field(default_factory=list)  # -I paths for cc -E
+    cbmc_defines: list = field(default_factory=list)  # -D name[=value] preprocessor defines
     cc_path: str = "cc"                               # C compiler for preprocessing
     preprocess: bool = False                          # run cc -E before parsing
 
@@ -129,6 +130,7 @@ class Config:
             skip_refinement=os.environ.get("BMC_AGENT_SKIP_REFINEMENT", "false").lower() == "true",
             max_requeue_per_function=int(os.environ.get("BMC_AGENT_MAX_REQUEUE_PER_FUNCTION", "3")),
             include_dirs=[d for d in os.environ.get("BMC_AGENT_INCLUDE_DIRS", "").split(":") if d],
+            cbmc_defines=[d for d in os.environ.get("BMC_AGENT_CBMC_DEFINES", "").split(":") if d],
             cc_path=os.environ.get("BMC_AGENT_CC_PATH", "cc"),
             preprocess=os.environ.get("BMC_AGENT_PREPROCESS", "false").lower() == "true",
             enable_dynamic_validation=(os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION") or os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION") or "false").lower() == "true",
