@@ -57,6 +57,11 @@ class RustFunctionSignature:
     modifiers: list[str] = field(default_factory=list)
     type_parameters: str = ""
     where_clause: str = ""
+    # is_static is a C storage-class concept with no Rust counterpart; kept
+    # at False to preserve structural compatibility with the C-side
+    # FunctionSignature so duck-typed consumers don't need to branch on
+    # language.
+    is_static: bool = False
 
 
 @dataclass

@@ -26,6 +26,7 @@ from bmc_agent.harness_generator import HarnessGenerator
 from bmc_agent.llm import LLMClient
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
+from bmc_agent.source_parser import parse_source_file
 from bmc_agent.realism_checker import RealismChecker
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.spec_generator import SpecGenerator
@@ -164,7 +165,7 @@ class AMCPipeline:
             except Exception as exc:
                 logger.warning("Preprocessing failed (%s) — parsing file as-is", exc)
 
-        parsed = parse_c_file(source_file, source_text=preprocessed_source)
+        parsed = parse_source_file(source_file, source_text=preprocessed_source)
         self.store.init_driver(driver_name)
 
         specs = self.spec_gen.generate_specs(

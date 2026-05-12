@@ -77,7 +77,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     from bmc_agent.artifacts import ArtifactStore
     from bmc_agent.bmc_engine import BMCEngine
     from bmc_agent.config import Config
-    from bmc_agent.parser import parse_c_file
+    from bmc_agent.source_parser import parse_source_file
 
     config = Config.from_env()
     if hasattr(args, "output") and args.output:
@@ -92,7 +92,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
     print(f"Source file:      {source_file}")
     print(f"Artifact dir:     {config.artifact_dir}")
 
-    parsed = parse_c_file(source_file)
+    parsed = parse_source_file(source_file)
 
     # Load specs from disk
     driver_name = args.driver
@@ -496,7 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
         "generate",
         help="Generate specs for all functions in a C source file (Phase 1)",
     )
-    gen.add_argument("--source", required=True, help="Path to C source file")
+    gen.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
     gen.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
     gen.add_argument("--output", default="artifacts", help="Artifact output directory")
     gen.add_argument(
@@ -513,7 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
         "check",
         help="Run BMC on previously generated specs (Phase 2)",
     )
-    chk.add_argument("--source", required=True, help="Path to C source file")
+    chk.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
     chk.add_argument("--driver", required=True, help="Driver name")
     chk.add_argument("--output", default="artifacts", help="Artifact directory")
     chk.add_argument("--function", default="", help="Specific function to check (optional)")
@@ -524,7 +524,7 @@ def build_parser() -> argparse.ArgumentParser:
         "verify",
         help="Run full pipeline: generate + check + validate (Phase 3)",
     )
-    ver.add_argument("--source", required=True, help="Path to C source file")
+    ver.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
     ver.add_argument("--driver", required=True, help="Driver name")
     ver.add_argument("--output", default="artifacts", help="Artifact directory")
     ver.add_argument(
@@ -584,7 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
         "baseline",
         help="Run CBMC-alone baseline on a C source file (no LLM, no spec generation)",
     )
-    bl.add_argument("--source", required=True, help="Path to C source file")
+    bl.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
     bl.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
     bl.add_argument("--output", default="artifacts", help="Artifact output directory")
     bl.set_defaults(func=_cmd_baseline)
@@ -594,7 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
         "ablation-baseline",
         help="Run AMC-ablation baseline: bottom-up spec generation without caller context",
     )
-    ab.add_argument("--source", required=True, help="Path to C source file")
+    ab.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
     ab.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
     ab.add_argument("--output", default="artifacts", help="Artifact output directory")
     _add_model_arg(ab)

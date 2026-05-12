@@ -46,10 +46,59 @@ The specification DSL:
 - parameters use their actual names from the function signature
 """
 
-# System prompt shared by all spec-generation calls.
-# Placed here so the spec generator can cache it across all LLM calls in a session
-# (the Anthropic cache_control:ephemeral has a 5-minute TTL).
-SPEC_SYSTEM_PROMPT = f"You are a formal verification expert for C programs.\n\n{DSL_GRAMMAR}"
+# Rust-aware DSL notes. The core predicate vocabulary matches the C DSL —
+# Phase 2 translates either form into Kani/CBMC primitives — but Rust's
+# type system changes which predicates are *needed* vs *implicit*. Safe
+# references are guaranteed non-null and aligned by the language, so
+# valid()/null() are reserved for raw pointers inside unsafe regions.
+# Slices carry length intrinsically, so valid_range becomes a bound on
+# the index expression against slice.len().
+RUST_DSL_GRAMMAR = """\
+The specification DSL:
+- precondition: "requires <formula>"
+- postcondition: "ensures <formula>"
+- formulas can use: &&, ||, !, forall, exists
+- predicates: valid(ptr), valid_range(ptr, lo, hi), in_bounds(slice, idx), null(ptr)
+- Rust-specific notes:
+  * Safe references (&T, &mut T) are non-null and properly aligned by
+    Rust's type system — do NOT write valid(r) or !null(r) for them.
+    Those predicates apply only to raw pointers (*const T, *mut T).
+  * Slices (&[T], &mut [T]) carry their length intrinsically; express
+    bounds against slice.len() rather than valid_range.
+  * Option<T> parameters should be characterised by is_some() /
+    is_none() in natural language rather than null().
+  * Integer arithmetic in Rust panics on overflow in debug and wraps in
+    release; explicit wrapping_*/checked_*/saturating_* methods control
+    behaviour. When the source uses wrapping_*, the postcondition should
+    reflect the wrapped result.
+  * \\result refers to the return value; parameters use their source
+    names from the signature.
+- arithmetic: +, -, *, /, %, <, <=, >, >=, ==, !=
+- you may write natural-language conditions when the formal DSL is too
+  coarse (trait-bound preconditions, lifetime invariants, etc.).
+"""
+
+# System prompts shared by all spec-generation calls in a session.
+# Placed at module scope so the spec generator can rely on Anthropic
+# prompt caching (cache_control:ephemeral, 5-minute TTL).
+SPEC_SYSTEM_PROMPT = (
+    f"You are a formal verification expert for C programs.\n\n{DSL_GRAMMAR}"
+)
+RUST_SPEC_SYSTEM_PROMPT = (
+    f"You are a formal verification expert for Rust programs.\n\n{RUST_DSL_GRAMMAR}"
+)
+
+
+def spec_system_prompt_for(language: str) -> str:
+    """Return the system prompt appropriate for *language*.
+
+    Recognised values: ``"c"`` and ``"rust"``. Unknown languages fall
+    back to the C prompt to preserve existing behaviour for callers that
+    have not been updated.
+    """
+    if language == "rust":
+        return RUST_SPEC_SYSTEM_PROMPT
+    return SPEC_SYSTEM_PROMPT
 
 ENTRY_SPEC_PROMPT = """\
 Your task: Given a C function's implementation and domain knowledge, generate a precise

@@ -28,7 +28,8 @@ from bmc_agent.artifacts import ArtifactStore
 from bmc_agent.config import Config
 from bmc_agent.llm import LLMClient, LLMError
 from bmc_agent.logger import get_logger
-from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
+from bmc_agent.parser import FunctionInfo, ParsedCFile
+from bmc_agent.source_parser import detect_language, parse_source_file
 from bmc_agent.prompts import (
     CALLER_HEAVY_SPEC_PROMPT,
     DSL_GRAMMAR,
@@ -39,6 +40,7 @@ from bmc_agent.prompts import (
     SPEC_DISAGREEMENT_PROMPT,
     SPEC_SYSTEM_PROMPT,
     THREAT_MODEL_CONTEXT,
+    spec_system_prompt_for,
 )
 from bmc_agent.spec import Spec, SpecStatus, merge_specs
 
@@ -308,6 +310,11 @@ class SpecGenerator:
         self.config = config
         self.llm = llm
         self.store = store
+        # System prompt is set per-generate_specs() call based on input
+        # language. Initialised to the C prompt so test doubles that bypass
+        # generate_specs() (calling internal _generate_* helpers directly)
+        # still get a well-formed system prompt.
+        self._spec_system_prompt: str = SPEC_SYSTEM_PROMPT
 
     # ------------------------------------------------------------------
     # Public API
@@ -341,7 +348,14 @@ class SpecGenerator:
         Mapping of function_name -> Spec.
         """
         logger.info("Parsing source file: %s", source_file)
-        parsed = parse_c_file(source_file, source_text=source_text)
+        parsed = parse_source_file(source_file, source_text=source_text)
+
+        # Select the language-appropriate system prompt for this run so
+        # Rust input gets Rust-aware DSL notes (references, slices,
+        # wrapping arithmetic) rather than C-flavored ones.
+        language = detect_language(source_file)
+        self._spec_system_prompt = spec_system_prompt_for(language)
+        logger.info("Using %s-flavored spec system prompt", language)
 
         self.store.init_driver(driver_name)
 
@@ -597,7 +611,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt)
+            response = self.llm.complete(self._spec_system_prompt, user_prompt)
             result = _parse_llm_spec_response(response, func.name)
             if result is not None:
                 pre, post = result
@@ -654,7 +668,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt)
+            response = self.llm.complete(self._spec_system_prompt, user_prompt)
             result = _parse_llm_spec_response(response, func.name)
             if result is not None:
                 pre, post = result
@@ -695,7 +709,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt)
+            response = self.llm.complete(self._spec_system_prompt, user_prompt)
             result = _parse_llm_spec_response(response, callee_name)
             if result is not None:
                 pre, post = result
@@ -755,7 +769,7 @@ class SpecGenerator:
                 caller_context=caller_context or "No caller context available.",
                 body=func.body,
             )
-            response_a = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt_a)
+            response_a = self.llm.complete(self._spec_system_prompt, user_prompt_a)
             result_a = _parse_llm_spec_response(response_a, func.name)
         except Exception:
             result_a = None
@@ -766,7 +780,7 @@ class SpecGenerator:
                 signature=sig,
                 body=func.body,
             )
-            response_b = self.llm.complete(SPEC_SYSTEM_PROMPT, user_prompt_b)
+            response_b = self.llm.complete(self._spec_system_prompt, user_prompt_b)
             result_b = _parse_llm_spec_response(response_b, func.name)
         except Exception:
             result_b = None
@@ -786,7 +800,7 @@ class SpecGenerator:
                     pre_a=result_a[0], post_a=result_a[1],
                     pre_b=result_b[0], post_b=result_b[1],
                 )
-                disagree_response = self.llm.complete(SPEC_SYSTEM_PROMPT, disagree_prompt)
+                disagree_response = self.llm.complete(self._spec_system_prompt, disagree_prompt)
                 import json as _json
                 parsed = _json.loads(disagree_response.strip())
                 disagree = bool(parsed.get("disagree", False))
