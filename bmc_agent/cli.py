@@ -297,6 +297,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if hasattr(args, "include_dir") and args.include_dir:
         config.include_dirs = args.include_dir
         config.preprocess = True
+    if getattr(args, "real_libc", False):
+        # Real-libc supersedes Python preprocessing: CBMC handles all
+        # preprocessing via -I so we don't expand glibc internals into
+        # text that CBMC's frontend can't re-parse.
+        config.cbmc_real_libc = True
+        config.preprocess = False
     if getattr(args, "skip_refinement", False):
         config.skip_refinement = True
     if getattr(args, "enable_realism_check", False):
@@ -582,6 +588,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
+    )
+    ver.add_argument(
+        "--real-libc",
+        action="store_true",
+        default=False,
+        help="Real-libc mode: harness #includes the source .c file and lets CBMC do all preprocessing via -I. Required for real-world glibc-using OSS (jq, curl, OpenSSL, …); leave off for bare-metal targets like VibeOS.",
     )
     ver.add_argument(
         "--threat-model",

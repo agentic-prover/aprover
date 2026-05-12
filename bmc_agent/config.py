@@ -21,6 +21,13 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
+    # Real-libc mode: emit minimal harnesses that `#include` the original
+    # .c file and let CBMC do all preprocessing via -I, instead of the
+    # default Python-side `cc -E` expand-then-strip pipeline. Required
+    # for verifying real-world glibc-using OSS (jq, curl, OpenSSL, …);
+    # leave False for bare-metal targets like VibeOS that need the
+    # type stripping. Implies preprocess=False (Python doesn't expand).
+    cbmc_real_libc: bool = False
 
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
@@ -91,6 +98,7 @@ class Config:
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
+            cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),

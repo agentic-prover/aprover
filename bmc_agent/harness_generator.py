@@ -1127,6 +1127,13 @@ class HarnessGenerator:
 
         Returns the harness as a C source string.
         """
+        # Real-libc mode: emit a minimal harness that #includes the
+        # source .c file directly so CBMC handles all preprocessing,
+        # rather than the default expand-then-strip pipeline that
+        # struggles with glibc/gcc internals.  See _generate_real_libc.
+        if getattr(self.config, "cbmc_real_libc", False):
+            return self._generate_real_libc(func, spec, parsed_file, all_funcs)
+
         fn_name = func.name
         sig = func.signature
 
@@ -1309,6 +1316,114 @@ class HarnessGenerator:
         )
 
         return "\n\n".join(sections) + "\n"
+
+    # ------------------------------------------------------------------
+    # Real-libc harness mode
+    # ------------------------------------------------------------------
+
+    def _generate_real_libc(
+        self,
+        func: FunctionInfo,
+        spec: Spec,
+        parsed_file: ParsedCFile,
+        all_funcs: Optional[dict],
+    ) -> str:
+        """Emit a minimal CBMC harness that defers all preprocessing.
+
+        The harness ``#include``s the original source file directly, so
+        every project header and system header it transitively pulls in
+        gets parsed by CBMC's own preprocessor (with ``-I`` flags from
+        ``config.include_dirs``).  This avoids the entire failure mode
+        of "Python ``cc -E`` expands gcc/glibc internals → CBMC's
+        frontend rejects ``__gnuc_va_list``, ``struct _IO_FILE``, …".
+
+        Trade-offs vs. the default mode:
+          * Callees are NOT stubbed — the real implementations from the
+            included source are verified inline.  This is generally what
+            you want for bounty / CVE work (no stub-induced false
+            positives), but means BMC has to chew through more code.
+          * The "function under test" body is not separately reconstructed;
+            it comes from the ``#include``.
+          * No glibc-internal stripping is needed because we never
+            inline the preprocessor output.
+
+        Required CLI:  ``--include-dir <project_src_dir>`` so CBMC can
+        resolve project headers, plus ``--real-libc``.
+        """
+        fn_name = func.name
+        sig = func.signature
+
+        # Resolve the source path against any include_dirs the user passed
+        # so the harness can write a clean `#include "<basename>"` and rely
+        # on CBMC's -I.  Falls back to the absolute path if we can't find
+        # the file under any -I root.
+        src_path = Path(func.source_file)
+        src_basename = src_path.name
+        include_target = src_basename
+        if not any(
+            (Path(d) / src_basename).exists()
+            for d in (getattr(self.config, "include_dirs", []) or [])
+        ):
+            # Fallback: use the absolute path so the include resolves even
+            # without a matching -I dir.
+            include_target = str(src_path)
+
+        # Nondeterministic input declarations — reuse the existing helper.
+        nonnull = _infer_nonnull_params(func, all_funcs, parsed_file)
+        nd_decls = _generate_nd_decls(func, self.config.cbmc_unwind, nonnull_params=nonnull)
+
+        # Precondition assume + postcondition assert via existing DSL.
+        param_names = [pname for _, pname in sig.parameters if pname]
+        assume_stmts = precond_to_assume(spec.precondition, param_names)
+        assert_stmts = postcond_to_assert(spec.postcondition, param_names)
+
+        # Filter out lone "void" params — `f(void)` means no params in C.
+        real_params = [(pt, pn) for pt, pn in sig.parameters
+                       if not (pt.strip() == "void" and not pn.strip())]
+        call_args = ", ".join(
+            (pname if pname else "_") for _, pname in real_params
+        )
+        ret_type = sig.return_type.strip()
+
+        body_lines: list[str] = []
+        body_lines.append("    /* Step 1: nondeterministic inputs */")
+        body_lines.extend(nd_decls)
+
+        if assume_stmts:
+            body_lines.append("    /* Step 2: precondition assumptions */")
+            body_lines.extend(f"    {s}" for s in assume_stmts)
+
+        body_lines.append(f"    /* Step 3: call function under test */")
+        if ret_type == "void":
+            body_lines.append(f"    {fn_name}({call_args});")
+            result_line_present = False
+        else:
+            body_lines.append(f"    {ret_type} result = {fn_name}({call_args});")
+            result_line_present = True
+
+        if assert_stmts:
+            body_lines.append(f"    /* Step 4: postcondition assertions */")
+            body_lines.extend(f"    {s}" for s in assert_stmts)
+
+        # Silence unused-variable warnings if the postcondition didn't
+        # reference `result` (e.g. trivial postcondition).
+        if result_line_present and not any(
+            "result" in s for s in assert_stmts
+        ):
+            body_lines.append("    (void)result;")
+
+        sections = [
+            f"/* Auto-generated CBMC harness (real-libc mode) for: {fn_name} */",
+            f"/* Source: {func.source_file} */",
+            "",
+            f'#include "{include_target}"',
+            "",
+            "int main(void) {",
+            "\n".join(body_lines),
+            "    return 0;",
+            "}",
+        ]
+        return "\n".join(sections) + "\n"
 
 
 # ---------------------------------------------------------------------------
