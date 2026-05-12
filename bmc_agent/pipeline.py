@@ -684,15 +684,32 @@ class AMCPipeline:
         file_callees: dict[str, set[str]] = {}       # stem → all function names called
         file_parsed_c: dict[str, ParsedCFile] = {}   # stem → ParsedCFile
 
-        logger.info("Pass 1: building global call graph across %d files", len(c_files))
+        # In real-libc mode, parse the raw source (without cc -E expansion):
+        # otherwise the include path pulls in every header's inline functions
+        # — for libssh + OpenSSL, a 700-line agent.c becomes 325 specs of
+        # OSSL_FUNC_* dispatch thunks. Cross-file analysis loses fidelity
+        # for #ifdef-guarded code without preprocessing, but the spec
+        # generation runs only against the project's own functions, which
+        # is the bug-finding target anyway.
+        use_preprocess = not getattr(self.config, "cbmc_real_libc", False)
+
+        logger.info(
+            "Pass 1: building global call graph across %d files (%s)",
+            len(c_files),
+            "with cc -E preprocessing" if use_preprocess else "raw source, real-libc mode",
+        )
         for c_file in c_files:
             try:
-                expanded = preprocess(
-                    c_file,
-                    include_dirs=[str(source_dir)] + include_dirs,
-                    cc=self.config.cc_path,
-                )
-                parsed_pass1 = parse_c_file(c_file, source_text=expanded)
+                if use_preprocess:
+                    expanded = preprocess(
+                        c_file,
+                        include_dirs=[str(source_dir)] + include_dirs,
+                        cc=self.config.cc_path,
+                    )
+                    parsed_pass1 = parse_c_file(c_file, source_text=expanded)
+                else:
+                    expanded = c_file.read_text(encoding="utf-8", errors="replace")
+                    parsed_pass1 = parse_c_file(c_file)
             except Exception as exc:
                 logger.warning("Pass 1: failed for %s: %s — skipping", c_file.name, exc)
                 continue
