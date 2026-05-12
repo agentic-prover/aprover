@@ -44,10 +44,46 @@ _PRIMITIVE_RUST_TYPES = {
 }
 
 
+# Default fixed-size bound for nondeterministic slice and array
+# initialisation in harnesses.  BMC verification is bounded by
+# construction, so we explore all slice contents and lengths up to this
+# cap.  Picked small to keep verification time reasonable; raise via
+# config.kani_slice_bound when a spec needs more reach.
+_DEFAULT_SLICE_BOUND = 4
+
+
 def _is_pointer_type(rust_type: str) -> bool:
     """True iff *rust_type* is a Rust raw pointer or reference type."""
     t = rust_type.strip()
     return t.startswith("*const ") or t.startswith("*mut ") or t.startswith("&")
+
+
+def _is_slice_type(rust_type: str) -> bool:
+    """True iff *rust_type* is a shared slice reference like ``&[T]``.
+
+    Mutable slices (``&mut [T]``) are recognised by the same prefix
+    check after stripping ``mut ``.
+    """
+    t = rust_type.strip()
+    if t.startswith("&mut "):
+        t = t[len("&mut "):].strip()
+    elif t.startswith("&"):
+        t = t[1:].strip()
+    else:
+        return False
+    return t.startswith("[") and t.endswith("]")
+
+
+def _slice_element_type(rust_type: str) -> str:
+    """Return ``T`` from ``&[T]`` / ``&mut [T]``.  Caller must have already
+    verified the type is a slice via :func:`_is_slice_type`."""
+    t = rust_type.strip()
+    if t.startswith("&mut "):
+        t = t[len("&mut "):].strip()
+    elif t.startswith("&"):
+        t = t[1:].strip()
+    # t is now "[T]"
+    return t[1:-1].strip()
 
 
 def _initialiser_for(rust_type: str) -> str:
@@ -56,6 +92,12 @@ def _initialiser_for(rust_type: str) -> str:
     For primitives we use ``kani::any()``.  For raw pointers we use
     ``kani::any::<usize>() as *mut T`` so Kani explores both null and non-null
     states; the spec's precondition narrows it further.
+
+    Slice types (``&[T]``, ``&mut [T]``) are NOT single-expression
+    initialisable — they need a backing array and a separately-bounded
+    length — so this function rejects them with ``NotImplementedError``.
+    Use :func:`_param_init_block` instead, which emits the
+    multi-statement setup.
     """
     t = rust_type.strip()
     if t in _PRIMITIVE_RUST_TYPES:
@@ -66,9 +108,14 @@ def _initialiser_for(rust_type: str) -> str:
     if t.startswith("*const "):
         inner = t[len("*const "):].strip()
         return f"kani::any::<usize>() as *const {inner}"
+    if _is_slice_type(t):
+        # Slice initialisation requires multi-line setup; route through
+        # _param_init_block instead.
+        raise NotImplementedError(
+            f"slice type {t!r} cannot be initialised in a single expression; "
+            f"use _param_init_block"
+        )
     if t.startswith("&mut "):
-        # Safe references cannot be nondeterministic in stable Kani; require
-        # the caller to model them via raw pointers in the spec.
         raise NotImplementedError(
             f"&mut references in Kani harnesses are not yet supported; "
             f"use a *mut raw pointer instead (got {t!r})"
@@ -82,6 +129,40 @@ def _initialiser_for(rust_type: str) -> str:
         f"don't know how to nondeterministically initialise Rust type {t!r}; "
         f"only primitives and raw pointers are currently supported"
     )
+
+
+def _param_init_block(
+    rust_type: str,
+    name: str,
+    slice_bound: int = _DEFAULT_SLICE_BOUND,
+) -> list[str]:
+    """Return the Kani init statements needed to bind *name* to a
+    nondeterministic value of *rust_type*.
+
+    For primitives and raw pointers this is the single line emitted by
+    :func:`_initialiser_for`.  For slice types we emit four lines:
+    a backing fixed-size array, a separately-nondeterministic length
+    capped at *slice_bound*, and a borrow producing the slice itself.
+    Kani then explores every combination of contents, length, and
+    downstream indices up to that bound.
+
+    The backing names are prefixed with ``_`` and suffixed with the
+    parameter name so a harness with multiple slice parameters does not
+    collide.
+    """
+    t = rust_type.strip()
+    if _is_slice_type(t):
+        elem = _slice_element_type(t)
+        backing = f"_backing_{name}"
+        length = f"_len_{name}"
+        borrow = "&mut " if t.startswith("&mut ") else "&"
+        return [
+            f"    let mut {backing}: [{elem}; {slice_bound}] = kani::any();",
+            f"    let {length}: usize = kani::any();",
+            f"    kani::assume({length} <= {slice_bound});",
+            f"    let {name}: {t} = {borrow}{backing}[..{length}];",
+        ]
+    return [f"    let {name}: {t} = {_initialiser_for(t)};"]
 
 
 def _translate_dsl(predicate: str, result_var: str = "result") -> str:
@@ -109,6 +190,16 @@ def _translate_dsl(predicate: str, result_var: str = "result") -> str:
 
     # \result → result_var
     expr = expr.replace("\\result", result_var)
+    # in_bounds(slice, idx) → idx < slice.len()
+    # The Rust DSL uses in_bounds for slice indexing; Phase 1 emits
+    # this for raw and reference slices alike since Rust slices carry
+    # their length intrinsically.  Translate to a length comparison so
+    # Kani can encode it as kani::assume / kani::assert.
+    expr = re.sub(
+        r"\bin_bounds\(\s*([^,)]+?)\s*,\s*([^)]+?)\s*\)",
+        lambda m: f"({m.group(2)}) < {m.group(1)}.len()",
+        expr,
+    )
     # null(ptr) → ptr.is_null()
     expr = re.sub(r"\bnull\(\s*([^)]+?)\s*\)", lambda m: f"{m.group(1)}.is_null()", expr)
     # valid_range(ptr, lo, hi) → !ptr.is_null()
@@ -127,7 +218,56 @@ def _translate_dsl(predicate: str, result_var: str = "result") -> str:
     expr = re.sub(r"\bowns\(\s*([^)]+?)\s*\)", lambda m: f"!{m.group(1)}.is_null()", expr)
     # valid(ptr) → !ptr.is_null() (must come last; the others are more specific)
     expr = re.sub(r"\bvalid\(\s*([^)]+?)\s*\)", lambda m: f"!{m.group(1)}.is_null()", expr)
+    # Logical implication: (A ==> B) → (!(A) || (B)).
+    # Matches paren-wrapped implications without nested parens on either
+    # side — the form Phase 1 emits when a postcondition uses ==>.
+    # Iterate until no more matches so chained implications inside
+    # outer conjunctions all get rewritten.
+    _impl_re = re.compile(r"\(\s*([^()]+?)\s*==>\s*([^()]+?)\s*\)")
+    while _impl_re.search(expr):
+        new_expr = _impl_re.sub(lambda m: f"(!({m.group(1)}) || ({m.group(2)}))", expr)
+        if new_expr == expr:
+            break  # defensive: shouldn't loop forever
+        expr = new_expr
     return expr
+
+
+def _reconstruct_fn_definition(func) -> str:
+    """Rebuild a complete ``fn name(params) -> ret { body }`` item.
+
+    The tree-sitter Rust parser exposes ``func.body`` as just the
+    ``{...}`` block — no fn header — so the harness file needs us to
+    synthesise the header from the signature.  We rebuild it
+    deterministically rather than relying on a verbatim signature-text
+    field (which the parser does not provide today).
+
+    Modifiers (``unsafe``/``async``/``const``), generic parameters, and
+    where clauses are preserved when present on the signature so the
+    reconstructed definition matches the call shape used in the harness.
+
+    When ``func.body`` already starts with the keyword ``fn`` we assume
+    the caller passed a hand-written full-definition string (the shape
+    several existing tests use as a shortcut) and return it unchanged
+    rather than double-wrapping.
+    """
+    body = (getattr(func, "body", "") or "").lstrip()
+    if body.startswith("fn ") or body.startswith("pub fn ") or body.startswith("unsafe fn "):
+        return body.rstrip()
+
+    sig = func.signature
+    params_text = ", ".join(f"{name}: {ty}" for ty, name in sig.parameters)
+    return_text = f" -> {sig.return_type}" if sig.return_type and sig.return_type != "()" else ""
+
+    modifiers = " ".join(getattr(sig, "modifiers", []) or [])
+    if modifiers:
+        modifiers += " "
+    type_params = getattr(sig, "type_parameters", "") or ""
+    where_clause = getattr(sig, "where_clause", "") or ""
+    where_text = f" {where_clause}" if where_clause else ""
+
+    header = f"{modifiers}fn {sig.name}{type_params}({params_text}){return_text}{where_text}"
+    body_block = body if body else "{}"
+    return f"{header} {body_block}".rstrip()
 
 
 class KaniBackend(BMCBackend):
@@ -168,11 +308,21 @@ class KaniBackend(BMCBackend):
         return_type = (func.signature.return_type or "").strip()
 
         # 1. Nondeterministic parameter initialisation.
+        slice_bound = getattr(self._config, "kani_slice_bound", _DEFAULT_SLICE_BOUND)
         init_lines: list[str] = []
         arg_names: list[str] = []
         for ty, name in params:
-            init_lines.append(f"    let {name}: {ty} = {_initialiser_for(ty)};")
+            init_lines.extend(_param_init_block(ty, name, slice_bound=slice_bound))
             arg_names.append(name)
+
+        # Reconstruct the function definition from sig + body.  The
+        # tree-sitter parser stores ``func.body`` as just the {...} block
+        # (no fn header), so the harness file must wrap it in a real
+        # ``fn ... { body }`` item, or rustc will refuse to compile.  We
+        # rebuild the signature deterministically rather than rely on
+        # ``func.signature_text`` (which is not part of the parser
+        # output today).
+        fn_def = _reconstruct_fn_definition(func)
 
         # 2. Precondition → kani::assume.
         pre_expr = _translate_dsl(spec.precondition or "true")
@@ -199,14 +349,14 @@ class KaniBackend(BMCBackend):
         )
 
         harness_name = f"check_{func.name}"
-        body = (func.body or "").rstrip()
 
-        # Compose the file.  Body is included so the harness is self-contained.
+        # Compose the file.  fn_def is included so the harness is
+        # self-contained; the body it wraps is verbatim from the source.
         parts: list[str] = [
             "//! Auto-generated Kani harness — do not edit by hand.",
             "#![allow(unused_imports, dead_code, non_snake_case)]",
             "",
-            body,
+            fn_def,
             "",
             "#[cfg(kani)]",
             "#[kani::proof]",

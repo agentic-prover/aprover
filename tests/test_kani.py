@@ -19,6 +19,10 @@ from bmc_agent.kani import run_kani, _parse_kani_output, _extract_counterexample
 from bmc_agent.backends.kani_backend import (
     KaniBackend,
     _initialiser_for,
+    _is_slice_type,
+    _param_init_block,
+    _reconstruct_fn_definition,
+    _slice_element_type,
     _translate_dsl,
 )
 
@@ -213,6 +217,152 @@ def test_dsl_translation_compound_expressions():
 def test_dsl_translation_empty_or_true_returns_true():
     assert _translate_dsl("") == "true"
     assert _translate_dsl("true") == "true"
+
+
+def test_dsl_translation_implication():
+    """(A ==> B) must translate to (!(A) || (B)) — Rust has no ==> operator."""
+    assert _translate_dsl("(x > 0 ==> y > 0)") == "(!(x > 0) || (y > 0))"
+
+
+def test_dsl_translation_implication_chained_in_conjunction():
+    """The implication rewrite must apply to every paren-wrapped occurrence."""
+    spec = (
+        "result >= 1 && result <= 4 && "
+        "(b < 0xC0 ==> result == 1) && "
+        "(b >= 0xC0 && b < 0xE0 ==> result == 2)"
+    )
+    out = _translate_dsl(spec)
+    assert "==>" not in out
+    assert "(!(b < 0xC0) || (result == 1))" in out
+    assert "(!(b >= 0xC0 && b < 0xE0) || (result == 2))" in out
+
+
+def test_dsl_translation_in_bounds_slice_idx():
+    """in_bounds(slice, idx) becomes (idx) < slice.len() — Rust slice DSL."""
+    assert _translate_dsl("in_bounds(input, pos)") == "(pos) < input.len()"
+    # Mixed with other clauses.
+    out = _translate_dsl("in_bounds(buf, i) && i > 0")
+    assert "(i) < buf.len()" in out
+    assert "i > 0" in out
+
+
+def test_slice_type_detection():
+    assert _is_slice_type("&[u8]") is True
+    assert _is_slice_type("&mut [i32]") is True
+    assert _is_slice_type("& [u8]") is True
+    assert _is_slice_type("*mut u8") is False
+    assert _is_slice_type("&i32") is False
+    assert _is_slice_type("Vec<u8>") is False
+    assert _is_slice_type("u8") is False
+
+
+def test_slice_element_type_extraction():
+    assert _slice_element_type("&[u8]") == "u8"
+    assert _slice_element_type("&mut [i32]") == "i32"
+    assert _slice_element_type("& [u64]") == "u64"
+
+
+def test_param_init_block_primitive_single_line():
+    lines = _param_init_block("i32", "x")
+    assert lines == ["    let x: i32 = kani::any::<i32>();"]
+
+
+def test_param_init_block_raw_pointer_single_line():
+    lines = _param_init_block("*mut u8", "p")
+    assert lines == ["    let p: *mut u8 = kani::any::<usize>() as *mut u8;"]
+
+
+def test_param_init_block_slice_multiline():
+    """Shared slice → backing array + nondeterministic length + borrow."""
+    lines = _param_init_block("&[u8]", "input", slice_bound=4)
+    src = "\n".join(lines)
+    assert "let mut _backing_input: [u8; 4] = kani::any();" in src
+    assert "let _len_input: usize = kani::any();" in src
+    assert "kani::assume(_len_input <= 4);" in src
+    assert "let input: &[u8] = &_backing_input[.._len_input];" in src
+
+
+def test_param_init_block_mutable_slice():
+    lines = _param_init_block("&mut [i32]", "buf", slice_bound=2)
+    src = "\n".join(lines)
+    assert "let buf: &mut [i32] = &mut _backing_buf[.._len_buf];" in src
+
+
+def test_param_init_block_bound_is_configurable():
+    lines = _param_init_block("&[u8]", "s", slice_bound=16)
+    src = "\n".join(lines)
+    assert "[u8; 16]" in src
+    assert "_len_s <= 16" in src
+
+
+def test_reconstruct_fn_definition_from_signature():
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Sig:
+        name: str
+        return_type: str
+        parameters: list
+        modifiers: list = field(default_factory=list)
+        type_parameters: str = ""
+        where_clause: str = ""
+
+    @dataclass
+    class _Func:
+        name: str
+        signature: _Sig
+        body: str
+
+    func = _Func(
+        name="utf8_len",
+        signature=_Sig(
+            name="utf8_len",
+            return_type="usize",
+            parameters=[("u8", "b")],
+        ),
+        body="{ if b < 0xC0 { 1 } else { 4 } }",
+    )
+    src = _reconstruct_fn_definition(func)
+    assert src.startswith("fn utf8_len(b: u8) -> usize")
+    assert src.endswith("}")
+    assert "if b < 0xC0" in src
+
+
+def test_reconstruct_fn_definition_passes_through_full_def_body():
+    """Legacy callers may pass a body that already includes the fn header;
+    don't double-wrap."""
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Sig:
+        name: str = "add"
+        return_type: str = "i32"
+        parameters: list = field(default_factory=list)
+        modifiers: list = field(default_factory=list)
+        type_parameters: str = ""
+        where_clause: str = ""
+
+    @dataclass
+    class _Func:
+        name: str = "add"
+        signature: _Sig = field(default_factory=_Sig)
+        body: str = "fn add(a: i32, b: i32) -> i32 { a + b }"
+
+    src = _reconstruct_fn_definition(_Func())
+    assert src == "fn add(a: i32, b: i32) -> i32 { a + b }"
+
+
+def test_dsl_translation_result_with_implication():
+    """End-to-end on the postcondition shape Phase 1 actually emits for
+    utf8_sequence_length: \\result substitution + implication rewrite + AND chain."""
+    spec = (
+        "\\result >= 1 && \\result <= 4 && "
+        "(b < 0xC0 ==> \\result == 1)"
+    )
+    out = _translate_dsl(spec)
+    assert "\\result" not in out
+    assert "result >= 1" in out
+    assert "(!(b < 0xC0) || (result == 1))" in out
 
 
 # ---------------------------------------------------------------------------
