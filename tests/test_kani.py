@@ -18,6 +18,7 @@ from bmc_agent.cbmc import CBMCResult, Counterexample
 from bmc_agent.kani import run_kani, _parse_kani_output, _extract_counterexamples
 from bmc_agent.backends.kani_backend import (
     KaniBackend,
+    _call_site_expr,
     _initialiser_for,
     _is_slice_type,
     _param_init_block,
@@ -224,6 +225,39 @@ def test_dsl_translation_implication():
     assert _translate_dsl("(x > 0 ==> y > 0)") == "(!(x > 0) || (y > 0))"
 
 
+def test_dsl_translation_implication_with_nested_parens_on_rhs():
+    """Nested parens on either side must be paren-balanced by the rewriter.
+    This is the shape Phase 1 emits when it adds a type suffix or grouping
+    expression inside the RHS of an implication."""
+    out = _translate_dsl("(result.1 == 3 ==> (result.0 >= 0x80u8))")
+    # Outer rewrite produced; inner parens preserved verbatim.
+    assert out == "(!(result.1 == 3) || ((result.0 >= 0x80u8)))"
+    assert "==>" not in out
+
+
+def test_dsl_translation_implication_with_nested_parens_on_lhs():
+    out = _translate_dsl("((a > 0 && b > 0) ==> c == 1)")
+    assert out == "(!((a > 0 && b > 0)) || (c == 1))"
+    assert "==>" not in out
+
+
+def test_dsl_translation_multiple_implications_in_conjunction():
+    """Real decode_pua_byte postcondition shape — five chained implications
+    each wrapped in its own paren group."""
+    spec = (
+        "(result.1 == 1 || result.1 == 3) "
+        "&& (result.1 == 1 ==> result.0 == input[pos]) "
+        "&& (result.1 == 3 ==> (result.0 >= 0x80u8)) "
+        "&& (result.1 == 3 ==> pos + 2 < input.len())"
+    )
+    out = _translate_dsl(spec)
+    assert "==>" not in out
+    # All four rewrites should appear.
+    assert "(!(result.1 == 1) || (result.0 == input[pos]))" in out
+    assert "(!(result.1 == 3) || ((result.0 >= 0x80u8)))" in out
+    assert "(!(result.1 == 3) || (pos + 2 < input.len()))" in out
+
+
 def test_dsl_translation_implication_chained_in_conjunction():
     """The implication rewrite must apply to every paren-wrapped occurrence."""
     spec = (
@@ -293,6 +327,57 @@ def test_param_init_block_bound_is_configurable():
     src = "\n".join(lines)
     assert "[u8; 16]" in src
     assert "_len_s <= 16" in src
+
+
+def test_param_init_block_vec_multiline():
+    """Vec<T> → bounded backing array + .to_vec() copy."""
+    lines = _param_init_block("Vec<u8>", "bytes", slice_bound=4)
+    src = "\n".join(lines)
+    assert "let _backing_bytes: [u8; 4] = kani::any();" in src
+    assert "let _len_bytes: usize = kani::any();" in src
+    assert "kani::assume(_len_bytes <= 4);" in src
+    assert "let bytes: Vec<u8> = _backing_bytes[.._len_bytes].to_vec();" in src
+
+
+def test_param_init_block_vec_inner_type_preserved():
+    """Inner type is whatever the parameter declared — verbatim."""
+    lines = _param_init_block("Vec<i32>", "xs", slice_bound=2)
+    src = "\n".join(lines)
+    assert "[i32; 2]" in src
+    assert "Vec<i32>" in src
+
+
+def test_call_site_expr_primitives_no_clone():
+    assert _call_site_expr("i32", "x") == "x"
+    assert _call_site_expr("u64", "y") == "y"
+    assert _call_site_expr("bool", "b") == "b"
+
+
+def test_call_site_expr_pointers_and_refs_no_clone():
+    assert _call_site_expr("*mut u8", "p") == "p"
+    assert _call_site_expr("&[u8]", "s") == "s"
+    assert _call_site_expr("&mut [i32]", "buf") == "buf"
+    assert _call_site_expr("&str", "s") == "s"
+
+
+def test_call_site_expr_owned_vec_string_clones():
+    """Vec<T>/String are moved when passed by value; clone so the
+    postcondition can still reference the original."""
+    assert _call_site_expr("Vec<u8>", "bytes") == "bytes.clone()"
+    assert _call_site_expr("String", "s") == "s.clone()"
+
+
+def test_call_site_expr_option_clones():
+    assert _call_site_expr("Option<u32>", "x") == "x.clone()"
+
+
+def test_param_init_block_option_branches_on_kani_any():
+    """Option<T> picks Some/None via a nondeterministic bool."""
+    lines = _param_init_block("Option<u32>", "x")
+    src = "\n".join(lines)
+    assert "let _some_x: bool = kani::any();" in src
+    assert "if _some_x { Some(kani::any::<u32>()) } else { None }" in src
+    assert "Option<u32>" in src
 
 
 def test_reconstruct_fn_definition_from_signature():

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from bmc_agent.artifacts import ArtifactStore
+from bmc_agent.backends import backend_for
 from bmc_agent.bmc_engine import BMCEngine, BMCVerdict
 from bmc_agent.bug_reporter import BugReport, BugReporter
 from bmc_agent.cex_validator import CExOutcome, CExValidator, ValidationResult
@@ -26,7 +27,7 @@ from bmc_agent.harness_generator import HarnessGenerator
 from bmc_agent.llm import LLMClient
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
-from bmc_agent.source_parser import parse_source_file
+from bmc_agent.source_parser import detect_language, parse_source_file
 from bmc_agent.realism_checker import RealismChecker
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.spec_generator import SpecGenerator
@@ -166,6 +167,12 @@ class AMCPipeline:
                 logger.warning("Preprocessing failed (%s) — parsing file as-is", exc)
 
         parsed = parse_source_file(source_file, source_text=preprocessed_source)
+
+        # Swap in the language-appropriate verification backend in place
+        # so that mocks attached to self.bmc_engine survive.  The default
+        # (set in __init__) is CBMC; for .rs inputs we want Kani.
+        self.bmc_engine.backend = backend_for(detect_language(source_file), self.config)
+
         self.store.init_driver(driver_name)
 
         specs = self.spec_gen.generate_specs(

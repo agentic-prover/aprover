@@ -54,28 +54,47 @@ The specification DSL:
 # Slices carry length intrinsically, so valid_range becomes a bound on
 # the index expression against slice.len().
 RUST_DSL_GRAMMAR = """\
-The specification DSL:
-- precondition: "requires <formula>"
-- postcondition: "ensures <formula>"
-- formulas can use: &&, ||, !, forall, exists
-- predicates: valid(ptr), valid_range(ptr, lo, hi), in_bounds(slice, idx), null(ptr)
-- Rust-specific notes:
-  * Safe references (&T, &mut T) are non-null and properly aligned by
-    Rust's type system — do NOT write valid(r) or !null(r) for them.
-    Those predicates apply only to raw pointers (*const T, *mut T).
-  * Slices (&[T], &mut [T]) carry their length intrinsically; express
-    bounds against slice.len() rather than valid_range.
-  * Option<T> parameters should be characterised by is_some() /
-    is_none() in natural language rather than null().
-  * Integer arithmetic in Rust panics on overflow in debug and wraps in
-    release; explicit wrapping_*/checked_*/saturating_* methods control
-    behaviour. When the source uses wrapping_*, the postcondition should
-    reflect the wrapped result.
-  * \\result refers to the return value; parameters use their source
-    names from the signature.
-- arithmetic: +, -, *, /, %, <, <=, >, >=, ==, !=
-- you may write natural-language conditions when the formal DSL is too
-  coarse (trait-bound preconditions, lifetime invariants, etc.).
+The specification DSL — STRICTLY FORMAL FOR RUST:
+
+A precondition and a postcondition must each be a SINGLE Rust-boolean
+expression. The expression is dropped verbatim (after a small set of DSL
+rewrites — see below) into `kani::assume(...)` and `kani::assert(...)`,
+so anything that doesn't compile as a Rust bool expression will break
+the harness. Do NOT include:
+  * prose, English commentary, or em-dashes (— or –)
+  * "Let X = Y" / "If A then B" / "In all cases ..." style preludes
+  * inline comments (// or /* */)
+  * sentence punctuation ('.' at end, ',' separating clauses)
+Combine clauses with `&&` and `||`. Quote tuple/struct fields directly
+(`result.0`, `result.1`, `s.len()`).
+
+Allowed predicates (rewritten to Rust by the harness generator):
+  * in_bounds(slice, idx)   → (idx) < slice.len()
+  * (A ==> B)               → (!(A) || (B))   — must be paren-wrapped
+  * valid(ptr) / null(ptr)  → ptr.is_null() / !ptr.is_null()   (raw ptrs only)
+  * \\result                 → result (Rust binding)
+
+Rust-specific reminders (informational, not new syntax):
+  * Safe references (&T, &mut T) are non-null by language guarantee —
+    do not write valid(r) for them; restrict valid()/null() to raw
+    pointers (*const T, *mut T) inside unsafe regions.
+  * Slices (&[T], &mut [T]) carry length intrinsically — index with
+    slice[i] and bound with i < slice.len().
+  * Option<T> uses .is_some() / .is_none() / .unwrap() in expressions.
+  * Rust integers panic on overflow in debug; for wrapping_*/checked_*
+    sources the postcondition should reflect wrapped/None semantics.
+
+EXAMPLES of correct vs. incorrect for a (u8, usize) return:
+  GOOD pre:  in_bounds(input, pos)
+  GOOD post: (result.1 == 1 || result.1 == 3) && (result.1 == 3 || result.0 == input[pos])
+  BAD  pre:  in_bounds(input, pos) — i.e., pos < input.len(), so that ...
+  BAD  post: Let (byte, advance) = result. advance == 1 || advance == 3. If advance == 3 then ...
+
+If the spec is genuinely too rich for a single boolean expression
+(trait-bound preconditions, lifetime invariants, complex state machines),
+emit the WEAKEST formal expression you can defend and add the rest as a
+JSON field "reasoning" — never inline the prose into precondition or
+postcondition.
 """
 
 # System prompts shared by all spec-generation calls in a session.

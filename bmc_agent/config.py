@@ -28,6 +28,11 @@ class Config:
     kani_path: str = "kani"
     kani_unwind: int = 4
     kani_timeout: int = 120  # seconds
+    # Bound on nondeterministic slice/array length in Kani harnesses. BMC
+    # is bounded by construction; this controls how far the verifier
+    # explores slice contents and indices. Default 4 keeps runtime small
+    # for typical CCC-style helpers.
+    kani_slice_bound: int = 4
     # Artifact settings
     artifact_dir: str = "artifacts"
 
@@ -89,6 +94,7 @@ class Config:
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),
+            kani_slice_bound=int(os.environ.get("BMC_AGENT_KANI_SLICE_BOUND", "4")),
             artifact_dir=os.environ.get("BMC_AGENT_ARTIFACT_DIR", "artifacts"),
             max_spec_retries=int(os.environ.get("BMC_AGENT_MAX_SPEC_RETRIES", "3")),
             max_refinement_iters=int(os.environ.get("BMC_AGENT_MAX_REFINEMENT_ITERS", "5")),

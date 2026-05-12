@@ -99,40 +99,47 @@ class BMCEngine:
         harness_path = self._save_harness(driver_name, fn_name, harness_src)
         logger.debug("Harness saved to: %s", harness_path)
 
-        # ---- Step 3: run CBMC ----
-        # Baseline flags come from the threat model; per-function flag selection
-        # adds on top (OR-merged so either source can enable a check).
-        threat_model = getattr(self.config, "threat_model", "security")
-        pointer_check    = threat_model in ("security", "safety")
-        bounds_check     = threat_model in ("security", "safety")
-        div_by_zero_check = threat_model == "safety"
+        # ---- Step 3: run the backend verifier ----
+        # The CBMC path threads threat-model + per-function flag selection
+        # through to run_cbmc.  Non-C backends (Kani for Rust) don't take
+        # those CBMC-specific flags, so for them we use the polymorphic
+        # backend.check() method and ignore flag selection.
+        if self.backend.language == "c":
+            threat_model = getattr(self.config, "threat_model", "security")
+            pointer_check    = threat_model in ("security", "safety")
+            bounds_check     = threat_model in ("security", "safety")
+            div_by_zero_check = threat_model == "safety"
 
-        unsigned_overflow_check = bool(getattr(flag_selection, "unsigned_overflow_check", False))
-        signed_overflow_check   = bool(getattr(flag_selection, "signed_overflow_check", False))
-        conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
-        pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
+            unsigned_overflow_check = bool(getattr(flag_selection, "unsigned_overflow_check", False))
+            signed_overflow_check   = bool(getattr(flag_selection, "signed_overflow_check", False))
+            conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
+            pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
 
-        if flag_selection and flag_selection.any_enabled():
-            logger.debug(
-                "Flag selection for '%s': %s (%s)",
-                fn_name,
-                ", ".join(flag_selection.enabled_flags()),
-                getattr(flag_selection, "reasoning", ""),
+            if flag_selection and flag_selection.any_enabled():
+                logger.debug(
+                    "Flag selection for '%s': %s (%s)",
+                    fn_name,
+                    ", ".join(flag_selection.enabled_flags()),
+                    getattr(flag_selection, "reasoning", ""),
+                )
+            cbmc_result = run_cbmc(
+                harness_path=harness_path,
+                unwind=self.config.cbmc_unwind,
+                timeout=self.config.cbmc_timeout,
+                cbmc_path=self.config.cbmc_path,
+                include_dirs=getattr(self.config, "include_dirs", None),
+                unsigned_overflow_check=unsigned_overflow_check,
+                signed_overflow_check=signed_overflow_check,
+                conversion_check=conversion_check,
+                pointer_overflow_check=pointer_overflow_check,
+                pointer_check=pointer_check,
+                bounds_check=bounds_check,
+                div_by_zero_check=div_by_zero_check,
             )
-        cbmc_result = run_cbmc(
-            harness_path=harness_path,
-            unwind=self.config.cbmc_unwind,
-            timeout=self.config.cbmc_timeout,
-            cbmc_path=self.config.cbmc_path,
-            include_dirs=getattr(self.config, "include_dirs", None),
-            unsigned_overflow_check=unsigned_overflow_check,
-            signed_overflow_check=signed_overflow_check,
-            conversion_check=conversion_check,
-            pointer_overflow_check=pointer_overflow_check,
-            pointer_check=pointer_check,
-            bounds_check=bounds_check,
-            div_by_zero_check=div_by_zero_check,
-        )
+        else:
+            # Rust / Kani path: the backend wraps its own verifier
+            # invocation and returns a CBMCResult-shaped object.
+            cbmc_result = self.backend.check(harness_path)
 
         # ---- Step 4: build verdict ----
         if cbmc_result.error:
@@ -261,12 +268,17 @@ class BMCEngine:
     ) -> Path:
         """
         Save the harness source to
-        ``{artifact_dir}/{driver_name}/{func_name}/harness.c``.
+        ``{artifact_dir}/{driver_name}/{func_name}/harness.{c,rs}``.
+
+        The extension follows ``self.backend.language`` so Rust harnesses
+        get a ``.rs`` extension (required for Kani to parse them) and
+        artifact inspection tools can rely on filename to language.
         """
+        ext = "rs" if self.backend.language == "rust" else "c"
         fn_dir = (
             Path(self.config.artifact_dir) / driver_name / func_name
         )
         fn_dir.mkdir(parents=True, exist_ok=True)
-        harness_path = fn_dir / "harness.c"
+        harness_path = fn_dir / f"harness.{ext}"
         harness_path.write_text(harness_src, encoding="utf-8")
         return harness_path

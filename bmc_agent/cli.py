@@ -77,14 +77,21 @@ def _cmd_check(args: argparse.Namespace) -> int:
     from bmc_agent.artifacts import ArtifactStore
     from bmc_agent.bmc_engine import BMCEngine
     from bmc_agent.config import Config
-    from bmc_agent.source_parser import parse_source_file
+    from bmc_agent.backends import backend_for
+    from bmc_agent.source_parser import detect_language, parse_source_file
 
     config = Config.from_env()
     if hasattr(args, "output") and args.output:
         config.artifact_dir = args.output
 
     store = ArtifactStore(config.artifact_dir)
-    engine = BMCEngine(config, store)
+    # Pick CBMC for .c/.h and Kani for .rs; both implement BMCEngine's
+    # backend interface.
+    engine = BMCEngine(
+        config,
+        store,
+        backend=backend_for(detect_language(args.source), config),
+    )
 
     # Load the source file (required for harness generation)
     source_file = args.source

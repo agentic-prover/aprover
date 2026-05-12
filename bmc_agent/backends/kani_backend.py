@@ -86,6 +86,29 @@ def _slice_element_type(rust_type: str) -> str:
     return t[1:-1].strip()
 
 
+def _is_vec_type(rust_type: str) -> bool:
+    """True iff *rust_type* is ``Vec<T>`` (no leading reference)."""
+    t = rust_type.strip()
+    return t.startswith("Vec<") and t.endswith(">")
+
+
+def _vec_element_type(rust_type: str) -> str:
+    """Return ``T`` from ``Vec<T>``.  Caller verifies via :func:`_is_vec_type`."""
+    t = rust_type.strip()
+    return t[len("Vec<") : -1].strip()
+
+
+def _is_option_type(rust_type: str) -> bool:
+    """True iff *rust_type* is ``Option<T>``."""
+    t = rust_type.strip()
+    return t.startswith("Option<") and t.endswith(">")
+
+
+def _option_inner_type(rust_type: str) -> str:
+    t = rust_type.strip()
+    return t[len("Option<") : -1].strip()
+
+
 def _initialiser_for(rust_type: str) -> str:
     """Return a Rust expression that produces a nondeterministic *rust_type*.
 
@@ -162,6 +185,31 @@ def _param_init_block(
             f"    kani::assume({length} <= {slice_bound});",
             f"    let {name}: {t} = {borrow}{backing}[..{length}];",
         ]
+    if _is_vec_type(t):
+        # Build a Vec<T> by materialising a bounded backing array and
+        # using slice.to_vec() to copy into a heap allocation.  Kani
+        # can model this — vec construction from a fixed-size slice is
+        # well-supported — and the resulting Vec's length is the
+        # nondeterministic _len_ we previously assumed bounded.
+        elem = _vec_element_type(t)
+        backing = f"_backing_{name}"
+        length = f"_len_{name}"
+        return [
+            f"    let {backing}: [{elem}; {slice_bound}] = kani::any();",
+            f"    let {length}: usize = kani::any();",
+            f"    kani::assume({length} <= {slice_bound});",
+            f"    let {name}: Vec<{elem}> = {backing}[..{length}].to_vec();",
+        ]
+    if _is_option_type(t):
+        # Option<T> alternates between Some(any T) and None on a
+        # nondeterministic discriminant; Kani then explores both arms.
+        inner = _option_inner_type(t)
+        flag = f"_some_{name}"
+        return [
+            f"    let {flag}: bool = kani::any();",
+            f"    let {name}: Option<{inner}> = if {flag} "
+            f"{{ Some({_initialiser_for(inner)}) }} else {{ None }};",
+        ]
     return [f"    let {name}: {t} = {_initialiser_for(t)};"]
 
 
@@ -218,18 +266,142 @@ def _translate_dsl(predicate: str, result_var: str = "result") -> str:
     expr = re.sub(r"\bowns\(\s*([^)]+?)\s*\)", lambda m: f"!{m.group(1)}.is_null()", expr)
     # valid(ptr) → !ptr.is_null() (must come last; the others are more specific)
     expr = re.sub(r"\bvalid\(\s*([^)]+?)\s*\)", lambda m: f"!{m.group(1)}.is_null()", expr)
-    # Logical implication: (A ==> B) → (!(A) || (B)).
-    # Matches paren-wrapped implications without nested parens on either
-    # side — the form Phase 1 emits when a postcondition uses ==>.
-    # Iterate until no more matches so chained implications inside
-    # outer conjunctions all get rewritten.
-    _impl_re = re.compile(r"\(\s*([^()]+?)\s*==>\s*([^()]+?)\s*\)")
-    while _impl_re.search(expr):
-        new_expr = _impl_re.sub(lambda m: f"(!({m.group(1)}) || ({m.group(2)}))", expr)
-        if new_expr == expr:
-            break  # defensive: shouldn't loop forever
-        expr = new_expr
-    return expr
+    # Logical implication: (A ==> B) → (!(A) || (B)).  The expression
+    # tree may contain nested parens inside A or B (e.g.
+    # ``(result.1 == 3 ==> (result.0 >= 0x80))``), which a flat regex
+    # cannot match, so we paren-balance manually: for each ==>, walk
+    # left/right to find the enclosing parentheses and rewrite the
+    # substring as a whole.
+    return _rewrite_implications(expr)
+
+
+def _rewrite_implications(expr: str) -> str:
+    """Iteratively rewrite ``(A ==> B)`` to ``(!(A) || (B))``.
+
+    Handles arbitrary nesting on either side of ``==>`` by scanning for
+    the matching outer parens with explicit depth tracking, rather than
+    relying on a regex (which cannot recognise paren-balanced grammars).
+
+    Each occurrence of ``==>`` must lie inside a paren-balanced
+    enclosing group; otherwise the original expression is returned
+    unchanged so the user sees the LLM-emitted form in the Kani error
+    rather than silent corruption.
+    """
+    while True:
+        idx = expr.find("==>")
+        if idx == -1:
+            return expr
+
+        # Walk left from idx to find the opening "(" at the same depth.
+        start = -1
+        depth = 0
+        for j in range(idx - 1, -1, -1):
+            ch = expr[j]
+            if ch == ")":
+                depth += 1
+            elif ch == "(":
+                if depth == 0:
+                    start = j
+                    break
+                depth -= 1
+        if start == -1:
+            return expr  # unbalanced — bail out, surface the error to Kani.
+
+        # Walk right from idx to find the matching ")" at the same depth.
+        end = -1
+        depth = 0
+        for j in range(idx + len("==>"), len(expr)):
+            ch = expr[j]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                if depth == 0:
+                    end = j
+                    break
+                depth -= 1
+        if end == -1:
+            return expr  # unbalanced — bail out.
+
+        lhs = expr[start + 1 : idx].strip()
+        rhs = expr[idx + len("==>") : end].strip()
+        replacement = f"(!({lhs}) || ({rhs}))"
+        expr = expr[:start] + replacement + expr[end + 1 :]
+
+
+def _load_full_source(func, parsed_file) -> "str | None":
+    """Return the full source text of *func*'s defining file, or None.
+
+    Used by the harness generator to include consts, use statements and
+    sibling functions verbatim — anything the function under test might
+    transitively depend on.  Prefers an in-memory copy on parsed_file
+    (set when the spec generator passed source_text through) and falls
+    back to reading from func.source_file on disk.  Failures are
+    swallowed: the caller then falls back to reconstructing just the
+    fn_def plus parsed siblings, which is correct for self-contained
+    primitive functions but loses module-level consts.
+    """
+    if parsed_file is not None:
+        src = getattr(parsed_file, "preprocessed_source", None)
+        if src:
+            return src
+    source_file = getattr(func, "source_file", None)
+    if source_file:
+        try:
+            return Path(source_file).read_text(encoding="utf-8", errors="replace")
+        except (OSError, FileNotFoundError):
+            return None
+    return None
+
+
+def _call_site_expr(rust_type: str, name: str) -> str:
+    """Return the expression to pass *name* at the call site so the
+    postcondition can still reference *name* afterwards.
+
+    Owned, non-Copy types (Vec<T>, String, Box<T>) are moved when passed
+    by value — referencing ``name`` in the postcondition would then fail
+    to compile with E0382 (borrow of moved value).  For those we pass
+    ``name.clone()`` so the original binding remains live.  Copy
+    primitives, raw pointers, and references don't need this.
+    """
+    t = rust_type.strip()
+    if t in _PRIMITIVE_RUST_TYPES:
+        return name
+    if t.startswith("*mut ") or t.startswith("*const "):
+        return name  # raw pointers are Copy
+    if t.startswith("&"):
+        return name  # references survive past the call
+    if _is_vec_type(t) or t == "String" or t.startswith("Box<"):
+        return f"{name}.clone()"
+    if _is_option_type(t):
+        # Option<T> is Clone iff T is.  Conservative default: clone so
+        # the postcondition can re-bind ``.is_some()`` / ``.unwrap()``.
+        return f"{name}.clone()"
+    return name
+
+
+def _sibling_fn_definitions(func, parsed_file) -> list[str]:
+    """Return reconstructed definitions for every other fn in *parsed_file*.
+
+    The Kani harness must compile standalone, so any sibling function
+    that *func* calls — and any function those siblings call in turn —
+    needs to be in scope.  We don't try to be selective: emit all the
+    file's parsed functions, deduplicating *func* itself.  Rust allows
+    fn items in any order so layout doesn't matter.
+
+    When *parsed_file* is None the result is empty; callers that don't
+    pass it get the old single-fn behaviour.
+    """
+    if parsed_file is None:
+        return []
+    siblings: list[str] = []
+    seen = {func.name}
+    for sibling_info in parsed_file.all_function_infos():
+        if sibling_info is None or sibling_info.name in seen:
+            continue
+        siblings.append(_reconstruct_fn_definition(sibling_info))
+        siblings.append("")
+        seen.add(sibling_info.name)
+    return siblings
 
 
 def _reconstruct_fn_definition(func) -> str:
@@ -307,13 +479,18 @@ class KaniBackend(BMCBackend):
         params: list[tuple[str, str]] = list(func.signature.parameters)
         return_type = (func.signature.return_type or "").strip()
 
-        # 1. Nondeterministic parameter initialisation.
+        # 1. Nondeterministic parameter initialisation.  For each parameter
+        #    we also record the call-site expression — typically just the
+        #    name, but ``.clone()`` for owned non-Copy types so the
+        #    postcondition can still reference the original value.
         slice_bound = getattr(self._config, "kani_slice_bound", _DEFAULT_SLICE_BOUND)
         init_lines: list[str] = []
-        arg_names: list[str] = []
+        arg_names: list[str] = []  # names visible to postcondition
+        call_args_list: list[str] = []  # expressions passed at call site
         for ty, name in params:
             init_lines.extend(_param_init_block(ty, name, slice_bound=slice_bound))
             arg_names.append(name)
+            call_args_list.append(_call_site_expr(ty, name))
 
         # Reconstruct the function definition from sig + body.  The
         # tree-sitter parser stores ``func.body`` as just the {...} block
@@ -331,8 +508,10 @@ class KaniBackend(BMCBackend):
         )
 
         # 3. Function call.  Track the return binding so the postcondition
-        #    can refer to it as `result`.
-        call_args = ", ".join(arg_names)
+        #    can refer to it as `result`.  ``call_args`` uses cloned forms
+        #    for non-Copy owned parameters; the postcondition still uses
+        #    ``arg_names`` to access the originals.
+        call_args = ", ".join(call_args_list)
         if return_type in ("", "()"):
             call_line = f"    {func.name}({call_args});"
             result_binding = ""
@@ -350,19 +529,32 @@ class KaniBackend(BMCBackend):
 
         harness_name = f"check_{func.name}"
 
-        # Compose the file.  fn_def is included so the harness is
-        # self-contained; the body it wraps is verbatim from the source.
+        # Compose the file.  Prefer the full source verbatim so consts,
+        # use statements, sibling fns, and helper items are all in scope.
+        # Fall back to fn_def + reconstructed sibling fns when the
+        # source text isn't available (e.g. test fixtures that don't
+        # pass parsed_file).
+        file_source = _load_full_source(func, parsed_file)
         parts: list[str] = [
             "//! Auto-generated Kani harness — do not edit by hand.",
             "#![allow(unused_imports, dead_code, non_snake_case)]",
             "",
-            fn_def,
+        ]
+        if file_source is not None:
+            parts.append(file_source.rstrip())
+        else:
+            parts.append(fn_def)
+            sibling_defs = _sibling_fn_definitions(func, parsed_file)
+            if sibling_defs:
+                parts.append("")
+                parts.extend(sibling_defs)
+        parts.extend([
             "",
             "#[cfg(kani)]",
             "#[kani::proof]",
             f"fn {harness_name}() {{",
             *init_lines,
-        ]
+        ])
         if precondition_line:
             parts.append(precondition_line)
         parts.append(call_line)
