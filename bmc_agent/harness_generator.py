@@ -355,10 +355,94 @@ def _infer_nonnull_params(
     return {p for p in ptr_params if found_site[p] and not null_seen[p]}
 
 
+def _detect_paired_pointers(
+    precondition: str,
+    pointer_params: set[str],
+) -> list[list[str]]:
+    """Return groups of pointer parameter names that should share a backing buffer.
+
+    Parser-style C APIs commonly take pairs (or triples) of pointers
+    that must point into the *same* allocation — typically a ``start`` /
+    ``end`` window over an input buffer.  The precondition encodes this
+    relationship via comparisons (``a <= b``) and pointer arithmetic
+    (``valid_range(a, 0, b - a)``).  When the harness allocates each
+    pointer parameter as an independent stack object, those constraints
+    become inter-object pointer comparisons — undefined behavior in C,
+    which CBMC's ``--pointer-check`` correctly flags as ``main.pointer``.
+    The result is a spurious "memory_safety" finding that is purely a
+    harness artifact, not a bug in the function under test.
+
+    This helper extracts the pairing structure from the precondition so
+    the harness generator can allocate one backing buffer per paired
+    group and place the pointers at nondeterministic offsets within it.
+
+    Recognised patterns (a, b are pointer parameter names):
+      * ``a <= b``, ``a < b``, ``b >= a``, ``b > a``  — direct ordering
+      * ``valid_range(a, lo, b - a)``                  — buffer slice
+      * ``valid_range(a, lo, b - a + k)``              — inclusive slice
+
+    Returns
+    -------
+    A list of groups, where each group is a list of 2+ parameter names.
+    Pointer parameters that don't appear in any pairing are not
+    returned (the caller falls back to per-pointer independent
+    allocation for them).
+    """
+    if not precondition or len(pointer_params) < 2:
+        return []
+
+    parent = {p: p for p in pointer_params}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Pointer-pointer ordering: a <= b, a < b, a >= b, a > b.
+    cmp_re = re.compile(r"\b(\w+)\s*(?:<=|<|>=|>)\s*(\w+)\b")
+    for m in cmp_re.finditer(precondition):
+        a, b = m.group(1), m.group(2)
+        if a in pointer_params and b in pointer_params:
+            union(a, b)
+
+    # valid_range(a, _, b - a [+ k]): pairs (a, b).
+    range_re = re.compile(
+        r"\bvalid_range\(\s*(\w+)\s*,\s*[^,]+,\s*(\w+)\s*-\s*\1\b"
+    )
+    for m in range_re.finditer(precondition):
+        a, b = m.group(1), m.group(2)
+        if a in pointer_params and b in pointer_params:
+            union(a, b)
+
+    # valid_range(a, _, _ + b - a): same pairing flipped form.
+    range_re2 = re.compile(
+        r"\bvalid_range\(\s*(\w+)\s*,\s*[^,]+,\s*[^,)]*\+\s*(\w+)\s*-\s*\1\b"
+    )
+    for m in range_re2.finditer(precondition):
+        a, b = m.group(1), m.group(2)
+        if a in pointer_params and b in pointer_params:
+            union(a, b)
+
+    groups: dict[str, list[str]] = {}
+    for p in pointer_params:
+        groups.setdefault(find(p), []).append(p)
+    return sorted(
+        (sorted(g) for g in groups.values() if len(g) >= 2),
+        key=lambda g: g[0],
+    )
+
+
 def _generate_nd_decls(
     func: FunctionInfo,
     cbmc_unwind: int = 4,
     nonnull_params: Optional[set] = None,
+    precondition: Optional[str] = None,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -371,12 +455,69 @@ def _generate_nd_decls(
     Parameters that are never passed NULL at any call site in the codebase
     (as determined by _infer_nonnull_params) receive an explicit
     __CPROVER_assume(param != NULL) guard so CBMC explores only realistic paths.
+
+    When *precondition* is supplied, _detect_paired_pointers extracts
+    pointer parameter groups that should share a backing buffer (parser
+    start/end pairs, etc.).  Each group is emitted as a single backing
+    array with per-pointer offsets, avoiding the inter-object pointer
+    comparison UB that would otherwise produce spurious memory-safety
+    findings on every paired-pointer parser API.
     """
     if nonnull_params is None:
         nonnull_params = set()
-    lines: list[str] = []
+
+    # Collect pointer parameter names for paired-buffer analysis.
+    pointer_pnames: set[str] = set()
     for ptype, pname in func.signature.parameters:
         if not pname:
+            continue
+        if ptype.strip().endswith("*") or "*" in pname:
+            pointer_pnames.add(pname)
+    paired_groups = (
+        _detect_paired_pointers(precondition, pointer_pnames)
+        if precondition
+        else []
+    )
+    paired_emitted: set[str] = set()
+
+    lines: list[str] = []
+
+    # Emit shared backing buffer per paired group first.
+    ptype_by_name = {pn: pt.strip() for pt, pn in func.signature.parameters if pn}
+    for group_idx, group in enumerate(paired_groups):
+        # Use the first parameter's type as the canonical pointer type
+        # for the group; in practice paired pointers in C parser APIs
+        # always have the same element type (const char*, uint8_t*, etc.).
+        ref_type = ptype_by_name[group[0]]
+        base_type = ref_type.rstrip("*").strip()
+        clean_base = re.sub(r"\bconst\b", "", base_type).strip() or base_type
+        buf_size = cbmc_unwind + 1
+        buf_name = f"_shared_buf_{group_idx}"
+        lines.append(
+            f"    /* Shared backing buffer for paired pointer params: "
+            f"{', '.join(group)} (avoids inter-object pointer-compare UB) */"
+        )
+        lines.append(f"    {clean_base} {buf_name}[{buf_size}];")
+        for pname in group:
+            off = f"_{pname}_off"
+            ptype = ptype_by_name[pname]
+            lines.append(f"    unsigned int {off};")
+            lines.append(
+                f"    __CPROVER_assume({off} <= (unsigned int){cbmc_unwind});"
+            )
+            lines.append(f"    {ptype} {pname} = {buf_name} + {off};")
+            paired_emitted.add(pname)
+            if pname in nonnull_params:
+                lines.append(
+                    f"    /* {pname} is non-null by construction (shared buffer) */"
+                )
+
+    # Fall through to the original per-parameter logic for everything that
+    # wasn't already emitted as part of a paired group.
+    for ptype, pname in func.signature.parameters:
+        if not pname:
+            continue
+        if pname in paired_emitted:
             continue
         ptype_stripped = ptype.strip()
 
@@ -1189,7 +1330,12 @@ class HarnessGenerator:
 
         # --- 5. Generate nondeterministic input declarations ---
         nonnull = _infer_nonnull_params(func, all_funcs, parsed_file)
-        nd_decls = _generate_nd_decls(func, self.config.cbmc_unwind, nonnull_params=nonnull)
+        nd_decls = _generate_nd_decls(
+            func,
+            self.config.cbmc_unwind,
+            nonnull_params=nonnull,
+            precondition=spec.precondition,
+        )
 
         # --- 6. Precondition assumptions ---
         param_names = [pname for _, pname in sig.parameters if pname]
@@ -1370,7 +1516,12 @@ class HarnessGenerator:
 
         # Nondeterministic input declarations — reuse the existing helper.
         nonnull = _infer_nonnull_params(func, all_funcs, parsed_file)
-        nd_decls = _generate_nd_decls(func, self.config.cbmc_unwind, nonnull_params=nonnull)
+        nd_decls = _generate_nd_decls(
+            func,
+            self.config.cbmc_unwind,
+            nonnull_params=nonnull,
+            precondition=spec.precondition,
+        )
 
         # Precondition assume + postcondition assert via existing DSL.
         param_names = [pname for _, pname in sig.parameters if pname]
