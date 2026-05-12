@@ -155,10 +155,25 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         return wrap(f"{idx} >= 0 && {idx} < (int)(sizeof({arr})/sizeof({arr}[0]))")
 
     # Only wrap in assert/assume if the entire atom looks like valid C.
-    # A simple heuristic: no spaces outside of parens (i.e. a single expression,
-    # not a natural-language phrase).
-    if _C_COMPARISON_RE.search(atom) and _looks_like_c_expr(atom):
-        return wrap(atom)
+    # A simple heuristic: no spaces outside of parens (i.e. a single
+    # expression, not a natural-language phrase) AND the matched
+    # comparison must cover the full atom (modulo whitespace/parens) —
+    # otherwise a prose-mixed clause like "otherwise result >= 0"
+    # would be wrapped verbatim into ``assert(otherwise result >= 0);``
+    # which fails to compile.
+    m = _C_COMPARISON_RE.search(atom)
+    if m and _looks_like_c_expr(atom):
+        # Strip the atom of redundant surrounding parens for the
+        # "matched span == whole atom" check.
+        stripped_atom = _strip_outer_parens(atom).strip()
+        matched_span = m.group(0).strip()
+        if matched_span == stripped_atom:
+            return wrap(atom)
+        # The comparison is embedded in prose (e.g. "otherwise X >= 0",
+        # "result is the value if Y"). The qualifying word changes the
+        # condition's meaning, so wrapping just the matched comparison
+        # would over-constrain. Comment it out instead.
+        return f"/* condition: {atom} */"
 
     # Fall through: emit as a comment (natural language / unknown)
     return f"/* condition: {atom} */"
