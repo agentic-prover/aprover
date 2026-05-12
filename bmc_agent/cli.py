@@ -458,11 +458,27 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_realism_thinking = True
     if getattr(args, "enable_flag_selection", False):
         config.enable_flag_selection = True
+    if getattr(args, "real_libc", False):
+        config.cbmc_real_libc = True
+        config.preprocess = False
+    if getattr(args, "strict_dsl", False):
+        config.strict_dsl = True
+    if getattr(args, "raw_bytes", False):
+        config.raw_bytes = True
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
+    if include_dirs:
+        config.include_dirs = include_dirs
+        # In real-libc mode we deliberately DON'T also enable Python-side
+        # preprocessing; CBMC handles all -I expansion itself. In every
+        # other mode, include_dirs implies Python preprocessing is wanted.
+        if not config.cbmc_real_libc:
+            config.preprocess = True
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if args.domain_knowledge else ""
 
@@ -707,6 +723,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
+    )
+    vd.add_argument(
+        "--real-libc",
+        action="store_true",
+        default=False,
+        help="Real-libc mode: harness #includes the source .c file and lets CBMC do all preprocessing via -I. Required for real-world glibc-using OSS.",
+    )
+    vd.add_argument(
+        "--strict-dsl",
+        action="store_true",
+        default=False,
+        help="Strict-formal Phase 1 prompts: pre/post must be a single C boolean expression. Required for bounty/CVE work.",
+    )
+    vd.add_argument(
+        "--raw-bytes",
+        action="store_true",
+        default=False,
+        help="Treat single char* / const char* params as raw byte buffers (no NUL termination). Required for wire-format parsers.",
+    )
+    vd.add_argument(
+        "-D", "--define",
+        action="append",
+        default=[],
+        dest="defines",
+        help="Pass a preprocessor define to CBMC (repeatable). Use NAME or NAME=VALUE. Required for build-config-driven C codebases.",
     )
     vd.add_argument(
         "--threat-model",
