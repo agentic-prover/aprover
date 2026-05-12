@@ -687,29 +687,41 @@ def _generate_nd_decls(
                     lines.append(
                         f"    /* {pname} is non-null by construction (addr of cursor) */"
                     )
-            elif clean_base == "char" and star_count == 1:
-                # Single-indirection char*.  Two strategies:
+            elif clean_base in ("char", "unsigned char", "uint8_t", "int8_t") and star_count == 1:
+                # Single-indirection byte-shaped pointer.  Three strategies:
                 #
-                #  - Default (raw_bytes=False): bounded null-terminated string,
-                #    so strlen-style traversal loops terminate within the CBMC
-                #    unwinding bound.  Right for textual APIs (printf, strcpy).
+                #  - Default for ``char`` (raw_bytes=False): bounded
+                #    null-terminated string, so strlen-style traversal
+                #    loops terminate within the CBMC unwinding bound.
+                #    Right for textual APIs (printf, strcpy).
                 #
-                #  - raw_bytes=True: raw byte buffer with no NUL termination
-                #    constraint.  Right for wire-format parsers (protobuf upb
-                #    varints, length-prefixed blobs) that read N raw bytes from
-                #    ptr[0..N) regardless of NULs.  The NUL-string mode
-                #    over-constrains the input (no embedded NULs) and
-                #    under-sizes the buffer when the callee reads past strlen.
+                #  - Default for ``unsigned char``/``uint8_t``/``int8_t``:
+                #    raw byte buffer (no NUL).  These types are the C
+                #    convention for binary data; NUL termination would
+                #    artificially over-constrain wire-format inputs and
+                #    miss bugs that only fire when the buffer contains
+                #    embedded zeros.
+                #
+                #  - raw_bytes=True: raw byte buffer for ALL byte-shaped
+                #    pointers, including ``char *``.  Right for
+                #    wire-format parsers (protobuf upb varints,
+                #    length-prefixed blobs) that read N raw bytes from
+                #    ptr[0..N) regardless of NULs.
                 #
                 # char** (e.g. argv) uses the default treatment in either mode.
                 buf_name = f"_{pname}_buf"
-                if raw_bytes:
+                is_textual = (clean_base == "char")
+                emit_raw = raw_bytes or not is_textual
+                if emit_raw:
                     lines.append(
                         f"    /* raw byte buffer for '{pname}' "
                         f"({cbmc_unwind + 1} bytes, no NUL termination) */"
                     )
-                    lines.append(f"    char {buf_name}[{cbmc_unwind + 1}];")
-                    lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
+                    # Use unsigned char as the backing type since we're
+                    # treating these as raw bytes; const promotes on assign.
+                    backing_t = "unsigned char" if clean_base != "int8_t" else "signed char"
+                    lines.append(f"    {backing_t} {buf_name}[{cbmc_unwind + 1}];")
+                    lines.append(f"    {ptype_stripped} {pname} = ({ptype_stripped}){buf_name};")
                 else:
                     len_name = f"_{pname}_len"
                     lines.append(f"    /* bounded null-terminated string for '{pname}' (max {cbmc_unwind} chars) */")
