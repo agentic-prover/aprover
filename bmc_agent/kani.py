@@ -23,11 +23,17 @@ from bmc_agent.cbmc import CBMCResult, Counterexample
 
 
 # Kani's standalone CLI invocation form:
-#   kani <file.rs> [--harness <name>] [--default-unwind N] [--output-format old]
+#   kani <file.rs> [--harness <name>] [--default-unwind N]
 # When the path is a Cargo project we'd use `cargo kani` instead, but the
 # pipeline drops single .rs files into a working dir per function so single-file
 # mode is the natural fit.
-_DEFAULT_OUTPUT_FORMAT = "old"  # CBMC-style text; richer than the default "regular"
+#
+# We use Kani's default ("regular") output format, not "old": the old format
+# emits per-assertion reachability_check rows that report FAILURE when the
+# assertion *was reached* (i.e. healthy proofs), and its per-harness summary
+# prints "VERIFICATION FAILED" for any harness containing such a row. That
+# inverts the verdict and is essentially unparseable. Regular format suppresses
+# reachability checks and prints "VERIFICATION:- SUCCESSFUL/FAILED" cleanly.
 
 
 def run_kani(
@@ -73,8 +79,6 @@ def run_kani(
         str(harness_path),
         "--default-unwind",
         str(unwind),
-        "--output-format",
-        _DEFAULT_OUTPUT_FORMAT,
     ]
     if harness_name:
         cmd += ["--harness", harness_name]
@@ -103,13 +107,26 @@ def run_kani(
 # ---------------------------------------------------------------------------
 
 
-# Kani's "old" output format uses CBMC-style verdict lines, but its failure
-# block headers and counterexample assignments differ.  We recognise both.
+# Kani's regular (default) output format. The per-harness verdict is a single
+# "VERIFICATION:- SUCCESSFUL" or "VERIFICATION:- FAILED" line; each property is
+# a multi-line "Check N: <id> / Status: ... / Description: ..." block.
 _VERDICT_SUCCESS_RE = re.compile(r"^VERIFICATION:-\s*SUCCESSFUL", re.MULTILINE)
 _VERDICT_FAILED_RE = re.compile(r"^VERIFICATION:-\s*FAILED", re.MULTILINE)
 
-# Per-property failure rows: "[<id>] <description>: FAILURE"
-_PROPERTY_FAILURE_RE = re.compile(
+# Per-check failure block in regular format. The `Check N:` header line is
+# followed by indented "- Status:" and "- Description:" lines. Status FAILURE
+# is the genuine failure signal — reachability_check rows are not present in
+# regular output.
+_REGULAR_CHECK_FAILURE_RE = re.compile(
+    r"^Check\s+\d+:\s*(?P<prop>\S+)\s*\n"
+    r"\s*-\s*Status:\s*FAILURE\s*\n"
+    r"\s*-\s*Description:\s*\"?(?P<desc>[^\"\n]*)\"?",
+    re.MULTILINE,
+)
+
+# Legacy/old-format per-property failure row, kept for backward compatibility
+# with synthetic test fixtures and other Kani output variants.
+_LEGACY_PROPERTY_FAILURE_RE = re.compile(
     r"^\s*\[([^\]]+)\]\s*(.*?):\s*(?:FAILURE|FAILED)\s*$",
     re.MULTILINE,
 )
@@ -139,14 +156,21 @@ def _parse_kani_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
 
 
 def _extract_counterexamples(raw: str) -> list[Counterexample]:
-    """Pull failing properties out of Kani's text output."""
+    """Pull failing properties out of Kani's text output.
+
+    Tries the regular-format multi-line ``Check N:`` blocks first, then falls
+    back to the legacy ``[id] desc: FAILURE`` row form, then to a single
+    ``Failed Checks:`` summary line. Reachability_check rows (only present in
+    --output-format old) report FAILURE when the assertion *was reached* and
+    so must not be treated as genuine failures; the regex below targets only
+    the regular-format "Status: FAILURE" lines.
+    """
     cexes: list[Counterexample] = []
     seen: set[str] = set()
 
-    for match in _PROPERTY_FAILURE_RE.finditer(raw):
-        prop_id = match.group(1).strip()
-        desc = match.group(2).strip()
-        # Same property may appear multiple times in Kani output; dedup here.
+    for match in _REGULAR_CHECK_FAILURE_RE.finditer(raw):
+        prop_id = match.group("prop").strip()
+        desc = match.group("desc").strip()
         if prop_id in seen:
             continue
         seen.add(prop_id)
@@ -159,7 +183,25 @@ def _extract_counterexamples(raw: str) -> list[Counterexample]:
             )
         )
 
-    # Fallback: a single "Failed Checks: ..." line with no per-property rows.
+    if not cexes:
+        for match in _LEGACY_PROPERTY_FAILURE_RE.finditer(raw):
+            prop_id = match.group(1).strip()
+            # Skip reachability_check pseudo-failures in old-format output.
+            if ".reachability_check." in prop_id:
+                continue
+            desc = match.group(2).strip()
+            if prop_id in seen:
+                continue
+            seen.add(prop_id)
+            trace = [f"property {prop_id}: {desc}"] if desc else []
+            cexes.append(
+                Counterexample(
+                    failing_property=prop_id,
+                    variable_assignments={},
+                    trace=trace,
+                )
+            )
+
     if not cexes:
         m = _FAILED_CHECKS_RE.search(raw)
         if m:

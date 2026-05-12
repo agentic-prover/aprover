@@ -159,7 +159,10 @@ def test_run_kani_passes_arguments_through():
     assert "harness.rs" in cmd
     assert "--harness" in cmd and "check_add" in cmd
     assert "--default-unwind" in cmd and "7" in cmd
-    assert "--output-format" in cmd and "old" in cmd
+    # We deliberately do NOT pass --output-format: Kani's default (regular)
+    # is the only format whose verdict and per-check rows can be parsed
+    # unambiguously. See bmc_agent/kani.py for why "old" is unsafe.
+    assert "--output-format" not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -297,3 +300,58 @@ def test_kani_results_are_cbmcresult_instances():
     result = _parse_kani_output("VERIFICATION:- SUCCESSFUL\n", stderr="", returncode=0)
     assert isinstance(result, CBMCResult)
     assert all(isinstance(c, Counterexample) for c in result.counterexamples)
+
+
+def test_parser_regular_format_check_failure():
+    """Real Kani 'regular' output: multi-line Check N: blocks with Status rows."""
+    raw = (
+        "RESULTS:\n"
+        "Check 1: check_add.assertion.1\n"
+        "\t - Status: FAILURE\n"
+        "\t - Description: \"postcondition violated\"\n"
+        "\t - Location: harness.rs:10:5 in function check_add\n"
+        "\n"
+        "SUMMARY:\n"
+        " ** 1 of 1 failed\n"
+        "\n"
+        "VERIFICATION:- FAILED\n"
+    )
+    result = _parse_kani_output(raw, stderr="", returncode=10)
+    assert result.verified is False
+    assert len(result.counterexamples) == 1
+    cex = result.counterexamples[0]
+    assert cex.failing_property == "check_add.assertion.1"
+    assert "postcondition violated" in cex.trace[0]
+
+
+def test_parser_regular_format_check_success():
+    """Real Kani 'regular' output for a passing harness — verdict alone is enough."""
+    raw = (
+        "RESULTS:\n"
+        "Check 1: check_x.assertion.1\n"
+        "\t - Status: SUCCESS\n"
+        "\t - Description: \"assertion holds\"\n"
+        "\n"
+        "SUMMARY:\n"
+        " ** 0 of 1 failed\n"
+        "\n"
+        "VERIFICATION:- SUCCESSFUL\n"
+    )
+    result = _parse_kani_output(raw, stderr="", returncode=0)
+    assert result.verified is True
+    assert result.counterexamples == []
+
+
+def test_parser_old_format_reachability_not_treated_as_failure():
+    """Reachability_check FAILURE rows in old-format output indicate the
+    assertion was *reached* (a healthy proof), not a property violation.
+    The parser must ignore them when the underlying assertion is SUCCESS."""
+    raw = (
+        "[check_x.assertion.1] line 5 assertion failed: x == 1: SUCCESS\n"
+        "[check_x.reachability_check.1] line 5 KANI_CHECK_ID: FAILURE\n"
+        "VERIFICATION:- SUCCESSFUL\n"
+    )
+    result = _parse_kani_output(raw, stderr="", returncode=0)
+    assert result.verified is True
+    # No genuine failure row — only the reachability_check pseudo-row.
+    assert result.counterexamples == []
