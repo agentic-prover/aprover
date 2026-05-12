@@ -138,8 +138,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
     failed_count = 0
     error_count = 0
     for fn_name, verdict in sorted(verdicts.items()):
-        if verdict.error and "not found" in verdict.error.lower():
-            status = "SKIPPED (cbmc not installed)"
+        err_lower = (verdict.error or "").lower()
+        if verdict.error and "not found" in err_lower:
+            status = "SKIPPED (verifier not installed)"
+            error_count += 1
+        elif verdict.error and ("unwind" in err_lower or "timed out" in err_lower):
+            # Inconclusive: BMC bound exhausted or timeout — not a found
+            # CEx, not a verified property either.
+            status = f"INCONCLUSIVE ({verdict.error})"
             error_count += 1
         elif verdict.error:
             status = f"ERROR: {verdict.error}"

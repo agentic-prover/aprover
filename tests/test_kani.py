@@ -380,6 +380,32 @@ def test_param_init_block_option_branches_on_kani_any():
     assert "Option<u32>" in src
 
 
+def test_param_init_block_str_ref_ascii_bounded():
+    """&str → bounded u8 backing array with ASCII bytes, then from_utf8."""
+    lines = _param_init_block("&str", "text", slice_bound=4)
+    src = "\n".join(lines)
+    assert "let _backing_text: [u8; 4] = kani::any();" in src
+    assert "let _len_text: usize = kani::any();" in src
+    assert "kani::assume(_len_text <= 4);" in src
+    assert "kani::assume(_backing_text[_i] < 0x80);" in src
+    assert "let text: &str = std::str::from_utf8(&_backing_text[.._len_text]).unwrap();" in src
+
+
+def test_param_init_block_str_ref_with_lifetime():
+    """&'a str — lifetime token should be tolerated."""
+    lines = _param_init_block("&'a str", "s", slice_bound=2)
+    src = "\n".join(lines)
+    assert "[u8; 2]" in src
+    # The original type (with lifetime) is preserved in the binding.
+    assert "let s: &'a str = std::str::from_utf8" in src
+
+
+def test_call_site_expr_str_ref_no_clone():
+    """&str is a reference; no clone needed at call site."""
+    assert _call_site_expr("&str", "text") == "text"
+    assert _call_site_expr("&'a str", "s") == "s"
+
+
 def test_reconstruct_fn_definition_from_signature():
     from dataclasses import dataclass, field
 
@@ -575,6 +601,64 @@ def test_parser_regular_format_check_success():
     result = _parse_kani_output(raw, stderr="", returncode=0)
     assert result.verified is True
     assert result.counterexamples == []
+
+
+def test_parser_unwind_failure_reported_as_inconclusive():
+    """`.unwind.N` rows mean the loop ran past the unwind bound. They're
+    inconclusive, not real CEx — surface as error, not counterexample."""
+    raw = (
+        "RESULTS:\n"
+        "Check 1: check_x.unwind.0\n"
+        "\t - Status: FAILURE\n"
+        "\t - Description: \"unwinding assertion loop 0\"\n"
+        "\n"
+        "VERIFICATION:- FAILED\n"
+    )
+    result = _parse_kani_output(raw, stderr="", returncode=10)
+    assert result.verified is False
+    assert result.counterexamples == []
+    assert result.error is not None
+    assert "unwind" in result.error.lower()
+
+
+def test_parser_failed_checks_summary_unwinding_is_inconclusive():
+    """Kani's real-world output includes a 'Failed Checks: unwinding ...'
+    fallback line alongside the per-check FAILURE row. The fallback
+    must not be treated as a real CEx — both paths point at the same
+    inconclusive unwind failure."""
+    raw = (
+        "Check 2450: check_x.unwind.0\n"
+        "\t - Status: FAILURE\n"
+        "\t - Description: \"unwinding assertion loop 0\"\n"
+        "\nSUMMARY:\n"
+        "Failed Checks: unwinding assertion loop 0\n"
+        "VERIFICATION:- FAILED\n"
+    )
+    result = _parse_kani_output(raw, stderr="", returncode=10)
+    assert result.counterexamples == []
+    assert "unwind" in (result.error or "").lower()
+
+
+def test_parser_real_cex_takes_precedence_over_unwind():
+    """If both a real assertion failure AND an unwind warning fire,
+    the real CEx wins — the spec was actually violated."""
+    raw = (
+        "RESULTS:\n"
+        "Check 1: check_x.assertion.1\n"
+        "\t - Status: FAILURE\n"
+        "\t - Description: \"postcondition violated\"\n"
+        "Check 2: check_x.unwind.0\n"
+        "\t - Status: FAILURE\n"
+        "\t - Description: \"unwinding assertion loop 0\"\n"
+        "\n"
+        "VERIFICATION:- FAILED\n"
+    )
+    result = _parse_kani_output(raw, stderr="", returncode=10)
+    assert result.verified is False
+    assert len(result.counterexamples) == 1
+    assert result.counterexamples[0].failing_property == "check_x.assertion.1"
+    # Real CEx wins; we do not also surface the unwind error.
+    assert result.error is None
 
 
 def test_parser_old_format_reachability_not_treated_as_failure():

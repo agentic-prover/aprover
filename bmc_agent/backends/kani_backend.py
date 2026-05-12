@@ -109,6 +109,31 @@ def _option_inner_type(rust_type: str) -> str:
     return t[len("Option<") : -1].strip()
 
 
+def _is_str_ref_type(rust_type: str) -> bool:
+    """True iff *rust_type* is ``&str`` or ``&mut str``.
+
+    Rust string slices are references into UTF-8 byte storage; we model
+    them as a bounded ``[u8; N]`` array constrained to ASCII so
+    ``std::str::from_utf8`` succeeds without expensive UTF-8 validation
+    inside the symbolic engine.
+    """
+    t = rust_type.strip()
+    if t == "&str" or t == "&mut str":
+        return True
+    # Tolerate the lifetime-annotated form: &'a str / &'a mut str.
+    if t.startswith("&"):
+        body = t[1:].strip()
+        if body.startswith("'"):
+            # Skip the lifetime token: &'a str -> "a str"
+            try:
+                _, rest = body.split(None, 1)
+            except ValueError:
+                return False
+            rest = rest.strip()
+            return rest == "str" or rest == "mut str"
+    return False
+
+
 def _initialiser_for(rust_type: str) -> str:
     """Return a Rust expression that produces a nondeterministic *rust_type*.
 
@@ -209,6 +234,25 @@ def _param_init_block(
             f"    let {flag}: bool = kani::any();",
             f"    let {name}: Option<{inner}> = if {flag} "
             f"{{ Some({_initialiser_for(inner)}) }} else {{ None }};",
+        ]
+    if _is_str_ref_type(t):
+        # &str is a borrow into UTF-8 storage. We build a bounded u8
+        # backing array, constrain every byte to ASCII (< 0x80) so
+        # str::from_utf8 succeeds without Kani exploring multi-byte
+        # UTF-8 validity, then borrow as a &str of nondeterministic
+        # length. Index access (s.len(), s.starts_with(...)) works
+        # naturally on the resulting slice.
+        backing = f"_backing_{name}"
+        length = f"_len_{name}"
+        return [
+            f"    let {backing}: [u8; {slice_bound}] = kani::any();",
+            f"    let {length}: usize = kani::any();",
+            f"    kani::assume({length} <= {slice_bound});",
+            f"    for _i in 0..{slice_bound} {{",
+            f"        kani::assume({backing}[_i] < 0x80);",
+            f"    }}",
+            f"    let {name}: {t} = "
+            f"std::str::from_utf8(&{backing}[..{length}]).unwrap();",
         ]
     return [f"    let {name}: {t} = {_initialiser_for(t)};"]
 
@@ -369,7 +413,7 @@ def _call_site_expr(rust_type: str, name: str) -> str:
     if t.startswith("*mut ") or t.startswith("*const "):
         return name  # raw pointers are Copy
     if t.startswith("&"):
-        return name  # references survive past the call
+        return name  # references (incl. &str / &[T]) survive past the call
     if _is_vec_type(t) or t == "String" or t.startswith("Box<"):
         return f"{name}.clone()"
     if _is_option_type(t):

@@ -134,13 +134,63 @@ _LEGACY_PROPERTY_FAILURE_RE = re.compile(
 # Kani sometimes summarises failures as "Failed Checks: <description>".
 _FAILED_CHECKS_RE = re.compile(r"^Failed Checks:\s*(.+)$", re.MULTILINE)
 
+# Loop unwinding assertion: reported when a loop runs past Kani's
+# unwind bound.  The result is inconclusive, not a real CEx — bumping
+# the bound or proving the loop bounded by other means is needed to
+# conclude verification.  Pattern matches both formats.
+_REGULAR_UNWIND_RE = re.compile(
+    r"^Check\s+\d+:\s*(?P<prop>\S+\.unwind\.\d+)\s*\n"
+    r"\s*-\s*Status:\s*FAILURE\s*\n"
+    r"\s*-\s*Description:\s*\"?(?P<desc>[^\"\n]*)\"?",
+    re.MULTILINE,
+)
+_LEGACY_UNWIND_RE = re.compile(
+    r"^\s*\[([^\]]*\.unwind\.\d+)\]\s*(.*?):\s*(?:FAILURE|FAILED)\s*$",
+    re.MULTILINE,
+)
+
+
+def _extract_unwind_failures(raw: str) -> list[str]:
+    """Return short descriptions of every unwind-assertion failure in
+    *raw*.  An empty list means no loop hit its unwind bound."""
+    descriptions: list[str] = []
+    seen: set[str] = set()
+    for match in _REGULAR_UNWIND_RE.finditer(raw):
+        prop = match.group("prop").strip()
+        desc = (match.group("desc") or "").strip() or prop
+        if prop in seen:
+            continue
+        seen.add(prop)
+        descriptions.append(desc)
+    for match in _LEGACY_UNWIND_RE.finditer(raw):
+        prop = match.group(1).strip()
+        desc = (match.group(2) or "").strip() or prop
+        if prop in seen:
+            continue
+        seen.add(prop)
+        descriptions.append(desc)
+    return descriptions
+
 
 def _parse_kani_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
     """Parse Kani text output into a CBMCResult.
 
-    Kani's exit codes match CBMC's convention: 0 = verified, non-zero = failed
-    or error.  When the run produced no verdict marker at all we treat it as
-    an error.
+    Kani's exit codes match CBMC's convention: 0 = verified, non-zero =
+    failed or error.  When the run produced no verdict marker at all we
+    treat it as an error.
+
+    Three failure modes need to be distinguished:
+
+      * Real property violation — a ``.assertion.N`` row marked FAILURE.
+        Reported as ``verified=False`` with the counterexample attached.
+      * Reachability check failure — a ``.reachability_check.N`` row;
+        these report FAILURE when the assertion was *reached* (a healthy
+        signal) so they are silently ignored.
+      * Unwinding-assertion failure — a ``.unwind.N`` row; Kani's loop
+        ran past the unwind bound and the run is inconclusive (we
+        cannot conclude the property holds OR fails).  Surface this as
+        ``verified=False`` with an ``error`` describing the unwind bound
+        rather than as a fake counterexample.
     """
     has_success = bool(_VERDICT_SUCCESS_RE.search(raw))
     has_failure = bool(_VERDICT_FAILED_RE.search(raw))
@@ -150,26 +200,47 @@ def _parse_kani_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
         err = (stderr or "").strip() or f"kani exited with code {returncode}"
         return CBMCResult(verified=False, raw_output=raw, error=err)
 
-    verified = has_success and not has_failure
     counterexamples = _extract_counterexamples(raw)
-    return CBMCResult(verified=verified, counterexamples=counterexamples, raw_output=raw)
+    unwind_failures = _extract_unwind_failures(raw)
+
+    if counterexamples:
+        # A real property failure dominates: report the CEx and ignore
+        # any concurrent unwind warnings.
+        return CBMCResult(verified=False, counterexamples=counterexamples, raw_output=raw)
+
+    if unwind_failures:
+        # Inconclusive: loop unwind bound exhausted, no real CEx found.
+        # Synthesise an error so the verdict surfaces clearly.
+        first = unwind_failures[0]
+        return CBMCResult(
+            verified=False,
+            counterexamples=[],
+            raw_output=raw,
+            error=f"loop unwind bound exhausted: {first}",
+        )
+
+    # No CEx, no unwind issue → verified iff Kani said SUCCESSFUL.
+    return CBMCResult(verified=has_success, counterexamples=[], raw_output=raw)
 
 
 def _extract_counterexamples(raw: str) -> list[Counterexample]:
     """Pull failing properties out of Kani's text output.
 
-    Tries the regular-format multi-line ``Check N:`` blocks first, then falls
-    back to the legacy ``[id] desc: FAILURE`` row form, then to a single
-    ``Failed Checks:`` summary line. Reachability_check rows (only present in
-    --output-format old) report FAILURE when the assertion *was reached* and
-    so must not be treated as genuine failures; the regex below targets only
-    the regular-format "Status: FAILURE" lines.
+    Tries the regular-format multi-line ``Check N:`` blocks first, then
+    falls back to the legacy ``[id] desc: FAILURE`` row form, then to a
+    single ``Failed Checks:`` summary line. ``.reachability_check.N``
+    rows (a Kani internal: FAILURE means the assertion was *reached*) and
+    ``.unwind.N`` rows (loop ran past the unwind bound; inconclusive,
+    not a real CEx) are filtered out — both would otherwise be reported
+    as bogus property violations.
     """
     cexes: list[Counterexample] = []
     seen: set[str] = set()
 
     for match in _REGULAR_CHECK_FAILURE_RE.finditer(raw):
         prop_id = match.group("prop").strip()
+        if ".unwind." in prop_id or ".reachability_check." in prop_id:
+            continue
         desc = match.group("desc").strip()
         if prop_id in seen:
             continue
@@ -186,8 +257,9 @@ def _extract_counterexamples(raw: str) -> list[Counterexample]:
     if not cexes:
         for match in _LEGACY_PROPERTY_FAILURE_RE.finditer(raw):
             prop_id = match.group(1).strip()
-            # Skip reachability_check pseudo-failures in old-format output.
-            if ".reachability_check." in prop_id:
+            # Skip reachability_check and unwind pseudo-failures —
+            # neither indicates a real property violation.
+            if ".reachability_check." in prop_id or ".unwind." in prop_id:
                 continue
             desc = match.group(2).strip()
             if prop_id in seen:
@@ -205,12 +277,18 @@ def _extract_counterexamples(raw: str) -> list[Counterexample]:
     if not cexes:
         m = _FAILED_CHECKS_RE.search(raw)
         if m:
-            cexes.append(
-                Counterexample(
-                    failing_property="failed_checks",
-                    variable_assignments={},
-                    trace=[m.group(1).strip()],
+            desc = m.group(1).strip()
+            # The "Failed Checks:" summary line may reflect a real CEx
+            # or an inconclusive unwind failure; if it's the latter,
+            # leave the cex list empty so _parse_kani_output surfaces
+            # the unwind failure via its dedicated path.
+            if "unwinding" not in desc.lower():
+                cexes.append(
+                    Counterexample(
+                        failing_property="failed_checks",
+                        variable_assignments={},
+                        trace=[desc],
+                    )
                 )
-            )
 
     return cexes
