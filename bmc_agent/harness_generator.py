@@ -581,6 +581,39 @@ def _generate_nd_decls(
                     f"    /* {pname} is non-null by construction (shared buffer) */"
                 )
 
+    # Detect double-indirection (in-out cursor) parameters: T** + optional
+    # size sibling param. Pattern is endemic to C parser APIs
+    # (OpenSSL ASN.1 `(const unsigned char **pp, long max)`,
+    # libxml2 `(xmlChar **str, int *len)`, nghttp2 wire decoders, ...).
+    # The naive "T** -> local of T + addr-of" treatment allocates a single
+    # byte and lets the function dereference into garbage; we instead
+    # allocate a backing buffer of cbmc_unwind+1 elements, point the
+    # cursor at it, and pass &cursor.  A sibling integer param whose
+    # name suggests it's the available byte count is clamped to the
+    # backing-buffer size so CBMC explores only consistent states.
+    _SIZE_PARAM_NAMES = {
+        "max", "omax", "len", "length", "size", "n", "nbytes",
+        "bufsize", "buflen", "mlen", "inlen", "limit", "remaining",
+    }
+    cursor_size_assumes: dict[str, str] = {}  # size_param_name -> assume stmt
+    cursor_pnames: set[str] = set()
+    for ptype_outer, pname_outer in func.signature.parameters:
+        if not pname_outer or pname_outer in paired_emitted:
+            continue
+        if ptype_outer.strip().count("*") == 2 and "void" not in ptype_outer.lower():
+            cursor_pnames.add(pname_outer)
+    if cursor_pnames:
+        for ptype_inner, pname_inner in func.signature.parameters:
+            if (pname_inner
+                    and "*" not in ptype_inner
+                    and pname_inner.lower() in _SIZE_PARAM_NAMES
+                    and pname_inner not in cursor_size_assumes):
+                cursor_size_assumes[pname_inner] = (
+                    f"    __CPROVER_assume({pname_inner} >= 0 && "
+                    f"{pname_inner} <= (long){cbmc_unwind});"
+                )
+                break  # one size param per cursor group is enough
+
     # Fall through to the original per-parameter logic for everything that
     # wasn't already emitted as part of a paired group.
     for ptype, pname in func.signature.parameters:
@@ -602,6 +635,30 @@ def _generate_nd_decls(
             if base_type.lower() in ("void", "const void"):
                 lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
                 lines.append(f"    {ptype_stripped} {pname} = NULL;")
+            elif star_count == 2 and pname in cursor_pnames:
+                # T** in-out cursor — allocate backing buffer + cursor + addr-of.
+                #
+                # ptype_stripped is e.g. "const unsigned char **" or
+                # "unsigned char **".  Strip exactly the two trailing stars
+                # to get the element type ("const unsigned char" or
+                # "unsigned char").  Const promotes on assignment so the
+                # backing buffer can drop const.
+                inner_type = ptype_stripped.rstrip("*").rstrip().rstrip("*").rstrip()
+                backing_base = re.sub(r"\bconst\b", "", inner_type).strip() or inner_type
+                buf_size = cbmc_unwind + 1
+                backing_name = f"_{pname}_backing"
+                cursor_name = f"_{pname}_cursor"
+                lines.append(
+                    f"    /* in-out cursor for '{pname}': "
+                    f"backing buffer + advanceable cursor + addr-of-cursor */"
+                )
+                lines.append(f"    {backing_base} {backing_name}[{buf_size}];")
+                lines.append(f"    {inner_type} *{cursor_name} = {backing_name};")
+                lines.append(f"    {ptype_stripped} {pname} = &{cursor_name};")
+                if pname in nonnull_params:
+                    lines.append(
+                        f"    /* {pname} is non-null by construction (addr of cursor) */"
+                    )
             elif clean_base == "char" and star_count == 1:
                 # Single-indirection char*.  Two strategies:
                 #
@@ -646,6 +703,8 @@ def _generate_nd_decls(
         else:
             # Value parameter
             lines.append(f"    {ptype_stripped} {pname};")
+            if pname in cursor_size_assumes:
+                lines.append(cursor_size_assumes[pname])
     return lines
 
 

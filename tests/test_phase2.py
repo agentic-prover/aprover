@@ -258,6 +258,80 @@ def test_translate_atom_c_cast_on_rhs():
     assert "__CPROVER_assume(val == (uint64_t)(uint8_t)ptr[0])" in stmt
 
 
+def test_generate_nd_decls_double_pointer_cursor():
+    """`T**` params (in-out cursors) get a backing buffer + cursor + addr-of.
+
+    Regression: parser-style APIs like
+    ``asn1_get_length(const unsigned char **pp, ..., long max)`` previously
+    got a single-byte ``_pp_val`` and ``&_pp_val`` for pp, causing CBMC to
+    flag every read of ``**pp`` as a dereference of garbage memory. The fix
+    allocates ``backing[cbmc_unwind+1]`` and a separate cursor pointer that
+    the function can advance.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="asn1_get_length",
+        return_type="int",
+        parameters=[
+            ("const unsigned char **", "pp"),
+            ("int *", "inf"),
+            ("long *", "rl"),
+            ("long", "max"),
+        ],
+    )
+    func = FunctionInfo(
+        name="asn1_get_length",
+        signature=sig,
+        body="",
+        callees=set(),
+        source_file="x.c",
+    )
+    out = _generate_nd_decls(func, cbmc_unwind=10)
+    src = "\n".join(out)
+    # Backing buffer must be a real array, not a single byte.
+    assert "unsigned char _pp_backing[11];" in src
+    # Cursor points into the backing buffer.
+    assert "const unsigned char *_pp_cursor = _pp_backing;" in src
+    # pp = &cursor (so the function can advance *pp).
+    assert "_pp_cursor;" in src and "pp = &_pp_cursor" in src
+    # Sibling "max" param gets a bound assume.
+    assert "__CPROVER_assume(max >= 0 && max <= (long)10);" in src
+    # No naive single-byte fallback.
+    assert "_pp_val" not in src
+
+
+def test_generate_nd_decls_double_pointer_no_size_sibling():
+    """`T**` without a size sibling still gets a backing buffer.
+
+    For functions like ``ASN1_put_eoc(unsigned char **pp)`` that write a
+    fixed number of bytes through ``*p++``, the backing buffer alone is
+    enough — no size param to clamp.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="ASN1_put_eoc",
+        return_type="int",
+        parameters=[("unsigned char **", "pp")],
+    )
+    func = FunctionInfo(
+        name="ASN1_put_eoc",
+        signature=sig,
+        body="",
+        callees=set(),
+        source_file="x.c",
+    )
+    out = _generate_nd_decls(func, cbmc_unwind=4)
+    src = "\n".join(out)
+    assert "unsigned char _pp_backing[5];" in src
+    assert "_pp_cursor = _pp_backing" in src
+    # No size assume since there's no sibling int param.
+    assert "__CPROVER_assume(" not in src or "max" not in src
+
+
 def test_extract_type_decls_strips_multi_line_return_types():
     """Multi-line function definitions must be excised whole.
 
