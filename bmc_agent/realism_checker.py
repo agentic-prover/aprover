@@ -541,6 +541,53 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
     key_concern = str(data.get("key_concern", "")).strip()
     llm_confidence = str(data.get("confidence", "")).strip()
 
+    # New evidence fields the prompt now requires for REALISTIC verdicts.
+    source_line_guard = str(data.get("source_line_guard", "")).strip()
+    public_api_call_chain = str(data.get("public_api_call_chain", "")).strip()
+
+    # Consistency checks: this session's bounty runs surfaced two patterns
+    # where the LLM's verdict field comes back REALISTIC but the verdict
+    # is not supported by the reasoning. Trust the evidence over the label
+    # and downgrade in two cases.
+    #
+    # Case 1: Reasoning text explicitly identifies the finding as an
+    # artifact / stub behavior / harness simplification. Examples seen:
+    # ASN1_STRING_type_new (reasoning noted `if (ret == NULL) return NULL;`
+    # guard); curl_url_dup (`Curl_ccalloc=NULL is a CBMC stub artifact`);
+    # checktz / datestring (`bsearch return treated as unconstrained`).
+    #
+    # Case 2: REALISTIC verdict but the LLM failed to populate the
+    # REQ-1 source-line guard analysis OR REQ-2 public-API call chain.
+    # These are mandatory evidence per the prompt; an empty / "no guard
+    # found" / "cannot construct" answer means the LLM didn't actually
+    # demonstrate the bug is reachable from a real entry point.
+    if verdict == RealismVerdict.REALISTIC:
+        downgrade_reason = _detect_artifact_phrases(
+            reasoning + " " + key_concern
+            + " " + source_line_guard + " " + public_api_call_chain
+        )
+        if downgrade_reason:
+            logger.warning(
+                "Realism check: downgrading REALISTIC → UNREALISTIC for '%s' "
+                "(matched '%s' — likely CBMC modelling artifact)",
+                func_name, downgrade_reason,
+            )
+            verdict = RealismVerdict.UNREALISTIC
+            tag = f"[auto-downgraded: matched '{downgrade_reason}']"
+            key_concern = (tag + " " + key_concern) if key_concern else tag
+        elif _is_evidence_missing(source_line_guard, public_api_call_chain):
+            logger.warning(
+                "Realism check: downgrading REALISTIC → UNCERTAIN for '%s' "
+                "(missing source-line guard or public-API call chain)",
+                func_name,
+            )
+            verdict = RealismVerdict.UNCERTAIN
+            tag = (
+                "[auto-downgraded: REALISTIC verdict without REQ-1 "
+                "source-line guard analysis or REQ-2 public-API call chain]"
+            )
+            key_concern = (tag + " " + key_concern) if key_concern else tag
+
     logger.info(
         "Realism check for '%s': verdict=%s confidence=%s",
         func_name, verdict.value, llm_confidence,
@@ -554,3 +601,60 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
         key_concern=key_concern,
         llm_confidence=llm_confidence,
     )
+
+
+# Phrases that strongly indicate the reasoning concluded the finding is
+# a harness / CBMC modelling artifact rather than a real bug. When any
+# of these appears in the reasoning text, the verdict is downgraded
+# to UNREALISTIC regardless of what the LLM labelled.
+_ARTIFACT_PHRASES = [
+    "cbmc modelling artifact", "cbmc modeling artifact",
+    "cbmc symbolic artifact", "symbolic artifact",
+    "cbmc stub", "stub returns", "stubbed extern",
+    "harness has a simplified", "harness modelling",
+    "harness simplification", "the harness models",
+    "harness allocates", "harness under-bounds",
+    "unconstrained by cbmc", "unconstrained pointer",
+    "treated as unconstrained",
+    "specific witness is unrealistic",
+    "specific witness requires", "witness value is",
+    "is a cbmc artifact",
+    "the actual function body has guards",
+    "real code has", "real curl", "real openssl", "real nghttp2",
+    "the if check", "the null check", "is guarded by",
+]
+
+
+def _detect_artifact_phrases(text: str) -> str | None:
+    """Return the matched artifact phrase, or None if reasoning looks like
+    a genuine bug claim. Case-insensitive substring search."""
+    if not text:
+        return None
+    lowered = text.lower()
+    for phrase in _ARTIFACT_PHRASES:
+        if phrase in lowered:
+            return phrase
+    return None
+
+
+# Phrases that indicate the LLM didn't actually fulfill the
+# REQ-1 / REQ-2 evidence requirements and is hand-waving.
+_EVIDENCE_MISSING_PHRASES = [
+    "no guard found", "no explicit guard", "no null check",
+    "cannot construct", "cannot produce a", "unable to construct",
+    "no concrete chain", "no public api", "not exposed",
+    "this is hypothetical", "in theory", "theoretically",
+    "any caller could", "an attacker could", "if a caller",
+]
+
+
+def _is_evidence_missing(source_line_guard: str, public_api_call_chain: str) -> bool:
+    """REALISTIC verdicts must include concrete REQ-1 and REQ-2 evidence.
+    Treat empty / hand-wave answers as missing evidence."""
+    def _empty_or_handwave(s: str) -> bool:
+        if not s or len(s.strip()) < 20:
+            return True
+        lowered = s.lower()
+        return any(p in lowered for p in _EVIDENCE_MISSING_PHRASES)
+
+    return _empty_or_handwave(source_line_guard) or _empty_or_handwave(public_api_call_chain)

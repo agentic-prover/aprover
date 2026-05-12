@@ -735,6 +735,64 @@ def test_spec_system_prompt_contains_dsl_grammar():
     assert "{dsl_grammar}" not in prompts.SPEC_SYSTEM_PROMPT
 
 
+def test_relax_postcondition_permits_null_when_body_returns_null():
+    """Soften `result != NULL` when body has explicit `return NULL;`.
+
+    Regression: this session's bounty runs surfaced many CEs where the
+    LLM generated assertions like `result != NULL` while the function
+    body had an explicit `return NULL;` error path. CBMC then flagged
+    every error-path execution as a postcondition violation.
+    """
+    from bmc_agent.spec_generator import _relax_postcondition_for_error_paths
+
+    body = "if (x == NULL) return NULL;\nreturn malloc(sizeof(*p));"
+    post = "result != NULL"
+    softened = _relax_postcondition_for_error_paths(post, body, "f")
+    assert "result == NULL" in softened
+    assert "result != NULL" in softened
+
+
+def test_relax_postcondition_permits_negative_when_body_returns_neg1():
+    """Soften `result > 0` when body has `return -1;`."""
+    from bmc_agent.spec_generator import _relax_postcondition_for_error_paths
+
+    body = "if (bad) return -1;\nreturn n;"
+    post = "result > 0"
+    softened = _relax_postcondition_for_error_paths(post, body, "f")
+    assert "result < 0" in softened
+    assert "result > 0" in softened
+
+
+def test_relax_postcondition_permits_error_enums():
+    """Append UPPER_SNAKE error enums to postcondition disjunction."""
+    from bmc_agent.spec_generator import _relax_postcondition_for_error_paths
+
+    body = "if (bad) return CURLUE_OUT_OF_MEMORY;\nreturn CURLUE_OK;"
+    post = "result == CURLUE_OK"
+    softened = _relax_postcondition_for_error_paths(post, body, "f")
+    assert "CURLUE_OUT_OF_MEMORY" in softened
+
+
+def test_relax_postcondition_no_change_without_error_returns():
+    """Postcondition unchanged when body has no error-sentinel returns."""
+    from bmc_agent.spec_generator import _relax_postcondition_for_error_paths
+
+    body = "return 42;"
+    post = "result == 42"
+    assert _relax_postcondition_for_error_paths(post, body, "f") == post
+
+
+def test_relax_postcondition_idempotent_when_clause_already_present():
+    """If postcondition already permits the error sentinel, no change."""
+    from bmc_agent.spec_generator import _relax_postcondition_for_error_paths
+
+    body = "if (x) return NULL;\nreturn p;"
+    post = "result == NULL || result->ok > 0"
+    softened = _relax_postcondition_for_error_paths(post, body, "f")
+    # Should not double-wrap since result == NULL is already in the clause.
+    assert softened == post
+
+
 def test_spec_prompts_no_dsl_grammar_placeholder():
     """Spec prompts should not have {dsl_grammar} placeholder after refactoring."""
     from bmc_agent import prompts

@@ -68,12 +68,28 @@ def _make_validation_result(func_name: str = "rb_write"):
 
 
 def _make_llm_response(verdict: str, confidence: str = "high", key_concern: str = "") -> str:
-    return json.dumps({
+    # REALISTIC verdicts now require concrete REQ-1 (source-line guard
+    # analysis) and REQ-2 (public-API call chain) evidence; without it,
+    # the parser auto-downgrades to UNCERTAIN. Tests asserting REALISTIC
+    # must supply both so they exercise the verdict path rather than the
+    # downgrade path.
+    payload = {
         "verdict": verdict,
         "reasoning": f"Step-by-step analysis for {verdict}.",
-        "key_concern": key_concern,
+        "key_concern": key_concern or "concrete exploit scenario for test",
         "confidence": confidence,
-    })
+    }
+    if verdict.upper() == "REALISTIC":
+        payload["source_line_guard"] = (
+            "rb_write at line 14 dereferences rb->buf without any preceding "
+            "if(rb==NULL) check; the function trusts its caller, and the "
+            "violation point is the assignment rb->buf[rb->pos] = byte."
+        )
+        payload["public_api_call_chain"] = (
+            "external_input → public_api_entry(buf, len) → "
+            "rb_write(rb, buf, len) where buf == NULL and rb is uninitialised"
+        )
+    return json.dumps(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +172,65 @@ def test_parse_unrealistic_verdict():
 def test_parse_uncertain_verdict():
     from bmc_agent.realism_checker import _parse_result, RealismVerdict
     r = _parse_result(_make_llm_response("UNCERTAIN", "low"), "rb_write")
+    assert r.verdict == RealismVerdict.UNCERTAIN
+
+
+def test_realistic_downgraded_when_reasoning_says_artifact():
+    """REALISTIC verdict with reasoning that admits it's a CBMC artifact
+    is downgraded to UNREALISTIC.
+
+    Regression: every "realistic" finding in this session's bounty runs
+    (OpenSSL ASN1_STRING_type_new, curl curl_url_dup / curl_url_cleanup,
+    parsedate datestring->checktz) had reasoning explicitly identifying
+    the witness as a stub-returns-NULL or CBMC modelling artifact while
+    the verdict field still said REALISTIC.
+    """
+    from bmc_agent.realism_checker import _parse_result, RealismVerdict
+    payload = {
+        "verdict": "REALISTIC",
+        "reasoning": (
+            "The counterexample shows Curl_ccalloc=NULL which is a CBMC "
+            "modelling artifact; real curl initialises this via "
+            "curl_global_init. The function's if(u) guard handles a NULL "
+            "return correctly."
+        ),
+        "key_concern": "stub returns NULL but real allocator wouldn't",
+        "confidence": "medium",
+        "source_line_guard": (
+            "if(u) at line 1234 protects the dereference path; only "
+            "reachable when curlx_calloc returns NULL"
+        ),
+        "public_api_call_chain": "any application → curl_url_dup(in)",
+    }
+    r = _parse_result(json.dumps(payload), "curl_url_dup")
+    assert r.verdict == RealismVerdict.UNREALISTIC
+    assert "auto-downgraded" in r.key_concern.lower()
+
+
+def test_realistic_downgraded_when_evidence_missing():
+    """REALISTIC verdict without REQ-1 source-line-guard or REQ-2
+    public-API call chain is downgraded to UNCERTAIN.
+
+    Empirically, REALISTIC verdicts without these concrete evidence
+    fields turned out to be LLM hand-waving in every bounty case this
+    session.
+    """
+    from bmc_agent.realism_checker import _parse_result, RealismVerdict
+    payload = {
+        "verdict": "REALISTIC",
+        "reasoning": "Could occur if attacker controls input.",
+        "key_concern": "general concern, no specific exploit chain",
+        "confidence": "low",
+        "source_line_guard": "",
+        "public_api_call_chain": "",
+    }
+    r = _parse_result(json.dumps(payload), "f")
+    assert r.verdict == RealismVerdict.UNCERTAIN
+
+    # Handwave phrases also count as missing evidence
+    payload["source_line_guard"] = "this is hypothetical"
+    payload["public_api_call_chain"] = "an attacker could pass NULL"
+    r = _parse_result(json.dumps(payload), "f")
     assert r.verdict == RealismVerdict.UNCERTAIN
 
 

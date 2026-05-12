@@ -258,6 +258,100 @@ def _build_generation_order(call_graph: dict[str, set[str]]) -> list[list[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _relax_postcondition_for_error_paths(post: str, body: str, func_name: str) -> str:
+    """
+    Soften over-strict postconditions when the function body has explicit
+    error-return paths.
+
+    Empirical pattern from this session's bounty runs: the LLM frequently
+    generates postconditions like ``result != NULL`` or ``result > 0``
+    while the function body has explicit ``return NULL;`` / ``return -1;``
+    error paths. CBMC then flags every error-path execution as a
+    postcondition violation, even though the function is doing exactly
+    what its contract requires.
+
+    Strategy: when the body contains explicit returns of common error
+    sentinels (NULL, negative integers, UPPER_SNAKE error enums), and the
+    postcondition would assert against those sentinels, OR the existing
+    postcondition with a clause that permits the sentinel.
+
+    The softening preserves the SAFETY content of the postcondition on
+    success paths (the original clauses still have to hold when the
+    function doesn't return the error sentinel) while letting CBMC
+    explore error paths without flagging them as bugs.
+    """
+    if not body or not post:
+        return post
+
+    # Find explicit ``return X;`` statements. Constrain to single-line
+    # forms with simple expressions to avoid eating multi-line returns
+    # or returns of complex expressions.
+    error_returns: set[str] = set()
+    for m in re.finditer(r"\breturn\s+([^;\n]{1,40});", body):
+        val = m.group(1).strip()
+        if val in ("NULL", "0", "false", "FALSE", "-1"):
+            error_returns.add(val)
+        elif re.match(r"^-\d{1,5}$", val):
+            error_returns.add(val)
+        elif re.match(r"^[A-Z][A-Z0-9_]{2,}$", val):
+            # Uppercase-snake identifier, likely an error enum
+            # (CURLUE_OUT_OF_MEMORY, ASN1_R_TOO_LONG, NGHTTP2_ERR_HEADER_COMP).
+            # We don't know the integer value, but record it as a marker
+            # that some non-trivial error sentinel exists.
+            error_returns.add(val)
+
+    if not error_returns:
+        return post
+
+    softened = post
+    notes: list[str] = []
+
+    # Pattern 1: ``result != NULL`` postcondition where body has
+    # ``return NULL;``. OR-in ``result == NULL`` to permit the error path.
+    if "NULL" in error_returns and re.search(r"\bresult\s*!=\s*NULL\b", post):
+        if "result == NULL" not in post:
+            softened = f"(result == NULL) || ({softened})"
+            notes.append("permit result==NULL")
+
+    # Pattern 2: ``result > 0`` / ``result >= 0`` postcondition where body
+    # has ``return -1;`` or any explicit negative-integer return.
+    # OR-in ``result < 0`` to permit the error path.
+    has_negative_return = any(
+        v == "-1" or re.match(r"^-\d", v) for v in error_returns
+    )
+    if has_negative_return and re.search(r"\bresult\s*>\s*0\b", post):
+        if "result < 0" not in post and "result <= 0" not in post:
+            softened = f"(result < 0) || ({softened})"
+            notes.append("permit result<0")
+    elif has_negative_return and re.search(r"\bresult\s*>=\s*0\b", post):
+        if "result < 0" not in post and "result <= 0" not in post:
+            softened = f"(result < 0) || ({softened})"
+            notes.append("permit result<0")
+
+    # Pattern 3: function has UPPER_SNAKE error returns (enum sentinels);
+    # if postcondition asserts ``result == K`` for a narrow set, broaden
+    # to also permit the sentinel.  We don't know the int values, so we
+    # softly permit any value the body can return.  Conservative: only
+    # apply when the postcondition is a disjunction of equalities and
+    # there's at least one UPPER_SNAKE error return.
+    upper_snake_returns = [v for v in error_returns if re.match(r"^[A-Z]", v)]
+    if upper_snake_returns and re.match(
+        r"^\s*\(?\s*result\s*==\s*\S+\s*(\)|\)\s*\|\|\s*\(?\s*result\s*==\s*\S+\s*\)?)*\s*$",
+        post,
+    ):
+        # Append each error sentinel as an alternative.
+        extra = " || ".join(f"result == {v}" for v in sorted(upper_snake_returns))
+        softened = f"({softened}) || ({extra})"
+        notes.append(f"permit error sentinels {sorted(upper_snake_returns)[:3]}")
+
+    if softened != post:
+        logger.info(
+            "Spec quality: softened postcondition for '%s' (%s)",
+            func_name, "; ".join(notes),
+        )
+    return softened
+
+
 def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[str, str]]:
     """
     Parse LLM JSON response into (precondition, postcondition).
@@ -623,6 +717,7 @@ class SpecGenerator:
             result = _parse_llm_spec_response(response, func.name)
             if result is not None:
                 pre, post = result
+                post = _relax_postcondition_for_error_paths(post, func.body, func.name)
                 return Spec(
                     function_name=func.name,
                     precondition=pre,
@@ -680,6 +775,7 @@ class SpecGenerator:
             result = _parse_llm_spec_response(response, func.name)
             if result is not None:
                 pre, post = result
+                post = _relax_postcondition_for_error_paths(post, func.body, func.name)
                 return Spec(
                     function_name=func.name,
                     precondition=pre,
@@ -799,6 +895,7 @@ class SpecGenerator:
 
         # Use whichever succeeded; prefer caller-heavy
         pre, post = result_a or result_b
+        post = _relax_postcondition_for_error_paths(post, func.body, func.name)
 
         # Check disagreement if both succeeded
         disagree = False

@@ -562,11 +562,46 @@ A finding is REALISTIC when:
 6. Even if this specific CBMC witness is an aliasing artifact or symbolic extreme —
    if the same violation TYPE is reachable via other inputs, lean UNCERTAIN not UNREALISTIC.
 
+EVIDENCE REQUIREMENTS — these are MANDATORY before returning REALISTIC.
+Empirically, REALISTIC verdicts are wrong far more often than they're right
+unless the LLM (you) commits to specific evidence on the record:
+
+  REQ-1. Cite the specific source-line guard that would have to be
+         bypassed for the counterexample to reach the violation. If the
+         function or any caller has an `if (ptr == NULL) return ...;`,
+         `if (len > MAX) return error;`, `DEBUGASSERT(...)`, or
+         `__CPROVER_assume(...)` before the violation point — quote it
+         verbatim and explain how the witness gets past it. If no such
+         guard exists, say "no guard found" explicitly.
+
+  REQ-2. Produce a concrete public-API calling sequence that reaches
+         the witness state. Start from a real entry point (a function
+         exported in the public header, or a syscall/network handler),
+         and show each call in the chain with the argument values that
+         lead to the violation. If you can't construct one because the
+         witness requires state that no public caller produces, the
+         verdict is UNREALISTIC.
+
+  REQ-3. If the dynamic validation result is "not triggered" or the
+         witness involves a CBMC stub return value (`bsearch`,
+         `malloc`/`calloc`/family, `strdup`, project-specific allocator
+         indirections like `Curl_ccalloc` or `OPENSSL_zalloc`), default
+         to UNREALISTIC unless you can show the same fault triggered
+         dynamically. CBMC stubs return symbolic / unconstrained values
+         that don't match real libc / real allocator behavior.
+
+If you can't fulfill REQ-1 AND REQ-2 with concrete citations and a
+real call chain, the verdict is UNREALISTIC. Empty `key_concern` on a
+REALISTIC verdict is a contradiction — describe the specific exploit
+scenario.
+
 Respond with ONLY valid JSON:
 {{
   "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
-  "reasoning": "<step-by-step: first answer Q1 (can the violation TYPE occur?), then Q2 (is this witness realistic?)>",
-  "key_concern": "<if UNREALISTIC or UNCERTAIN: the specific scenario that makes this unrealistic>",
+  "reasoning": "<step-by-step: first answer Q1 (can the violation TYPE occur?), then Q2 (is this witness realistic?), then for REALISTIC verdicts cite REQ-1 source-line guard analysis and REQ-2 public-API call chain>",
+  "source_line_guard": "<REQ-1: quote the specific guard or 'no guard found'. REALISTIC requires this is populated.>",
+  "public_api_call_chain": "<REQ-2: real entry point → ... → function under test with arguments. REALISTIC requires a concrete chain.>",
+  "key_concern": "<the specific scenario that makes this realistic/unrealistic — must be non-empty>",
   "confidence": "high" | "medium" | "low"
 }}
 """
