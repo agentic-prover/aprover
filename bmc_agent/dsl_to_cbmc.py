@@ -76,6 +76,15 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
             return f"assert({expr});"
         return f"__CPROVER_assume({expr});"
 
+    # Strip outer parens so that the top-level &&/|| split below can see
+    # connectives that the caller's grouping parens would otherwise hide.
+    # Without this, "(A || B || C)" is treated as a single atom and the
+    # NULL_RE / VALID_RE search anywhere inside it matches the first
+    # predicate-looking substring (e.g. ``null(result)`` in disjunct 2),
+    # silently dropping the other disjuncts and over-constraining the
+    # generated assert/assume.
+    atom = _strip_outer_parens(atom)
+
     # Normalise \result → result
     atom = _RESULT_RE.sub("result", atom)
 

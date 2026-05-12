@@ -407,6 +407,74 @@ def _format_harness_code(vr: "ValidationResult") -> str:
     return "(harness code not available)"
 
 
+def _extract_first_json_object(text: str) -> "str | None":
+    """Find the first top-level ``{...}`` JSON object in *text*.
+
+    The LLM sometimes wraps the expected object in surrounding prose
+    ("Here is my analysis: { ... }").  Scan from the first ``{`` and
+    return the substring covering its balanced match, or None if the
+    braces are unbalanced.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _recover_verdict_from_prose(text: str) -> "RealismVerdict | None":
+    """Best-effort verdict extraction from a non-JSON prose response.
+
+    Looks for explicit verdict keywords. Order matters: ``UNREALISTIC``
+    must be checked before ``REALISTIC`` (the latter is a substring of
+    the former).
+    """
+    upper = text.upper()
+    # Prefer a "Verdict: X" / "verdict": "X" / "**Verdict**: X" hit.
+    import re as _re
+    m = _re.search(
+        r"VERDICT\s*[:\-=]?\s*\"?(UNREALISTIC|REALISTIC|UNCERTAIN)\b",
+        upper,
+    )
+    if m:
+        token = m.group(1)
+    else:
+        # Generic fallback: search for the keyword anywhere.
+        if "UNREALISTIC" in upper:
+            token = "UNREALISTIC"
+        elif "REALISTIC" in upper:
+            token = "REALISTIC"
+        elif "UNCERTAIN" in upper:
+            token = "UNCERTAIN"
+        else:
+            return None
+    return {
+        "REALISTIC":   RealismVerdict.REALISTIC,
+        "UNREALISTIC": RealismVerdict.UNREALISTIC,
+        "UNCERTAIN":   RealismVerdict.UNCERTAIN,
+    }[token]
+
+
 # ---------------------------------------------------------------------------
 # LLM response parser
 # ---------------------------------------------------------------------------
@@ -427,14 +495,40 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
                 inner.append(line)
         text = "\n".join(inner).strip()
 
+    # First try strict JSON.
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Realism check: failed to parse JSON for '%s'", func_name)
-        return RealismCheckResult(
-            verdict=RealismVerdict.UNCERTAIN,
-            reasoning=f"Could not parse LLM response: {raw[:200]}",
-        )
+        # Fallback 1: extract a JSON object embedded in prose.
+        embedded = _extract_first_json_object(text)
+        if embedded is not None:
+            try:
+                data = json.loads(embedded)
+            except json.JSONDecodeError:
+                embedded = None
+        if embedded is None:
+            # Fallback 2: recover verdict + reasoning from prose. The LLM
+            # often ignores "respond with ONLY valid JSON" and emits an
+            # analytical paragraph that still contains the verdict word
+            # somewhere. Better to recover an UNREALISTIC / REALISTIC
+            # judgement from prose than to default everything to
+            # UNCERTAIN with "Could not parse" — that hides real signal
+            # downstream.
+            recovered = _recover_verdict_from_prose(raw)
+            if recovered is not None:
+                logger.warning(
+                    "Realism check: parsed verdict %s from prose for '%s' "
+                    "(JSON failed)", recovered.value, func_name,
+                )
+                return RealismCheckResult(
+                    verdict=recovered,
+                    reasoning=raw.strip()[:2000],
+                )
+            logger.warning("Realism check: failed to parse JSON or recover verdict for '%s'", func_name)
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNCERTAIN,
+                reasoning=f"Could not parse LLM response: {raw[:200]}",
+            )
 
     raw_verdict = str(data.get("verdict", "UNCERTAIN")).upper().strip()
     verdict_map = {
