@@ -36,6 +36,14 @@ class Config:
     # Off by default to preserve VibeOS-era behaviour.
     strict_dsl: bool = False
 
+    # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
+    # raw byte buffers instead of bounded NUL-terminated strings in the harness.
+    # Required for wire-format parsers (protobuf upb varints, length-prefixed
+    # blobs) that read N raw bytes from ``ptr[0..N)`` regardless of NULs.  The
+    # NUL-string default over-constrains the input (no embedded NULs) and
+    # under-sizes the backing buffer when the function reads beyond strlen.
+    raw_bytes: bool = False
+
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
     # absent (we still surface the field to give the pipeline a single knob).
@@ -107,6 +115,7 @@ class Config:
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
             cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
+            raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),

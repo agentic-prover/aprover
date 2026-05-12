@@ -46,6 +46,12 @@ class ParsedCFile:
     functions: dict[str, FunctionSignature]  # name -> signature
     call_graph: dict[str, set[str]]          # caller -> set of callee names
     function_bodies: dict[str, str]          # name -> raw body text
+    # Full function-definition text (return type + attributes + declarator + body)
+    # captured directly from tree-sitter.  Used by the harness generator to
+    # excise complete function defs from the source when emitting type-decl
+    # context, so multi-line return types and attribute lines don't leak through
+    # as orphan declarations.
+    function_definitions: dict[str, str] = field(default_factory=dict)
     # When the file was preprocessed before parsing, the expanded source is
     # stored here so harness generators can use it instead of re-reading the
     # original (unexpanded) file.
@@ -160,6 +166,7 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
     functions: dict[str, FunctionSignature] = {}
     call_graph: dict[str, set[str]] = {}
     function_bodies: dict[str, str] = {}
+    function_definitions: dict[str, str] = {}
 
     # Walk top-level function definitions
     for node in root.children:
@@ -168,6 +175,9 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
             if sig:
                 functions[sig.name] = sig
                 call_graph[sig.name] = set()
+                function_definitions[sig.name] = src_bytes[
+                    node.start_byte:node.end_byte
+                ].decode("utf-8", errors="replace")
                 # Body is the compound_statement child
                 body_node = node.child_by_field_name("body")
                 if body_node:
@@ -183,6 +193,7 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
         functions=functions,
         call_graph=call_graph,
         function_bodies=function_bodies,
+        function_definitions=function_definitions,
     )
 
 
@@ -294,6 +305,7 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
     functions: dict[str, FunctionSignature] = {}
     call_graph: dict[str, set[str]] = {}
     function_bodies: dict[str, str] = {}
+    function_definitions: dict[str, str] = {}
 
     matches = list(_FUNC_DEF_RE.finditer(source))
 
@@ -310,6 +322,7 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
         # Extract body: from { to matching }
         body_start = m.end() - 1  # points at the '{'
         body_text = _extract_body(source, body_start)
+        body_end = body_start + len(body_text)
 
         functions[fn_name] = FunctionSignature(
             name=fn_name,
@@ -318,6 +331,7 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
             is_static=is_static,
         )
         function_bodies[fn_name] = body_text
+        function_definitions[fn_name] = source[m.start():body_end]
 
         # Collect calls within the body
         callees: set[str] = set()
@@ -332,6 +346,7 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
         functions=functions,
         call_graph=call_graph,
         function_bodies=function_bodies,
+        function_definitions=function_definitions,
     )
 
 

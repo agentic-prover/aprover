@@ -305,6 +305,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.preprocess = False
     if getattr(args, "strict_dsl", False):
         config.strict_dsl = True
+    if getattr(args, "raw_bytes", False):
+        config.raw_bytes = True
     if getattr(args, "skip_refinement", False):
         config.skip_refinement = True
     if getattr(args, "enable_realism_check", False):
@@ -602,6 +604,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Strict-formal Phase 1 prompts: pre/post must be a single C boolean expression (no natural language). Required for bounty/CVE work — prose-mixed specs translate to comments and produce vacuous verifications.",
+    )
+    ver.add_argument(
+        "--raw-bytes",
+        action="store_true",
+        default=False,
+        help="Treat single char* / const char* params as raw byte buffers (no NUL termination) in the harness. Required for wire-format parsers (protobuf upb, length-prefixed blobs) that read N raw bytes regardless of NULs.",
     )
     ver.add_argument(
         "--threat-model",

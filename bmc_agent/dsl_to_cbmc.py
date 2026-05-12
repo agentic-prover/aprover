@@ -41,8 +41,35 @@ _RESULT_RE = re.compile(r"\\result\b")
 
 # Simple C-style comparison: expr op expr  (e.g., ptr != NULL, x > 0, x <= 64)
 _C_COMPARISON_RE = re.compile(
-    r"(\b[\w\->.\[\]]+\b)\s*(!=|==|<=|>=|<|>)\s*(\b[\w\->.\[\]]+\b)"
+    # Trailing \b dropped because operands ending in ']' (e.g. ``ptr[0]``)
+    # never satisfy a word-boundary against a following space — both sides
+    # of the boundary would be non-word characters.  Greedy matching of the
+    # character class already prevents partial-identifier matches.
+    r"(\b[\w\->.\[\]]+)\s*(!=|==|<=|>=|<|>)\s*([\w\->.\[\]]+)"
 )
+
+# Strips C-style cast prefixes like ``(uint8_t)``, ``(const char *)``,
+# ``(unsigned long)`` so we can compare comparison spans against full
+# atoms modulo casts. The leading negative look-behind prevents matching
+# a function call like ``foo(x)``: a cast's paren cannot be preceded by
+# an identifier character.
+_CAST_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"\(\s*(?:const\s+|volatile\s+|unsigned\s+|signed\s+)*"
+    r"[A-Za-z_]\w*"
+    r"(?:\s+(?:const|volatile|unsigned|signed))*"
+    r"\s*\*?\s*\)\s*"
+)
+
+
+def _normalize_casts(s: str) -> str:
+    """Remove C-style casts from *s* for span-equality comparison."""
+    prev = None
+    cur = s
+    while cur != prev:
+        prev = cur
+        cur = _CAST_PREFIX_RE.sub("", cur)
+    return cur.strip()
 
 # "NULL" literal (ensure we recognise it)
 _NULL_LITERAL_RE = re.compile(r"\bNULL\b")
@@ -157,17 +184,21 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     # Only wrap in assert/assume if the entire atom looks like valid C.
     # A simple heuristic: no spaces outside of parens (i.e. a single
     # expression, not a natural-language phrase) AND the matched
-    # comparison must cover the full atom (modulo whitespace/parens) —
-    # otherwise a prose-mixed clause like "otherwise result >= 0"
-    # would be wrapped verbatim into ``assert(otherwise result >= 0);``
-    # which fails to compile.
-    m = _C_COMPARISON_RE.search(atom)
+    # comparison must cover the full atom (modulo whitespace/parens,
+    # and modulo C-style casts) — otherwise a prose-mixed clause like
+    # "otherwise result >= 0" would be wrapped verbatim into
+    # ``assert(otherwise result >= 0);`` which fails to compile.
+    # Cast-normalize before matching: C casts on either operand
+    # (e.g. ``val == (uint64_t)(uint8_t)ptr[0]``) defeat the bare
+    # comparison regex because the RHS starts with ``(``. We strip
+    # casts only for the regex/full-atom check and wrap the original
+    # atom (which compiles fine in C with casts intact).
+    atom_norm = _normalize_casts(atom)
+    m = _C_COMPARISON_RE.search(atom_norm)
     if m and _looks_like_c_expr(atom):
-        # Strip the atom of redundant surrounding parens for the
-        # "matched span == whole atom" check.
-        stripped_atom = _strip_outer_parens(atom).strip()
+        stripped_norm = _normalize_casts(_strip_outer_parens(atom).strip()).strip()
         matched_span = m.group(0).strip()
-        if matched_span == stripped_atom:
+        if matched_span == stripped_norm:
             return wrap(atom)
         # The comparison is embedded in prose (e.g. "otherwise X >= 0",
         # "result is the value if Y"). The qualifying word changes the

@@ -213,6 +213,114 @@ def test_translate_atom_in_bounds():
     assert "sizeof" in stmt
 
 
+def test_translate_atom_bracketed_lhs():
+    """Bracketed identifiers on LHS (e.g. ptr[0] >= 0x80) must wrap.
+
+    Regression: ``_C_COMPARISON_RE`` previously required a word-boundary
+    after the LHS operand, but ``]`` followed by a space is non-word↔non-word
+    so the match failed, dropping the atom to a /* condition */ comment and
+    silently disabling the precondition assume.
+    """
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("ptr[0] >= 0x80", context="assume")
+    assert stmt is not None
+    assert "__CPROVER_assume(ptr[0] >= 0x80)" in stmt
+
+
+def test_translate_atom_c_cast_on_lhs():
+    """A C-style cast prefix on the LHS must not block matching.
+
+    Regression: precondition atoms emitted by strict-DSL Phase 1 commonly
+    take the form ``(uint8_t)ptr[0] >= 0x80`` (UTF-8 byte tests, varint
+    bytes). Without cast normalization these dropped to comments and the
+    harness silently allowed precondition-violating states, producing
+    spurious findings.
+    """
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("(uint8_t)ptr[0] >= 0x80", context="assume")
+    assert stmt is not None
+    assert "__CPROVER_assume((uint8_t)ptr[0] >= 0x80)" in stmt
+
+
+def test_translate_atom_c_cast_on_rhs():
+    """A C-style cast prefix on the RHS must not block matching.
+
+    Regression: ``val == (uint64_t)(uint8_t)ptr[0]`` previously failed
+    because the RHS started with ``(`` (outside the operand character
+    class). Nested casts must also normalize correctly.
+    """
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("val == (uint64_t)(uint8_t)ptr[0]", context="assume")
+    assert stmt is not None
+    assert "__CPROVER_assume(val == (uint64_t)(uint8_t)ptr[0])" in stmt
+
+
+def test_extract_type_decls_strips_multi_line_return_types():
+    """Multi-line function definitions must be excised whole.
+
+    Regression: when the return type sits on its own line above the
+    declarator (common in glibc-style code and any code with attribute
+    macros), the body-strip step previously left the return-type line
+    behind as an orphan declaration, producing a syntax error when CBMC
+    parsed the harness.  The fix uses ``ParsedCFile.function_definitions``
+    (the full tree-sitter function_definition range) for excision.
+    """
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.harness_generator import _extract_type_decls_using_bodies
+
+    src = (
+        "#include <stdint.h>\n"
+        "typedef struct { int x; } S;\n"
+        "\n"
+        "uint64_t\n"
+        "first(const char* p) {\n"
+        "  return (uint64_t)p[0];\n"
+        "}\n"
+        "\n"
+        "uint64_t\n"
+        "second(const char* p) {\n"
+        "  return (uint64_t)p[1];\n"
+        "}\n"
+    )
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as tf:
+        tf.write(src)
+        path = tf.name
+    try:
+        parsed = parse_c_file(path)
+    finally:
+        os.unlink(path)
+    out = _extract_type_decls_using_bodies(src, parsed)
+    # Both function names should be excised entirely — no orphan return type.
+    assert "first" not in out
+    assert "second" not in out
+    # The struct typedef should survive.
+    assert "typedef struct { int x; } S;" in out
+    # No dangling `uint64_t` line on its own (the regression symptom).
+    for line in out.splitlines():
+        assert line.strip() != "uint64_t"
+
+
+def test_translate_atom_function_call_not_cast():
+    """A function call (``foo(x) >= 0``) must NOT be treated as a cast.
+
+    The cast-stripping look-behind ensures that paren groups preceded by
+    an identifier (function calls) are left intact; otherwise ``foo(x)``
+    would be eaten and ``foo >= 0`` would be wrapped, executing the call
+    twice in the assert path with potential side effects.
+    """
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom("foo(x) >= 0", context="assume")
+    assert stmt is not None
+    # Function calls drop to a comment — neither cast-stripped nor wrapped.
+    assert "__CPROVER_assume" not in stmt
+    assert "condition:" in stmt
+
+
 def test_translate_atom_null():
     """null(ptr) translates to ptr == NULL."""
     from bmc_agent.dsl_to_cbmc import translate_atom

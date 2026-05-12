@@ -41,16 +41,84 @@ def _extract_type_declarations(source_text: str, parsed_file: Optional["ParsedCF
     return _extract_type_decls_heuristic(source_text)
 
 
+def _find_decl_preamble(source_text: str, def_start: int) -> int:
+    """
+    Walk backward from *def_start* over any contiguous attribute / annotation
+    lines that belong to the same declaration but sit above the line tree-sitter
+    treats as the function_definition node (e.g. ``UPB_NOINLINE`` on its own
+    line, or ``__attribute__((...))`` annotations).
+
+    Stops at the previous statement-terminator (``;``), block-terminator (``}``),
+    comment-end (``*/``), preprocessor directive, or beginning of file.
+
+    Returns the offset of the first character of the preamble (which may equal
+    ``def_start`` if there is no preamble).
+    """
+    if def_start <= 0:
+        return def_start
+
+    # Walk backward line-by-line over candidate preamble lines.
+    line_end = def_start  # exclusive
+    while line_end > 0:
+        # Find start of the previous line (exclusive of '\n').
+        prev_nl = source_text.rfind("\n", 0, line_end - 1)
+        line_start = prev_nl + 1 if prev_nl >= 0 else 0
+        line = source_text[line_start:line_end - 1] if line_end > 0 else ""
+        stripped = line.strip()
+
+        if not stripped:
+            # Blank line — preamble does not bridge blank lines.
+            return line_end
+
+        # Hard stops: previous decl/block terminator, comment, preprocessor.
+        if stripped.endswith(";") or stripped.endswith("}") or stripped.endswith("*/"):
+            return line_end
+        if stripped.startswith("#"):
+            return line_end
+
+        # Candidate preamble line: identifier(s) or attribute macros, possibly
+        # with parens (e.g. __attribute__((noinline))).  Heuristic: no braces,
+        # no semicolons, doesn't end mid-statement.
+        if "{" in stripped or "}" in stripped:
+            return line_end
+
+        # Include this line in the preamble.
+        line_end = line_start
+        if line_start == 0:
+            return 0
+
+    return line_end
+
+
 def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile") -> str:
     """
-    Exclude function definitions from *source_text* by locating each function
-    body, then scanning backward to include the return-type line(s).
+    Exclude function definitions from *source_text*.
+
+    Preferred path: use ``parsed_file.function_definitions`` (full text from the
+    tree-sitter ``function_definition`` node, including return type and body),
+    extended backward over any attribute/annotation preamble.  Multi-line
+    return types and attribute-on-own-line declarations are excised cleanly.
+
+    Fallback path (for parsers that didn't populate ``function_definitions``):
+    locate each function body and walk backward to pick up the return-type
+    line.  Only reliably handles single-line signatures.
     """
     exclude: list[tuple[int, int]] = []  # (start, end) char offsets to drop
+    function_defs = getattr(parsed_file, "function_definitions", None) or {}
 
     for func_name, body_text in parsed_file.function_bodies.items():
         if not body_text:
             continue
+
+        full_def = function_defs.get(func_name)
+        if full_def:
+            def_start = source_text.find(full_def)
+            if def_start != -1:
+                preamble_start = _find_decl_preamble(source_text, def_start)
+                exclude.append((preamble_start, def_start + len(full_def)))
+                continue
+
+        # Fallback: walk back from body to the signature's '(' line.
         body_start = source_text.find(body_text)
         if body_start == -1:
             continue
@@ -443,6 +511,7 @@ def _generate_nd_decls(
     cbmc_unwind: int = 4,
     nonnull_params: Optional[set] = None,
     precondition: Optional[str] = None,
+    raw_bytes: bool = False,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -534,17 +603,36 @@ def _generate_nd_decls(
                 lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
                 lines.append(f"    {ptype_stripped} {pname} = NULL;")
             elif clean_base == "char" and star_count == 1:
-                # Single-indirection char* — bounded null-terminated string.
-                # Ensures string-traversal loops terminate within the CBMC
-                # unwinding bound. char** (e.g. argv) uses the default treatment.
+                # Single-indirection char*.  Two strategies:
+                #
+                #  - Default (raw_bytes=False): bounded null-terminated string,
+                #    so strlen-style traversal loops terminate within the CBMC
+                #    unwinding bound.  Right for textual APIs (printf, strcpy).
+                #
+                #  - raw_bytes=True: raw byte buffer with no NUL termination
+                #    constraint.  Right for wire-format parsers (protobuf upb
+                #    varints, length-prefixed blobs) that read N raw bytes from
+                #    ptr[0..N) regardless of NULs.  The NUL-string mode
+                #    over-constrains the input (no embedded NULs) and
+                #    under-sizes the buffer when the callee reads past strlen.
+                #
+                # char** (e.g. argv) uses the default treatment in either mode.
                 buf_name = f"_{pname}_buf"
-                len_name = f"_{pname}_len"
-                lines.append(f"    /* bounded null-terminated string for '{pname}' (max {cbmc_unwind} chars) */")
-                lines.append(f"    char {buf_name}[{cbmc_unwind + 1}];")
-                lines.append(f"    unsigned int {len_name};")
-                lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){cbmc_unwind});")
-                lines.append(f"    {buf_name}[{len_name}] = '\\0';")
-                lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
+                if raw_bytes:
+                    lines.append(
+                        f"    /* raw byte buffer for '{pname}' "
+                        f"({cbmc_unwind + 1} bytes, no NUL termination) */"
+                    )
+                    lines.append(f"    char {buf_name}[{cbmc_unwind + 1}];")
+                    lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
+                else:
+                    len_name = f"_{pname}_len"
+                    lines.append(f"    /* bounded null-terminated string for '{pname}' (max {cbmc_unwind} chars) */")
+                    lines.append(f"    char {buf_name}[{cbmc_unwind + 1}];")
+                    lines.append(f"    unsigned int {len_name};")
+                    lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){cbmc_unwind});")
+                    lines.append(f"    {buf_name}[{len_name}] = '\\0';")
+                    lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
                 if pname in nonnull_params:
                     lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
             elif "const" in ptype_stripped.lower():
@@ -650,7 +738,10 @@ class HarnessGenerator:
         func_def = f"{sig.return_type} {fn_name}({params_str})\n{body_with_stubs}"
 
         # --- 5. Generate nondeterministic input declarations ---
-        nd_decls = _generate_nd_decls(caller)
+        nd_decls = _generate_nd_decls(
+            caller,
+            raw_bytes=getattr(self.config, "raw_bytes", False),
+        )
 
         # --- 6. Precondition assumptions ---
         param_names = [pname for _, pname in sig.parameters if pname]
@@ -1335,6 +1426,7 @@ class HarnessGenerator:
             self.config.cbmc_unwind,
             nonnull_params=nonnull,
             precondition=spec.precondition,
+            raw_bytes=getattr(self.config, "raw_bytes", False),
         )
 
         # --- 6. Precondition assumptions ---
@@ -1521,6 +1613,7 @@ class HarnessGenerator:
             self.config.cbmc_unwind,
             nonnull_params=nonnull,
             precondition=spec.precondition,
+            raw_bytes=getattr(self.config, "raw_bytes", False),
         )
 
         # Precondition assume + postcondition assert via existing DSL.
