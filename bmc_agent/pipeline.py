@@ -560,15 +560,55 @@ class AMCPipeline:
         all_funcs: "dict[str, FunctionInfo]",
         driver_name: str,
     ) -> BugReport:
-        """Run realism check then create and save a BugReport."""
-        realism = self.realism_checker.check(
-            func=func,
-            counterexample=validation.counterexample,
-            validation_result=validation,
-            parsed_file=parsed,
-            all_funcs=all_funcs,
-            spec=spec,
-        )
+        """Run realism check then create and save a BugReport.
+
+        Dynamic-validation gate: if dynamic validation already ran for
+        this counterexample and the runtime fault did NOT trigger
+        (DynamicOutcome.NOT_TRIGGERED), mark the finding UNREALISTIC
+        and skip the expensive realism LLM call. This eliminates the
+        bsearch / malloc-stub-returns-NULL class of false positives
+        wholesale — those CEs require unconstrained allocator returns
+        that real libc never produces, so the dynamic harness never
+        reaches the fault, and there's nothing for the realism LLM to
+        usefully add.
+        """
+        from bmc_agent.dynamic_validator import DynamicOutcome
+        from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+
+        dyn = getattr(validation, "dynamic_result", None)
+        if (
+            self.config.enable_realism_check
+            and dyn is not None
+            and dyn.outcome == DynamicOutcome.NOT_TRIGGERED
+        ):
+            logger.info(
+                "Realism check skipped for '%s': dynamic validation reported "
+                "NOT_TRIGGERED, marking finding as artifact",
+                func.name,
+            )
+            realism = RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    "Dynamic validation harness compiled + executed the "
+                    "counterexample state; the runtime fault did not trigger. "
+                    "Marked UNREALISTIC without a realism-LLM call: when the "
+                    "real runtime can't reproduce the fault, the CBMC witness "
+                    "is by definition a model artifact (stub return values, "
+                    "unconstrained symbolic state, or aliasing impossible "
+                    "in real C)."
+                ),
+                key_concern="dynamic validation did not reproduce the fault",
+                llm_confidence="high",
+            )
+        else:
+            realism = self.realism_checker.check(
+                func=func,
+                counterexample=validation.counterexample,
+                validation_result=validation,
+                parsed_file=parsed,
+                all_funcs=all_funcs,
+                spec=spec,
+            )
         realism_arg = realism if self.config.enable_realism_check else None
         return self.reporter.create_report(validation, func, realism_check=realism_arg)
 

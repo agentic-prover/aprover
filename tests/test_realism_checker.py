@@ -175,6 +175,92 @@ def test_parse_uncertain_verdict():
     assert r.verdict == RealismVerdict.UNCERTAIN
 
 
+def test_pipeline_skips_realism_when_dynamic_not_triggered():
+    """Pipeline._make_report skips the LLM realism call and returns
+    UNREALISTIC directly when dynamic validation reported NOT_TRIGGERED.
+
+    This kills the bsearch / calloc-stub class of false positives
+    wholesale without needing an LLM call.
+    """
+    from unittest.mock import MagicMock
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.dynamic_validator import DynamicValidationResult, DynamicOutcome
+    from bmc_agent.realism_checker import RealismVerdict
+    from bmc_agent.config import Config
+
+    config = Config()
+    config.enable_realism_check = True
+    config.enable_dynamic_validation = True
+
+    # Build a pipeline with mocked dependencies; we only exercise _make_report.
+    pipeline = AMCPipeline.__new__(AMCPipeline)
+    pipeline.config = config
+    pipeline.llm = MagicMock()
+    pipeline.realism_checker = MagicMock()
+    pipeline.realism_checker.check = MagicMock(
+        side_effect=AssertionError("realism LLM should not be called when dynamic NOT_TRIGGERED")
+    )
+    pipeline.reporter = MagicMock()
+    pipeline.reporter.create_report = MagicMock(side_effect=lambda v, f, realism_check: realism_check)
+
+    # Fake a ValidationResult with dynamic_result = NOT_TRIGGERED
+    validation = MagicMock()
+    validation.counterexample = MagicMock()
+    validation.dynamic_result = DynamicValidationResult(
+        outcome=DynamicOutcome.NOT_TRIGGERED,
+        signal_name=None,
+        reasoning="harness ran cleanly, no SIGSEGV/SIGABRT",
+    )
+
+    func = MagicMock()
+    func.name = "test_fn"
+
+    realism = pipeline._make_report(
+        validation=validation, func=func, spec=MagicMock(),
+        parsed=MagicMock(), all_funcs={}, driver_name="d",
+    )
+    assert realism is not None
+    assert realism.verdict == RealismVerdict.UNREALISTIC
+    pipeline.realism_checker.check.assert_not_called()
+
+
+def test_pipeline_runs_realism_when_dynamic_confirmed():
+    """When dynamic validation CONFIRMS the fault, the realism LLM still
+    runs (to assess realistic exploitability and call-chain feasibility)."""
+    from unittest.mock import MagicMock
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.dynamic_validator import DynamicValidationResult, DynamicOutcome
+    from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+    from bmc_agent.config import Config
+
+    config = Config()
+    config.enable_realism_check = True
+    config.enable_dynamic_validation = True
+
+    pipeline = AMCPipeline.__new__(AMCPipeline)
+    pipeline.config = config
+    pipeline.llm = MagicMock()
+    expected = RealismCheckResult(verdict=RealismVerdict.REALISTIC, reasoning="x")
+    pipeline.realism_checker = MagicMock()
+    pipeline.realism_checker.check = MagicMock(return_value=expected)
+    pipeline.reporter = MagicMock()
+    pipeline.reporter.create_report = MagicMock(side_effect=lambda v, f, realism_check: realism_check)
+
+    validation = MagicMock()
+    validation.counterexample = MagicMock()
+    validation.dynamic_result = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED, signal_name="SIGSEGV",
+    )
+    func = MagicMock(); func.name = "test_fn"
+
+    realism = pipeline._make_report(
+        validation=validation, func=func, spec=MagicMock(),
+        parsed=MagicMock(), all_funcs={}, driver_name="d",
+    )
+    assert realism is expected
+    pipeline.realism_checker.check.assert_called_once()
+
+
 def test_realistic_downgraded_when_reasoning_says_artifact():
     """REALISTIC verdict with reasoning that admits it's a CBMC artifact
     is downgraded to UNREALISTIC.
