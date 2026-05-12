@@ -52,6 +52,15 @@ class ParsedCFile:
     # context, so multi-line return types and attribute lines don't leak through
     # as orphan declarations.
     function_definitions: dict[str, str] = field(default_factory=dict)
+    # Struct definitions encountered at translation-unit scope. Keyed by
+    # the struct's tag name (the part after ``struct``, or the typedef'd
+    # alias when bound via ``typedef struct { ... } Name;``). The value is
+    # a list of ``(field_type, field_name)`` pairs preserving declaration
+    # order. Used by the harness emitter to populate struct-pointer params
+    # with per-field initialisation (pointer fields → fresh backing
+    # buffers; length/index fields → ``>= 0`` constraint) so opaque-struct
+    # arguments don't produce 100+ spurious CBMC field-access findings.
+    struct_definitions: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     # When the file was preprocessed before parsing, the expanded source is
     # stored here so harness generators can use it instead of re-reading the
     # original (unexpanded) file.
@@ -207,13 +216,172 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
                 # Collect call expressions within the body
                 _collect_calls_ts(body_node, call_graph[sig.name], src_bytes)
 
+    struct_definitions = _collect_struct_defs(root, src_bytes)
+
     return ParsedCFile(
         path=path,
         functions=functions,
         call_graph=call_graph,
         function_bodies=function_bodies,
         function_definitions=function_definitions,
+        struct_definitions=struct_definitions,
     )
+
+
+def _collect_struct_defs(root, src_bytes: bytes) -> dict[str, list[tuple[str, str]]]:
+    """Walk the translation unit and collect struct definitions, keyed by
+    tag name (or typedef'd alias for anonymous structs).
+
+    Each value is a list of ``(field_type, field_name)`` pairs in
+    declaration order. Forward declarations (``struct opaque;``) are
+    skipped because they have no field_declaration_list.
+    """
+    _PREPROC_CONTAINER_TYPES = {
+        "preproc_if", "preproc_ifdef", "preproc_ifndef",
+        "preproc_else", "preproc_elif", "preproc_elifdef", "preproc_elifndef",
+        "linkage_specification",
+    }
+    structs: dict[str, list[tuple[str, str]]] = {}
+
+    def walk(node):
+        if node.type == "struct_specifier":
+            _record_struct(node, src_bytes, structs, alias=None)
+            return
+        if node.type == "type_definition":
+            # typedef struct [Tag] { ... } Alias;
+            inner_struct = None
+            alias = None
+            for c in node.children:
+                if c.type == "struct_specifier":
+                    inner_struct = c
+                elif c.type == "type_identifier":
+                    alias = src_bytes[c.start_byte:c.end_byte].decode(
+                        "utf-8", errors="replace"
+                    )
+            if inner_struct is not None:
+                _record_struct(inner_struct, src_bytes, structs, alias=alias)
+            return
+        if node.type in _PREPROC_CONTAINER_TYPES or node.type == "translation_unit":
+            for c in node.children:
+                walk(c)
+
+    walk(root)
+    return structs
+
+
+def _record_struct(
+    struct_node,
+    src_bytes: bytes,
+    structs: dict[str, list[tuple[str, str]]],
+    alias: Optional[str],
+) -> None:
+    """Pull (type, name) field pairs out of a struct_specifier and store
+    them under the tag name and/or typedef alias."""
+    tag_name: Optional[str] = None
+    fdecl_list = None
+    for c in struct_node.children:
+        if c.type == "type_identifier":
+            tag_name = src_bytes[c.start_byte:c.end_byte].decode(
+                "utf-8", errors="replace"
+            )
+        elif c.type == "field_declaration_list":
+            fdecl_list = c
+    if fdecl_list is None:
+        # Forward declaration / opaque struct — no fields to extract.
+        return
+
+    fields: list[tuple[str, str]] = []
+    for fdecl in fdecl_list.children:
+        if fdecl.type != "field_declaration":
+            continue
+        # Gather the field type prefix (everything before the declarator).
+        type_parts: list[str] = []
+        declarator_node = None
+        for c in fdecl.children:
+            if c.type in {
+                "type_qualifier", "primitive_type", "type_identifier",
+                "sized_type_specifier", "struct_specifier",
+                "union_specifier", "enum_specifier",
+            }:
+                # For nested struct/union specifiers, prefer the type
+                # identifier ("struct Curl_str") rather than the full body.
+                if c.type == "struct_specifier":
+                    tag = None
+                    for cc in c.children:
+                        if cc.type == "type_identifier":
+                            tag = src_bytes[cc.start_byte:cc.end_byte].decode(
+                                "utf-8", errors="replace"
+                            )
+                    type_parts.append(f"struct {tag}" if tag else "struct")
+                else:
+                    type_parts.append(
+                        src_bytes[c.start_byte:c.end_byte].decode(
+                            "utf-8", errors="replace"
+                        )
+                    )
+            elif c.type in {
+                "field_identifier", "pointer_declarator", "array_declarator",
+            }:
+                declarator_node = c
+
+        if declarator_node is None:
+            continue
+
+        # Walk the declarator to recover the field name and any pointer
+        # stars / array brackets that belong to the type prefix.
+        name, type_suffix = _flatten_declarator(declarator_node, src_bytes)
+        if not name:
+            continue
+        ftype = " ".join(type_parts) + type_suffix
+        fields.append((ftype.strip(), name))
+
+    if not fields:
+        return
+    if tag_name:
+        structs[tag_name] = fields
+    if alias and alias not in structs:
+        structs[alias] = fields
+
+
+def _flatten_declarator(decl_node, src_bytes: bytes) -> tuple[str, str]:
+    """Return (field_name, type_suffix) for a field declarator.
+
+    ``type_suffix`` accumulates ``*`` stars (pointer_declarator) and
+    ``[N]`` array dimensions (array_declarator) so callers can append
+    them to the type prefix.
+    """
+    suffix = ""
+    node = decl_node
+    while True:
+        if node.type == "pointer_declarator":
+            suffix = "*" + suffix
+            inner = node.child_by_field_name("declarator")
+            if inner is None:
+                return ("", suffix)
+            node = inner
+        elif node.type == "array_declarator":
+            # Capture the [N] portion verbatim.
+            text = src_bytes[node.start_byte:node.end_byte].decode(
+                "utf-8", errors="replace"
+            )
+            # The trailing bracket-segment is everything after the inner
+            # declarator's name; recover the name by recursing into the
+            # inner child.
+            inner = node.child_by_field_name("declarator")
+            if inner is None:
+                return ("", suffix)
+            # The bracket portion of this array declarator goes to suffix.
+            bracket_idx = text.find("[")
+            if bracket_idx >= 0:
+                suffix = suffix + text[bracket_idx:]
+            node = inner
+        elif node.type == "field_identifier":
+            name = src_bytes[node.start_byte:node.end_byte].decode(
+                "utf-8", errors="replace"
+            )
+            return (name, suffix)
+        else:
+            return ("", suffix)
 
 
 def _slice_bytes(src_bytes: bytes, node) -> str:

@@ -300,6 +300,63 @@ def test_parser_recurses_into_preproc_ifdef():
     assert "linux_only" in parsed.functions
 
 
+def test_generate_nd_decls_struct_pointer_per_field_init():
+    """Single-pointer to a known struct gets per-field initialisation:
+    char* fields → bounded backing buffer; length fields → assume ≥ 0.
+
+    Regression: opaque struct pointer params (curl `Curl_URL *`, curl
+    `Curl_str *`, nghttp2 `nghttp2_bufs *`, OpenSSL `ASN1_STRING *`)
+    previously produced 100+ spurious CEs per function because each
+    field access against the nondet struct was unconstrained. With
+    parsed struct_definitions, the harness emits per-field init that
+    constrains the obviously-bad states.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="cmp", return_type="int",
+        parameters=[("struct Curl_str *", "str"), ("const char *", "check")],
+    )
+    func = FunctionInfo(
+        name="cmp", signature=sig, body="", callees=set(), source_file="x.c",
+    )
+    struct_defs = {"Curl_str": [("const char *", "str"), ("size_t", "len")]}
+    out = _generate_nd_decls(func, cbmc_unwind=8, struct_definitions=struct_defs)
+    src = "\n".join(out)
+    # Real struct instance (not just &single_byte_local).
+    assert "struct Curl_str _str_obj;" in src
+    assert "str = &_str_obj" in src
+    # char* field gets a NUL-terminated backing buffer.
+    assert "__str_obj_str_buf[9];" in src
+    assert "_str_obj.str = __str_obj_str_buf" in src
+    # len field (name suggests length) gets a >=0 / <= unwind assume.
+    assert "_str_obj.len >= 0" in src
+    assert "_str_obj.len <= (long)(8)" in src
+
+
+def test_generate_nd_decls_unknown_struct_falls_back_to_default():
+    """If the struct definition is not in struct_definitions, fall
+    through to the existing single-pointer addr-of behaviour."""
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="f", return_type="void",
+        parameters=[("struct Unknown *", "p")],
+    )
+    func = FunctionInfo(
+        name="f", signature=sig, body="", callees=set(), source_file="x.c",
+    )
+    # Empty struct_definitions — Unknown is opaque to bmc-agent.
+    out = _generate_nd_decls(func, cbmc_unwind=4, struct_definitions={})
+    src = "\n".join(out)
+    # No per-field init.
+    assert "_p_obj.p" not in src
+    # Default behaviour preserved: single local + addr-of.
+    assert "_p_val" in src or "&_p" in src
+
+
 def test_generate_nd_decls_uint8_pointer_is_raw_bytes():
     """`uint8_t *` / `unsigned char *` single-pointer params get a raw
     byte buffer, not a single-byte addr-of.

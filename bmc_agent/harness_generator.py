@@ -506,12 +506,112 @@ def _detect_paired_pointers(
     )
 
 
+def _resolve_struct_name(base_type: str, struct_definitions: Optional[dict]) -> Optional[str]:
+    """Given a parameter base type like ``struct Curl_str`` or ``CURLU``,
+    return the matching key in ``struct_definitions`` or None.
+
+    Handles three forms:
+      - ``struct Tag`` → look up ``Tag``
+      - ``Alias`` (typedef'd) → look up ``Alias``
+      - ``const struct Tag`` / ``const Alias`` → strip const, retry
+    """
+    if not struct_definitions:
+        return None
+    t = re.sub(r"\bconst\b", "", base_type).strip()
+    if t.startswith("struct "):
+        name = t[len("struct "):].strip()
+    else:
+        name = t
+    return name if name in struct_definitions else None
+
+
+# Substrings that suggest an integer field carries a length / count /
+# size, which should be constrained ``>= 0 && <= cbmc_unwind`` so CBMC
+# explores realistic states rather than wildly negative or astronomical
+# values that no real caller would set.
+_LENGTH_FIELD_HINTS = (
+    "len", "length", "size", "count", "n_", "num", "nbytes",
+    "bufsize", "buflen", "mlen", "inlen", "amount", "off", "offset",
+    "pos", "position", "remaining",
+)
+
+
+def _is_likely_length_field(field_name: str) -> bool:
+    fname = field_name.lower()
+    # Exact-match short names.
+    if fname in ("n", "num", "len", "size", "count", "off", "pos"):
+        return True
+    # Substring match (e.g. ``buf_len``, ``num_items``).
+    return any(hint in fname for hint in _LENGTH_FIELD_HINTS)
+
+
+def _emit_struct_field_init(
+    obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
+) -> list[str]:
+    """Emit harness statements that initialise a single struct field.
+
+    Heuristics (conservative — never violate field types):
+      - ``char *`` or ``const char *`` field: malloc a small backing
+        buffer + NUL terminator + assign. Models the common
+        "this struct owns a NUL-terminated string" pattern.
+      - ``unsigned char *`` / ``uint8_t *`` field: raw byte buffer
+        (no NUL), suitable for binary buffer fields.
+      - integer field whose name looks like a length / count / size
+        (``len``, ``length``, ``size``, ``count``, ``n``, ``num``,
+        ``off``, ``pos``): ``__CPROVER_assume`` it's in ``[0,
+        cbmc_unwind]`` so CBMC explores reasonable inputs.
+      - everything else: leave the field nondet (default tree-sitter
+        behaviour); intentionally don't fight CBMC's natural symbolic
+        exploration.
+    """
+    out: list[str] = []
+    t = ftype.strip()
+    # Pointer fields
+    if t.endswith("*"):
+        stars = t.count("*")
+        # Only single-pointer fields get auto-backing buffers; double
+        # pointers and beyond stay nondet (too speculative to model).
+        if stars != 1:
+            return out
+        base = re.sub(r"\bconst\b", "", t[:-1]).strip()
+        buf_size = cbmc_unwind + 1
+        backing = f"_{obj_name}_{fname}_buf"
+        if base == "char":
+            # NUL-terminated string backing for char *.
+            len_var = f"_{obj_name}_{fname}_len"
+            out.append(f"    char {backing}[{buf_size}];")
+            out.append(f"    unsigned int {len_var};")
+            out.append(
+                f"    __CPROVER_assume({len_var} <= (unsigned int){cbmc_unwind});"
+            )
+            out.append(f"    {backing}[{len_var}] = '\\0';")
+            out.append(f"    {obj_name}.{fname} = {backing};")
+        elif base in ("unsigned char", "uint8_t", "int8_t"):
+            # Raw byte buffer for binary fields.
+            btype = "unsigned char" if base != "int8_t" else "signed char"
+            out.append(f"    {btype} {backing}[{buf_size}];")
+            out.append(f"    {obj_name}.{fname} = ({t}){backing};")
+        # Other pointer types (void *, struct pointers, function pointers,
+        # arrays of pointers) stay nondet — modelling them would risk
+        # over-constraining or compile errors on incomplete types.
+        return out
+
+    # Integer / size fields with length-suggesting names.
+    if _is_likely_length_field(fname):
+        out.append(
+            f"    __CPROVER_assume({obj_name}.{fname} >= 0 && "
+            f"{obj_name}.{fname} <= (long)({cbmc_unwind}));"
+        )
+    return out
+
+
 def _generate_nd_decls(
     func: FunctionInfo,
     cbmc_unwind: int = 4,
     nonnull_params: Optional[set] = None,
     precondition: Optional[str] = None,
     raw_bytes: bool = False,
+    struct_definitions: Optional[dict] = None,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -732,6 +832,34 @@ def _generate_nd_decls(
                     lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
                 if pname in nonnull_params:
                     lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
+            elif star_count == 1 and _resolve_struct_name(base_type, struct_definitions):
+                # Single-pointer to a known struct — emit per-field
+                # initialisation instead of just leaving the struct
+                # nondet. Empirical pattern: opaque-struct pointer args
+                # (`Curl_URL *u`, `nghttp2_bufs *bufs`, `ASN1_STRING *s`)
+                # produced 100+ spurious CEs each because every field
+                # access was unconstrained.
+                struct_tag = _resolve_struct_name(base_type, struct_definitions)
+                fields = struct_definitions[struct_tag]
+                obj_name = f"_{pname}_obj"
+                lines.append(
+                    f"    /* struct-pointer init for '{pname}' ({base_type}, "
+                    f"{len(fields)} field{'s' if len(fields) != 1 else ''}) */"
+                )
+                # Emit a stack-allocated instance (CBMC fills it with
+                # nondet); we then constrain individual fields below.
+                lines.append(f"    {base_type} {obj_name};")
+                lines.append(f"    {ptype_stripped} {pname} = &{obj_name};")
+                for ftype, fname in fields:
+                    lines.extend(
+                        _emit_struct_field_init(
+                            obj_name, ftype, fname, cbmc_unwind,
+                        )
+                    )
+                if pname in nonnull_params:
+                    lines.append(
+                        f"    /* {pname} is non-null by construction (addr of {obj_name}) */"
+                    )
             elif "const" in ptype_stripped.lower():
                 lines.append(f"    {clean_base} {local_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
@@ -840,6 +968,7 @@ class HarnessGenerator:
         nd_decls = _generate_nd_decls(
             caller,
             raw_bytes=getattr(self.config, "raw_bytes", False),
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
         )
 
         # --- 6. Precondition assumptions ---
@@ -1526,6 +1655,7 @@ class HarnessGenerator:
             nonnull_params=nonnull,
             precondition=spec.precondition,
             raw_bytes=getattr(self.config, "raw_bytes", False),
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
         )
 
         # --- 6. Precondition assumptions ---
@@ -1713,6 +1843,7 @@ class HarnessGenerator:
             nonnull_params=nonnull,
             precondition=spec.precondition,
             raw_bytes=getattr(self.config, "raw_bytes", False),
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
         )
 
         # Precondition assume + postcondition assert via existing DSL.
