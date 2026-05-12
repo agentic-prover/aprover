@@ -258,6 +258,48 @@ def test_translate_atom_c_cast_on_rhs():
     assert "__CPROVER_assume(val == (uint64_t)(uint8_t)ptr[0])" in stmt
 
 
+def test_parser_recurses_into_preproc_ifdef():
+    """Function defs inside `#ifndef X` blocks must be discovered.
+
+    Regression: tree-sitter parses `#ifndef X ... #endif` as a
+    `preproc_ifdef` node whose children include the function defs, but
+    the parser previously only walked direct `function_definition`
+    children of the translation unit. Result: any function guarded by
+    a build-config macro (`#ifndef CURL_DISABLE_PARSEDATE`,
+    `#ifdef __linux__`, etc.) was invisible, even when the guard
+    evaluates true in the default build.
+    """
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+
+    src = (
+        "#include <stdint.h>\n"
+        "\n"
+        "static int top_level_fn(int x) { return x + 1; }\n"
+        "\n"
+        "#ifndef CURL_DISABLE_PARSEDATE\n"
+        "static int guarded_fn(int x) { return x * 2; }\n"
+        "static int another_guarded(int x) { return x - 1; }\n"
+        "#endif\n"
+        "\n"
+        "#ifdef __linux__\n"
+        "static int linux_only(int x) { return x & 0xFF; }\n"
+        "#endif\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as tf:
+        tf.write(src)
+        path = tf.name
+    try:
+        parsed = parse_c_file(path)
+    finally:
+        os.unlink(path)
+
+    assert "top_level_fn" in parsed.functions
+    assert "guarded_fn" in parsed.functions
+    assert "another_guarded" in parsed.functions
+    assert "linux_only" in parsed.functions
+
+
 def test_generate_nd_decls_double_pointer_cursor():
     """`T**` params (in-out cursors) get a backing buffer + cursor + addr-of.
 

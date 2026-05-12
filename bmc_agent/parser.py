@@ -168,25 +168,44 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
     function_bodies: dict[str, str] = {}
     function_definitions: dict[str, str] = {}
 
-    # Walk top-level function definitions
-    for node in root.children:
+    # Preprocessor wrapper node types whose children must also be walked.
+    # Without recursing into these, functions guarded by ``#ifndef
+    # CURL_DISABLE_PARSEDATE`` (curl/parsedate.c) or ``#ifdef __linux__``
+    # are invisible to the parser even though they're in the build by
+    # default.
+    _PREPROC_CONTAINER_TYPES = {
+        "preproc_if", "preproc_ifdef", "preproc_ifndef",
+        "preproc_else", "preproc_elif", "preproc_elifdef", "preproc_elifndef",
+        "linkage_specification",  # extern "C" { ... }
+    }
+
+    def _collect_function_defs(node):
+        """Yield every function_definition node, recursing through
+        preprocessor / linkage wrappers but not into other function defs."""
         if node.type == "function_definition":
-            sig = _extract_sig_ts(node, src_bytes)
-            if sig:
-                functions[sig.name] = sig
-                call_graph[sig.name] = set()
-                function_definitions[sig.name] = src_bytes[
-                    node.start_byte:node.end_byte
-                ].decode("utf-8", errors="replace")
-                # Body is the compound_statement child
-                body_node = node.child_by_field_name("body")
-                if body_node:
-                    body_text = src_bytes[body_node.start_byte:body_node.end_byte].decode(
-                        "utf-8", errors="replace"
-                    )
-                    function_bodies[sig.name] = body_text
-                    # Collect call expressions within the body
-                    _collect_calls_ts(body_node, call_graph[sig.name], src_bytes)
+            yield node
+            return
+        if node.type in _PREPROC_CONTAINER_TYPES or node.type == "translation_unit":
+            for child in node.children:
+                yield from _collect_function_defs(child)
+
+    for node in _collect_function_defs(root):
+        sig = _extract_sig_ts(node, src_bytes)
+        if sig:
+            functions[sig.name] = sig
+            call_graph[sig.name] = set()
+            function_definitions[sig.name] = src_bytes[
+                node.start_byte:node.end_byte
+            ].decode("utf-8", errors="replace")
+            # Body is the compound_statement child
+            body_node = node.child_by_field_name("body")
+            if body_node:
+                body_text = src_bytes[body_node.start_byte:body_node.end_byte].decode(
+                    "utf-8", errors="replace"
+                )
+                function_bodies[sig.name] = body_text
+                # Collect call expressions within the body
+                _collect_calls_ts(body_node, call_graph[sig.name], src_bytes)
 
     return ParsedCFile(
         path=path,
