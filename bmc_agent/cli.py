@@ -303,6 +303,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         # text that CBMC's frontend can't re-parse.
         config.cbmc_real_libc = True
         config.preprocess = False
+    if getattr(args, "strict_dsl", False):
+        config.strict_dsl = True
     if getattr(args, "skip_refinement", False):
         config.skip_refinement = True
     if getattr(args, "enable_realism_check", False):
@@ -594,6 +596,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Real-libc mode: harness #includes the source .c file and lets CBMC do all preprocessing via -I. Required for real-world glibc-using OSS (jq, curl, OpenSSL, …); leave off for bare-metal targets like VibeOS.",
+    )
+    ver.add_argument(
+        "--strict-dsl",
+        action="store_true",
+        default=False,
+        help="Strict-formal Phase 1 prompts: pre/post must be a single C boolean expression (no natural language). Required for bounty/CVE work — prose-mixed specs translate to comments and produce vacuous verifications.",
     )
     ver.add_argument(
         "--threat-model",

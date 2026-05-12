@@ -46,6 +46,66 @@ The specification DSL:
 - parameters use their actual names from the function signature
 """
 
+# Strict-formal C DSL — pre/post must be single C boolean expressions
+# (only the listed predicates, only && / || / ! / arithmetic /
+# comparisons). Used for bounty / CVE workflows where natural-language
+# clauses translate to /* … */ comments and produce vacuous
+# verifications, masking real bugs. Opt-in via Config.strict_dsl /
+# `--strict-dsl`; default off to preserve the looser VibeOS-era
+# behaviour where some prose mixing is tolerated.
+STRICT_DSL_GRAMMAR = """\
+The specification DSL — STRICTLY FORMAL FOR C:
+
+A precondition and a postcondition must each be a SINGLE C boolean
+expression. The expression is dropped verbatim (after a small set of
+DSL rewrites — see below) into __CPROVER_assume(...) and assert(...),
+so anything that doesn't compile as a C bool expression breaks the
+harness AND silently translates to a comment, producing a vacuous
+verification. Do NOT include:
+  * prose, English commentary, em-dashes
+  * "Let X = Y" / "If A then B" / "otherwise X" style preludes
+  * inline /* … */ comments
+  * sentence punctuation ('.' at end of clause, ',' separating clauses)
+Combine clauses with && and ||. Quote struct fields directly
+(p->curr_buf, p->stackpos, etc.).
+
+Allowed predicates (rewritten to C by the harness generator):
+  * valid(ptr)        → ptr != NULL
+  * valid_string(p)   → p != NULL  (null-terminated; bound set in harness)
+  * valid_range(p,l,h)→ p != NULL && l>=0 && h>=l
+  * in_bounds(a, i)   → i>=0 && i<sizeof(a)/sizeof(a[0])
+  * null(ptr)         → ptr == NULL
+  * \\result           → C variable holding the return value
+
+C-specific reminders:
+  * Pointers can be NULL — write valid(p) when callers may pass NULL
+    and the function dereferences it.
+  * Integer arithmetic in C wraps silently on overflow; for
+    unsigned*signed mixed ops, the precondition should bound the
+    operand ranges so the bug class doesn't get missed.
+  * Use the parameter / struct-field names from the actual signature
+    — don't invent fields.
+
+EXAMPLES of correct vs. incorrect:
+  GOOD pre:  valid(p) && valid_range(buf, 0, length) && length >= 0
+  GOOD post: \\result == 0 || \\result == -1
+  BAD  pre:  p has been initialized by parser_init(); p->curr_buf is NULL …
+  BAD  post: \\result == 0 if successful; otherwise \\result is an error pointer
+
+If a property is genuinely too rich for a single C boolean expression
+(temporal state-machine invariants, owned-vs-borrowed, etc.), emit the
+WEAKEST formal expression that captures the SAFETY portion (e.g.
+result != NULL, stackpos in range) and put the rest in the JSON
+"reasoning" field — never mix prose into precondition / postcondition.
+"""
+
+# System prompt variants. The strict prompt swaps the DSL grammar but
+# keeps the rest of the C-side preamble (threat model, struct context,
+# etc.). Chosen at spec-generation time based on Config.strict_dsl.
+STRICT_SPEC_SYSTEM_PROMPT = (
+    f"You are a formal verification expert for C programs.\n\n{STRICT_DSL_GRAMMAR}"
+)
+
 # Rust-aware DSL notes. The core predicate vocabulary matches the C DSL —
 # Phase 2 translates either form into Kani/CBMC primitives — but Rust's
 # type system changes which predicates are *needed* vs *implicit*. Safe
@@ -108,15 +168,24 @@ RUST_SPEC_SYSTEM_PROMPT = (
 )
 
 
-def spec_system_prompt_for(language: str) -> str:
+def spec_system_prompt_for(language: str, strict: bool = False) -> str:
     """Return the system prompt appropriate for *language*.
 
     Recognised values: ``"c"`` and ``"rust"``. Unknown languages fall
-    back to the C prompt to preserve existing behaviour for callers that
-    have not been updated.
+    back to the C prompt to preserve existing behaviour for callers
+    that have not been updated.
+
+    When *strict* is True and *language* is ``"c"``, the strict-formal
+    C variant is returned. Strict mode forbids natural-language
+    clauses in pre/post and is the right choice for bounty / CVE
+    workflows where prose-mixed specs translate to vacuous
+    verifications.  The Rust prompt is already strict-formal by
+    default (M3c) so the flag has no effect for Rust.
     """
     if language == "rust":
         return RUST_SPEC_SYSTEM_PROMPT
+    if strict:
+        return STRICT_SPEC_SYSTEM_PROMPT
     return SPEC_SYSTEM_PROMPT
 
 ENTRY_SPEC_PROMPT = """\

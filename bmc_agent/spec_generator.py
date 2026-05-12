@@ -352,10 +352,18 @@ class SpecGenerator:
 
         # Select the language-appropriate system prompt for this run so
         # Rust input gets Rust-aware DSL notes (references, slices,
-        # wrapping arithmetic) rather than C-flavored ones.
+        # wrapping arithmetic) rather than C-flavored ones.  When
+        # config.strict_dsl is set, swap in the strict-formal C
+        # variant — bounty/CVE work needs single-C-expression specs
+        # because prose mixing translates to vacuous verifications.
         language = detect_language(source_file)
-        self._spec_system_prompt = spec_system_prompt_for(language)
-        logger.info("Using %s-flavored spec system prompt", language)
+        strict = bool(getattr(self.config, "strict_dsl", False))
+        self._spec_system_prompt = spec_system_prompt_for(language, strict=strict)
+        logger.info(
+            "Using %s%s spec system prompt",
+            "strict-" if (strict and language == "c") else "",
+            language,
+        )
 
         self.store.init_driver(driver_name)
 

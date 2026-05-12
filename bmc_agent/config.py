@@ -29,6 +29,13 @@ class Config:
     # type stripping. Implies preprocess=False (Python doesn't expand).
     cbmc_real_libc: bool = False
 
+    # Strict DSL mode: force Phase 1 prompts to emit pre/post as a
+    # single C boolean expression (no natural language).  Required for
+    # bounty / CVE workflows where prose-mixed specs translate to
+    # comments and produce vacuous verifications that mask real bugs.
+    # Off by default to preserve VibeOS-era behaviour.
+    strict_dsl: bool = False
+
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
     # absent (we still surface the field to give the pipeline a single knob).
@@ -99,6 +106,7 @@ class Config:
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
             cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
+            strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),
