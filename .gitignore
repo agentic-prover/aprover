@@ -24,6 +24,7 @@ main.tex
 *.blg
 *.out
 *.pdf
+pipeline.svg
 
 # Proposals and reports (kept locally)
 PROPOSAL.md
@@ -43,6 +44,9 @@ REPORT_AMC_with_figure.md
 .vscode/
 *.swp
 *.swo
+
+# Claude Code harness state
+.claude/
 
 # Logs
 *.log
