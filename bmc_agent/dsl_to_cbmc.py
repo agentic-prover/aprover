@@ -337,7 +337,7 @@ def precond_to_assume(precondition: str, params: list[str]) -> list[str]:
     -------
     A list of C statement strings.
     """
-    return _condition_to_stmts(precondition, context="assume")
+    return _filter_tautological(_condition_to_stmts(precondition, context="assume"))
 
 
 def postcond_to_assert(
@@ -363,7 +363,147 @@ def postcond_to_assert(
     """
     # Replace \result with the actual return variable name
     post = re.sub(r"\\result\b", return_var, postcondition)
-    return _condition_to_stmts(post, context="assert")
+    return _filter_tautological(_condition_to_stmts(post, context="assert"))
+
+
+# ---------------------------------------------------------------------------
+# Tautological-assertion detector
+# ---------------------------------------------------------------------------
+
+# Comparison operators we treat as potential tautology sites.  Always-true
+# (==, >=, <=) and always-false (!=, <, >) self-comparisons are both
+# refused: the always-true ones waste solver effort, the always-false
+# ones HIDE real bugs because the assert will always fire on every
+# execution, drowning out the actual property the spec was supposed to
+# check.
+_TAUTOLOGY_OPERATORS: tuple[str, ...] = (">=", "<=", "==", "!=", ">", "<")
+
+
+def _is_self_comparison(expr: str) -> bool:
+    """Return True when ``expr`` is of the form ``X OP X`` where both
+    sides are syntactically identical after stripping outer parens and
+    collapsing whitespace.
+
+    Catches tautologies produced when the spec references ``\\old(X)``
+    and the DSL sanitiser strips ``\\old()`` leaving ``X OP X``.  The
+    canonical example, observed on ttf.c stbtt__cff_skip_operand:
+
+        postcondition: b->cursor > \\old(b->cursor)
+            ↓ \\old() stripped
+        b->cursor > b->cursor
+            ↓ wrap()
+        assert(b->cursor > b->cursor);     ← always false, bug-hiding
+
+    Returns False on anything we can't unambiguously parse.
+    """
+    if not expr:
+        return False
+    s = expr.strip()
+    # Strip up to a few layers of outer parens.
+    for _ in range(4):
+        if s.startswith("(") and s.endswith(")"):
+            s = s[1:-1].strip()
+        else:
+            break
+    # Try each operator in length-descending order so ``>=`` matches
+    # before ``>`` would consume the ``=``.
+    for op in sorted(_TAUTOLOGY_OPERATORS, key=len, reverse=True):
+        # Find the operator at the TOP level (not nested in parens / brackets).
+        depth = 0
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            if ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+            elif depth == 0 and s[i:i + len(op)] == op:
+                # Boundary-check so ``a>=b`` doesn't match for op ``>``.
+                if op in ("<", ">") and i + 1 < len(s) and s[i + 1] == "=":
+                    i += 1
+                    continue
+                if op in ("<", ">", "=") and i > 0 and s[i - 1] in "<>=!":
+                    i += 1
+                    continue
+                # Skip ``->`` arrow operator (e.g. b->cursor): when op is
+                # ``>`` and the preceding char is ``-``, this is the
+                # struct-pointer accessor, not a comparison.
+                if op == ">" and i > 0 and s[i - 1] == "-":
+                    i += 1
+                    continue
+                # Skip ``<-`` if it ever appears (rare; not standard C
+                # but defensive).
+                if op == "<" and i + 1 < len(s) and s[i + 1] == "-":
+                    i += 1
+                    continue
+                lhs = s[:i].strip()
+                rhs = s[i + len(op):].strip()
+                if not lhs or not rhs:
+                    return False
+                # Normalise: strip outer parens, collapse whitespace.
+                def _norm(t: str) -> str:
+                    while t.startswith("(") and t.endswith(")"):
+                        t = t[1:-1].strip()
+                    return re.sub(r"\s+", "", t)
+                return _norm(lhs) == _norm(rhs)
+            i += 1
+    return False
+
+
+def _strip_wrapper(stmt: str) -> str | None:
+    """Return the inner expression of ``assert(EXPR);`` or
+    ``__CPROVER_assume(EXPR);``, or None if the statement isn't an
+    assertion/assume call. Used by the tautology filter to inspect the
+    expression CBMC will see."""
+    s = stmt.strip().rstrip(";").strip()
+    for prefix in ("assert(", "__CPROVER_assume("):
+        if s.startswith(prefix) and s.endswith(")"):
+            return s[len(prefix):-1]
+    return None
+
+
+def _filter_tautological(stmts: list[str]) -> list[str]:
+    """Replace any ``assert(EXPR);`` / ``__CPROVER_assume(EXPR);`` where
+    EXPR is a self-comparison (``X OP X``) with an inline comment.  Logs
+    a warning so the user sees the suppression.
+
+    Rationale: a tautological assert that's always false (``b->cursor >
+    b->cursor``) silently hides every other property of the function
+    because CBMC reports it on every execution.  A tautological assert
+    that's always true (``size >= size``) wastes solver effort.  Both
+    cases originate from the same root: the spec referenced ``\\old()``
+    or another temporal construct the DSL translator doesn't model, and
+    the sanitiser stripped one side leaving an identical comparison.
+
+    Multi-line input handling: ``translate_atom`` joins multiple
+    ``&&``-split asserts with ``\\n    `` into a single string, so each
+    list element can contain multiple semicolon-terminated statements
+    on separate lines.  We split, filter, and re-join per element so
+    the structure of the caller's output is preserved.
+    """
+    import logging as _logging
+    out: list[str] = []
+    for stmt in stmts:
+        # Split on lines so multi-statement entries get filtered per-line.
+        lines = stmt.split("\n")
+        new_lines: list[str] = []
+        for line in lines:
+            inner = _strip_wrapper(line.strip())
+            if inner is not None and _is_self_comparison(inner):
+                _logging.getLogger("bmc_agent").warning(
+                    "Refused tautological assertion (likely a stripped "
+                    "\\old() or temporal construct): %s", line.strip(),
+                )
+                # Preserve leading whitespace for the comment.
+                leading_ws = line[:len(line) - len(line.lstrip())]
+                new_lines.append(
+                    f"{leading_ws}/* tautological — refused: "
+                    f"{line.strip()} (see harness gen log for why) */"
+                )
+            else:
+                new_lines.append(line)
+        out.append("\n".join(new_lines))
+    return out
 
 
 # ---------------------------------------------------------------------------

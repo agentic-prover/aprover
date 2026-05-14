@@ -185,6 +185,55 @@ def test_postcond_to_assert_comparisons():
     assert "result >= 0" in joined
 
 
+def test_postcond_to_assert_refuses_tautology_from_stripped_old():
+    """When the postcondition references ``\\old(X)`` and the DSL
+    sanitiser strips it, the resulting ``X OP X`` is a tautological
+    assertion that must NOT be emitted: an always-false self-comparison
+    drowns out every other property. Regression: ttf.c
+    stbtt__cff_skip_operand was emitting ``assert(b->cursor > b->cursor)``.
+    """
+    from bmc_agent.dsl_to_cbmc import postcond_to_assert
+    stmts = postcond_to_assert(
+        "b->cursor > \\old(b->cursor) && b->size > 0", ["b"],
+    )
+    # Flatten on newlines because translate_atom joins multi-clause
+    # postconditions with \n inside a single list element.
+    lines = []
+    for s in stmts:
+        lines.extend(s.split("\n"))
+    # Live lines: those that aren't comments.
+    live = [l.strip() for l in lines if l.strip() and not l.strip().startswith("/*")]
+    joined_live = " ".join(live)
+    # The tautology must NOT appear as a live assert.
+    assert "b->cursor > b->cursor" not in joined_live, live
+    # The marker comment must appear somewhere.
+    assert any("tautological" in l for l in lines), lines
+    # The other clause survives intact as a live assert.
+    assert any("b->size > 0" in l for l in live), live
+
+
+def test_is_self_comparison_basic_cases():
+    """Predicate identifies syntactic self-comparisons; rejects normal
+    binary comparisons."""
+    from bmc_agent.dsl_to_cbmc import _is_self_comparison
+    # Tautologies (any operator with identical sides)
+    assert _is_self_comparison("x == x")
+    assert _is_self_comparison("x > x")
+    assert _is_self_comparison("x >= x")
+    assert _is_self_comparison("x != x")
+    assert _is_self_comparison("b->cursor > b->cursor")  # ->-aware
+    assert _is_self_comparison("(b->cursor) > b->cursor")  # paren-tolerant
+    assert _is_self_comparison("p->len <= p->len")
+    assert _is_self_comparison("a->b->c == a->b->c")  # nested ->
+    # NOT tautologies
+    assert not _is_self_comparison("x > y")
+    assert not _is_self_comparison("a + 1 > a")
+    assert not _is_self_comparison("p->len == q->len")
+    assert not _is_self_comparison("result >= 0")
+    assert not _is_self_comparison("")
+    assert not _is_self_comparison("just_an_expression")
+
+
 def test_translate_atom_valid():
     """translate_atom with valid(ptr) in assume context."""
     from bmc_agent.dsl_to_cbmc import translate_atom
@@ -1984,6 +2033,49 @@ def test_infer_extern_return_contract_requires_underscore_prefix(tmp_path: Path)
     )
     parsed = parse_c_file(str(src))
     assert _infer_extern_return_contract("baz", "int", parsed) == []
+
+
+def test_infer_extern_return_contract_offset_pattern(tmp_path: Path):
+    """Offset/index family: siblings return -1 (error sentinel) plus a
+    non-literal expression (the computed offset). Yields ``result >= -1``.
+    Canonical case: stb_truetype's stbtt_GetFontOffsetForIndex —
+    arm-(a) feedback-loop TODO from the 2026-05-14 ttf.c sweep.
+    """
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "stbtt.c"
+    src.write_text(
+        "int stbtt_GetFontOffsetForIndex_local(unsigned char *d, int i) {\n"
+        "    if (i < 0) return -1;\n"
+        "    return ttULONG(d + offset);\n"
+        "}\n"
+        "int stbtt_GetNumberOfFonts_local(unsigned char *d) {\n"
+        "    if (d == 0) return -1;\n"
+        "    return ttULONG(d + 8);\n"
+        "}\n"
+        "int stbtt_target(unsigned char *d, int i);\n"
+    )
+    parsed = parse_c_file(str(src))
+    out = _infer_extern_return_contract("stbtt_target", "int", parsed)
+    assert out == ["__CPROVER_assume(result >= -1);"], out
+
+
+def test_infer_extern_return_contract_offset_pattern_requires_mixed_sibling(tmp_path: Path):
+    """The offset-pattern only fires when at least one sibling has both
+    literal and non-literal returns. Pure {-1, -1, -1} → ``result < 0``
+    not ``result >= -1`` (since we don't have evidence of non-negative
+    returns)."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "pure_neg.c"
+    src.write_text(
+        "int api_first(int x) { return -1; }\n"
+        "int api_second(int x) { return -1; }\n"
+        "int api_target(int x);\n"
+    )
+    parsed = parse_c_file(str(src))
+    out = _infer_extern_return_contract("api_target", "int", parsed)
+    assert out == ["__CPROVER_assume(result < 0);"], out
 
 
 def test_infer_extern_return_contract_pointer_return_skipped(tmp_path: Path):

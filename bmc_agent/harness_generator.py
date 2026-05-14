@@ -1119,6 +1119,11 @@ def _infer_extern_return_contract(
     saw_negative_macro = False
     siblings_with_literals = 0
     siblings_with_only_nonliterals = 0
+    # ``mixed`` siblings have BOTH a literal return AND a non-literal
+    # return (e.g., ``return -1;`` alongside ``return ttULONG(...);``).
+    # This is the offset/index pattern: -1 sentinel for error, otherwise
+    # a computed non-negative value. Used to infer ``result >= -1``.
+    siblings_with_mixed_returns = 0
     for sib in siblings:
         body = fbodies.get(sib, "")
         sib_constants: set[int] = set()
@@ -1151,6 +1156,10 @@ def _infer_extern_return_contract(
         saw_negative_macro = saw_negative_macro or sib_neg_macro
         if sib_constants or sib_neg_macro:
             siblings_with_literals += 1
+            if sib_nonliteral:
+                # Mixed: sibling has both a literal return (e.g. -1) AND
+                # a non-literal return (e.g. an offset expression).
+                siblings_with_mixed_returns += 1
         elif sib_nonliteral:
             siblings_with_only_nonliterals += 1
 
@@ -1165,12 +1174,31 @@ def _infer_extern_return_contract(
         return []
 
     # Derive the contract.
-    # Case 1: all observed values are 0 or negative → result <= 0
-    # Case 2: all observed values in a small fixed set → result == c0 || ... || result == cN
     has_positive = any(c > 0 for c in constants)
     has_zero = 0 in constants
     has_negative = any(c < 0 for c in constants) or saw_negative_macro
 
+    # Case "offset/index family": siblings consistently return -1 (error
+    # sentinel) alongside a computed non-literal value, with no positive
+    # literal observed. Pattern is ``return -1; ... return computed_offset;``
+    # — canonical example: stb_truetype's stbtt_GetFontOffsetForIndex,
+    # which returns -1 for "no more fonts" or a non-negative byte offset.
+    # Without this contract, the stub returns unconstrained int and CBMC
+    # picks impossible values like -8193. Conservative trigger:
+    #   - the only literal observed is -1
+    #   - no negative macros (which would imply a wider error code range)
+    #   - at least one sibling produced mixed literal+non-literal returns
+    #     (so we're sure the namespace includes non-literal "success" paths)
+    if (
+        not has_positive
+        and constants == {-1}
+        and not saw_negative_macro
+        and siblings_with_mixed_returns >= 1
+    ):
+        return ["__CPROVER_assume(result >= -1);"]
+
+    # Case "non-positive, possibly with macros": all observed literals
+    # are 0 or negative → result <= 0
     if not has_positive:
         if has_zero and has_negative:
             return ["__CPROVER_assume(result <= 0);"]
@@ -1179,8 +1207,7 @@ def _infer_extern_return_contract(
         if has_negative and not has_zero:
             return ["__CPROVER_assume(result < 0);"]
 
-    # Mixed positive + others: only emit a contract when the constant set
-    # is small and well-known (e.g., {-1, 0, 1} for comparators).
+    # Case "small fixed set including positives": e.g. {-1, 0, 1} comparators.
     if has_positive and len(constants) <= 4 and not saw_negative_macro:
         clauses = " || ".join(f"result == {c}" for c in sorted(constants))
         return [f"__CPROVER_assume({clauses});"]
