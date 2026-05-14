@@ -35,6 +35,67 @@ from bmc_agent.spec_generator import SpecGenerator
 logger = get_logger("pipeline")
 
 
+# CBMC property classes that would manifest as a runtime crash if the bug
+# were real (signal-fault or assertion).  When dynamic validation reports
+# NOT_TRIGGERED on one of these, the CBMC witness is genuinely a model
+# artifact and the realism shortcut is safe.
+_CRASH_CLASS_PROPERTY_SUFFIXES: tuple[str, ...] = (
+    "pointer_dereference",
+    "pointer",                # CBMC's older single-property pointer check
+    "bounds",
+    "null-pointer",
+    "NULL-pointer",
+    "double-free",
+    "use-after-free",
+    "assertion",
+    "div-by-zero",
+    "memory-leak",
+    "precondition_instance",  # PROPERTY_OF callee precondition violations
+)
+
+
+# CBMC property classes that are SILENT undefined behaviour — the bug is
+# real per the C standard, but the runtime doesn't crash without
+# instrumentation (UBSan / ASan-with-pointer-checks).  Dynamic
+# NOT_TRIGGERED on one of these is uninformative; we must call the
+# realism LLM rather than auto-marking UNREALISTIC.  Misclassifying these
+# as artifacts erases real bugs — see the May-7 VibeOS malloc.overflow.1
+# regression that exposed this.
+_SILENT_UB_PROPERTY_SUFFIXES: tuple[str, ...] = (
+    "overflow",
+    "conversion",
+    "pointer_arithmetic",     # C11 §6.5.6/8 pointer-past-end
+    "pointer_overflow",
+    "shift",
+    "alignment",
+)
+
+
+def _is_crash_class_property(prop: str) -> bool:
+    """Return True when the CBMC property would crash at runtime if real.
+
+    The property name looks like ``func.<class>.<index>`` (e.g.
+    ``malloc.overflow.1``, ``f.pointer_dereference.13``).  We match on the
+    middle token.  Anything not on the crash list is treated conservatively
+    — including unknown classes — so the realism-shortcut only fires when
+    we positively know a real bug here would manifest as a crash.
+
+    Returns False for empty / malformed property names so the dynamic
+    shortcut is gated on a positive identification, not on absence of
+    information.
+    """
+    if not prop:
+        return False
+    parts = prop.split(".")
+    # Walk inward from the property name; allow either ``f.class.N`` or
+    # ``f.subdir.class.N`` shape.  We match against any token that equals
+    # a crash-class suffix.
+    for tok in parts:
+        if tok in _CRASH_CLASS_PROPERTY_SUFFIXES:
+            return True
+    return False
+
+
 def _ce_class_key(ce) -> str:
     """Coarse equivalence class for a counterexample.
 
@@ -639,15 +700,19 @@ class AMCPipeline:
         from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
 
         dyn = getattr(validation, "dynamic_result", None)
+        ce = getattr(validation, "counterexample", None)
+        failing_prop = getattr(ce, "failing_property", "") or ""
         if (
             self.config.enable_realism_check
             and dyn is not None
             and dyn.outcome == DynamicOutcome.NOT_TRIGGERED
+            and _is_crash_class_property(failing_prop)
         ):
             logger.info(
                 "Realism check skipped for '%s': dynamic validation reported "
-                "NOT_TRIGGERED, marking finding as artifact",
-                func.name,
+                "NOT_TRIGGERED on crash-class property '%s', marking finding "
+                "as artifact",
+                func.name, failing_prop,
             )
             realism = RealismCheckResult(
                 verdict=RealismVerdict.UNREALISTIC,
@@ -655,8 +720,9 @@ class AMCPipeline:
                     "Dynamic validation harness compiled + executed the "
                     "counterexample state; the runtime fault did not trigger. "
                     "Marked UNREALISTIC without a realism-LLM call: when the "
-                    "real runtime can't reproduce the fault, the CBMC witness "
-                    "is by definition a model artifact (stub return values, "
+                    "real runtime can't reproduce the fault for a crash-class "
+                    "property (NULL deref, OOB, bounds), the CBMC witness is "
+                    "by definition a model artifact (stub return values, "
                     "unconstrained symbolic state, or aliasing impossible "
                     "in real C)."
                 ),

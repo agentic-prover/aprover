@@ -3007,19 +3007,28 @@ def _strip_glibc_internal_typedefs(text: str) -> str:
             strip = True
             reason = "removed"
 
-        # Cascading strip rule: typedef body references something already
-        # stripped (e.g. ``typedef __gnuc_va_list va_list;`` after
-        # __gnuc_va_list is gone).  We only check identifiers that came
-        # from the SOURCE side of the typedef, not the target name itself,
-        # so a typedef that just happens to reuse the target identifier
-        # in its body isn't mis-classified.
+        # Cascading strip rule: typedef body references a *glibc-internal*
+        # name that was already stripped (e.g. ``typedef __gnuc_va_list
+        # va_list;`` after __gnuc_va_list is gone).  We restrict the
+        # cascade to ``__``-prefixed referents because:
+        #   * Those are glibc-internal types the system headers will NOT
+        #     reintroduce, so a typedef referencing them really is orphaned.
+        #   * C-standard types (size_t, ptrdiff_t, ...) DO get reintroduced
+        #     by ``<stdint.h>``, ``<stddef.h>``, etc., so a user typedef
+        #     like ``typedef struct { size_t size; ... } block_header_t;``
+        #     remains valid even after our primary rule strips ``size_t``.
+        # We exclude the target name itself from the match set so a typedef
+        # that happens to reuse its target identifier in its body isn't
+        # mis-classified.
         if not strip and target and stripped_names:
             body_tokens = set(re.findall(r'\b\w+\b', typedef_text))
             body_tokens.discard(target)
             referenced = body_tokens & stripped_names
-            if referenced:
+            # Restrict cascade to glibc-internal references only.
+            referenced_internal = {n for n in referenced if n.startswith('__')}
+            if referenced_internal:
                 strip = True
-                reason = f"removed: references stripped {sorted(referenced)[0]}"
+                reason = f"removed: references stripped {sorted(referenced_internal)[0]}"
 
         if strip and target:
             result.append(text[i:m.start()])

@@ -175,12 +175,14 @@ def test_parse_uncertain_verdict():
     assert r.verdict == RealismVerdict.UNCERTAIN
 
 
-def test_pipeline_skips_realism_when_dynamic_not_triggered():
-    """Pipeline._make_report skips the LLM realism call and returns
-    UNREALISTIC directly when dynamic validation reported NOT_TRIGGERED.
+def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
+    """Pipeline._make_report takes the shortcut and returns UNREALISTIC
+    directly when (a) dynamic validation reported NOT_TRIGGERED AND
+    (b) the failing property is a crash-class (NULL deref, OOB, etc.).
 
-    This kills the bsearch / calloc-stub class of false positives
-    wholesale without needing an LLM call.
+    A real bug here would crash at runtime, so NOT_TRIGGERED proves the
+    witness is a model artifact (stub returns, aliasing, …).  Kills the
+    bsearch / calloc-stub FP class without an LLM call.
     """
     from unittest.mock import MagicMock
     from bmc_agent.pipeline import AMCPipeline
@@ -192,20 +194,19 @@ def test_pipeline_skips_realism_when_dynamic_not_triggered():
     config.enable_realism_check = True
     config.enable_dynamic_validation = True
 
-    # Build a pipeline with mocked dependencies; we only exercise _make_report.
     pipeline = AMCPipeline.__new__(AMCPipeline)
     pipeline.config = config
     pipeline.llm = MagicMock()
     pipeline.realism_checker = MagicMock()
     pipeline.realism_checker.check = MagicMock(
-        side_effect=AssertionError("realism LLM should not be called when dynamic NOT_TRIGGERED")
+        side_effect=AssertionError("realism LLM should not be called on crash-class NOT_TRIGGERED")
     )
     pipeline.reporter = MagicMock()
     pipeline.reporter.create_report = MagicMock(side_effect=lambda v, f, realism_check: realism_check)
 
-    # Fake a ValidationResult with dynamic_result = NOT_TRIGGERED
     validation = MagicMock()
     validation.counterexample = MagicMock()
+    validation.counterexample.failing_property = "test_fn.pointer_dereference.1"
     validation.dynamic_result = DynamicValidationResult(
         outcome=DynamicOutcome.NOT_TRIGGERED,
         signal_name=None,
@@ -222,6 +223,64 @@ def test_pipeline_skips_realism_when_dynamic_not_triggered():
     assert realism is not None
     assert realism.verdict == RealismVerdict.UNREALISTIC
     pipeline.realism_checker.check.assert_not_called()
+
+
+def test_pipeline_does_not_skip_realism_on_silent_ub_property():
+    """When the property is a SILENT UB class (overflow, conversion,
+    pointer_arithmetic), dynamic NOT_TRIGGERED is uninformative — the
+    runtime wraps silently even when the bug is real.  The pipeline
+    MUST call the realism LLM rather than auto-marking UNREALISTIC.
+
+    Regression observed on VibeOS memory.c: malloc.overflow.1 (the
+    May-7 BUG-19) was being absorbed by the feedback loop after the
+    pipeline shortcut wrongly classified it as an artifact.
+    """
+    from unittest.mock import MagicMock
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.dynamic_validator import DynamicValidationResult, DynamicOutcome
+    from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+    from bmc_agent.config import Config
+
+    config = Config()
+    config.enable_realism_check = True
+    config.enable_dynamic_validation = True
+    # Feedback loop OFF so we test the realism path directly.
+    config.enable_feedback_loop = False
+
+    pipeline = AMCPipeline.__new__(AMCPipeline)
+    pipeline.config = config
+    pipeline.llm = MagicMock()
+    pipeline.realism_checker = MagicMock()
+    pipeline.realism_checker.check = MagicMock(return_value=RealismCheckResult(
+        verdict=RealismVerdict.REALISTIC,
+        reasoning="overflow on attacker-controlled size",
+        key_concern="unsigned overflow",
+        llm_confidence="high",
+    ))
+    pipeline.reporter = MagicMock()
+    pipeline.reporter.create_report = MagicMock(side_effect=lambda v, f, realism_check: realism_check)
+
+    validation = MagicMock()
+    validation.counterexample = MagicMock()
+    validation.counterexample.failing_property = "malloc.overflow.1"  # silent UB
+    validation.dynamic_result = DynamicValidationResult(
+        outcome=DynamicOutcome.NOT_TRIGGERED,
+        signal_name=None,
+        reasoning="harness ran without GCC catching the overflow",
+    )
+
+    func = MagicMock()
+    func.name = "malloc"
+
+    realism = pipeline._make_report(
+        validation=validation, func=func, spec=MagicMock(),
+        parsed=MagicMock(), all_funcs={}, driver_name="d",
+    )
+    # Realism LLM MUST have been called on the silent-UB property.
+    pipeline.realism_checker.check.assert_called_once()
+    # And the LLM's REALISTIC verdict propagates.
+    assert realism is not None
+    assert realism.verdict == RealismVerdict.REALISTIC
 
 
 def test_pipeline_runs_realism_when_dynamic_confirmed():

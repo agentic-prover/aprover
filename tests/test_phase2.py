@@ -1871,3 +1871,82 @@ def test_strip_cascade_preserves_target_name_self_reference():
     out = _strip_glibc_internal_typedefs(src)
     assert "typedef __foo removed" in out
     assert "typedef long bar" in out  # not stripped — body has no stripped names
+
+
+def test_strip_cascade_preserves_user_typedef_with_standard_type():
+    """A user struct typedef whose body uses a C-standard type (size_t,
+    int32_t, …) that got primary-stripped MUST NOT be cascade-stripped.
+    System headers reintroduce the standard types, so the user typedef
+    remains valid.  Regression observed on VibeOS memory.c where
+    ``typedef struct { size_t size; ... } block_header_t;`` was being
+    cascade-stripped, leaving every reference to block_header_t
+    undefined and CBMC failing with ``syntax error before '*'``.
+    """
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef unsigned long size_t;\n"
+        "typedef struct block_header { size_t size; int is_free; } block_header_t;\n"
+        "block_header_t *free_list;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    # size_t stripped (primary rule via _SYSTEM_TYPEDEF_NAMES)
+    assert "typedef size_t removed" in out
+    # block_header_t kept — system header reintroduces size_t
+    assert "block_header_t" in out
+    assert "typedef block_header_t removed" not in out
+
+
+def test_is_crash_class_property_recognises_crash_classes():
+    """Crash-class CBMC properties (NULL deref, OOB, bounds, double-free)
+    should be recognised so the dynamic NOT_TRIGGERED → UNREALISTIC
+    shortcut applies."""
+    from bmc_agent.pipeline import _is_crash_class_property
+    assert _is_crash_class_property("f.pointer_dereference.13")
+    assert _is_crash_class_property("f.bounds.5")
+    assert _is_crash_class_property("f.null-pointer.1")
+    assert _is_crash_class_property("f.NULL-pointer.1")
+    assert _is_crash_class_property("f.double-free.2")
+    assert _is_crash_class_property("f.use-after-free.7")
+    assert _is_crash_class_property("f.assertion.0")
+    assert _is_crash_class_property("f.precondition_instance.3")
+
+
+def test_is_crash_class_property_rejects_silent_ub_classes():
+    """Silent-UB classes (overflow, conversion, shift, alignment) are
+    NOT crash-class — the runtime wraps silently. The realism shortcut
+    must not fire on these or real bugs get suppressed (see the
+    malloc.overflow.1 regression from the VibeOS memory.c re-test)."""
+    from bmc_agent.pipeline import _is_crash_class_property
+    assert not _is_crash_class_property("malloc.overflow.1")
+    assert not _is_crash_class_property("f.conversion.4")
+    assert not _is_crash_class_property("f.pointer_arithmetic.17")
+    assert not _is_crash_class_property("f.pointer_overflow.2")
+    assert not _is_crash_class_property("f.shift.1")
+    assert not _is_crash_class_property("f.alignment.0")
+
+
+def test_is_crash_class_property_empty_input_is_conservative():
+    """Empty / malformed property names must not trigger the shortcut.
+    Returning False ensures the realism LLM runs instead — that's the
+    safe default when the property class is unknown."""
+    from bmc_agent.pipeline import _is_crash_class_property
+    assert not _is_crash_class_property("")
+    assert not _is_crash_class_property(None or "")
+    # Unknown class — also treated as silent (let the LLM decide)
+    assert not _is_crash_class_property("f.weird_new_class.1")
+
+
+def test_strip_cascade_only_fires_for_glibc_internal_reference():
+    """Cascade fires for ``__``-prefixed referents (true glibc internals)
+    but NOT for plain C-standard references (which system headers re-
+    define). Mixed body with both: should still cascade-strip because the
+    __ referent is unresolvable."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef unsigned long __my_internal;\n"  # __ primary strip
+        "typedef unsigned long size_t;\n"          # C-standard primary strip
+        # Body mixes both stripped types — cascade fires because of __my_internal
+        "typedef struct { __my_internal a; size_t b; } orphan_t;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    assert "typedef orphan_t removed: references stripped __my_internal" in out
