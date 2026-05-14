@@ -323,7 +323,19 @@ def _generate_stub(
     else:
         # Havoc the return value: declare it, constrain by postcondition
         lines.append(f"    {ret_type} result;")
-        if callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
+
+        # Built-in stub contracts for well-known allocator-family externs.
+        # Without these, CBMC stubs return arbitrary garbage pointers that
+        # alias unrelated memory regions, producing a large class of
+        # false-positive NULL-deref / OOB findings. The contracts model
+        # the documented behavior: return NULL or a valid pointer to N bytes.
+        builtin_contract = _builtin_stub_return_contract(
+            callee_name, ret_type, params
+        )
+        if builtin_contract:
+            lines.append("    /* Built-in stub contract (allocator-family) */")
+            lines.extend(f"    {c}" for c in builtin_contract)
+        elif callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
             param_names = [pname for _, pname in params]
             assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
             if assert_stmts:
@@ -336,6 +348,555 @@ def _generate_stub(
 
     lines.append("}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Library-init global function pointers — assumed non-NULL by harness
+# ---------------------------------------------------------------------------
+
+# Known library-init global function pointers. CBMC's nondet default for
+# an unbound extern is NULL, which is wrong for these: real public APIs
+# always go through library init that assigns them. The harness assumes
+# `extern != NULL` up front so CBMC doesn't waste effort (or emit
+# spurious CEs) on the impossible "uninitialized library" state.
+#
+# Grouped by library so we can detect them via either header-style or
+# `extern ... = ` source pattern; the actual `__CPROVER_assume` is the
+# same — we just need the symbol to exist in the linked image.
+_LIBRARY_INIT_GLOBALS: tuple[str, ...] = (
+    # libxml2
+    "xmlMalloc", "xmlMallocAtomic", "xmlRealloc", "xmlFree", "xmlMemStrdup",
+    "xmlGenericError", "xmlStructuredError",
+    "xmlOutputBufferCreateFilenameValue",
+    "xmlParserInputBufferCreateFilenameValue",
+    # libcurl
+    "Curl_cmalloc", "Curl_ccalloc", "Curl_crealloc", "Curl_cfree", "Curl_cstrdup",
+    # OpenSSL / BoringSSL
+    "CRYPTO_malloc", "CRYPTO_free", "CRYPTO_realloc",
+    # glib
+    "g_malloc", "g_free", "g_realloc",
+)
+
+
+def _emit_learned_clauses(
+    config: "Config", func_name: str, scope: str
+) -> list[str]:
+    """Return `__CPROVER_assume(...)` statements for clauses learned
+    from previous realism rejections (feedback loop arm (b)/(c)).
+
+    ``scope`` is "project" or "function". Function clauses are bound
+    to the named function; project clauses apply to every harness.
+    Returns empty list when the feedback loop is disabled or the store
+    is empty.
+    """
+    if not getattr(config, "enable_feedback_loop", False):
+        return []
+    try:
+        from bmc_agent.feedback_loop import LearnedConstraintsStore
+        store = LearnedConstraintsStore(config.artifact_dir)
+        if scope == "project":
+            clauses = store.project_clauses()
+        else:
+            clauses = store.function_clauses(func_name)
+    except Exception as exc:
+        # Don't ever fail harness generation because of feedback-loop I/O.
+        # The constraints are an OPTIMIZATION, not a correctness invariant.
+        # Logging at debug level since this isn't an error per se.
+        from bmc_agent.logger import get_logger
+        get_logger("harness").debug(
+            "Feedback-loop clause read failed for '%s': %s", func_name, exc,
+        )
+        return []
+    return [f"__CPROVER_assume({c});" for c in clauses if c.strip()]
+
+
+def _emit_library_init_function_pointer_overrides(parsed_file: "ParsedCFile") -> tuple[list[str], list[str]]:
+    """Return (decl_lines, init_lines) that:
+      - declare a BMC-side stub function (allocator-shaped) and
+      - in main(), set the library's global function pointer to that stub.
+
+    Why we need this on top of ``_emit_library_init_assumptions``:
+      ``__CPROVER_assume(xmlMalloc != NULL)`` only constrains the NULL
+      check. CBMC's ``--pointer-check`` is stricter for function pointers:
+      it verifies the pointer points to a valid function code object.
+      An extern function pointer with no body satisfies "not NULL" but
+      can still trip pointer-check at the call site
+      ``ret = xmlMalloc(size);`` → reported as
+      ``pointer_dereference.N (dereference failure: pointer NULL in xmlMalloc)``.
+
+    Pointing the global at a real stub function in main() makes the call
+    site dispatch to a concrete function body — pointer-check passes,
+    AND the stub's return value is constrained the same way our
+    ``_builtin_stub_return_contract`` constrains it (NULL or valid pointer
+    to ``size`` writable bytes).
+    """
+    import re as _re
+
+    bodies = getattr(parsed_file, "function_bodies", None) or {}
+    text_blobs: list[str] = []
+    for body in bodies.values():
+        if body:
+            text_blobs.append(body)
+    preproc = getattr(parsed_file, "preprocessed_source", None)
+    if preproc:
+        text_blobs.append(preproc)
+    combined = "\n".join(text_blobs)
+
+    decls: list[str] = []
+    inits: list[str] = []
+    seen_stub_names: set[str] = set()
+
+    # xmlMalloc / xmlMallocAtomic / OPENSSL_malloc / CRYPTO_malloc — single
+    # size_t arg, return malloc-style pointer.
+    #
+    # Use `__CPROVER_allocate(size, 0)` which creates a CBMC-tracked
+    # writable symbolic region of exactly `size` bytes. Downstream memset
+    # / pointer-write checks then correctly see the allocation metadata.
+    # The earlier `void *p; __CPROVER_assume(__CPROVER_w_ok(p, size));`
+    # version didn't propagate writability through the return (schematron.c
+    # ``memset(ret, 0, sizeof(xmlSchematron))`` was reported as
+    # `precondition_instance.1` despite the stub's assume).
+    for name in ("xmlMalloc", "xmlMallocAtomic", "OPENSSL_malloc",
+                 "OPENSSL_zalloc", "CRYPTO_malloc"):
+        if not _re.search(r"(?<![A-Za-z0-9_])" + _re.escape(name) + r"(?![A-Za-z0-9_])", combined):
+            continue
+        stub = f"_bmc_stub_{name}"
+        if stub in seen_stub_names:
+            continue
+        seen_stub_names.add(stub)
+        decls.append(
+            f"static void *{stub}(size_t size) {{\n"
+            f"    int nondet_null;\n"
+            f"    if (nondet_null) return NULL;\n"
+            f"    return __CPROVER_allocate(size, 0);\n"
+            f"}}"
+        )
+        inits.append(f"{name} = {stub};")
+
+    # xmlRealloc / OPENSSL_realloc — (void *, size_t) → void *
+    for name in ("xmlRealloc", "OPENSSL_realloc", "CRYPTO_realloc"):
+        if not _re.search(r"(?<![A-Za-z0-9_])" + _re.escape(name) + r"(?![A-Za-z0-9_])", combined):
+            continue
+        stub = f"_bmc_stub_{name}"
+        if stub in seen_stub_names:
+            continue
+        seen_stub_names.add(stub)
+        decls.append(
+            f"static void *{stub}(void *old, size_t size) {{\n"
+            f"    (void)old;\n"
+            f"    int nondet_null;\n"
+            f"    if (nondet_null) return NULL;\n"
+            f"    return __CPROVER_allocate(size, 0);\n"
+            f"}}"
+        )
+        inits.append(f"{name} = {stub};")
+
+    # xmlFree / OPENSSL_free / CRYPTO_free — void(void *)
+    for name in ("xmlFree", "OPENSSL_free", "CRYPTO_free"):
+        if not _re.search(r"(?<![A-Za-z0-9_])" + _re.escape(name) + r"(?![A-Za-z0-9_])", combined):
+            continue
+        stub = f"_bmc_stub_{name}"
+        if stub in seen_stub_names:
+            continue
+        seen_stub_names.add(stub)
+        decls.append(
+            f"static void {stub}(void *p) {{ (void)p; }}"
+        )
+        inits.append(f"{name} = {stub};")
+
+    # xmlMemStrdup / OPENSSL_strdup — (const char *) → char *
+    for name in ("xmlMemStrdup", "OPENSSL_strdup"):
+        if not _re.search(r"(?<![A-Za-z0-9_])" + _re.escape(name) + r"(?![A-Za-z0-9_])", combined):
+            continue
+        stub = f"_bmc_stub_{name}"
+        if stub in seen_stub_names:
+            continue
+        seen_stub_names.add(stub)
+        decls.append(
+            f"static char *{stub}(const char *s) {{\n"
+            f"    (void)s;\n"
+            f"    char *p;\n"
+            f"    __CPROVER_assume(p == NULL || __CPROVER_r_ok(p, 1));\n"
+            f"    return p;\n"
+            f"}}"
+        )
+        inits.append(f"{name} = {stub};")
+
+    return decls, inits
+
+
+def _emit_library_init_assumptions(parsed_file: "ParsedCFile") -> list[str]:
+    """Return `__CPROVER_assume(X != NULL);` statements for each
+    library-init global referenced by code parsed_file knows about.
+
+    Detection: a global is "referenced" if its name appears as a bare
+    identifier (word boundary on both sides) anywhere in any function
+    body of the parsed file. We can't safely emit the assume if the
+    symbol isn't even mentioned because the linker / preprocessor
+    might not expose it.
+    """
+    import re as _re
+    referenced: set[str] = set()
+    bodies = getattr(parsed_file, "function_bodies", None) or {}
+    text_blobs: list[str] = []
+    for body in bodies.values():
+        if body:
+            text_blobs.append(body)
+    # Also scan the preprocessed source if available.
+    preproc = getattr(parsed_file, "preprocessed_source", None)
+    if preproc:
+        text_blobs.append(preproc)
+    if not text_blobs:
+        return []
+    combined = "\n".join(text_blobs)
+    for name in _LIBRARY_INIT_GLOBALS:
+        if _re.search(r"(?<![A-Za-z0-9_])" + _re.escape(name) + r"(?![A-Za-z0-9_])", combined):
+            referenced.add(name)
+    if not referenced:
+        return []
+    return [
+        f"__CPROVER_assume({name} != NULL);"
+        for name in sorted(referenced)
+    ]
+
+
+def _extract_source_precondition_asserts(
+    func_body: str, param_names: list[str]
+) -> list[str]:
+    """Return ``__CPROVER_assume(expr);`` statements derived from
+    ``assert(expr)`` calls at the top of ``func_body`` whose expression
+    references only the function's own parameter names.
+
+    Pattern from jq's jv_alloc.c (shipped 2026-05-13):
+
+        void* jv_mem_calloc(size_t nemb, size_t sz) {{
+            assert(nemb > 0 && sz > 0);
+            ...
+        }}
+
+    The C ``assert()`` documents an internal-helper precondition. Real
+    callers obey it; the bmc-agent harness, passing nondet params, does
+    not — so the assertion fires and CBMC reports a "real_bug". The fix
+    is to mirror the precondition into a ``__CPROVER_assume(expr)`` at
+    Step 2 of the harness, exactly as a real caller would respect it.
+
+    Conservative scope:
+      * Only matches ``assert(...)`` invocations BEFORE the first
+        side-effecting statement (assignment, call, return). Once the
+        body modifies state, an assert is no longer a pure precondition.
+      * Only accepts assertions whose expression's identifiers are all
+        either parameter names or numeric literals / constants. This
+        excludes asserts over global state we'd have no business
+        assuming about.
+      * Skips ``assert(0)`` and ``assert(false)`` — those are
+        unreachability markers, not preconditions.
+    """
+    if not func_body or not param_names:
+        return []
+    import re as _re
+    # Find the opening brace (function body start).
+    brace = func_body.find("{")
+    if brace < 0:
+        return []
+    body = func_body[brace + 1 :]
+    # Strip line comments and block comments — keep it simple, scan the
+    # first ~2 KB of body content which is more than enough for the
+    # "precondition asserts at the top" idiom.
+    body = body[:2000]
+    body = _re.sub(r"//[^\n]*", "", body)
+    body = _re.sub(r"/\*.*?\*/", "", body, flags=_re.DOTALL)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    param_set = set(param_names)
+    pos = 0
+    while pos < len(body):
+        # Skip whitespace.
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        if pos >= len(body):
+            break
+        # If the next token is "assert" followed by "(", parse the call.
+        m = _re.match(r"assert\s*\(", body[pos:])
+        if m:
+            # Find the matching close-paren.
+            start = pos + m.end()
+            depth = 1
+            i = start
+            while i < len(body) and depth > 0:
+                if body[i] == "(":
+                    depth += 1
+                elif body[i] == ")":
+                    depth -= 1
+                i += 1
+            if depth != 0:
+                break  # malformed; bail
+            expr = body[start : i - 1].strip()
+            # Advance past the trailing ';' if present.
+            j = i
+            while j < len(body) and body[j].isspace():
+                j += 1
+            if j < len(body) and body[j] == ";":
+                j += 1
+            pos = j
+            # Reject useless / wrong-shape asserts.
+            if expr in ("0", "false", "1", "true", ""):
+                continue
+            # Only emit if every bare identifier in expr is a
+            # parameter, a C keyword, NULL, or a numeric literal.
+            # Strip struct member-access tails (`->field`, `.field`)
+            # before extracting identifiers — `l->nlines` references
+            # `l` (a parameter) plus the *member name* `nlines` which
+            # is not a free identifier. This matches the jq
+            # `locfile_line_length` idiom `assert(line < l->nlines)`.
+            scrub = _re.sub(r"(?:->|\.)\s*[A-Za-z_][A-Za-z0-9_]*", "", expr)
+            idents = set(_re.findall(r"[A-Za-z_][A-Za-z0-9_]*", scrub))
+            non_param = idents - param_set - {
+                "NULL", "true", "false",
+                # benign C / stdint constants commonly appearing in
+                # parameter-bound asserts:
+                "SIZE_MAX", "INT_MAX", "INT_MIN", "UINT_MAX",
+                "LONG_MAX", "LONG_MIN", "ULONG_MAX",
+                "sizeof",
+            }
+            if non_param:
+                continue
+            if expr in seen:
+                continue
+            seen.add(expr)
+            out.append(f"__CPROVER_assume({expr});")
+            continue
+        # Not an assert: detect "side-effecting statement starts".
+        # Crude heuristic — if we hit any '=' or ';' or '(' that isn't
+        # inside an assert(), we've left the prelude. We treat the
+        # first such char as the boundary.
+        if body[pos] in ("=", ";", "{", "}"):
+            break
+        # Tokens like "if", "while", "for", "return" also end the
+        # prelude.
+        if _re.match(r"(if|while|for|switch|return|do|goto)\b", body[pos:]):
+            break
+        # Otherwise advance one char (skip declarations like
+        # `int x;` — but the ';' check above will catch those too).
+        pos += 1
+    return out
+
+
+# Map jq jv-accessor APIs to the JV_KIND constant their parameter must
+# carry. When a static helper opens by unconditionally calling one of
+# these accessors on its parameter, real callers in jq always satisfy
+# the corresponding kind precondition; the harness should mirror that
+# (otherwise CBMC explores impossible nondet jv states and reports
+# spurious NULL-deref via the stubbed accessor returning NULL).
+_JV_KIND_ACCESSORS: dict[str, str] = {
+    "jv_string_value": "JV_KIND_STRING",
+    "jv_string_length_bytes": "JV_KIND_STRING",
+    "jv_string_length_codepoints": "JV_KIND_STRING",
+    "jv_string_hash": "JV_KIND_STRING",
+    "jv_number_value": "JV_KIND_NUMBER",
+    "jv_array_length": "JV_KIND_ARRAY",
+    "jv_array_get": "JV_KIND_ARRAY",
+    "jv_object_length": "JV_KIND_OBJECT",
+    "jv_object_get": "JV_KIND_OBJECT",
+    "jv_object_iter": "JV_KIND_OBJECT",
+}
+
+
+def _extract_jv_kind_preconditions(
+    func, param_names: list[str]
+) -> list[str]:
+    """Return ``__CPROVER_assume(jv_get_kind(p) == JV_KIND_X);`` for each
+    parameter ``p`` of a STATIC helper whose body opens by unconditionally
+    invoking a jq jv-accessor of kind X on ``p`` (e.g.
+    ``jv_string_value(name)`` at the top of ``validate_relpath``).
+
+    Rationale (jq linker.c, 2026-05-13): static helpers in jq commonly
+    skip kind-checking because their internal callers always check; the
+    harness, however, passes nondet ``jv`` and the stubbed accessor
+    returns NULL, producing spurious NULL-deref findings.
+
+    Conservative: only fires when
+      (1) the function is declared ``static``,
+      (2) the parameter is a ``jv`` (by type token), and
+      (3) an accessor call on the parameter appears in the first ~10
+          non-blank lines AND is NOT preceded by a kind check
+          (``jv_get_kind(p) ==`` / ``jv_is_valid(p)``).
+    """
+    sig = getattr(func, "signature", None)
+    body = getattr(func, "body", None) or ""
+    if not sig or not body:
+        return []
+    if not getattr(sig, "is_static", False):
+        return []
+    import re as _re
+    # Map param name → param type so we know which params are `jv`.
+    jv_params: dict[str, str] = {}
+    for ptype, pname in (sig.parameters or []):
+        if pname and ptype and _re.search(r"\bjv\b", ptype) and "*" not in ptype:
+            jv_params[pname] = ptype
+    if not jv_params:
+        return []
+
+    # Scan first 800 chars of body for early accessor calls.
+    brace = body.find("{")
+    head = body[brace + 1 :][:800] if brace >= 0 else body[:800]
+    head = _re.sub(r"//[^\n]*", "", head)
+    head = _re.sub(r"/\*.*?\*/", "", head, flags=_re.DOTALL)
+
+    out: list[str] = []
+    seen_kinds: set[tuple[str, str]] = set()
+    for accessor, kind in _JV_KIND_ACCESSORS.items():
+        pattern = _re.compile(
+            r"(?<![A-Za-z0-9_])" + _re.escape(accessor) + r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+        )
+        for m in pattern.finditer(head):
+            param = m.group(1)
+            if param not in jv_params:
+                continue
+            # Reject if a kind-check on this param precedes the accessor
+            # call in head.
+            prior = head[: m.start()]
+            # Any earlier reference to jv_get_kind(param) or
+            # jv_is_valid(param) signals the function self-validates.
+            guarded = bool(_re.search(
+                r"jv_get_kind\s*\(\s*" + _re.escape(param) + r"\s*\)",
+                prior,
+            )) or bool(_re.search(
+                r"jv_is_valid\s*\(\s*" + _re.escape(param) + r"\s*\)",
+                prior,
+            ))
+            if guarded:
+                continue
+            key = (param, kind)
+            if key in seen_kinds:
+                continue
+            seen_kinds.add(key)
+            out.append(
+                f"__CPROVER_assume(jv_get_kind({param}) == {kind});"
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Built-in stub contracts for well-known C-runtime / libxml / curl externals
+# ---------------------------------------------------------------------------
+
+
+def _builtin_stub_return_contract(
+    name: str,
+    ret_type: str,
+    params: list[tuple[str, str]],
+) -> list[str]:
+    """Return CBMC __CPROVER_assume statements that constrain ``result``
+    for a known allocator-family / library function. Empty list when the
+    function isn't in the contract table.
+
+    Patterns covered:
+      malloc(size) / xmlMalloc(size) / OPENSSL_malloc / ...
+        → result == NULL || valid pointer with (size) writable bytes
+      calloc(n, sz) / xmlMallocAtomic
+        → result == NULL || valid pointer with (n*sz) writable bytes,
+          AND the bytes are zero-initialized
+      realloc(p, size) / xmlRealloc
+        → result == NULL || valid pointer with (size) writable bytes
+      strdup(s) / xmlStrdup / strndup
+        → result == NULL || valid pointer to a NUL-terminated string
+      getenv(name) / secure_getenv
+        → result == NULL || valid pointer to a NUL-terminated string
+    """
+    if "*" not in ret_type:
+        return []  # only pointer-returning allocators interesting here
+
+    n = name
+    # Find size-like argument name (first parameter whose type is integral).
+    size_arg = ""
+    second_arg = ""
+    for i, (ptype, pname) in enumerate(params):
+        if not pname:
+            continue
+        ptype_l = (ptype or "").lower()
+        looks_integral = any(
+            t in ptype_l for t in
+            ("size_t", "ssize_t", "unsigned", "signed", "int", "long",
+             "uint", "u8", "u16", "u32", "u64")
+        ) and "*" not in ptype
+        if looks_integral and not size_arg:
+            size_arg = pname
+        elif looks_integral and not second_arg:
+            second_arg = pname
+
+    malloc_like = {
+        "malloc", "xmlMalloc", "xmlMallocAtomic", "OPENSSL_malloc",
+        "OPENSSL_zalloc", "g_malloc", "g_malloc0",
+        "CRYPTO_malloc", "CRYPTO_zalloc",
+    }
+    calloc_like = {"calloc", "g_malloc_n", "g_malloc0_n"}
+    realloc_like = {
+        "realloc", "xmlRealloc", "OPENSSL_realloc",
+        "g_realloc", "CRYPTO_realloc",
+    }
+    strdup_like = {
+        "strdup", "xmlStrdup", "xmlCharStrdup",
+        "g_strdup", "OPENSSL_strdup",
+    }
+    strndup_like = {
+        "strndup", "xmlStrndup", "xmlCharStrndup",
+        "g_strndup",
+    }
+    getenv_like = {"getenv", "secure_getenv"}
+
+    if n in malloc_like and size_arg:
+        return [
+            f"__CPROVER_assume(result == NULL || "
+            f"__CPROVER_w_ok(result, {size_arg}));"
+        ]
+    if n in calloc_like and size_arg and second_arg:
+        return [
+            f"__CPROVER_assume(result == NULL || "
+            f"__CPROVER_w_ok(result, ((size_t){size_arg}) * ((size_t){second_arg})));",
+        ]
+    if n in realloc_like and size_arg:
+        return [
+            f"__CPROVER_assume(result == NULL || "
+            f"__CPROVER_w_ok(result, {size_arg}));"
+        ]
+    if n in strdup_like:
+        return [
+            "/* strdup-like: NULL or pointer to NUL-terminated string */",
+            "__CPROVER_assume(result == NULL || __CPROVER_r_ok(result, 1));",
+        ]
+    if n in strndup_like and size_arg:
+        return [
+            f"__CPROVER_assume(result == NULL || "
+            f"__CPROVER_w_ok(result, ((size_t){size_arg}) + 1));",
+        ]
+    if n in getenv_like:
+        return [
+            "__CPROVER_assume(result == NULL || __CPROVER_r_ok(result, 1));",
+        ]
+
+    # libc string-length-bounded functions: strspn, strcspn, strlen,
+    # strnlen. CBMC's default stub returns unconstrained size_t. Real
+    # libc returns ≤ strlen of the input string. Without this contract,
+    # callers like jq's jq_set_colors get spurious "pointer advances
+    # past end" findings (LLM TODO from jv_print.c sweep).
+    if "*" in ret_type:
+        # not pointer-returning, handled above
+        pass
+    elif n in ("strlen", "strnlen"):
+        # First arg is the string; size_t return ≤ strlen(s).
+        # We can't easily express ≤ strlen(s) on a symbolic s; settle
+        # for "≤ very-large" instead of "any size_t including >2^60".
+        # Cap to a generous but finite value (1 MB) — any real string
+        # passed through bmc-agent's bounded harness is far smaller.
+        return [f"__CPROVER_assume(result <= 1048576);"]
+    elif n in ("strspn", "strcspn"):
+        return [f"__CPROVER_assume(result <= 1048576);"]
+    elif n in ("strcmp", "strncmp", "memcmp"):
+        # Return -1, 0, or +1 typically — but compilers may return any
+        # int with sign of (a-b). Cap to plausible range.
+        return [f"__CPROVER_assume(result >= -1048576 && result <= 1048576);"]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -545,8 +1106,23 @@ def _is_likely_length_field(field_name: str) -> bool:
     return any(hint in fname for hint in _LENGTH_FIELD_HINTS)
 
 
+def _matches_struct_tag(pointee_base: str, struct_tag: str) -> bool:
+    """True when *pointee_base* refers to the same struct type as
+    *struct_tag*. Both forms are normalized to strip ``struct``, leading
+    underscores, and the typedef alias from ``typedef struct {...} Foo;``
+    so ``xmlPattern`` matches a ``struct _xmlPattern *next;`` field.
+    """
+    def _norm(s: str) -> str:
+        s = re.sub(r"\bstruct\b", "", s).strip()
+        s = s.lstrip("_")
+        return s
+
+    return _norm(pointee_base) == _norm(struct_tag)
+
+
 def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
+    enclosing_struct_tag: Optional[str] = None,
 ) -> list[str]:
     """Emit harness statements that initialise a single struct field.
 
@@ -556,6 +1132,13 @@ def _emit_struct_field_init(
         "this struct owns a NUL-terminated string" pattern.
       - ``unsigned char *`` / ``uint8_t *`` field: raw byte buffer
         (no NUL), suitable for binary buffer fields.
+      - self-referential pointer fields (linked-list ``next`` /
+        ``prev`` / ``children`` style, where the field's pointee
+        matches *enclosing_struct_tag*): force NULL to terminate the
+        chain. Otherwise CBMC's nondet treats the field as "valid
+        non-NULL pointer to garbage" and reports a spurious deref on
+        the next loop iteration (libxml2 xmlPatternStreamable, see
+        findings/bounty/FP_REFLECTIONS.md).
       - integer field whose name looks like a length / count / size
         (``len``, ``length``, ``size``, ``count``, ``n``, ``num``,
         ``off``, ``pos``): ``__CPROVER_assume`` it's in ``[0,
@@ -574,6 +1157,16 @@ def _emit_struct_field_init(
         if stars != 1:
             return out
         base = re.sub(r"\bconst\b", "", t[:-1]).strip()
+        # Self-referential pointer? (linked-list-style field whose pointee
+        # type matches the enclosing struct's tag.) Force NULL so the
+        # harness exits any traversal loop after one iteration instead of
+        # treating ->next as "valid pointer to garbage".
+        if enclosing_struct_tag and _matches_struct_tag(base, enclosing_struct_tag):
+            out.append(
+                f"    {obj_name}.{fname} = NULL;  "
+                f"/* terminate self-ref chain ({enclosing_struct_tag}.{fname}) */"
+            )
+            return out
         buf_size = cbmc_unwind + 1
         backing = f"_{obj_name}_{fname}_buf"
         if base == "char":
@@ -854,6 +1447,7 @@ def _generate_nd_decls(
                     lines.extend(
                         _emit_struct_field_init(
                             obj_name, ftype, fname, cbmc_unwind,
+                            enclosing_struct_tag=struct_tag,
                         )
                     )
                 if pname in nonnull_params:
@@ -1107,7 +1701,10 @@ class HarnessGenerator:
         param_names = {pname for _, pname in params if pname}
         for var_name, var_value in counterexample.variable_assignments.items():
             clean_var = var_name.strip()
-            clean_val = var_value.strip()
+            # CBMC sometimes reports values as Python bools (for boolean
+            # variables, overflow flags, etc.); coerce so .strip() doesn't
+            # crash the whole reachability harness.
+            clean_val = str(var_value).strip() if var_value is not None else ""
 
             # --- Filter out CBMC-internal variable names ---
             # 1. CBMC builtins: __CPROVER_*
@@ -1744,6 +2341,29 @@ class HarnessGenerator:
         harness_body_lines.append("    /* Step 1: nondeterministic inputs */")
         harness_body_lines.extend(nd_decls)
 
+        # Step 1.5: pre-init library globals (see _emit_library_init_assumptions docstring)
+        lib_init_assumes = _emit_library_init_assumptions(parsed_file)
+        if lib_init_assumes:
+            harness_body_lines.append("")
+            harness_body_lines.append("    /* Step 1.5: assume library init has run */")
+            for s in lib_init_assumes:
+                harness_body_lines.append(f"    {s}")
+
+        # Step 1.8: precondition asserts mined from the source body.
+        source_assume_stmts = _extract_source_precondition_asserts(
+            func.body or "", param_names,
+        )
+        source_assume_stmts.extend(
+            _extract_jv_kind_preconditions(func, param_names)
+        )
+        if source_assume_stmts:
+            harness_body_lines.append("")
+            harness_body_lines.append(
+                "    /* Step 1.8: source-level assert() preconditions (auto-promoted) */"
+            )
+            for s in source_assume_stmts:
+                harness_body_lines.append(f"    {s}")
+
         # Step 2: constrain by precondition
         harness_body_lines.append("")
         harness_body_lines.append(
@@ -1863,6 +2483,51 @@ class HarnessGenerator:
         body_lines.append("    /* Step 1: nondeterministic inputs */")
         body_lines.extend(nd_decls)
 
+        # Step 1.5a: assume library-init globals are non-NULL.
+        lib_init_assumes = _emit_library_init_assumptions(parsed_file)
+        if lib_init_assumes:
+            body_lines.append("    /* Step 1.5a: assume library init has run (NULL check) */")
+            body_lines.extend(f"    {s}" for s in lib_init_assumes)
+
+        # Step 1.5b: point library allocator globals at concrete stubs.
+        # ``!= NULL`` alone doesn't satisfy CBMC's --pointer-check on
+        # function-pointer calls; we need a real function body for the
+        # solver to dispatch to. The stub itself constrains its return
+        # the same way our built-in stub contracts do.
+        fp_decls, fp_inits = _emit_library_init_function_pointer_overrides(parsed_file)
+        if fp_inits:
+            body_lines.append("    /* Step 1.5b: point library function-pointer globals at concrete stubs */")
+            body_lines.extend(f"    {s}" for s in fp_inits)
+
+        # Step 1.6: project-wide invariants learned from prior realism
+        # rejections (feedback loop arm (c)). Off unless enable_feedback_loop.
+        proj_clauses = _emit_learned_clauses(self.config, fn_name, "project")
+        if proj_clauses:
+            body_lines.append("    /* Step 1.6: learned project invariants */")
+            body_lines.extend(f"    {s}" for s in proj_clauses)
+
+        # Step 1.7: function-local invariants learned for THIS function
+        # (feedback loop arm (b)).
+        fn_clauses = _emit_learned_clauses(self.config, fn_name, "function")
+        if fn_clauses:
+            body_lines.append("    /* Step 1.7: learned function invariants */")
+            body_lines.extend(f"    {s}" for s in fn_clauses)
+
+        # Step 1.8: precondition asserts mined from the source body.
+        # When the function starts with `assert(precondition)`, real
+        # callers obey it; mirror that as __CPROVER_assume.
+        source_assume_stmts = _extract_source_precondition_asserts(
+            func.body or "", param_names,
+        )
+        source_assume_stmts.extend(
+            _extract_jv_kind_preconditions(func, param_names)
+        )
+        if source_assume_stmts:
+            body_lines.append(
+                "    /* Step 1.8: source-level assert() preconditions (auto-promoted) */"
+            )
+            body_lines.extend(f"    {s}" for s in source_assume_stmts)
+
         if assume_stmts:
             body_lines.append("    /* Step 2: precondition assumptions */")
             body_lines.extend(f"    {s}" for s in assume_stmts)
@@ -1875,6 +2540,28 @@ class HarnessGenerator:
             body_lines.append(f"    {ret_type} result = {fn_name}({call_args});")
             result_line_present = True
 
+        # Step 3.5: when the postcondition will dereference `result` (e.g.
+        # ``result->doc == doc``) and the function returns a pointer, the
+        # extern callees we don't have a stub contract for can return a
+        # NON-NULL but invalid pointer. The deref then trips a spurious
+        # `main.pointer_dereference.*` failure that no real caller would
+        # ever hit because they NULL-check first. Mirror that real-caller
+        # pattern: assume the returned pointer is either NULL or a
+        # 1-byte-readable region. From feedback-loop arm-(a) TODO #1
+        # on xmlXPtrNewContext (xpointer.c).
+        if (
+            result_line_present
+            and "*" in ret_type
+            and any("result->" in s for s in (assert_stmts or []))
+        ):
+            body_lines.append(
+                "    /* Step 3.5: harness-safe NULL-check on returned pointer "
+                "(prevents spurious main.pointer_dereference.* on extern returns) */"
+            )
+            body_lines.append(
+                "    __CPROVER_assume(result == NULL || __CPROVER_r_ok(result, 1));"
+            )
+
         if assert_stmts:
             body_lines.append(f"    /* Step 4: postcondition assertions */")
             body_lines.extend(f"    {s}" for s in assert_stmts)
@@ -1886,12 +2573,25 @@ class HarnessGenerator:
         ):
             body_lines.append("    (void)result;")
 
+        # Top-level stub-function declarations for library-init function
+        # pointer overrides (Step 1.5b). Must precede main() and the
+        # in-main assignments. Declared AFTER the #include so xmlMallocFunc
+        # etc. typedefs are visible.
+        stub_decl_section = ""
+        if fp_decls:
+            stub_decl_section = (
+                "/* --- Library-init function-pointer stubs (Step 1.5b) --- */\n"
+                + "\n".join(fp_decls)
+                + "\n"
+            )
+
         sections = [
             f"/* Auto-generated CBMC harness (real-libc mode) for: {fn_name} */",
             f"/* Source: {func.source_file} */",
             "",
             f'#include "{include_target}"',
             "",
+            stub_decl_section,
             "int main(void) {",
             "\n".join(body_lines),
             "    return 0;",

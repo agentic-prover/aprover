@@ -242,30 +242,71 @@ def _collect_struct_defs(root, src_bytes: bytes) -> dict[str, list[tuple[str, st
         "linkage_specification",
     }
     structs: dict[str, list[tuple[str, str]]] = {}
+    # Aliases declared via a separate ``typedef struct Tag Alias;``
+    # statement, where the struct body lives in another translation-unit
+    # node. We can't resolve these until the full walk completes.
+    pending_aliases: list[tuple[str, str]] = []
 
     def walk(node):
         if node.type == "struct_specifier":
             _record_struct(node, src_bytes, structs, alias=None)
             return
         if node.type == "type_definition":
-            # typedef struct [Tag] { ... } Alias;
+            # Two cases:
+            #   (1) ``typedef struct [Tag] { ... } Alias;`` — body present, record under tag+alias.
+            #   (2) ``typedef struct Tag Alias;`` — separate-typedef form,
+            #       body lives in a sibling struct_specifier elsewhere. We
+            #       record the alias→tag mapping here and rebind it after
+            #       the walk completes (alias may point to a struct whose
+            #       body hasn't been visited yet).
             inner_struct = None
+            inner_struct_has_body = False
+            inner_struct_tag = None
             alias = None
             for c in node.children:
                 if c.type == "struct_specifier":
                     inner_struct = c
+                    for cc in c.children:
+                        if cc.type == "type_identifier":
+                            inner_struct_tag = src_bytes[cc.start_byte:cc.end_byte].decode(
+                                "utf-8", errors="replace"
+                            )
+                        elif cc.type == "field_declaration_list":
+                            inner_struct_has_body = True
                 elif c.type == "type_identifier":
                     alias = src_bytes[c.start_byte:c.end_byte].decode(
                         "utf-8", errors="replace"
                     )
-            if inner_struct is not None:
+            if inner_struct is not None and inner_struct_has_body:
                 _record_struct(inner_struct, src_bytes, structs, alias=alias)
+            elif alias and inner_struct_tag:
+                # Pending alias — resolve after the full walk so we pick up
+                # the struct body that appears later in the file.
+                pending_aliases.append((alias, inner_struct_tag))
             return
         if node.type in _PREPROC_CONTAINER_TYPES or node.type == "translation_unit":
             for c in node.children:
                 walk(c)
 
     walk(root)
+    # Resolve pending typedef aliases: ``typedef struct Tag Alias;`` is
+    # common in libxml2 / libcurl / OpenSSL headers, where the struct
+    # body and the typedef are separate statements. Without this, harness
+    # generation falls back to a flat ``Type x;`` nondet rather than the
+    # per-field init path, and self-referential pointer fields stay
+    # symbolic, producing linked-list traversal false positives.
+    for alias, tag in pending_aliases:
+        if tag in structs and alias not in structs:
+            structs[alias] = structs[tag]
+    # libxml2 / glib idiom: struct tag with leading underscore, typedef
+    # alias without (typedef and struct usually live in a public header
+    # we don't parse). Rather than fight headers in real-libc mode, infer
+    # the alias from the convention: ``struct _xmlPattern`` → ``xmlPattern``.
+    for tag in list(structs.keys()):
+        if tag.startswith("_"):
+            alias = tag[1:]
+            if alias and alias not in structs:
+                structs[alias] = structs[tag]
     return structs
 
 

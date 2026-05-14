@@ -1156,6 +1156,352 @@ def test_cbmc_object_bits_auto_scale_on_too_many_objects(tmp_path: Path):
     assert second_cmd[bits_index + 1] in ("12", "16")
 
 
+def test_library_init_globals_emitted_when_referenced(tmp_path: Path):
+    """When the parsed file references xmlMalloc/xmlFree/etc., the
+    harness must emit __CPROVER_assume(xmlMalloc != NULL); at Step 1.5
+    so CBMC doesn't explore the impossible "library uninitialized" state.
+    """
+    from bmc_agent.harness_generator import _emit_library_init_assumptions
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "uses_xmlmalloc.c"
+    src.write_text(
+        "extern void *xmlMalloc(unsigned long);\n"
+        "extern void xmlFree(void *);\n"
+        "void *make(int n) { void *p = xmlMalloc((unsigned long)n);\n"
+        "  if (!p) return p; xmlFree(p); return p; }\n"
+    )
+    p = parse_c_file(str(src))
+    out = _emit_library_init_assumptions(p)
+    out_str = "\n".join(out)
+    assert "xmlMalloc != NULL" in out_str, out_str
+    assert "xmlFree != NULL" in out_str, out_str
+
+
+def test_library_init_globals_not_emitted_when_not_referenced(tmp_path: Path):
+    """If no library-init globals appear in the source, no assumption
+    is emitted — otherwise CBMC complains about unknown identifiers.
+    """
+    from bmc_agent.harness_generator import _emit_library_init_assumptions
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "no_libxml.c"
+    src.write_text("int add(int a, int b) { return a + b; }\n")
+    p = parse_c_file(str(src))
+    assert _emit_library_init_assumptions(p) == []
+
+
+def test_source_assert_promoted_to_cprover_assume():
+    """When a function body opens with `assert(precondition)` over its
+    parameters, the harness must auto-emit `__CPROVER_assume(precondition);`
+    at Step 1.8. Real callers obey the precondition; the harness should
+    too. Shipped from jq jv_alloc.c sweep (jv_mem_calloc /
+    jv_mem_calloc_unguarded FP class).
+    """
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = (
+        "void* jv_mem_calloc(size_t nemb, size_t sz) {\n"
+        "    assert(nemb > 0 && sz > 0);\n"
+        "    void* p = calloc(nemb, sz);\n"
+        "    if (!p) memory_exhausted();\n"
+        "    return p;\n"
+        "}"
+    )
+    out = _extract_source_precondition_asserts(body, ["nemb", "sz"])
+    assert out == ["__CPROVER_assume(nemb > 0 && sz > 0);"]
+
+
+def test_source_assert_ignores_assert_zero():
+    """`assert(0)` and `assert(false)` are unreachability markers, not
+    preconditions — must NOT be promoted (would make the harness path
+    trivially infeasible)."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = "void unreachable(int x) {\n    assert(0);\n}"
+    assert _extract_source_precondition_asserts(body, ["x"]) == []
+
+
+def test_source_assert_ignores_globals():
+    """An assert mentioning a non-parameter identifier (global) is NOT
+    a parameter-precondition — must be ignored to avoid asserting
+    something about state the harness can't validly constrain."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = "int f(int x) {\n    assert(global_state != NULL);\n    return x + 1;\n}"
+    assert _extract_source_precondition_asserts(body, ["x"]) == []
+
+
+def test_source_assert_stops_after_first_statement():
+    """An assert AFTER a body statement is no longer a pure precondition
+    (might depend on derived state); must NOT be promoted."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = (
+        "void h(int x) {\n"
+        "    int y = x + 1;\n"
+        "    assert(y > 0);\n"
+        "    use(y);\n"
+        "}"
+    )
+    assert _extract_source_precondition_asserts(body, ["x"]) == []
+
+
+def test_jv_kind_precondition_extracted_for_static_helper():
+    """When a static helper opens by unconditionally calling
+    `jv_string_value(p)`, the harness must auto-emit
+    `__CPROVER_assume(jv_get_kind(p) == JV_KIND_STRING)`. Real jq
+    callers always check kind first; the helper relies on that.
+    Shipped from linker.c sweep FPs (validate_relpath, jv_basename,
+    path_is_relative — 2026-05-13).
+    """
+    from bmc_agent.harness_generator import _extract_jv_kind_preconditions
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Sig:
+        is_static: bool = True
+        parameters: list = field(default_factory=list)
+
+    @dataclass
+    class _F:
+        signature: _Sig
+        body: str
+
+    body = (
+        "static jv validate_relpath(jv name) {\n"
+        "  const char *s = jv_string_value(name);\n"
+        "  if (strchr(s, '\\\\')) return jv_invalid_with_msg(jv_string(\"...\"));\n"
+        "  return name;\n"
+        "}"
+    )
+    sig = _Sig(is_static=True, parameters=[("jv", "name")])
+    out = _extract_jv_kind_preconditions(_F(sig, body), ["name"])
+    assert out == ["__CPROVER_assume(jv_get_kind(name) == JV_KIND_STRING);"]
+
+
+def test_jv_kind_precondition_skips_non_static():
+    """Non-static (public-API) functions should NOT get this assumption
+    — public APIs *should* validate their inputs; we don't want to mask
+    real missing-guard bugs in the API surface."""
+    from bmc_agent.harness_generator import _extract_jv_kind_preconditions
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Sig:
+        is_static: bool = False
+        parameters: list = field(default_factory=list)
+
+    @dataclass
+    class _F:
+        signature: _Sig
+        body: str
+
+    body = (
+        "jv public_fn(jv name) {\n"
+        "  const char *s = jv_string_value(name);\n"
+        "  return name;\n"
+        "}"
+    )
+    sig = _Sig(is_static=False, parameters=[("jv", "name")])
+    assert _extract_jv_kind_preconditions(_F(sig, body), ["name"]) == []
+
+
+def test_jv_kind_precondition_skips_self_guarded():
+    """If the function checks jv_get_kind itself, we must NOT add a
+    redundant assumption — that would over-constrain and could mask
+    bugs the function is meant to detect."""
+    from bmc_agent.harness_generator import _extract_jv_kind_preconditions
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Sig:
+        is_static: bool = True
+        parameters: list = field(default_factory=list)
+
+    @dataclass
+    class _F:
+        signature: _Sig
+        body: str
+
+    body = (
+        "static int f(jv name) {\n"
+        "  if (jv_get_kind(name) != JV_KIND_STRING) return 0;\n"
+        "  const char *s = jv_string_value(name);\n"
+        "  return *s;\n"
+        "}"
+    )
+    sig = _Sig(is_static=True, parameters=[("jv", "name")])
+    assert _extract_jv_kind_preconditions(_F(sig, body), ["name"]) == []
+
+
+def test_jv_kind_precondition_array_accessor():
+    """jv_array_length/jv_array_get → JV_KIND_ARRAY assumption."""
+    from bmc_agent.harness_generator import _extract_jv_kind_preconditions
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Sig:
+        is_static: bool = True
+        parameters: list = field(default_factory=list)
+
+    @dataclass
+    class _F:
+        signature: _Sig
+        body: str
+
+    body = (
+        "static int len(jv arr) {\n"
+        "  return jv_array_length(arr);\n"
+        "}"
+    )
+    sig = _Sig(is_static=True, parameters=[("jv", "arr")])
+    out = _extract_jv_kind_preconditions(_F(sig, body), ["arr"])
+    assert out == ["__CPROVER_assume(jv_get_kind(arr) == JV_KIND_ARRAY);"]
+
+
+def test_source_assert_accepts_param_field_access():
+    """`assert(line < l->nlines)` — `l` is a parameter, `nlines` is a
+    struct field of `l`. Detector must accept this, treating `->field`
+    / `.field` accesses as belonging to the parameter, not a separate
+    free identifier. Shipped from jq locfile.c sweep (locfile_line_length
+    FP, 2026-05-13)."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = (
+        "static int locfile_line_length(struct locfile* l, int line) {\n"
+        "  assert(line < l->nlines);\n"
+        "  return l->linemap[line+1] - l->linemap[line] - 1;\n"
+        "}"
+    )
+    out = _extract_source_precondition_asserts(body, ["l", "line"])
+    assert out == ["__CPROVER_assume(line < l->nlines);"]
+
+
+def test_source_assert_multiple_at_top():
+    """Multiple back-to-back asserts at the function head are all
+    promoted (until the first non-assert statement)."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = (
+        "void g(int a, int b) {\n"
+        "    assert(a > 0);\n"
+        "    assert(b > 0);\n"
+        "    use(a, b);\n"
+        "}"
+    )
+    out = _extract_source_precondition_asserts(body, ["a", "b"])
+    assert out == [
+        "__CPROVER_assume(a > 0);",
+        "__CPROVER_assume(b > 0);",
+    ]
+
+
+def test_parser_resolves_separate_typedef_alias(tmp_path: Path):
+    """Parser must record both ``_Tag`` (struct tag) and ``Tag`` (typedef
+    alias) keys when the typedef is a separate statement after the body.
+    This was the libxml2 / libcurl / OpenSSL idiom that broke
+    self-ref-pointer NULL init on every linked-list traversal.
+    """
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "t.c"
+    src.write_text(
+        "struct _foo { int x; struct _foo *next; };\n"
+        "typedef struct _foo foo_t;\n"
+        "void use(foo_t *p) { (void)p; }\n"
+    )
+    p = parse_c_file(str(src))
+    assert "_foo" in p.struct_definitions, list(p.struct_definitions.keys())
+    assert "foo_t" in p.struct_definitions, list(p.struct_definitions.keys())
+    assert p.struct_definitions["foo_t"] == p.struct_definitions["_foo"]
+
+
+def test_parser_resolves_underscore_tag_convention(tmp_path: Path):
+    """The libxml2 idiom ``struct _xmlPattern { ... };`` plus a typedef
+    in a separate header still resolves to alias ``xmlPattern`` via the
+    leading-underscore convention.
+    """
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "t.c"
+    src.write_text(
+        "struct _bar { int a; struct _bar *next; };\n"
+        "void use(struct _bar *p) { (void)p; }\n"
+    )
+    p = parse_c_file(str(src))
+    assert "_bar" in p.struct_definitions
+    assert "bar" in p.struct_definitions, "leading-_ alias should be inferred"
+    assert p.struct_definitions["bar"] == p.struct_definitions["_bar"]
+
+
+def test_struct_field_init_self_ref_pointer_emits_null():
+    """When a struct has a pointer field whose pointee matches the enclosing
+    struct (linked-list next/prev), the harness must NULL it. Without this
+    CBMC nondets the field as 'non-NULL valid pointer to garbage' and
+    reports spurious OOB derefs on the next loop iteration.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    lines = _emit_struct_field_init(
+        obj_name="_p_obj",
+        ftype="struct _xmlPattern *",
+        fname="next",
+        cbmc_unwind=4,
+        enclosing_struct_tag="_xmlPattern",
+    )
+    out = "\n".join(lines)
+    assert "= NULL" in out, out
+
+
+def test_struct_field_init_non_self_ref_pointer_stays_default():
+    """Non-self-ref pointer fields (e.g. ``xmlChar *content`` in xmlBuffer)
+    must NOT be forced to NULL; they get a backing buffer or stay nondet.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    lines = _emit_struct_field_init(
+        obj_name="_obj",
+        ftype="xmlChar *",
+        fname="content",
+        cbmc_unwind=4,
+        enclosing_struct_tag="_xmlPattern",  # different from pointee
+    )
+    out = "\n".join(lines)
+    # 'xmlChar *' won't hit the char* path (xmlChar is an alias for
+    # unsigned char that the field-init helper doesn't know), so it
+    # should stay nondet — i.e., NO ``= NULL`` line.
+    assert "= NULL" not in out
+
+
+def test_builtin_stub_contract_for_malloc():
+    """xmlMalloc / malloc stubs should constrain the result to NULL or
+    a w_ok-bounded pointer, not arbitrary garbage."""
+    from bmc_agent.harness_generator import _builtin_stub_return_contract
+    contract = _builtin_stub_return_contract(
+        "xmlMalloc", "void *", [("size_t", "size")]
+    )
+    assert any("__CPROVER_w_ok(result, size)" in c for c in contract), contract
+    assert any("result == NULL" in c for c in contract), contract
+
+
+def test_builtin_stub_contract_for_calloc():
+    from bmc_agent.harness_generator import _builtin_stub_return_contract
+    contract = _builtin_stub_return_contract(
+        "calloc", "void *", [("size_t", "nmemb"), ("size_t", "size")]
+    )
+    assert any("nmemb" in c and "size" in c for c in contract), contract
+
+
+def test_builtin_stub_contract_strdup_returns_nullable_string():
+    from bmc_agent.harness_generator import _builtin_stub_return_contract
+    contract = _builtin_stub_return_contract(
+        "strdup", "char *", [("const char *", "s")]
+    )
+    assert any("result == NULL" in c for c in contract), contract
+    assert any("__CPROVER_r_ok" in c for c in contract), contract
+
+
+def test_builtin_stub_contract_unknown_function_returns_empty():
+    """Functions not in the contract table must not produce false constraints."""
+    from bmc_agent.harness_generator import _builtin_stub_return_contract
+    assert _builtin_stub_return_contract(
+        "my_random_helper", "int", [("int", "x")]
+    ) == []
+    # Non-pointer returns should never get a contract.
+    assert _builtin_stub_return_contract(
+        "xmlMalloc", "int", [("size_t", "size")]
+    ) == []
+
+
 def test_cbmc_object_bits_disabled_when_auto_scale_off(tmp_path: Path):
     """When auto_scale_object_bits=False, run_cbmc must not retry."""
     from bmc_agent.cbmc import run_cbmc
