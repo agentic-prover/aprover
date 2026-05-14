@@ -179,6 +179,32 @@ class CExValidator:
         func_name = func.name
         logger.info("Validating counterexample for '%s'", func_name)
 
+        # Pre-classifier witness-pattern check (proactive perf + cost cut).
+        # If the witness obviously matches a known model-artifact pattern
+        # (library-init globals NULL, path-divergent unwind), skip the
+        # expensive classifier LLM reachability calls and emit a spurious
+        # validation directly. The realism check downstream will record
+        # the same artifact reason; this just avoids the extra LLM hop.
+        artifact_cause = _witness_obvious_artifact(counterexample)
+        if artifact_cause:
+            logger.info(
+                "Pre-classifier artifact filter: '%s' counterexample is a "
+                "model artifact (%s) — skipping classifier",
+                func_name, artifact_cause,
+            )
+            return ValidationResult(
+                outcome=CExOutcome.SPURIOUS,
+                function_name=func_name,
+                counterexample=counterexample,
+                caller_path=[],
+                system_entry_input="",
+                refinement_history=[],
+                final_precondition=spec.precondition,
+                reasoning=f"Pre-classifier artifact filter: {artifact_cause}.",
+                over_refinement_rejected=False,
+                system_entry_reached=False,
+            )
+
         # Unwind filter: CBMC unwinding assertions (.unwind.N) indicate that a loop
         # exceeded the BMC bound.  These are not directly reportable as bugs, but we
         # must not suppress them outright: falling through to _handle_spurious lets the
@@ -687,6 +713,10 @@ class CExValidator:
             logger.warning(
                 "Reachability harness generation failed for '%s' → '%s': %s",
                 caller.name, callee_name, exc,
+            )
+            logger.debug(
+                "Reachability harness traceback for '%s' → '%s':",
+                caller.name, callee_name, exc_info=True,
             )
             # Fall back to LLM
             return self._check_reachability_with_llm(
@@ -1374,6 +1404,33 @@ class CExValidator:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _witness_obvious_artifact(counterexample) -> Optional[str]:
+    """Cheap, deterministic check: does the witness state match a known
+    model-artifact pattern? Returns a one-line cause when it does, None
+    otherwise. Mirrors the realism-checker's pre-LLM detectors so the
+    classifier can skip expensive LLM reachability calls on findings
+    that the realism stage would reject anyway.
+    """
+    try:
+        from bmc_agent.realism_checker import (
+            _witness_indicates_uninitialized_library,
+            _witness_indicates_path_divergent_unwind,
+            _witness_indicates_jv_stub_disconnect,
+        )
+    except Exception:
+        return None
+    cause = _witness_indicates_uninitialized_library(counterexample)
+    if cause:
+        return cause
+    cause = _witness_indicates_path_divergent_unwind(counterexample)
+    if cause:
+        return cause
+    cause = _witness_indicates_jv_stub_disconnect(counterexample)
+    if cause:
+        return cause
+    return None
 
 
 def _parse_json_response(text: str) -> Optional[dict]:
