@@ -25,6 +25,13 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
+    # CBMC --object-bits. None = let CBMC pick its default (currently 8); with
+    # cbmc_auto_scale_object_bits=True, run_cbmc will retry at 12 and 16 when
+    # the "too many addressed objects" error trips. State-heavy parser files
+    # (libxml2 HTMLparser.c, OpenSSL ASN.1 parsers) routinely blow past 256
+    # objects; auto-scaling avoids losing those files to CBMC frontend errors.
+    cbmc_object_bits: int | None = None
+    cbmc_auto_scale_object_bits: bool = True
     # Real-libc mode: emit minimal harnesses that `#include` the original
     # .c file and let CBMC do all preprocessing via -I, instead of the
     # default Python-side `cc -E` expand-then-strip pipeline. Required

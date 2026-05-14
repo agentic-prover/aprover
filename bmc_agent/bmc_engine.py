@@ -136,6 +136,10 @@ class BMCEngine:
                 pointer_check=pointer_check,
                 bounds_check=bounds_check,
                 div_by_zero_check=div_by_zero_check,
+                object_bits=getattr(self.config, "cbmc_object_bits", None),
+                auto_scale_object_bits=getattr(
+                    self.config, "cbmc_auto_scale_object_bits", True
+                ),
             )
         else:
             # Rust / Kani path: the backend wraps its own verifier

@@ -22,6 +22,13 @@ class Counterexample:
     failing_property: str
     variable_assignments: dict[str, str] = field(default_factory=dict)
     trace: list[str] = field(default_factory=list)
+    # CBMC's textual description for the failing property
+    # (e.g. "dereference failure: NULL pointer").
+    description: str = ""
+    # Source location of the failing property, populated from CBMC's
+    # JSON output. Keys typically include "file", "line", "function".
+    # Empty when CBMC didn't emit a sourceLocation for the result item.
+    failure_location: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -61,6 +68,8 @@ def run_cbmc(
     pointer_check: bool = False,
     bounds_check: bool = False,
     div_by_zero_check: bool = False,
+    object_bits: int | None = None,
+    auto_scale_object_bits: bool = True,
 ) -> CBMCResult:
     """
     Run CBMC on *harness_path* and return a structured result.
@@ -114,40 +123,75 @@ def run_cbmc(
         cmd.append("--bounds-check")
     if div_by_zero_check:
         cmd.append("--div-by-zero-check")
+    if object_bits is not None:
+        cmd += ["--object-bits", str(object_bits)]
     for d in (include_dirs or []):
         cmd += ["-I", d]
     for d in (defines or []):
         cmd += ["-D", d]
 
-    # 3. Execute
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return CBMCResult(
-            verified=False,
-            error=f"cbmc timed out after {timeout}s",
-        )
-    except FileNotFoundError:
-        return CBMCResult(
-            verified=False,
-            error="cbmc not found",
-        )
-    except OSError as exc:
-        return CBMCResult(
-            verified=False,
-            error=f"cbmc OS error: {exc}",
-        )
-
-    raw = proc.stdout or ""
-    stderr = proc.stderr or ""
+    # 3. Execute (with auto-scale retry on "too many addressed objects")
+    # CBMC's default `--object-bits 8` allows 2^8=256 distinct objects.
+    # State-heavy parser files (libxml2 HTMLparser.c, etc.) blow past
+    # this; retry with progressively higher object-bits up to 16
+    # (= 2^16 = 65k objects, which is the practical ceiling).
+    retry_bits_ladder = [12, 16] if auto_scale_object_bits and object_bits is None else []
+    current_cmd = cmd
+    raw = ""
+    stderr = ""
+    returncode = -1
+    for tier in [None] + retry_bits_ladder:
+        if tier is not None:
+            # Drop any previous --object-bits and append the new tier.
+            stripped: list[str] = []
+            skip_next = False
+            for a in current_cmd:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if a == "--object-bits":
+                    skip_next = True
+                    continue
+                stripped.append(a)
+            current_cmd = stripped + ["--object-bits", str(tier)]
+        try:
+            proc = subprocess.run(
+                current_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return CBMCResult(
+                verified=False,
+                error=f"cbmc timed out after {timeout}s",
+            )
+        except FileNotFoundError:
+            return CBMCResult(
+                verified=False,
+                error="cbmc not found",
+            )
+        except OSError as exc:
+            return CBMCResult(
+                verified=False,
+                error=f"cbmc OS error: {exc}",
+            )
+        raw = proc.stdout or ""
+        stderr = proc.stderr or ""
+        returncode = proc.returncode
+        if not _is_too_many_objects(raw, stderr):
+            break
+        # Retry with a larger object-bits in the ladder; if exhausted,
+        # fall through with the last error result.
 
     # 4. Parse output
-    return _parse_cbmc_output(raw, stderr, proc.returncode)
+    return _parse_cbmc_output(raw, stderr, returncode)
+
+
+def _is_too_many_objects(raw: str, stderr: str) -> bool:
+    """Detect CBMC's 'too many addressed objects' error."""
+    needle = "too many addressed objects"
+    return needle in (raw or "") or needle in (stderr or "")
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +255,18 @@ def _extract_counterexamples(messages: list | dict) -> list[Counterexample]:
             prop = item.get("property", {})
             prop_id = prop if isinstance(prop, str) else prop.get("id", "unknown")
 
+            # CBMC's top-level description + source location for the failure.
+            description = str(item.get("description", "")).strip()
+            top_loc = item.get("sourceLocation") or {}
+            if not isinstance(top_loc, dict):
+                top_loc = {}
+            failure_location: dict[str, str] = {}
+            if top_loc:
+                for k in ("file", "line", "function", "column"):
+                    v = top_loc.get(k)
+                    if v is not None:
+                        failure_location[k] = str(v)
+
             # Extract trace
             trace_lines: list[str] = []
             var_assignments: dict[str, str] = {}
@@ -237,11 +293,27 @@ def _extract_counterexamples(messages: list | dict) -> list[Counterexample]:
                     func = loc.get("function", "?")
                     trace_lines.append(f"{step_type} at {func}:{line}")
 
+            # If the result item didn't carry a sourceLocation, fall back to
+            # the last trace step that did — usually the failing assert.
+            if not failure_location:
+                for trace_entry in reversed(item.get("trace", [])):
+                    if not isinstance(trace_entry, dict):
+                        continue
+                    loc = trace_entry.get("sourceLocation") or {}
+                    if isinstance(loc, dict) and loc.get("line"):
+                        for k in ("file", "line", "function", "column"):
+                            v = loc.get(k)
+                            if v is not None:
+                                failure_location[k] = str(v)
+                        break
+
             cexes.append(
                 Counterexample(
                     failing_property=prop_id,
                     variable_assignments=var_assignments,
                     trace=trace_lines,
+                    description=description,
+                    failure_location=failure_location,
                 )
             )
 

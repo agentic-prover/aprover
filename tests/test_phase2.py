@@ -1094,3 +1094,89 @@ def test_cli_check_with_mock_specs(tmp_path: Path):
             "--function", "rb_is_empty",
         ])
     assert ret == 0
+
+
+# ---------------------------------------------------------------------------
+# CBMC --object-bits auto-scaling
+# ---------------------------------------------------------------------------
+
+
+def test_cbmc_object_bits_auto_scale_on_too_many_objects(tmp_path: Path):
+    """run_cbmc must retry with higher --object-bits when CBMC reports
+    'too many addressed objects: maximum number of objects is set to 2^n=256'.
+
+    This was a hard-fail on libxml2 HTMLparser.c functions until auto-scaling
+    landed.
+    """
+    from bmc_agent.cbmc import run_cbmc, _is_too_many_objects
+    from unittest.mock import patch, MagicMock
+
+    too_many_msg = (
+        'too many addressed objects: maximum number of objects is set to '
+        '2^n=256 (with n=8); use the `--object-bits n` option to increase'
+    )
+    assert _is_too_many_objects(too_many_msg, "")
+
+    harness = tmp_path / "h.c"
+    harness.write_text("int main(){return 0;}\n")
+
+    # First call returns the too-many error, second call returns success.
+    call_count = {"n": 0}
+    captured_cmds: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmds.append(list(cmd))
+        call_count["n"] += 1
+        result = MagicMock()
+        if call_count["n"] == 1:
+            result.stdout = too_many_msg
+            result.stderr = ""
+            result.returncode = 6
+        else:
+            result.stdout = '[{"messageText":"VERIFICATION SUCCESSFUL"}]'
+            result.stderr = ""
+            result.returncode = 0
+        return result
+
+    with patch("bmc_agent.cbmc.shutil.which", return_value="/usr/bin/cbmc"), \
+         patch("bmc_agent.cbmc.subprocess.run", side_effect=_fake_run):
+        result = run_cbmc(harness_path=harness)
+
+    # First call had no --object-bits; second call must add it.
+    assert call_count["n"] >= 2, "auto-scale should retry at least once"
+    first_cmd = captured_cmds[0]
+    second_cmd = captured_cmds[1]
+    assert "--object-bits" not in first_cmd, (
+        "initial call should not pass --object-bits, letting CBMC default to 8"
+    )
+    assert "--object-bits" in second_cmd, (
+        "retry must add --object-bits to escalate past the 2^8 ceiling"
+    )
+    bits_index = second_cmd.index("--object-bits")
+    assert second_cmd[bits_index + 1] in ("12", "16")
+
+
+def test_cbmc_object_bits_disabled_when_auto_scale_off(tmp_path: Path):
+    """When auto_scale_object_bits=False, run_cbmc must not retry."""
+    from bmc_agent.cbmc import run_cbmc
+    from unittest.mock import patch, MagicMock
+
+    too_many_msg = "too many addressed objects: maximum number of objects is set to 2^n=256"
+    harness = tmp_path / "h.c"
+    harness.write_text("int main(){return 0;}\n")
+
+    call_count = {"n": 0}
+
+    def _fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        result = MagicMock()
+        result.stdout = too_many_msg
+        result.stderr = ""
+        result.returncode = 6
+        return result
+
+    with patch("bmc_agent.cbmc.shutil.which", return_value="/usr/bin/cbmc"), \
+         patch("bmc_agent.cbmc.subprocess.run", side_effect=_fake_run):
+        run_cbmc(harness_path=harness, auto_scale_object_bits=False)
+
+    assert call_count["n"] == 1, "auto_scale_object_bits=False must disable retries"
