@@ -274,6 +274,117 @@ def _params_str(params: list[tuple[str, str]]) -> str:
     return ", ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Selective callee inlining (FP reduction)
+# ---------------------------------------------------------------------------
+
+# Allocator-family names. Calls to these inside a candidate callee body
+# disqualify it from inlining, because we want CBMC to use our built-in
+# stub contracts (which model NULL-or-valid-pointer) rather than chase
+# the real implementation's symbolic allocation behaviour.
+_ALLOC_FAMILY_DISQUALIFY: frozenset[str] = frozenset({
+    "malloc", "calloc", "realloc", "free", "strdup", "strndup",
+    "xmlMalloc", "xmlMallocAtomic", "xmlRealloc", "xmlFree", "xmlMemStrdup",
+    "Curl_cmalloc", "Curl_ccalloc", "Curl_crealloc", "Curl_cfree", "Curl_cstrdup",
+    "OPENSSL_malloc", "OPENSSL_zalloc", "OPENSSL_free", "OPENSSL_realloc",
+    "CRYPTO_malloc", "CRYPTO_free", "CRYPTO_realloc",
+    "g_malloc", "g_free", "g_realloc",
+})
+
+
+def _strip_c_comments(src: str) -> str:
+    """Return *src* with C line- and block-comments removed.
+
+    Used only for callee-body shape analysis (LoC count + token scan),
+    so we don't need a full lexer — a regex pass is sufficient and
+    safer than mis-stripping a string literal containing /* … */.
+    String / char literals are left intact (we only strip comments).
+    """
+    # Block comments — non-greedy across lines.
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    # Line comments — to end of line.
+    src = re.sub(r"//[^\n]*", "", src)
+    return src
+
+
+def _should_inline_callee(
+    callee_name: str,
+    parsed_file: "ParsedCFile",
+    max_loc: int = 30,
+) -> tuple[bool, str]:
+    """Decide whether *callee_name* should be inlined (real body
+    embedded in the harness) instead of stubbed.
+
+    Returns ``(eligible, reason)``. Conservative by design — when a
+    rule rejects, the caller falls back to the existing stub path, so
+    rejection cannot regress correctness.
+
+    Eligibility (ALL must hold):
+      - callee body is defined in the parsed file (not extern);
+      - signature is ``static`` (file-local linkage);
+      - body is at most ``max_loc`` non-empty, non-comment lines;
+      - no loops in body (``for`` / ``while`` / ``do``);
+      - body does not call any allocator-family function;
+      - body is not directly recursive;
+      - body does not dispatch through a function pointer
+        (``(*foo)(...)`` patterns).
+
+    Rationale: the disqualifiers exactly cover the cases where
+    inlining (a) explodes CBMC state (loops, allocators, recursion),
+    or (b) requires extra reasoning the rule set can't do safely
+    (function-pointer dispatch). What's left is small pure helpers —
+    predicates, getters, accessors — which is exactly where stub
+    disconnect drives FPs (jv_get_kind, xmlIsBlank_ch, BUF_ERROR, …).
+    """
+    cfi = parsed_file.get_function_info(callee_name)
+    if cfi is None:
+        return False, "callee not defined in parsed file (extern)"
+    # The parser's tree-sitter path doesn't include the storage class in
+    # signature.return_type (it strips to the bare base type), so
+    # signature.is_static is unreliable for tree-sitter-parsed sources.
+    # Cross-check against the full function definition text, which captures
+    # storage class specifiers verbatim. The regex fallback DOES set
+    # is_static correctly, so we accept either signal.
+    is_static = bool(getattr(cfi.signature, "is_static", False))
+    if not is_static:
+        fdef = (parsed_file.function_definitions or {}).get(callee_name, "")
+        # ``static`` appearing before the function name in the definition
+        # header is the C storage-class specifier we care about.
+        header = fdef.split("{", 1)[0]
+        if re.search(r"\bstatic\b", header):
+            is_static = True
+    if not is_static:
+        return False, "callee is not file-local static"
+    body = cfi.body or ""
+    if not body.strip():
+        return False, "callee body is empty"
+    body_clean = _strip_c_comments(body)
+    nonempty = [ln for ln in body_clean.splitlines() if ln.strip()]
+    if len(nonempty) > max_loc:
+        return False, f"body has {len(nonempty)} LoC (cap {max_loc})"
+    # Loop detection. ``\b(for|while|do)\s*[({]`` covers C control-flow
+    # keywords; ``do { … } while`` is caught by the ``do`` match.
+    if re.search(r"\b(for|while|do)\s*[({]", body_clean):
+        return False, "body contains a loop"
+    # goto-based loops: a backward goto would also form a loop, but in
+    # practice the linux-kernel-style ``goto out;`` pattern is forward.
+    # We conservatively reject any goto at all, since CBMC unwind
+    # analysis on goto-graphs is harder to reason about.
+    if re.search(r"\bgoto\s+\w+", body_clean):
+        return False, "body uses goto"
+    # Allocator-family disqualifier.
+    for alloc in _ALLOC_FAMILY_DISQUALIFY:
+        if re.search(r"\b" + re.escape(alloc) + r"\s*\(", body_clean):
+            return False, f"body calls allocator-family function {alloc}"
+    # Direct recursion.
+    if re.search(r"\b" + re.escape(callee_name) + r"\s*\(", body_clean):
+        return False, "body is directly recursive"
+    # Function-pointer dispatch — ``(*foo)(...)`` or ``(*foo->bar)(...)``.
+    if re.search(r"\(\s*\*\s*[\w.\->]+\s*\)\s*\(", body_clean):
+        return False, "body dispatches through function pointer"
+    return True, "eligible"
+
+
 def _generate_stub(
     callee_name: str,
     callee_spec: Optional[Spec],
@@ -2226,18 +2337,50 @@ class HarnessGenerator:
         extern_callees = set()
         if extern_sigs:
             extern_callees = (func.callees - local_callees) & set(extern_sigs.keys())
-        all_stub_callees = local_callees | extern_callees
 
-        # --- 3. Generate stubs for each callee ---
+        # --- 2a. Partition local callees: inline-eligible vs stub ---
+        # Eligible callees are small, pure, file-local helpers (predicates /
+        # getters / accessors); inlining their real bodies lets CBMC verify
+        # against the truth rather than an LLM-generated contract, which
+        # kills the "stub disconnect" FP class on jv_get_kind, xmlIsBlank_ch,
+        # BUF_ERROR, …. Static eligibility — no LLM in this loop.
+        inline_local_callees: set[str] = set()
+        if getattr(self.config, "inline_pure_callees", True):
+            max_loc = int(getattr(self.config, "inline_pure_callees_max_loc", 30))
+            for cname in sorted(local_callees):
+                ok, _reason = _should_inline_callee(cname, parsed_file, max_loc=max_loc)
+                if ok:
+                    inline_local_callees.add(cname)
+        stubbed_local_callees = local_callees - inline_local_callees
+        all_stub_callees = stubbed_local_callees | extern_callees
+
+        # --- 3. Generate stubs for each callee that wasn't inlined ---
         stub_sections: list[str] = []
         for callee_name in sorted(all_stub_callees):
             callee_spec = spec.callee_specs.get(callee_name)
             stub_src = _generate_stub(callee_name, callee_spec, parsed_file, extern_sigs)
             stub_sections.append(stub_src)
 
+        # --- 3a. Emit inlined-callee bodies verbatim ---
+        # The inlined callee may itself call into ``all_stub_callees``; rewrite
+        # those nested calls so the inlined body compiles in the harness.
+        inline_func_defs: list[str] = []
+        for cname in sorted(inline_local_callees):
+            cfi = parsed_file.get_function_info(cname)
+            if cfi is None:
+                continue
+            cbody = _substitute_callee_calls(cfi.body, all_stub_callees)
+            cparams = _params_str(cfi.signature.parameters)
+            inline_func_defs.append(
+                f"/* Inlined real callee body: {cname} */\n"
+                f"static {cfi.signature.return_type} {cname}({cparams})\n{cbody}"
+            )
+
         defined_callees = all_stub_callees  # used below for substitution
 
         # --- 4. Build the function body with callee calls substituted ---
+        # Inlined callees keep their original names — only stubbed ones get
+        # rewritten to {name}_stub.
         body_with_stubs = _substitute_callee_calls(func.body, defined_callees)
 
         # Reconstruct the full function definition (with original signature)
@@ -2327,6 +2470,12 @@ class HarnessGenerator:
         if stub_sections:
             sections.append("/* --- Callee stubs --- */")
             sections.extend(stub_sections)
+
+        # Inlined real callee bodies (small file-local pure helpers).
+        # Emitted before the function under test so the call sites resolve.
+        if inline_func_defs:
+            sections.append("/* --- Inlined real callee bodies --- */")
+            sections.extend(inline_func_defs)
 
         # Original function (with stubs substituted for callee calls)
         sections.append(

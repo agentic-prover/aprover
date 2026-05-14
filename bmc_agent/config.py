@@ -32,6 +32,16 @@ class Config:
     # objects; auto-scaling avoids losing those files to CBMC frontend errors.
     cbmc_object_bits: int | None = None
     cbmc_auto_scale_object_bits: bool = True
+    # Inline small pure file-local callees instead of replacing them with
+    # LLM-generated stubs. Reduces the "stub disconnect" false-positive
+    # class — getters/predicates (jv_get_kind, xmlIsBlank_ch, BUF_ERROR)
+    # where the real body trivially constrains the return but the LLM
+    # contract gets it wrong. Static eligibility rules in harness_generator
+    # (file-local static, ≤30 LoC, no loops, no alloc, no recursion).
+    # Affects the non-real-libc path only; real-libc mode already
+    # inlines everything via #include.
+    inline_pure_callees: bool = True
+    inline_pure_callees_max_loc: int = 30
     # Real-libc mode: emit minimal harnesses that `#include` the original
     # .c file and let CBMC do all preprocessing via -I, instead of the
     # default Python-side `cc -E` expand-then-strip pipeline. Required
@@ -141,6 +151,8 @@ class Config:
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
             cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
+            inline_pure_callees=os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES", "true").lower() != "false",
+            inline_pure_callees_max_loc=int(os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES_MAX_LOC", "30")),
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),

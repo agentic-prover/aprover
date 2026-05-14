@@ -1526,3 +1526,292 @@ def test_cbmc_object_bits_disabled_when_auto_scale_off(tmp_path: Path):
         run_cbmc(harness_path=harness, auto_scale_object_bits=False)
 
     assert call_count["n"] == 1, "auto_scale_object_bits=False must disable retries"
+
+
+# ---------------------------------------------------------------------------
+# Selective callee inlining (_should_inline_callee)
+# ---------------------------------------------------------------------------
+
+
+def _eligible(callee: str, src: str, tmp_path: Path, max_loc: int = 30) -> tuple[bool, str]:
+    """Parse `src` and ask _should_inline_callee about `callee`."""
+    from bmc_agent.harness_generator import _should_inline_callee
+    from bmc_agent.parser import parse_c_file
+    p = tmp_path / f"{callee}_src.c"
+    p.write_text(src)
+    parsed = parse_c_file(str(p))
+    return _should_inline_callee(callee, parsed, max_loc=max_loc)
+
+
+def test_inline_eligible_small_static_predicate(tmp_path: Path):
+    """A small file-local static predicate (no loops/alloc/recursion) is
+    eligible — exactly the jv_get_kind / xmlIsBlank_ch pattern."""
+    src = (
+        "static int is_ascii(int c) {\n"
+        "    return c >= 0 && c < 128;\n"
+        "}\n"
+        "int caller(int c) { return is_ascii(c); }\n"
+    )
+    ok, reason = _eligible("is_ascii", src, tmp_path)
+    assert ok, f"expected eligible, got: {reason}"
+
+
+def test_inline_rejects_non_static(tmp_path: Path):
+    """Non-static (linkage-visible) functions are part of the public API
+    surface; we don't inline them — callers expect the contract, not the
+    implementation."""
+    src = (
+        "int public_helper(int c) {\n"
+        "    return c >= 0 && c < 128;\n"
+        "}\n"
+        "int caller(int c) { return public_helper(c); }\n"
+    )
+    ok, reason = _eligible("public_helper", src, tmp_path)
+    assert not ok
+    assert "file-local static" in reason
+
+
+def test_inline_rejects_extern(tmp_path: Path):
+    """Calls to functions not defined in the parsed file (externs) can't
+    be inlined — we have no body."""
+    src = (
+        "extern int strchr_like(const char *s, int c);\n"
+        "int caller(const char *s) { return strchr_like(s, 'x') != 0; }\n"
+    )
+    ok, reason = _eligible("strchr_like", src, tmp_path)
+    assert not ok
+    assert "extern" in reason
+
+
+def test_inline_rejects_body_too_large(tmp_path: Path):
+    """Body length cap excludes large helpers (state explosion risk)."""
+    body_lines = "\n".join(f"    x += {i};" for i in range(50))
+    src = (
+        "static int big(int x) {\n"
+        f"{body_lines}\n"
+        "    return x;\n"
+        "}\n"
+        "int caller(int x) { return big(x); }\n"
+    )
+    ok, reason = _eligible("big", src, tmp_path, max_loc=30)
+    assert not ok
+    assert "LoC" in reason
+
+
+def test_inline_rejects_loop_for(tmp_path: Path):
+    """``for`` loops disqualify — unwind blowup."""
+    src = (
+        "static int sum(int n) {\n"
+        "    int s = 0;\n"
+        "    for (int i = 0; i < n; i++) s += i;\n"
+        "    return s;\n"
+        "}\n"
+        "int caller(int n) { return sum(n); }\n"
+    )
+    ok, reason = _eligible("sum", src, tmp_path)
+    assert not ok
+    assert "loop" in reason
+
+
+def test_inline_rejects_loop_while(tmp_path: Path):
+    src = (
+        "static int countdown(int n) {\n"
+        "    while (n > 0) n--;\n"
+        "    return n;\n"
+        "}\n"
+        "int caller(int n) { return countdown(n); }\n"
+    )
+    ok, reason = _eligible("countdown", src, tmp_path)
+    assert not ok
+    assert "loop" in reason
+
+
+def test_inline_rejects_loop_do_while(tmp_path: Path):
+    src = (
+        "static int countdown(int n) {\n"
+        "    do { n--; } while (n > 0);\n"
+        "    return n;\n"
+        "}\n"
+        "int caller(int n) { return countdown(n); }\n"
+    )
+    ok, reason = _eligible("countdown", src, tmp_path)
+    assert not ok
+    assert "loop" in reason
+
+
+def test_inline_rejects_malloc_call(tmp_path: Path):
+    """Helpers that allocate are disqualified — built-in allocator stub
+    contracts model these better than inlining them."""
+    src = (
+        "static char *dup_one(char c) {\n"
+        "    char *p = malloc(1);\n"
+        "    if (p) *p = c;\n"
+        "    return p;\n"
+        "}\n"
+        "char *caller(char c) { return dup_one(c); }\n"
+    )
+    ok, reason = _eligible("dup_one", src, tmp_path)
+    assert not ok
+    assert "allocator-family" in reason
+
+
+def test_inline_rejects_xmlMalloc_call(tmp_path: Path):
+    """Library-specific allocator-family names are also disqualified."""
+    src = (
+        "static void *alloc_one(unsigned long n) {\n"
+        "    return xmlMalloc(n);\n"
+        "}\n"
+        "void *caller(unsigned long n) { return alloc_one(n); }\n"
+    )
+    ok, reason = _eligible("alloc_one", src, tmp_path)
+    assert not ok
+    assert "xmlMalloc" in reason
+
+
+def test_inline_rejects_direct_recursion(tmp_path: Path):
+    """A function that calls itself can't be inlined safely — CBMC
+    would need a separate unwind bound per recursion level."""
+    src = (
+        "static int fact(int n) {\n"
+        "    if (n <= 1) return 1;\n"
+        "    return n * fact(n - 1);\n"
+        "}\n"
+        "int caller(int n) { return fact(n); }\n"
+    )
+    ok, reason = _eligible("fact", src, tmp_path)
+    assert not ok
+    assert "recursive" in reason
+
+
+def test_inline_rejects_function_pointer_dispatch(tmp_path: Path):
+    """``(*fn)(args)`` style call disqualifies — we can't analyse the
+    target statically."""
+    src = (
+        "static int dispatch(int (*fn)(int), int x) {\n"
+        "    return (*fn)(x);\n"
+        "}\n"
+        "int caller(int (*f)(int), int x) { return dispatch(f, x); }\n"
+    )
+    ok, reason = _eligible("dispatch", src, tmp_path)
+    assert not ok
+    assert "function pointer" in reason
+
+
+def test_inline_rejects_goto(tmp_path: Path):
+    """goto-based control flow disqualifies (backward-goto loops, etc)."""
+    src = (
+        "static int helper(int x) {\n"
+        "    if (x < 0) goto out;\n"
+        "    x = x * 2;\n"
+        "out:\n"
+        "    return x;\n"
+        "}\n"
+        "int caller(int x) { return helper(x); }\n"
+    )
+    ok, reason = _eligible("helper", src, tmp_path)
+    assert not ok
+    assert "goto" in reason
+
+
+def test_inline_strip_comments_loc_accounting(tmp_path: Path):
+    """Comments don't count toward the LoC cap — a function with 100
+    lines of comments but 5 real lines is eligible."""
+    block_comment = "/* " + ("filler\n" * 50) + " */\n"
+    src = (
+        "static int small(int x) {\n"
+        + block_comment +
+        "    // and a line comment\n"
+        "    return x + 1;\n"
+        "}\n"
+        "int caller(int x) { return small(x); }\n"
+    )
+    ok, reason = _eligible("small", src, tmp_path)
+    assert ok, f"expected eligible after comment strip, got: {reason}"
+
+
+def test_inline_strip_c_comments_helper():
+    """``_strip_c_comments`` removes both block and line comments.
+
+    Note: the regex pass is not string-literal-aware (a ``//`` inside a
+    string would also be stripped). This is intentionally simple — the
+    helper is only used for callee-body shape analysis (LoC count and
+    coarse token scan), where this edge case doesn't change the
+    eligibility decision.
+    """
+    from bmc_agent.harness_generator import _strip_c_comments
+    src = (
+        "int f(void) {\n"
+        "    /* block\n       comment */\n"
+        "    int x = 1; // line comment\n"
+        "    return x;\n"
+        "}\n"
+    )
+    out = _strip_c_comments(src)
+    assert "block" not in out
+    assert "line comment" not in out
+
+
+def test_inline_path_used_in_harness(tmp_path: Path):
+    """When the predicate accepts a callee, the generated harness must
+    contain the real callee body, not a stub — and the call site must
+    NOT be rewritten to {name}_stub. This is the integration test for
+    the wiring change in HarnessGenerator.generate()."""
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec
+    from bmc_agent.config import Config
+
+    src = (
+        "static int is_pos(int x) {\n"
+        "    return x > 0;\n"
+        "}\n"
+        "int caller(int x) {\n"
+        "    if (is_pos(x)) return x;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    p = tmp_path / "src.c"
+    p.write_text(src)
+    parsed = parse_c_file(str(p))
+    cfg = Config()
+    cfg.inline_pure_callees = True
+    spec = Spec(function_name="caller", precondition="true", postcondition="true")
+    gen = HarnessGenerator(cfg)
+    func = parsed.get_function_info("caller")
+    harness = gen.generate_harness(func, spec, parsed)
+    # The inlined body should appear verbatim (return x > 0)
+    assert "return x > 0" in harness, harness
+    # The call site is preserved (no _stub rewrite)
+    assert "is_pos(x)" in harness, harness
+    # No stub function was emitted for is_pos
+    assert "is_pos_stub" not in harness, harness
+
+
+def test_inline_disabled_falls_back_to_stub(tmp_path: Path):
+    """With ``inline_pure_callees=False``, the existing stub path runs
+    and the harness contains is_pos_stub instead of the real body."""
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec
+    from bmc_agent.config import Config
+
+    src = (
+        "static int is_pos(int x) {\n"
+        "    return x > 0;\n"
+        "}\n"
+        "int caller(int x) {\n"
+        "    if (is_pos(x)) return x;\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    p = tmp_path / "src.c"
+    p.write_text(src)
+    parsed = parse_c_file(str(p))
+    cfg = Config()
+    cfg.inline_pure_callees = False
+    spec = Spec(function_name="caller", precondition="true", postcondition="true")
+    gen = HarnessGenerator(cfg)
+    func = parsed.get_function_info("caller")
+    harness = gen.generate_harness(func, spec, parsed)
+    # Stub function present with _stub suffix
+    assert "is_pos_stub" in harness, harness
