@@ -1815,3 +1815,59 @@ def test_inline_disabled_falls_back_to_stub(tmp_path: Path):
     harness = gen.generate_harness(func, spec, parsed)
     # Stub function present with _stub suffix
     assert "is_pos_stub" in harness, harness
+
+
+# ---------------------------------------------------------------------------
+# Cascading typedef strip (va_list orphan regression)
+# ---------------------------------------------------------------------------
+
+
+def test_strip_cascades_for_orphan_typedef():
+    """``typedef __gnuc_va_list va_list;`` must be stripped after the
+    earlier ``typedef __builtin_va_list __gnuc_va_list;`` is removed,
+    otherwise the harness contains a typedef referencing an undefined
+    name and CBMC's frontend errors with ``syntax error before 'va_list'``.
+    Regression observed running verify on VibeOS dtb.c.
+    """
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef __builtin_va_list __gnuc_va_list;\n"
+        "typedef __gnuc_va_list va_list;\n"
+        "typedef int normal_alias;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    # The orphan typedef must not survive
+    assert "typedef __gnuc_va_list va_list" not in out, out
+    # And the comment must explain the cascade so future debugging is easy
+    assert "references stripped __gnuc_va_list" in out, out
+    # The legitimate user typedef stays
+    assert "typedef int normal_alias" in out, out
+
+
+def test_strip_cascade_does_not_touch_user_typedefs():
+    """A typedef whose body references a USER type (never stripped) must
+    not be cascade-stripped — only references to already-stripped names
+    trigger the cascade."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef int MyType;\n"
+        "typedef MyType MyAlias;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    assert "typedef int MyType" in out
+    assert "typedef MyType MyAlias" in out
+
+
+def test_strip_cascade_preserves_target_name_self_reference():
+    """A typedef where the TARGET name happens to match a stripped name
+    (extremely unlikely but worth being explicit) is still stripped via
+    the primary __ rule, not the cascade rule — the cascade only looks
+    at body identifiers, so it doesn't double-count the target."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef int __foo;\n"      # primary strip
+        "typedef long bar;\n"        # neither stripped
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    assert "typedef __foo removed" in out
+    assert "typedef long bar" in out  # not stripped — body has no stripped names

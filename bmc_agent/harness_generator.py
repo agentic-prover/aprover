@@ -2961,8 +2961,18 @@ def _strip_glibc_internal_typedefs(text: str) -> str:
         typedef unsigned long int __dev_t;
         typedef struct { int __val[2]; } __fsid_t;
         typedef union { long long __ll; long double __ld; } max_align_t;
+
+    Also strips orphan typedefs whose BODY references a name that was
+    already stripped earlier in this scan — e.g.
+    ``typedef __gnuc_va_list va_list;`` after ``typedef __builtin_va_list
+    __gnuc_va_list;`` is removed.  Without this cascade, the harness
+    contains a typedef pointing at an undefined identifier and CBMC's
+    frontend errors with ``syntax error before 'va_list'``.  Source-order
+    scanning is sufficient because C typedefs may only reference names
+    declared earlier in the same translation unit.
     """
     result: list[str] = []
+    stripped_names: set[str] = set()
     i = 0
     pat = re.compile(r'\btypedef\b')
     while i < len(text):
@@ -2986,12 +2996,35 @@ def _strip_glibc_internal_typedefs(text: str) -> str:
             break
         typedef_text = text[m.start():j + 1]
         name_m = re.search(r'\b(\w+)\s*;$', typedef_text)
-        if name_m and (
-            name_m.group(1).startswith('__')
-            or name_m.group(1) in _SYSTEM_TYPEDEF_NAMES
+        target = name_m.group(1) if name_m else None
+
+        # Primary strip rule: name starts with `__` or is a C-standard typedef.
+        strip = False
+        reason = ""
+        if target and (
+            target.startswith('__') or target in _SYSTEM_TYPEDEF_NAMES
         ):
+            strip = True
+            reason = "removed"
+
+        # Cascading strip rule: typedef body references something already
+        # stripped (e.g. ``typedef __gnuc_va_list va_list;`` after
+        # __gnuc_va_list is gone).  We only check identifiers that came
+        # from the SOURCE side of the typedef, not the target name itself,
+        # so a typedef that just happens to reuse the target identifier
+        # in its body isn't mis-classified.
+        if not strip and target and stripped_names:
+            body_tokens = set(re.findall(r'\b\w+\b', typedef_text))
+            body_tokens.discard(target)
+            referenced = body_tokens & stripped_names
+            if referenced:
+                strip = True
+                reason = f"removed: references stripped {sorted(referenced)[0]}"
+
+        if strip and target:
             result.append(text[i:m.start()])
-            result.append(f'/* typedef {name_m.group(1)} removed */')
+            result.append(f'/* typedef {target} {reason} */')
+            stripped_names.add(target)
         else:
             result.append(text[i:j + 1])
         i = j + 1
