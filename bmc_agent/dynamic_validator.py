@@ -260,6 +260,16 @@ class DynamicValidator:
             bin_path = bin_f.name
 
         cmd = [cc, "-g", "-fno-builtin", "-w", "-o", bin_path, src_path]
+        # Propagate the configured -I paths so dynamic harnesses can resolve
+        # project-internal headers (e.g. libxml.h, openssl/foo.h). Without this,
+        # any harness that #includes the source file via real-libc mode fails
+        # to compile because the GCC frontend can't find the project headers.
+        include_dirs = getattr(self.config, "include_dirs", None) or []
+        for d in include_dirs:
+            cmd += ["-I", str(d)]
+        defines = getattr(self.config, "cbmc_defines", None) or []
+        for d in defines:
+            cmd += ["-D", str(d)]
         if extra_flags:
             cmd.extend(extra_flags)
         try:
