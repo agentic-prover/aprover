@@ -16,6 +16,10 @@ class Config:
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
     llm_base_url: str = ""  # optional OpenRouter or proxy base URL
+    # Per-request timeout for the Anthropic SDK. Without an explicit timeout the
+    # SDK can hang indefinitely on a stuck request, stalling a multi-hour sweep
+    # (observed in a libxml2 run that froze for >35 minutes mid-pipeline).
+    llm_request_timeout_s: float = 180.0
 
     # CBMC settings
     cbmc_path: str = "cbmc"
@@ -111,6 +115,7 @@ class Config:
             llm_model=os.environ.get("BMC_AGENT_LLM_MODEL", "claude-sonnet-4-6"),
             llm_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             llm_base_url=os.environ.get("BMC_AGENT_LLM_BASE_URL", ""),
+            llm_request_timeout_s=float(os.environ.get("BMC_AGENT_LLM_TIMEOUT_S", "180.0")),
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),

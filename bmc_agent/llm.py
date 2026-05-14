@@ -92,7 +92,11 @@ class LLMClient:
 
         for attempt in range(self.config.max_spec_retries):
             try:
-                response = client.messages.create(  # type: ignore[attr-defined]
+                # Per-request timeout: without it the SDK can block indefinitely
+                # on a stuck connection and stall the whole pipeline. The Anthropic
+                # SDK accepts an httpx-style timeout; we pass a simple float.
+                timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
+                response = client.with_options(timeout=timeout_s).messages.create(  # type: ignore[attr-defined]
                     model=self.config.llm_model,
                     max_tokens=max_tokens,
                     temperature=temperature,
