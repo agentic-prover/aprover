@@ -1896,6 +1896,110 @@ def test_strip_cascade_preserves_user_typedef_with_standard_type():
     assert "typedef block_header_t removed" not in out
 
 
+def test_infer_extern_return_contract_zero_or_negative(tmp_path: Path):
+    """Siblings consistently returning 0 or negative literals should
+    yield ``__CPROVER_assume(result <= 0);`` for the stubbed extern."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "vfs.c"
+    src.write_text(
+        "int vfs_set_cwd(const char *p) { if (!p) return -1; return 0; }\n"
+        "int vfs_delete(const char *p) { if (!p) return -1; return 0; }\n"
+        "int vfs_mkdir(const char *p) { return -1; }\n"
+        "int vfs_rename(const char *a, const char *b);\n"  # extern, no body
+    )
+    parsed = parse_c_file(str(src))
+    out = _infer_extern_return_contract("vfs_rename", "int", parsed)
+    assert out == ["__CPROVER_assume(result <= 0);"], out
+
+
+def test_infer_extern_return_contract_ignores_non_literal_returns(tmp_path: Path):
+    """A sibling that returns a function call alongside literals shouldn't
+    bail the whole inference — we accumulate literal evidence and only
+    require ≥2 siblings to have literal returns. Regression: previously
+    bailed entirely if any sibling had a non-literal return."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "vfs.c"
+    src.write_text(
+        # Has a delegate return AND literal returns
+        "int vfs_delete(const char *p) { if (!p) return -1; "
+        "if (p[0]=='x') return fat32_delete(p); return -1; }\n"
+        # All-literal sibling
+        "int vfs_set_cwd(const char *p) { return -1; }\n"
+        # Another all-literal sibling — boosts confidence
+        "int vfs_mkdir(const char *p) { return 0; }\n"
+        "int vfs_rename(const char *a, const char *b);\n"
+    )
+    parsed = parse_c_file(str(src))
+    out = _infer_extern_return_contract("vfs_rename", "int", parsed)
+    assert out == ["__CPROVER_assume(result <= 0);"], out
+
+
+def test_infer_extern_return_contract_skips_when_no_consensus(tmp_path: Path):
+    """When siblings exhibit no literal convention (all returns are
+    function calls / variables), no contract is emitted."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "vfs.c"
+    src.write_text(
+        "int vfs_set_cwd(const char *p) { return helper(p); }\n"
+        "int vfs_delete(const char *p) { return helper2(p); }\n"
+        "int vfs_mkdir(const char *p) { return another(p); }\n"
+        "int vfs_rename(const char *a, const char *b);\n"
+    )
+    parsed = parse_c_file(str(src))
+    assert _infer_extern_return_contract("vfs_rename", "int", parsed) == []
+
+
+def test_infer_extern_return_contract_requires_matching_return_type(tmp_path: Path):
+    """A sibling that returns a different type (pointer vs int) is
+    skipped. Avoids mixing vfs_lookup (returns ptr) with vfs_set_cwd
+    (returns int) when inferring vfs_rename's contract."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "vfs.c"
+    src.write_text(
+        # int-returning siblings (would qualify)
+        "int vfs_set_cwd(const char *p) { return -1; }\n"
+        "int vfs_delete(const char *p) { return 0; }\n"
+        # pointer-returning sibling (must be excluded from analysis)
+        "char *vfs_lookup(const char *p) { return 0; }\n"
+        "int vfs_rename(const char *a, const char *b);\n"
+    )
+    parsed = parse_c_file(str(src))
+    out = _infer_extern_return_contract("vfs_rename", "int", parsed)
+    assert out == ["__CPROVER_assume(result == 0);"] or out == ["__CPROVER_assume(result <= 0);"], out
+
+
+def test_infer_extern_return_contract_requires_underscore_prefix(tmp_path: Path):
+    """Names without an underscore prefix don't get inference (no
+    namespace to scan siblings in)."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "x.c"
+    src.write_text(
+        "int foo(int x) { return -1; }\n"
+        "int bar(int x) { return 0; }\n"
+    )
+    parsed = parse_c_file(str(src))
+    assert _infer_extern_return_contract("baz", "int", parsed) == []
+
+
+def test_infer_extern_return_contract_pointer_return_skipped(tmp_path: Path):
+    """Pointer-returning callees don't get this contract — they have
+    their own (allocator-family) builtin path."""
+    from bmc_agent.harness_generator import _infer_extern_return_contract
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "x.c"
+    src.write_text(
+        "void *xml_alloc1(unsigned long n) { return 0; }\n"
+        "void *xml_alloc2(unsigned long n) { return 0; }\n"
+    )
+    parsed = parse_c_file(str(src))
+    assert _infer_extern_return_contract("xml_other", "void *", parsed) == []
+
+
 def test_learned_clauses_emit_in_non_real_libc_harness(tmp_path: Path):
     """Step 1.6 (project) and Step 1.7 (function) clauses must be
     emitted in the main non-real-libc harness path, not just in

@@ -446,15 +446,32 @@ def _generate_stub(
         if builtin_contract:
             lines.append("    /* Built-in stub contract (allocator-family) */")
             lines.extend(f"    {c}" for c in builtin_contract)
-        elif callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
-            param_names = [pname for _, pname in params]
-            assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
-            if assert_stmts:
-                lines.append("    /* Havoc return value subject to postcondition */")
-                for stmt in assert_stmts:
-                    # In stub context, use __CPROVER_assume instead of assert
-                    stmt = stmt.replace("assert(", "__CPROVER_assume(")
-                    lines.append(f"    {stmt}")
+        else:
+            # Sibling-derived return contract: when the callee has no body
+            # in this translation unit (i.e. it's extern), look at other
+            # functions with the same prefix and infer a return-value
+            # contract from theirs (``vfs_*`` consistently returns 0/-1).
+            # Kills the recurring kapi.c-style FP where a nondet stub
+            # returns ``1`` and trips a caller assertion that real callers
+            # never see. Conservative — emits nothing when siblings don't
+            # agree.
+            inferred = _infer_extern_return_contract(
+                callee_name, ret_type, parsed_file
+            )
+            if inferred:
+                lines.append(
+                    f"    /* Inferred from {callee_name.split('_',1)[0]}_* sibling return values */"
+                )
+                lines.extend(f"    {c}" for c in inferred)
+            elif callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
+                param_names = [pname for _, pname in params]
+                assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
+                if assert_stmts:
+                    lines.append("    /* Havoc return value subject to postcondition */")
+                    for stmt in assert_stmts:
+                        # In stub context, use __CPROVER_assume instead of assert
+                        stmt = stmt.replace("assert(", "__CPROVER_assume(")
+                        lines.append(f"    {stmt}")
         lines.append("    return result;")
 
     lines.append("}")
@@ -1007,6 +1024,167 @@ def _builtin_stub_return_contract(
         # Return -1, 0, or +1 typically — but compilers may return any
         # int with sign of (a-b). Cap to plausible range.
         return [f"__CPROVER_assume(result >= -1048576 && result <= 1048576);"]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Helpers: infer stub return contracts from sibling functions
+# ---------------------------------------------------------------------------
+
+
+def _infer_extern_return_contract(
+    callee_name: str,
+    ret_type: str,
+    parsed_file: "ParsedCFile",
+) -> list[str]:
+    """Return CBMC __CPROVER_assume statements that constrain ``result``
+    based on sibling functions in the project sharing the same prefix.
+
+    Motivation: arm-(a) feedback from kapi.c sweep. When an extern
+    callee has no body (e.g. ``vfs_rename``), CBMC defaults to
+    unconstrained nondet return, allowing positive ints like ``1``
+    that no real implementation would produce. The realism LLM
+    correctly diagnoses this every time — but absorbing it as a
+    function-spec clause for every caller is brittle. Inferring the
+    contract from sibling functions in the SAME naming namespace
+    (``vfs_*`` already-defined functions consistently use 0/-1) is a
+    much cleaner FP filter.
+
+    Returns empty list when:
+      - ``ret_type`` is not a plain integer (we only handle int returns)
+      - No prefix can be derived
+      - No defined siblings exist
+      - Sibling return values aren't consistent enough to derive a contract
+
+    Conservative by design: if anything looks unusual, no contract is
+    emitted (the existing stub path runs unchanged).
+    """
+    # Only handle plain int returns for now — pointer / struct returns
+    # have their own contract paths.
+    rt = (ret_type or "").strip().rstrip("*").strip()
+    if rt not in ("int", "signed int", "unsigned int", "long", "signed long",
+                  "unsigned long", "short", "signed short", "unsigned short",
+                  "char", "signed char", "unsigned char", "int32_t", "int64_t",
+                  "uint32_t", "uint64_t", "int16_t", "uint16_t", "int8_t",
+                  "uint8_t", "ssize_t"):
+        return []
+
+    # Derive prefix: split at the first underscore. ``vfs_rename`` → ``vfs_``.
+    if "_" not in callee_name:
+        return []
+    prefix = callee_name.split("_", 1)[0] + "_"
+    if len(prefix) < 4:  # too generic (e.g. ``a_`` matches everything)
+        return []
+
+    fdefs = getattr(parsed_file, "function_definitions", None) or {}
+    fbodies = getattr(parsed_file, "function_bodies", None) or {}
+    fsigs = getattr(parsed_file, "functions", None) or {}
+    # Find SIBLINGS — same prefix, NOT the callee itself, body is available,
+    # AND same return type. Without the return-type filter we mix int-
+    # returning vfs_set_cwd with pointer-returning vfs_lookup and get
+    # garbage signal.
+    target_rt = rt
+    siblings: list[str] = []
+    for fname in fdefs.keys():
+        if fname == callee_name:
+            continue
+        if not fname.startswith(prefix):
+            continue
+        if not fbodies.get(fname):
+            continue
+        sib_sig = fsigs.get(fname)
+        if sib_sig is None:
+            continue
+        sib_rt = (getattr(sib_sig, "return_type", "") or "").strip().rstrip("*").strip()
+        if sib_rt != target_rt:
+            continue
+        siblings.append(fname)
+    if len(siblings) < 2:
+        # Need at least 2 siblings sharing the prefix + return type to argue
+        # this is a project convention rather than a one-off.
+        return []
+
+    # Collect literal return values across siblings.  We classify each
+    # ``return EXPR;`` into:
+    #   - literal int (0, 1, -1, 0x10, ...)
+    #   - negative macro (``-EINVAL`` — we know it's negative)
+    #   - non-literal (function call, variable, expression — IGNORED)
+    # Earlier versions bailed on any non-literal return.  That was too
+    # conservative: a sibling like vfs_delete returns ``fat32_delete(p)``
+    # alongside several literal ``-1``s.  We now collect what we can and
+    # only commit to a contract when we have enough literal evidence
+    # AND no sibling exclusively returns non-literals (which would
+    # suggest the namespace doesn't actually use a literal convention).
+    constants: set[int] = set()
+    saw_negative_macro = False
+    siblings_with_literals = 0
+    siblings_with_only_nonliterals = 0
+    for sib in siblings:
+        body = fbodies.get(sib, "")
+        sib_constants: set[int] = set()
+        sib_neg_macro = False
+        sib_nonliteral = False
+        for m in re.finditer(r"\breturn\s+([^;]+?)\s*;", body):
+            e = m.group(1).strip()
+            while e.startswith("(") and e.endswith(")"):
+                e = e[1:-1].strip()
+            try:
+                sib_constants.add(int(e, 0))
+                continue
+            except ValueError:
+                pass
+            if e.startswith("-"):
+                try:
+                    sib_constants.add(int(e, 0))
+                    continue
+                except ValueError:
+                    pass
+                if re.match(r"^-\s*[A-Z_][A-Z0-9_]*$", e):
+                    sib_neg_macro = True
+                    continue
+            sib_nonliteral = True
+        # ``return;`` with the callee returning int is a type mismatch
+        # in the sibling — skip it.
+        if re.search(r"\breturn\s*;", body):
+            continue
+        constants |= sib_constants
+        saw_negative_macro = saw_negative_macro or sib_neg_macro
+        if sib_constants or sib_neg_macro:
+            siblings_with_literals += 1
+        elif sib_nonliteral:
+            siblings_with_only_nonliterals += 1
+
+    # Need at least 2 siblings producing literal returns AND fewer
+    # all-nonliteral siblings than literal ones — otherwise the
+    # "convention" signal is too weak.
+    if siblings_with_literals < 2:
+        return []
+    if siblings_with_only_nonliterals >= siblings_with_literals:
+        return []
+    if not constants and not saw_negative_macro:
+        return []
+
+    # Derive the contract.
+    # Case 1: all observed values are 0 or negative → result <= 0
+    # Case 2: all observed values in a small fixed set → result == c0 || ... || result == cN
+    has_positive = any(c > 0 for c in constants)
+    has_zero = 0 in constants
+    has_negative = any(c < 0 for c in constants) or saw_negative_macro
+
+    if not has_positive:
+        if has_zero and has_negative:
+            return ["__CPROVER_assume(result <= 0);"]
+        if has_zero and not has_negative:
+            return ["__CPROVER_assume(result == 0);"]
+        if has_negative and not has_zero:
+            return ["__CPROVER_assume(result < 0);"]
+
+    # Mixed positive + others: only emit a contract when the constant set
+    # is small and well-known (e.g., {-1, 0, 1} for comparators).
+    if has_positive and len(constants) <= 4 and not saw_negative_macro:
+        clauses = " || ".join(f"result == {c}" for c in sorted(constants))
+        return [f"__CPROVER_assume({clauses});"]
+
     return []
 
 
