@@ -71,6 +71,45 @@ _SILENT_UB_PROPERTY_SUFFIXES: tuple[str, ...] = (
 )
 
 
+def _all_applied_clauses(config, func_name: str, spec) -> list[str]:
+    """Return every `__CPROVER_assume(...)` clause the next harness will
+    inject, in source order: project invariants (Step 1.6), function
+    invariants (Step 1.7), then the spec precondition (Step 2). Used by
+    the feedback loop's clean-proof log line to make explicit what the
+    "VERIFIED CLEAN" verdict is conditional on. Trivial preconditions
+    (``true`` / ``1`` / empty) are dropped so the log doesn't say
+    "verified clean under {true}".
+    """
+    clauses: list[str] = []
+    if getattr(config, "enable_feedback_loop", False):
+        try:
+            from bmc_agent.feedback_loop import LearnedConstraintsStore
+            store = LearnedConstraintsStore(config.artifact_dir)
+            clauses.extend(store.project_clauses())
+            clauses.extend(store.function_clauses(func_name))
+        except Exception:
+            pass
+    pre = getattr(spec, "precondition", None) if spec else None
+    if isinstance(pre, str):
+        clauses.append(pre)
+    return [c for c in clauses if isinstance(c, str) and c.strip() not in ("", "true", "1")]
+
+
+def _flag_summary(flag_selection) -> str:
+    """One-line summary of which CBMC checks the harness was run with.
+    Returns "pointer-check, bounds-check, ..." or "default" when no
+    extra Phase-1.5 flags are enabled."""
+    if flag_selection is None:
+        return "default (pointer-check, bounds-check)"
+    try:
+        enabled = flag_selection.enabled_flags()
+    except Exception:
+        return "default (pointer-check, bounds-check)"
+    if not enabled:
+        return "default (pointer-check, bounds-check)"
+    return "+ " + ", ".join(f.lstrip("-") for f in enabled)
+
+
 def _is_crash_class_property(prop: str) -> bool:
     """Return True when the CBMC property would crash at runtime if real.
 
@@ -133,6 +172,7 @@ def _verified_clean_validation(prev_validation):
         caller_path=getattr(prev_validation, "caller_path", []) or [],
         system_entry_input=getattr(prev_validation, "system_entry_input", "") or "",
         final_precondition=getattr(prev_validation, "final_precondition", None),
+        refinement_history=list(getattr(prev_validation, "refinement_history", []) or []),
         is_real_bug=False,
         system_entry_reached=False,
         over_refinement_rejected=False,
@@ -337,6 +377,13 @@ class AMCPipeline:
         # Phase 2: Run BMC on all functions
         # ------------------------------------------------------------------
         logger.info("--- Phase 2: Running BMC on %d functions ---", len(all_funcs))
+        # Stash on self so the feedback-loop re-invocations of check_function
+        # can pass the same per-function selection back through. Without this,
+        # the iter-1 CBMC run drops --unsigned-overflow-check (and friends)
+        # selected by Phase 1.5, which can silently "verify clean" the very
+        # property the bug was on.
+        self._flag_selections = flag_selections if flag_selections else {}
+
         verdicts = self.bmc_engine.check_all(
             funcs=all_funcs,
             specs=specs,
@@ -855,15 +902,30 @@ class AMCPipeline:
             # reads learned_constraints.json from disk and emits
             # __CPROVER_assume(clause) at Step 1.7, so the new clause
             # is active on this call.
+            #
+            # CRITICAL: pass the same Phase-1.5 flag_selection that the
+            # iter-0 CBMC run used. Without this, --unsigned-overflow-check
+            # / --pointer-overflow-check / etc. get dropped on the re-run
+            # and CBMC silently "verifies clean" by no longer checking the
+            # very property the bug was on — see the memory.c malloc
+            # regression that exposed this.
+            iter_flags = (getattr(self, "_flag_selections", {}) or {}).get(func.name)
             new_verdict = self.bmc_engine.check_function(
-                func, spec, parsed, driver_name, all_funcs=all_funcs,
+                func, spec, parsed, driver_name,
+                all_funcs=all_funcs,
+                flag_selection=iter_flags,
             )
 
             if new_verdict.verified or not new_verdict.counterexamples:
+                applied_clauses = _all_applied_clauses(
+                    self.config, func.name, spec
+                )
                 logger.info(
-                    "Feedback iter %d (%s): function VERIFIES CLEAN after "
-                    "applying learned clause '%s' — convergence",
-                    iteration, func.name, remediation.clause[:80],
+                    "Feedback iter %d (%s): VERIFIED CLEAN under "
+                    "{precondition: %s; CBMC checks: %s} — convergence",
+                    iteration, func.name,
+                    " && ".join(applied_clauses) or "(spec precondition only)",
+                    _flag_summary(iter_flags),
                 )
                 return _verified_clean_validation(validation), _realism_verified()
 

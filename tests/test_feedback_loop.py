@@ -256,3 +256,133 @@ def test_harness_emit_learned_clauses_function_scoped(tmp_path: Path):
         "__CPROVER_assume(x != NULL);"
     ]
     assert _emit_learned_clauses(config, "xmlOther", "function") == []
+
+
+# ---------------------------------------------------------------------------
+# Feedback loop: flag_selection threading (bug 2 regression)
+# ---------------------------------------------------------------------------
+
+
+def test_feedback_iterate_threads_flag_selection_through(tmp_path: Path):
+    """The iter-1 CBMC re-run must receive the same Phase-1.5
+    flag_selection that iter-0 used. Without this, --unsigned-overflow-check
+    and friends get dropped on the re-run and CBMC silently 'verifies
+    clean' the property the bug was on.
+
+    Regression: VibeOS memory.c malloc.overflow.1 was being suppressed
+    this way — iter-0 CBMC with --unsigned-overflow-check found the
+    overflow, iter-1 dropped the flag and "verified clean".
+    """
+    from unittest.mock import MagicMock
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.feedback_loop import Remediation, RemediationScope
+    from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+    from bmc_agent.flag_selector import FlagSelection
+    from bmc_agent.config import Config
+
+    config = Config()
+    config.enable_realism_check = True
+    config.enable_feedback_loop = True
+    config.feedback_max_iters = 1
+
+    pipeline = AMCPipeline.__new__(AMCPipeline)
+    pipeline.config = config
+    pipeline.llm = MagicMock()
+    pipeline.cex_validator = MagicMock()
+    pipeline.realism_checker = MagicMock()
+    pipeline.reporter = MagicMock()
+
+    # The iter-0 flag selection stashed on self by Phase 1.5.
+    pipeline._flag_selections = {
+        "malloc": FlagSelection(unsigned_overflow_check=True, reasoning="size math"),
+    }
+
+    # Capture the flag_selection arg the feedback loop's re-run passes.
+    captured = {}
+    fake_verdict = MagicMock()
+    fake_verdict.verified = True
+    fake_verdict.counterexamples = []
+    def fake_check(func, spec, parsed, driver_name, all_funcs=None, flag_selection=None):
+        captured["flag_selection"] = flag_selection
+        return fake_verdict
+    pipeline.bmc_engine = MagicMock()
+    pipeline.bmc_engine.check_function.side_effect = fake_check
+
+    # _feedback_record's LLM distillation: skip the real LLM, return a clause.
+    pipeline._feedback_record = MagicMock(return_value=Remediation(
+        scope=RemediationScope.FUNCTION_SPEC,
+        clause="size <= (SIZE_MAX / 2)",
+        confidence="high",
+    ))
+
+    # Inputs for _feedback_iterate.
+    validation = MagicMock()
+    validation.counterexample = MagicMock()
+    validation.counterexample.failing_property = "malloc.overflow.1"
+    validation.counterexample.failure_location = {"line": "10"}
+    realism = RealismCheckResult(
+        verdict=RealismVerdict.UNREALISTIC,
+        reasoning="bounded heap, never SIZE_MAX",
+        key_concern="overflow on alignment math",
+        llm_confidence="high",
+    )
+    func = MagicMock(); func.name = "malloc"; func.body = "..."
+    from bmc_agent.spec import Spec
+    spec = Spec(function_name="malloc", precondition="size >= 0", postcondition="true")
+
+    pipeline._feedback_iterate(
+        validation, realism, func, spec, MagicMock(),
+        all_funcs={}, driver_name="d", all_specs={},
+    )
+
+    # CRITICAL: the flag_selection from Phase 1.5 must have been passed through.
+    assert captured.get("flag_selection") is not None
+    assert captured["flag_selection"].unsigned_overflow_check is True
+
+
+def test_pipeline_clean_proof_helpers():
+    """``_all_applied_clauses`` and ``_flag_summary`` give the log line
+    explicit information about what was assumed and what was checked."""
+    from bmc_agent.pipeline import _all_applied_clauses, _flag_summary
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+    from bmc_agent.flag_selector import FlagSelection
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        store = LearnedConstraintsStore(td)
+        # Project + function clauses
+        store.record("malloc", Remediation(
+            scope=RemediationScope.FUNCTION_SPEC,
+            clause="size <= (SIZE_MAX / 2)",
+            confidence="high",
+        ))
+        store.record("anyone", Remediation(
+            scope=RemediationScope.PROJECT_INVARIANT,
+            clause="heap_start != 0",
+            confidence="high",
+        ))
+        cfg = Config()
+        cfg.enable_feedback_loop = True
+        cfg.artifact_dir = td
+        spec = Spec(function_name="malloc", precondition="size >= 0", postcondition="true")
+        clauses = _all_applied_clauses(cfg, "malloc", spec)
+        # Order: project, function, spec-pre
+        assert clauses == ["heap_start != 0", "size <= (SIZE_MAX / 2)", "size >= 0"]
+
+    # Trivial preconditions ("true", "1") get filtered out so the log
+    # doesn't say "verified clean under {true}".
+    cfg2 = Config()
+    cfg2.enable_feedback_loop = False
+    spec2 = Spec(function_name="f", precondition="true", postcondition="true")
+    assert _all_applied_clauses(cfg2, "f", spec2) == []
+
+    # Flag summary
+    assert _flag_summary(None) == "default (pointer-check, bounds-check)"
+    assert _flag_summary(FlagSelection()) == "default (pointer-check, bounds-check)"
+    s = _flag_summary(FlagSelection(unsigned_overflow_check=True, pointer_overflow_check=True))
+    assert "unsigned-overflow-check" in s
+    assert "pointer-overflow-check" in s

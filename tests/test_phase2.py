@@ -1896,6 +1896,84 @@ def test_strip_cascade_preserves_user_typedef_with_standard_type():
     assert "typedef block_header_t removed" not in out
 
 
+def test_learned_clauses_emit_in_non_real_libc_harness(tmp_path: Path):
+    """Step 1.6 (project) and Step 1.7 (function) clauses must be
+    emitted in the main non-real-libc harness path, not just in
+    _generate_real_libc. Regression: prior versions only wrote clauses
+    in real-libc mode, so the feedback loop on VibeOS persisted
+    clauses but they never reached CBMC."""
+    import json
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec
+    from bmc_agent.config import Config
+
+    # Seed a learned_constraints.json with one project + one function clause.
+    art = tmp_path / "artifacts"
+    art.mkdir()
+    (art / "learned_constraints.json").write_text(json.dumps({
+        "version": 1,
+        "project_clauses": ["g_init != 0"],
+        "function_clauses": {"under_test": ["x > 0"]},
+        "code_change_todos": [],
+    }))
+
+    src = tmp_path / "t.c"
+    src.write_text(
+        "int g_init;\n"
+        "int under_test(int x) { return x + 1; }\n"
+    )
+    parsed = parse_c_file(str(src))
+    cfg = Config()
+    cfg.enable_feedback_loop = True
+    cfg.artifact_dir = str(art)
+    # Stay on non-real-libc path
+    cfg.cbmc_real_libc = False
+    spec = Spec(function_name="under_test", precondition="true", postcondition="true")
+    func = parsed.get_function_info("under_test")
+
+    gen = HarnessGenerator(cfg)
+    harness = gen.generate_harness(func, spec, parsed)
+    assert "Step 1.6: learned project invariants" in harness, harness
+    assert "__CPROVER_assume(g_init != 0);" in harness, harness
+    assert "Step 1.7: learned function invariants" in harness, harness
+    assert "__CPROVER_assume(x > 0);" in harness, harness
+
+
+def test_learned_clauses_inert_without_feedback_flag(tmp_path: Path):
+    """When enable_feedback_loop is off, learned clauses on disk are
+    ignored — the feature is fully opt-in."""
+    import json
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.spec import Spec
+    from bmc_agent.config import Config
+
+    art = tmp_path / "artifacts"
+    art.mkdir()
+    (art / "learned_constraints.json").write_text(json.dumps({
+        "version": 1,
+        "project_clauses": ["g_init != 0"],
+        "function_clauses": {"under_test": ["x > 0"]},
+        "code_change_todos": [],
+    }))
+
+    src = tmp_path / "t.c"
+    src.write_text("int g_init;\nint under_test(int x) { return x + 1; }\n")
+    parsed = parse_c_file(str(src))
+    cfg = Config()
+    cfg.enable_feedback_loop = False  # OFF
+    cfg.artifact_dir = str(art)
+    spec = Spec(function_name="under_test", precondition="true", postcondition="true")
+    func = parsed.get_function_info("under_test")
+    gen = HarnessGenerator(cfg)
+    harness = gen.generate_harness(func, spec, parsed)
+    assert "Step 1.6" not in harness
+    assert "Step 1.7" not in harness
+    assert "__CPROVER_assume(g_init != 0)" not in harness
+    assert "__CPROVER_assume(x > 0)" not in harness
+
+
 def test_is_crash_class_property_recognises_crash_classes():
     """Crash-class CBMC properties (NULL deref, OOB, bounds, double-free)
     should be recognised so the dynamic NOT_TRIGGERED → UNREALISTIC

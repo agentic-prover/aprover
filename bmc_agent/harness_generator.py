@@ -2498,6 +2498,22 @@ class HarnessGenerator:
             for s in lib_init_assumes:
                 harness_body_lines.append(f"    {s}")
 
+        # Step 1.6: project-wide invariants learned from prior realism
+        # rejections (feedback loop arm (c)). Off unless enable_feedback_loop.
+        proj_clauses = _emit_learned_clauses(self.config, fn_name, "project")
+        if proj_clauses:
+            harness_body_lines.append("")
+            harness_body_lines.append("    /* Step 1.6: learned project invariants */")
+            harness_body_lines.extend(f"    {s}" for s in proj_clauses)
+
+        # Step 1.7: function-local invariants learned for THIS function
+        # (feedback loop arm (b)).
+        fn_clauses = _emit_learned_clauses(self.config, fn_name, "function")
+        if fn_clauses:
+            harness_body_lines.append("")
+            harness_body_lines.append("    /* Step 1.7: learned function invariants */")
+            harness_body_lines.extend(f"    {s}" for s in fn_clauses)
+
         # Step 1.8: precondition asserts mined from the source body.
         source_assume_stmts = _extract_source_precondition_asserts(
             func.body or "", param_names,
