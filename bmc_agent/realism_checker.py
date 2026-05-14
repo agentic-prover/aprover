@@ -123,6 +123,82 @@ class RealismChecker:
         logger.info("Realism check for '%s' (property: %s)",
                     func.name, counterexample.failing_property[:60])
 
+        # Witness-pattern pre-check: certain CBMC nondet defaults indicate
+        # the bug requires the library to be uninitialized. Skip the LLM
+        # and return UNREALISTIC directly. Saves an LLM round-trip AND
+        # avoids the realism LLM "creatively" justifying these artifacts.
+        artifact_cause = _witness_indicates_uninitialized_library(counterexample)
+        if artifact_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by witness-pattern — %s",
+                func.name, artifact_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"Witness-pattern auto-classification: {artifact_cause}. "
+                    "Skipped LLM realism call because this CBMC default state "
+                    "(library globals NULL) cannot occur after standard "
+                    "library init runs."
+                ),
+                key_concern=f"[witness-artifact] {artifact_cause}",
+                llm_confidence="high",
+            )
+
+        # jq jv tagged-union stub-disconnect detector (arm-(a), 2026-05-13,
+        # from jv_aux.c sweep): CBMC's nondet `jv` struct has u.ptr = NULL
+        # while stubbed `jv_get_kind` returns refcnt-backed kinds (ARRAY/
+        # STRING/OBJECT/NUMBER) or out-of-range enum integers. The
+        # implementation then dereferences the NULL refcnt — an artifact
+        # of stub disconnect, not a real bug.
+        jv_cause = _witness_indicates_jv_stub_disconnect(counterexample)
+        if jv_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by jv stub-disconnect — %s",
+                func.name, jv_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"jq jv tagged-union stub-disconnect: {jv_cause}. "
+                    "Real jq code obtains jv values via constructors "
+                    "(jv_array, jv_string, jv_object, …) which always pair "
+                    "the kind with a valid refcnt. The CBMC nondet jv has "
+                    "u.ptr=NULL while the stubbed jv_get_kind reports a "
+                    "refcnt-backed kind — an impossible runtime state."
+                ),
+                key_concern=f"[jv-stub-disconnect] {jv_cause}",
+                llm_confidence="high",
+            )
+
+        # Path-divergent unwind detector (from feedback-loop arm (a) TODO,
+        # 2026-05-13): CBMC reports a *.unwind.* property fail when its
+        # symbolic exploration on SOME path hits the loop bound; the
+        # reported counterexample witness, however, may correspond to a
+        # different path that exits early without ever entering the loop.
+        # When the witness shows function-return before any loop-head,
+        # the violation is path-divergent — not a bug along the witnessed
+        # path. Skip the LLM call.
+        divergent_cause = _witness_indicates_path_divergent_unwind(counterexample)
+        if divergent_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by path-divergent "
+                "unwind — %s",
+                func.name, divergent_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"Path-divergent unwind artifact: {divergent_cause}. "
+                    "CBMC's unwind assertion fires on a symbolic path that "
+                    "the exhibited witness doesn't actually traverse. The "
+                    "exhibited execution exits before reaching the loop "
+                    "whose bound was exceeded."
+                ),
+                key_concern=f"[path-divergent-unwind] {divergent_cause}",
+                llm_confidence="high",
+            )
+
         prompt = self._build_prompt(
             func=func,
             counterexample=counterexample,
@@ -134,10 +210,15 @@ class RealismChecker:
         try:
             # Use extended thinking when available to improve reasoning quality.
             use_thinking = getattr(self.config, "enable_realism_thinking", False)
+            # max_tokens=2048 caused realism responses to truncate mid-JSON for
+            # complex findings (observed in libxml2 xmlAddEntity); the parser
+            # then fell back to prose-keyword recovery and picked the wrong
+            # verdict. Bump to 4096; with thinking enabled the SDK auto-expands
+            # to thinking_budget + 1024, so we override that calculation here.
             raw = self.llm.complete(
                 SPEC_SYSTEM_PROMPT,
                 prompt,
-                max_tokens=2048,
+                max_tokens=4096 + (4000 if use_thinking else 0),
                 thinking=use_thinking,
                 thinking_budget=4000,
             )
@@ -163,7 +244,7 @@ class RealismChecker:
     ) -> str:
         sig = _format_signature(func)
         body = func.body or "(body not available)"
-        violated = counterexample.failing_property
+        violated = _format_failing_property_with_location(counterexample)
         cex_state = _format_cex_state(counterexample)
         call_chain_str = " → ".join(validation_result.caller_path) if validation_result.caller_path else func.name
         caller_context = _format_caller_context(
@@ -176,13 +257,26 @@ class RealismChecker:
             func.name, validation_result.caller_path, all_funcs, parsed_file
         )
         global_context = _extract_global_context(func, all_funcs, parsed_file)
+        # Mark the failing line with `>>>` arrow so the LLM can locate
+        # the property without manually mapping CBMC's instruction index.
+        failure_line = None
+        loc = getattr(counterexample, "failure_location", None) or {}
+        if isinstance(loc, dict):
+            try:
+                failure_line = int(loc.get("line", "")) if loc.get("line") else None
+            except (TypeError, ValueError):
+                failure_line = None
+        source_file_context = _format_source_file_context(parsed_file, mark_line=failure_line)
 
         tm = getattr(self.config, "threat_model", "security")
         return REALISM_CHECK_PROMPT.format(
             threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             function_name=func.name,
             function_signature=sig,
-            function_body=body[:2000],
+            # 8000 chars (~120 lines of C) accommodates mid-size leaf functions
+            # like libxml2 xmlAddEntity (~110 lines) without truncating past the
+            # lazy-init / guard region that the LLM needs to see.
+            function_body=body[:8000],
             violated_property=violated,
             counterexample_state=cex_state,
             call_chain=call_chain_str,
@@ -191,6 +285,7 @@ class RealismChecker:
             harness_code=harness_code,
             call_site_analysis=call_site_analysis,
             global_context=global_context,
+            source_file_context=source_file_context,
         )
 
 
@@ -349,6 +444,192 @@ def _format_signature(func: "FunctionInfo") -> str:
     return f"{sig.return_type} {sig.name}({params})"
 
 
+_LIB_INIT_GLOBAL_FN_PTRS = {
+    # libxml2 global allocator / dict / debug pointers
+    "xmlMalloc", "xmlMallocAtomic", "xmlRealloc", "xmlFree", "xmlMemStrdup",
+    "xmlGenericError", "xmlStructuredError", "xmlOutputBufferCreateFilenameValue",
+    "xmlParserInputBufferCreateFilenameValue",
+    # libcurl indirect allocators
+    "Curl_cmalloc", "Curl_ccalloc", "Curl_crealloc", "Curl_cfree", "Curl_cstrdup",
+    "Curl_cscalloc",
+    # OpenSSL / BoringSSL function-pointer indirections
+    "OPENSSL_malloc", "OPENSSL_zalloc", "OPENSSL_free", "OPENSSL_realloc",
+    "CRYPTO_malloc", "CRYPTO_free", "CRYPTO_realloc",
+    # glib
+    "g_malloc", "g_free", "g_realloc",
+}
+
+
+def _witness_indicates_uninitialized_library(cex: "Counterexample") -> str | None:
+    """Return a one-line description of the artifact pattern if the
+    counterexample's variable assignments indicate the witness only
+    triggers when library-init has not run (CBMC nondet default = NULL
+    for unset global function pointers). Otherwise None.
+
+    Real public APIs always go through ``xmlInit`` / ``curl_global_init`` /
+    ``OPENSSL_init_crypto`` / ``g_thread_init`` etc. at startup, which set
+    these globals; a CEx that needs them NULL is an artifact, not a bug.
+    """
+    if not cex or not getattr(cex, "variable_assignments", None):
+        return None
+    nulled: list[str] = []
+    for var, val in cex.variable_assignments.items():
+        if var in _LIB_INIT_GLOBAL_FN_PTRS:
+            # CBMC formats NULL as "NULL" or "(... *)NULL" / "((xmlMallocFunc)NULL)"
+            val_str = (val or "").upper()
+            if "NULL" in val_str and "!=" not in val_str:
+                nulled.append(var)
+    if len(nulled) >= 2:
+        return (
+            f"witness requires {len(nulled)} library-init global function pointers "
+            f"to be NULL ({', '.join(sorted(nulled)[:4])}"
+            f"{', …' if len(nulled) > 4 else ''}), "
+            "which only happens before library init runs"
+        )
+    return None
+
+
+_JV_REFCNT_KINDS = {"JV_KIND_STRING", "JV_KIND_ARRAY", "JV_KIND_OBJECT", "JV_KIND_NUMBER"}
+_JV_VALID_KINDS = {
+    "JV_KIND_INVALID", "JV_KIND_NULL", "JV_KIND_FALSE", "JV_KIND_TRUE",
+    "JV_KIND_NUMBER", "JV_KIND_STRING", "JV_KIND_ARRAY", "JV_KIND_OBJECT",
+}
+
+
+def _witness_indicates_jv_stub_disconnect(cex: "Counterexample") -> str | None:
+    """Detect jq's jv tagged-union stub-disconnect pattern.
+
+    jq represents values as a tagged-union struct ``jv = { kind_flags,
+    pad_, offset, size, u: { ptr | number } }`` where refcnt-backed kinds
+    (STRING/ARRAY/OBJECT/NUMBER-large) require ``u.ptr`` to be a valid
+    ``jv_refcnt *``. Real jq code obtains jv values only via constructors
+    (jv_array, jv_string, jv_object, …) which always pair the kind with
+    a valid refcnt.
+
+    CBMC, given a nondet ``jv`` parameter and a STUB ``jv_get_kind`` that
+    returns nondet enum, can produce a witness where ``j.u.ptr == NULL``
+    AND ``jv_get_kind(j)`` returns a refcnt-backed kind. The implementation
+    then dereferences NULL — a model artifact, not a real bug.
+
+    Trigger when:
+      (a) ≥1 ``*.u.ptr`` assignments are NULL, AND
+      (b) ≥1 ``return_value_jv_get_kind*`` assignments are either a
+          refcnt-backed kind or an out-of-enum-range integer
+          (e.g. ``/*enum*/17``, ``/*enum*/2097152``).
+    """
+    if not cex or not getattr(cex, "variable_assignments", None):
+        return None
+    null_ptr_count = 0
+    suspect_kinds: list[str] = []
+    for var, val in cex.variable_assignments.items():
+        v = (val or "")
+        # u.ptr fields that are NULL
+        if var.endswith(".u.ptr") or var.endswith(".ptr"):
+            if "NULL" in v.upper():
+                null_ptr_count += 1
+        # jv_get_kind stub returns
+        if var.startswith("return_value_jv_get_kind"):
+            # CBMC writes "/*enum*/JV_KIND_xxx" or "/*enum*/<int>"
+            m = re.search(r"/\*enum\*/(\S+)", v)
+            if not m:
+                continue
+            tok = m.group(1).strip().rstrip(",;")
+            if tok in _JV_REFCNT_KINDS:
+                suspect_kinds.append(tok)
+            elif tok.isdigit() or (tok.startswith("-") and tok[1:].isdigit()):
+                # Out-of-range enum integer — bogus stub return
+                try:
+                    n = int(tok)
+                    if n < 0 or n > 7:
+                        suspect_kinds.append(f"int({n})")
+                except ValueError:
+                    pass
+            elif tok not in _JV_VALID_KINDS:
+                # Unknown enum tag (e.g. "/*enum*/42_FOO") — also suspect
+                suspect_kinds.append(tok)
+    if null_ptr_count >= 1 and len(suspect_kinds) >= 1:
+        sample = ", ".join(suspect_kinds[:3])
+        more = "" if len(suspect_kinds) <= 3 else f" (+{len(suspect_kinds)-3} more)"
+        return (
+            f"{null_ptr_count} jv.u.ptr field(s) are NULL while stubbed "
+            f"jv_get_kind reports refcnt-backed/out-of-range kinds "
+            f"[{sample}{more}] — real jv constructors never pair these"
+        )
+    return None
+
+
+def _witness_indicates_path_divergent_unwind(cex: "Counterexample") -> str | None:
+    """Return a description of the divergence if the failing property is
+    `*.unwind.*` but the trace shows the function returning early
+    (before any loop-head). Otherwise None.
+
+    Detection from feedback-loop arm (a) TODO #1 (2026-05-13,
+    xmlXIncludeIncludeNode): CBMC's unwinding-assertion machinery emits
+    `*.unwind.N` when ANY symbolic path needs more iterations than the
+    bound, even when the EXHIBITED counterexample witness corresponds
+    to a path that takes an early-exit branch and never enters the loop.
+    These are pure path-divergence artifacts.
+    """
+    prop = (cex.failing_property or "")
+    if ".unwind." not in prop:
+        return None
+    trace = cex.trace or []
+    if not trace:
+        return None
+    # Walk the trace; find the first loop-head and the first function-return.
+    first_loop_head = None
+    first_func_return = None
+    for i, step in enumerate(trace):
+        s = (step or "").lower()
+        if first_loop_head is None and "loop-head" in s:
+            first_loop_head = i
+        if first_func_return is None and ("function-return" in s or s.startswith("return_value")):
+            first_func_return = i
+    # If we saw an early return AND it's before any loop-head, the
+    # exhibited path never iterates → unwind property fires on a different
+    # path. (If the function has no loops at all, first_loop_head is None;
+    # in that case the .unwind.* property is also a divergence artifact.)
+    if first_func_return is not None and (
+        first_loop_head is None or first_func_return < first_loop_head
+    ):
+        if first_loop_head is None:
+            return (
+                f"property '{prop}' fires but the function body has no loop on the "
+                "exhibited path (witness exits without entering any loop)"
+            )
+        return (
+            f"property '{prop}' fires on a non-exhibited path; the witness "
+            "returns at trace step %d before reaching any loop-head (first "
+            "loop-head at step %d)" % (first_func_return, first_loop_head)
+        )
+    return None
+
+
+def _format_failing_property_with_location(cex: "Counterexample") -> str:
+    """Format the failing property with file:line + description.
+
+    CBMC reports e.g. ``func.pointer_dereference.47``; the LLM has no way
+    to know which line that maps to. Append the source location and
+    one-line description so the LLM points at concrete code instead of
+    guessing instruction offsets.
+    """
+    prop = cex.failing_property or "<unknown>"
+    parts = [prop]
+    desc = getattr(cex, "description", "") or ""
+    if desc:
+        parts.append(f"({desc})")
+    loc = getattr(cex, "failure_location", None) or {}
+    if isinstance(loc, dict) and loc:
+        file_ = loc.get("file", "?")
+        line = loc.get("line", "?")
+        func = loc.get("function", "")
+        loc_str = f"at {file_}:{line}"
+        if func:
+            loc_str += f" in {func}"
+        parts.append(loc_str)
+    return " ".join(parts)
+
+
 def _format_cex_state(cex: "Counterexample") -> str:
     if not cex.variable_assignments:
         return "(no witness values recorded)"
@@ -378,6 +659,212 @@ def _format_caller_context(
         else:
             parts.append(f"Caller `{caller_name}`: (body not available)")
     return "\n\n".join(parts) if parts else "(caller bodies not available)"
+
+
+def _gather_sibling_sources(source_path: str, max_total_bytes: int = 60_000) -> str:
+    """Return concatenated bodies of OTHER .c files in the same directory
+    as the source under test, capped at ``max_total_bytes``.
+
+    Without this, the realism LLM can't see the bodies of project-internal
+    helpers like jq's ``jv_mem_realloc`` (in ``jv_alloc.c``) that are
+    called from ``jv_parse.c``. With it visible, the LLM can determine
+    whether the callee aborts on failure (never returns NULL) vs returns
+    a value the caller must check.
+    """
+    import os
+    if not source_path:
+        return ""
+    try:
+        src_dir = os.path.dirname(os.path.abspath(source_path))
+        my_base = os.path.basename(source_path)
+    except Exception:
+        return ""
+    if not os.path.isdir(src_dir):
+        return ""
+    parts: list[str] = []
+    total = 0
+    try:
+        entries = sorted(os.listdir(src_dir))
+    except Exception:
+        return ""
+    for name in entries:
+        if not name.endswith(".c"):
+            continue
+        if name == my_base:
+            continue
+        try:
+            with open(os.path.join(src_dir, name), "r", encoding="utf-8", errors="replace") as f:
+                body = f.read()
+        except Exception:
+            continue
+        section = f"\n/* === SIBLING SOURCE: {name} === */\n{body}"
+        if total + len(section) > max_total_bytes:
+            # Truncate this file to fit
+            remaining = max_total_bytes - total
+            if remaining > 5000:
+                section = section[:remaining] + "\n/* ... truncated ... */"
+                parts.append(section)
+                total += len(section)
+            break
+        parts.append(section)
+        total += len(section)
+    return "".join(parts)
+
+
+def _gather_relevant_headers(source_path: str, max_total_bytes: int = 80_000) -> str:
+    """Walk `#include "foo.h"` directives in the source file and try to
+    locate the referenced headers in sibling directories. Returns the
+    concatenated header bodies, capped at ``max_total_bytes`` so the
+    realism prompt budget stays under control.
+
+    Used to surface struct/typedef/macro definitions the LLM needs to
+    reason about (xmlXIncludeCtxt fields, xmlPattern layout, etc.) that
+    live in adjacent .h files rather than the .c file we're verifying.
+
+    Quoted includes only (``#include "foo.h"``) — angle-bracket
+    includes are system headers that bloat the prompt without help.
+    """
+    import os
+    import re
+    try:
+        with open(source_path, "r", encoding="utf-8", errors="replace") as f:
+            src = f.read()
+    except Exception:
+        return ""
+    headers_referenced: list[str] = []
+    for m in re.finditer(r'#\s*include\s+"([^"]+)"', src):
+        headers_referenced.append(m.group(1))
+    if not headers_referenced:
+        return ""
+    # Search candidate locations: source dir, ./include, ../include,
+    # and sibling include/<basename-no-ext>/ which matches the libxml2
+    # / libssh2 layout.
+    src_dir = os.path.dirname(os.path.abspath(source_path))
+    search_dirs = [
+        src_dir,
+        os.path.join(src_dir, "include"),
+        os.path.join(src_dir, "..", "include"),
+    ]
+    parts: list[str] = []
+    total = 0
+    seen: set[str] = set()
+    for hdr in headers_referenced:
+        if hdr in seen:
+            continue
+        seen.add(hdr)
+        found_path = None
+        for d in search_dirs:
+            candidate = os.path.normpath(os.path.join(d, hdr))
+            if os.path.exists(candidate):
+                found_path = candidate
+                break
+            # Try basename of the include path under each search dir
+            # (handles "libxml/xinclude.h" matched at include/libxml/xinclude.h).
+            for root, _, files in os.walk(d, followlinks=False):
+                bn = os.path.basename(hdr)
+                if bn in files:
+                    cand2 = os.path.join(root, bn)
+                    if cand2.endswith(hdr) or bn == hdr:
+                        found_path = cand2
+                        break
+                if found_path:
+                    break
+            if found_path:
+                break
+        if not found_path:
+            continue
+        try:
+            with open(found_path, "r", encoding="utf-8", errors="replace") as f:
+                body = f.read()
+        except Exception:
+            continue
+        # Skip pure-decl-only forward-only headers (no struct/typedef body)
+        if "struct" not in body and "typedef" not in body and "enum" not in body:
+            continue
+        section = f"\n/* === HEADER: {hdr} (from {found_path}) === */\n{body}"
+        if total + len(section) > max_total_bytes:
+            break
+        parts.append(section)
+        total += len(section)
+    return "".join(parts)
+
+
+def _format_source_file_context(parsed_file: "ParsedCFile", mark_line: int | None = None) -> str:
+    """Return the full source file body, lightly truncated, for the realism prompt.
+
+    The LLM hallucinated missing guards in two libxml2 cases (xmlBufferEmpty
+    and xmlAddEntity) because it didn't see the bodies of related functions
+    in the same file (xmlBufferDetach lazy-nulls content; xmlAddEntity's
+    lazy-init `dtd->entities = xmlHashCreate(...)` was past the
+    function-body cut). Send the full file so the LLM can cross-check.
+
+    Cap at 50k chars to stay within prompt budget; most libxml2 / curl /
+    OpenSSL leaf-parser files are 2k-30k chars.
+    """
+    src = getattr(parsed_file, "preprocessed_source", None)
+    if not src:
+        # Read the original file from disk.
+        try:
+            import os as _os
+            path = getattr(parsed_file, "path", "")
+            if path and _os.path.exists(path):
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    src = f.read()
+        except Exception:
+            src = None
+    if not src:
+        # Fall back: concatenate per-function bodies.
+        bodies = getattr(parsed_file, "function_bodies", None) or {}
+        parts: list[str] = []
+        for fname, body in bodies.items():
+            if body:
+                parts.append(f"/* --- {fname} --- */\n{body}")
+        src = "\n\n".join(parts)
+    if not src:
+        return "(source file context not available)"
+    # Optionally annotate the failing line. We number lines so the LLM can
+    # cross-reference against the file:line shown in the failing-property
+    # block, and prefix the suspected line with `>>>` so it stands out.
+    if mark_line is not None:
+        numbered_lines: list[str] = []
+        for idx, line in enumerate(src.splitlines(), start=1):
+            marker = ">>>" if idx == mark_line else "   "
+            numbered_lines.append(f"{idx:5d} {marker} {line}")
+        src = "\n".join(numbered_lines)
+
+    # Cap at 200 KB. Empirically: a 50 KB cap caused UNCERTAIN verdicts
+    # on libxml2 xinclude.c (~80 KB) when the LLM needed to inspect a
+    # callee's body that fell past the cut. The realism prompt's other
+    # sections add ~10-15 KB; sonnet-4-6's context window comfortably
+    # accommodates 200 KB of source for the typical leaf-parser file
+    # (largest libxml2 file is parser.c at ~280 KB, still fine with
+    # boundary truncation).
+    # Append relevant header bodies. Struct/typedef definitions live in
+    # adjacent .h files; without them the realism LLM has to guess
+    # field types and produces UNCERTAIN verdicts where it could be
+    # decisive.
+    hdr_src = _gather_relevant_headers(getattr(parsed_file, "path", "") or "")
+    if hdr_src:
+        src = src + "\n\n/* ===== Adjacent header bodies for type/struct context ===== */\n" + hdr_src
+
+    # Append sibling .c files in the same directory. Without these, the
+    # realism LLM can't see helper functions like jq's ``jv_mem_realloc``
+    # (defined in jv_alloc.c) called from jv_parse.c — it then can't
+    # determine whether the helper aborts on failure or returns NULL,
+    # producing UNCERTAIN verdicts that should be decisive.
+    sib_src = _gather_sibling_sources(getattr(parsed_file, "path", "") or "")
+    if sib_src:
+        src = src + "\n\n/* ===== Sibling .c source bodies for helper-function context ===== */\n" + sib_src
+
+    cap = 200_000
+    if len(src) <= cap:
+        return src
+    # Truncate at a function boundary if possible.
+    head = src[:cap]
+    last_close = head.rfind("\n}")
+    if last_close > cap - 5000:
+        head = head[: last_close + 2]
+    return head + "\n\n/* ... rest of file truncated for prompt budget ... */"
 
 
 def _format_dynamic_result(vr: "ValidationResult") -> str:
@@ -445,29 +932,60 @@ def _extract_first_json_object(text: str) -> "str | None":
 def _recover_verdict_from_prose(text: str) -> "RealismVerdict | None":
     """Best-effort verdict extraction from a non-JSON prose response.
 
-    Looks for explicit verdict keywords. Order matters: ``UNREALISTIC``
-    must be checked before ``REALISTIC`` (the latter is a substring of
-    the former).
+    Looks for an explicit verdict marker in priority order:
+
+      1. JSON-style key ``"verdict": "X"`` (matches even when the surrounding
+         JSON is truncated and can't be parsed by ``json.loads``).
+      2. Prose anchors like ``Verdict: X`` / ``**Verdict** — X`` /
+         ``Final verdict = X``.
+      3. Bare-keyword fallback, but ONLY when exactly one of the verdict
+         words appears anywhere in the text. If multiple appear without
+         a clear anchor, default to UNCERTAIN — the LLM was hedging or
+         used "realistic" inside reasoning prose.
+
+    Order of alternation puts ``UNREALISTIC`` first so the regex engine
+    doesn't greedily match ``REALISTIC`` as a prefix.
     """
-    upper = text.upper()
-    # Prefer a "Verdict: X" / "verdict": "X" / "**Verdict**: X" hit.
     import re as _re
+    upper = text.upper()
+
+    # 1. JSON key form: "verdict": "X" or 'verdict': 'X'
     m = _re.search(
-        r"VERDICT\s*[:\-=]?\s*\"?(UNREALISTIC|REALISTIC|UNCERTAIN)\b",
+        r'"VERDICT"\s*:\s*"(UNREALISTIC|REALISTIC|UNCERTAIN)"',
         upper,
     )
     if m:
         token = m.group(1)
     else:
-        # Generic fallback: search for the keyword anywhere.
-        if "UNREALISTIC" in upper:
-            token = "UNREALISTIC"
-        elif "REALISTIC" in upper:
-            token = "REALISTIC"
-        elif "UNCERTAIN" in upper:
-            token = "UNCERTAIN"
+        # 2. Prose anchor: Verdict: X / Verdict — X / Verdict = X / **Verdict**: X
+        m = _re.search(
+            r"\bVERDICT\b[\s\*]*[:\-—=]\s*\"?(UNREALISTIC|REALISTIC|UNCERTAIN)\b",
+            upper,
+        )
+        if m:
+            token = m.group(1)
         else:
-            return None
+            # 3. Bare-keyword fallback, conservatively. If more than one
+            # verdict word appears without an anchor, the LLM probably
+            # used the words inside reasoning text — don't guess.
+            words_present = [
+                w for w in ("UNREALISTIC", "REALISTIC", "UNCERTAIN")
+                if w in upper
+            ]
+            # REALISTIC is a substring of UNREALISTIC; if both are
+            # 'present' but it's really just UNREALISTIC, dedup.
+            if "UNREALISTIC" in words_present and "REALISTIC" in words_present:
+                # Count standalone REALISTIC occurrences (not preceded by 'UN')
+                standalone = len(_re.findall(r"(?<!UN)\bREALISTIC\b", upper))
+                if standalone == 0:
+                    words_present.remove("REALISTIC")
+            if len(words_present) == 1:
+                token = words_present[0]
+            elif len(words_present) > 1:
+                # Hedge — keep but mark UNCERTAIN.
+                token = "UNCERTAIN"
+            else:
+                return None
     return {
         "REALISTIC":   RealismVerdict.REALISTIC,
         "UNREALISTIC": RealismVerdict.UNREALISTIC,

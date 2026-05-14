@@ -340,6 +340,229 @@ def test_parse_markdown_fenced_json():
     assert r.verdict == RealismVerdict.REALISTIC
 
 
+def test_parse_truncated_json_recovers_correct_verdict():
+    """Regression for the libxml2 xmlAddEntity false-positive.
+
+    The LLM returned a markdown-fenced JSON whose ``verdict`` field was
+    UNCERTAIN, but the response was truncated by max_tokens, leaving the
+    JSON un-parseable. The bare-keyword fallback used to trip on the word
+    "realistic" appearing inside the reasoning prose and labelled the
+    finding REALISTIC. Verify the new parser honours the JSON-key
+    ``"verdict": "UNCERTAIN"`` even in the truncated case.
+    """
+    from bmc_agent.realism_checker import _parse_result, RealismVerdict
+    truncated = (
+        '```json\n'
+        '{\n'
+        '  "verdict": "UNCERTAIN",\n'
+        '  "reasoning": "Q1 — Could the violation TYPE occur? '
+        'Yes, this is a realistic null-pointer dereference. '
+        'Q2 — Is the specific witness reachable? Uncertain — '
+        'the CBMC trace has inconsistencies. The underlying '
+        'concern is independe'
+    )
+    r = _parse_result(truncated, "xmlAddEntity")
+    assert r.verdict == RealismVerdict.UNCERTAIN, (
+        f"truncated JSON with verdict=UNCERTAIN must not be parsed as "
+        f"{r.verdict.value}"
+    )
+
+
+def test_recover_prose_anchor_verdict():
+    """``Verdict: REALISTIC`` anchor must beat keyword counts in the prose."""
+    from bmc_agent.realism_checker import _recover_verdict_from_prose, RealismVerdict
+    text = (
+        "After analysis, the reasoning suggests both UNCERTAIN risk and "
+        "REALISTIC class.\n\nFinal Verdict: UNREALISTIC because the guard "
+        "exists at line 736."
+    )
+    assert _recover_verdict_from_prose(text) == RealismVerdict.UNREALISTIC
+
+
+def test_recover_prose_hedge_defaults_uncertain():
+    """When multiple verdict words appear without an anchor, default UNCERTAIN."""
+    from bmc_agent.realism_checker import _recover_verdict_from_prose, RealismVerdict
+    hedged = (
+        "The violation type is REALISTIC for a security threat model, "
+        "but specific witness values are UNCERTAIN given the CBMC trace."
+    )
+    assert _recover_verdict_from_prose(hedged) == RealismVerdict.UNCERTAIN
+
+
+def test_recover_prose_unrealistic_with_realistic_substring():
+    """``UNREALISTIC`` containing ``REALISTIC`` as substring must not flip the verdict."""
+    from bmc_agent.realism_checker import _recover_verdict_from_prose, RealismVerdict
+    text = "Conclusion: UNREALISTIC — the guard catches the witness state."
+    assert _recover_verdict_from_prose(text) == RealismVerdict.UNREALISTIC
+
+
+def test_witness_uninitialized_library_detects_xml_alloc_nulls():
+    """When xmlMalloc/xmlFree/xmlRealloc are all NULL in the witness, the
+    realism check must short-circuit to UNREALISTIC without an LLM call —
+    those globals are NULL only before library init runs, never in a real
+    public-API call chain.
+    """
+    from bmc_agent.realism_checker import _witness_indicates_uninitialized_library
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.pointer_dereference.1",
+        variable_assignments={
+            "xmlMalloc": "((xmlMallocFunc)NULL)",
+            "xmlFree": "((xmlFreeFunc)NULL)",
+            "xmlRealloc": "((xmlReallocFunc)NULL)",
+            "ptr": "0x1234",  # genuine bug state
+        },
+    )
+    cause = _witness_indicates_uninitialized_library(cex)
+    assert cause is not None
+    assert "library-init" in cause
+
+
+def test_witness_uninitialized_library_ignores_single_null():
+    """A single NULL global is not enough to call the witness uninitialized —
+    legitimately NULL output sinks (e.g. xmlGenericError when error-mode is
+    disabled) shouldn't trigger the auto-downgrade.
+    """
+    from bmc_agent.realism_checker import _witness_indicates_uninitialized_library
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.pointer.1",
+        variable_assignments={
+            "xmlGenericError": "((xmlGenericErrorFunc)NULL)",
+            "ptr": "0x1234",
+        },
+    )
+    cause = _witness_indicates_uninitialized_library(cex)
+    assert cause is None
+
+
+def test_path_divergent_unwind_detected_when_return_before_loop():
+    """When a `.unwind.0` violation is reported but the witness trace shows
+    function-return before any loop-head, mark UNREALISTIC.
+
+    From feedback-loop arm (a) TODO on xmlXIncludeIncludeNode: CBMC fires
+    unwind on a path the exhibited witness doesn't actually traverse.
+    """
+    from bmc_agent.realism_checker import _witness_indicates_path_divergent_unwind
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.unwind.0",
+        trace=[
+            "function-call at f:10",
+            "list = NULL",
+            "nb_elem = 0",
+            "function-return at f:12",  # early exit
+            # No loop-head — function returned before any loop
+        ],
+    )
+    cause = _witness_indicates_path_divergent_unwind(cex)
+    assert cause is not None
+    assert "no loop" in cause.lower() or "non-exhibited" in cause.lower()
+
+
+def test_path_divergent_unwind_not_detected_when_loop_was_entered():
+    """If the witness DID enter the loop before the unwind fired, the
+    finding is a legitimate loop-bound issue (might still be filtered
+    elsewhere, but not by THIS detector)."""
+    from bmc_agent.realism_checker import _witness_indicates_path_divergent_unwind
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.unwind.0",
+        trace=[
+            "function-call at f:10",
+            "list != NULL",
+            "loop-head at f:15",
+            "list = list->next",
+            "loop-head at f:15",
+            "list = list->next",
+            "function-return at f:20",  # after loop
+        ],
+    )
+    assert _witness_indicates_path_divergent_unwind(cex) is None
+
+
+def test_path_divergent_unwind_only_fires_on_unwind_properties():
+    """Pointer-deref / OOB CEs are NOT unwind-property — detector must
+    return None even if trace has early return."""
+    from bmc_agent.realism_checker import _witness_indicates_path_divergent_unwind
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.pointer_dereference.1",
+        trace=["function-return at f:5"],
+    )
+    assert _witness_indicates_path_divergent_unwind(cex) is None
+
+
+def test_jv_stub_disconnect_detects_null_refcnt_with_array_kind():
+    """jq jv tagged-union: when CE shows j.u.ptr=NULL plus stubbed
+    jv_get_kind returning JV_KIND_ARRAY, it's a stub-disconnect artifact
+    (real jv constructors always pair refcnt-backed kinds with valid
+    refcnt). Shipped from jv_aux.c sweep 2026-05-13.
+    """
+    from bmc_agent.realism_checker import _witness_indicates_jv_stub_disconnect
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="parse_slice.assertion.1",
+        variable_assignments={
+            "j.u.ptr": "((struct jv_refcnt *)NULL)",
+            "slice.u.ptr": "((struct jv_refcnt *)NULL)",
+            "return_value_jv_get_kind": "/*enum*/JV_KIND_ARRAY",
+            "return_value_jv_get_kind$0": "/*enum*/JV_KIND_STRING",
+        },
+    )
+    cause = _witness_indicates_jv_stub_disconnect(cex)
+    assert cause is not None
+    assert "stub" in cause.lower() or "ptr" in cause.lower()
+
+
+def test_jv_stub_disconnect_detects_out_of_range_enum_int():
+    """jv_get_kind stub returning out-of-enum-range integers (e.g. 17,
+    2097152) is a clear nondet-stub artifact even without NULL refcnt."""
+    from bmc_agent.realism_checker import _witness_indicates_jv_stub_disconnect
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="jv_has.overflow.1",
+        variable_assignments={
+            "j.u.ptr": "((struct jv_refcnt *)NULL)",
+            "return_value_jv_get_kind": "/*enum*/2097152",
+            "return_value_jv_get_kind$1": "/*enum*/268435463",
+        },
+    )
+    assert _witness_indicates_jv_stub_disconnect(cex) is not None
+
+
+def test_jv_stub_disconnect_skips_valid_simple_kinds():
+    """When jv_get_kind reports a non-refcnt kind (NULL/FALSE/TRUE/
+    INVALID), it's fine for u.ptr to be NULL — these simple values don't
+    use the refcnt. Detector must NOT flag this as an artifact.
+    """
+    from bmc_agent.realism_checker import _witness_indicates_jv_stub_disconnect
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.assertion.1",
+        variable_assignments={
+            "j.u.ptr": "((struct jv_refcnt *)NULL)",
+            "return_value_jv_get_kind": "/*enum*/JV_KIND_NULL",
+            "return_value_jv_get_kind$0": "/*enum*/JV_KIND_INVALID",
+        },
+    )
+    assert _witness_indicates_jv_stub_disconnect(cex) is None
+
+
+def test_witness_uninitialized_library_handles_libcurl_alloc_pattern():
+    from bmc_agent.realism_checker import _witness_indicates_uninitialized_library
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="curl_url_dup.pointer.1",
+        variable_assignments={
+            "Curl_cmalloc": "(Curl_malloc_callback)NULL",
+            "Curl_ccalloc": "(Curl_calloc_callback)NULL",
+            "Curl_cfree": "(Curl_free_callback)NULL",
+        },
+    )
+    assert _witness_indicates_uninitialized_library(cex) is not None
+
+
 # ---------------------------------------------------------------------------
 # 4. Prompt construction
 # ---------------------------------------------------------------------------

@@ -515,6 +515,16 @@ GLOBAL VARIABLE CONTEXT — where key globals used by this function are assigned
 {global_context}
 
 ---
+FULL SOURCE FILE CONTEXT — every function in the same .c file is available below.
+You MUST cross-reference any function you cite in your reasoning against this
+context. If your call chain depends on a function NOT defined below, you cannot
+return REALISTIC.
+
+```c
+{source_file_context}
+```
+
+---
 {threat_model_context}
 
 ---
@@ -567,20 +577,30 @@ Empirically, REALISTIC verdicts are wrong far more often than they're right
 unless the LLM (you) commits to specific evidence on the record:
 
   REQ-1. Cite the specific source-line guard that would have to be
-         bypassed for the counterexample to reach the violation. If the
-         function or any caller has an `if (ptr == NULL) return ...;`,
-         `if (len > MAX) return error;`, `DEBUGASSERT(...)`, or
-         `__CPROVER_assume(...)` before the violation point — quote it
-         verbatim and explain how the witness gets past it. If no such
-         guard exists, say "no guard found" explicitly.
+         bypassed for the counterexample to reach the violation. Search
+         the FULL SOURCE FILE CONTEXT above (not just the function body
+         excerpt) for `if (ptr == NULL) return ...;`,
+         `if (len > MAX) return error;`, `DEBUGASSERT(...)`,
+         `__CPROVER_assume(...)`, or lazy-init patterns like
+         `if (x == NULL) {{ x = alloc(...); }}` BEFORE the violation
+         point. Quote the exact line(s) verbatim with line number and
+         explain how the witness bypasses them. If you searched the
+         full source file and found none, say "no guard found in this
+         file" explicitly — but only after a careful read.
 
   REQ-2. Produce a concrete public-API calling sequence that reaches
          the witness state. Start from a real entry point (a function
          exported in the public header, or a syscall/network handler),
          and show each call in the chain with the argument values that
-         lead to the violation. If you can't construct one because the
-         witness requires state that no public caller produces, the
-         verdict is UNREALISTIC.
+         lead to the violation. **CRITICAL**: for every function you
+         name in the chain, that function MUST appear in the FULL
+         SOURCE FILE CONTEXT above. If you reason about what
+         `someFunction()` does to global state, you MUST quote the
+         relevant lines from its body in the context. If a step in
+         your chain depends on a function NOT defined in the
+         context (e.g. you assume `helperX()` zeroes a field but its
+         body isn't shown), you cannot vote REALISTIC — vote UNCERTAIN
+         and note the missing context.
 
   REQ-3. If the dynamic validation result is "not triggered" or the
          witness involves a CBMC stub return value (`bsearch`,
