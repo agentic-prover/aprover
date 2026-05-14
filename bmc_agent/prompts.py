@@ -197,6 +197,29 @@ The specification should:
 - Capture what the function GUARANTEES about its outputs and side effects (postcondition)
 - Be tight enough to be useful for verification, not just "true"
 
+BUG-CLASS DETECTION (postcondition strengthening):
+A weak postcondition like ``result != NULL || true`` lets CBMC verify the function
+as "correct" while real bugs slip through. Strengthen the postcondition to also rule
+out the SPECIFIC bug classes a hostile caller could trigger:
+
+  * **Integer overflow in size arithmetic**: when the function computes
+    ``n * sizeof(T)`` or ``a + b`` for allocation/indexing, add a clause like
+    ``(n <= INT_MAX / sizeof(T)) || (result == NULL)`` — i.e. either no overflow
+    or the function returned the error sentinel.
+  * **OOB read/write at cursor advance**: when the function advances a pointer
+    or index, add a clause asserting the post-advance cursor is in-bounds.
+  * **Use-after-free in cleanup**: if the function frees a resource, the
+    postcondition should imply the resource pointer is NULL on return so callers
+    can't reuse it.
+  * **NULL deref on optional field**: when accessing ``struct->field``, the
+    postcondition should be guarded by ``struct != NULL && field != NULL``
+    where dereferencing happened.
+
+Don't fabricate clauses that aren't supported by the function body — over-strong
+postconditions cause VERIFIED-CLEAN runs to flip to spurious failures. Encode only
+the bug-class invariants the code is actually trying to enforce; if no such
+guard exists in the body, the function may genuinely have the bug.
+
 {threat_model_context}
 
 Domain knowledge:
@@ -217,7 +240,7 @@ Respond with ONLY valid JSON in this exact format:
 {{
   "precondition": "<precondition in DSL or natural language>",
   "postcondition": "<postcondition in DSL or natural language>",
-  "reasoning": "<brief explanation of why these conditions are correct>"
+  "reasoning": "<brief explanation of why these conditions are correct, with one sentence on which bug-class invariants you encoded>"
 }}
 """
 

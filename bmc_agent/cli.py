@@ -317,6 +317,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_realism_thinking = True
     if getattr(args, "enable_flag_selection", False):
         config.enable_flag_selection = True
+    if getattr(args, "enable_feedback_loop", False):
+        config.enable_feedback_loop = True
+    if getattr(args, "feedback_max_iters", None) is not None:
+        config.feedback_max_iters = int(args.feedback_max_iters)
     if getattr(args, "enable_dynamic_validation", False):
         config.enable_dynamic_validation = True
     if getattr(args, "threat_model", None):
@@ -458,6 +462,10 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_realism_thinking = True
     if getattr(args, "enable_flag_selection", False):
         config.enable_flag_selection = True
+    if getattr(args, "enable_feedback_loop", False):
+        config.enable_feedback_loop = True
+    if getattr(args, "feedback_max_iters", None) is not None:
+        config.feedback_max_iters = int(args.feedback_max_iters)
     if getattr(args, "real_libc", False):
         config.cbmc_real_libc = True
         config.preprocess = False
@@ -612,6 +620,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
     )
     ver.add_argument(
+        "--enable-feedback-loop",
+        action="store_true",
+        default=False,
+        help="Distill UNREALISTIC realism rejections into learned constraints (function-spec or project invariant) "
+             "or code-change TODOs. Persists to <output>/learned_constraints.json so subsequent sweeps stop "
+             "re-producing the same artifact pattern.",
+    )
+    ver.add_argument(
+        "--feedback-max-iters",
+        type=int,
+        default=None,
+        help="In-sweep convergence: after distilling a clause, re-run CBMC on the same function up to N times "
+             "until the function verifies clean, a REALISTIC verdict emerges, or the same CE class repeats. "
+             "Default 3 (set via Config.feedback_max_iters).",
+    )
+    ver.add_argument(
         "--real-libc",
         action="store_true",
         default=False,
@@ -723,6 +747,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Phase 1.5: LLM selects per-function CBMC flags (unsigned/signed overflow, conversion, pointer overflow)",
+    )
+    vd.add_argument(
+        "--enable-feedback-loop",
+        action="store_true",
+        default=False,
+        help="Distill UNREALISTIC realism rejections into learned constraints or code-change TODOs. "
+             "Persists to <output>/learned_constraints.json so subsequent sweeps stop re-producing "
+             "the same artifact pattern.",
+    )
+    vd.add_argument(
+        "--feedback-max-iters",
+        type=int,
+        default=None,
+        help="In-sweep convergence: after distilling a clause, re-run CBMC on the same function up to N times "
+             "until the function verifies clean, a REALISTIC verdict emerges, or the same CE class repeats. "
+             "Default 3.",
     )
     vd.add_argument(
         "--real-libc",

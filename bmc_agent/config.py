@@ -102,6 +102,20 @@ class Config:
     enable_realism_check: bool = False       # LLM agent that audits REAL_BUG findings for realistic exploitability
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
 
+    # Feedback loop: distill UNREALISTIC verdicts into learned constraints
+    # or code-change TODOs (see bmc_agent/feedback_loop.py). The harness
+    # generator auto-applies learned function/project clauses on the next
+    # sweep so the same artifact pattern stops re-appearing.
+    enable_feedback_loop: bool = False
+    # In-sweep convergence: after distilling a clause and persisting it,
+    # immediately re-run CBMC on the same function (with the new harness
+    # picking up the clause via Step 1.7). Loop until the function
+    # verifies clean, a REALISTIC verdict emerges, the new CE is the
+    # same class as the previous one (clause was a no-op), or
+    # ``feedback_max_iters`` is exhausted. Off by default so it doesn't
+    # change non-opt-in pipeline timing.
+    feedback_max_iters: int = 3
+
     # Threat model — shapes CBMC baseline flags, spec prompts, and realism context.
     # "security"   (default): memory safety + integer overflow, attacker-controlled inputs.
     # "safety"     : functional correctness + no-crash, valid system state.

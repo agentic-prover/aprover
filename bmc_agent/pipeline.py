@@ -35,6 +35,68 @@ from bmc_agent.spec_generator import SpecGenerator
 logger = get_logger("pipeline")
 
 
+def _ce_class_key(ce) -> str:
+    """Coarse equivalence class for a counterexample.
+
+    Two CEs are considered "same class" when they fail the same property
+    family (the trailing index is dropped — ``pointer_dereference.1`` and
+    ``pointer_dereference.7`` are the same class). Used by the in-sweep
+    feedback loop to detect a clause that didn't prune the CE state.
+    """
+    prop = getattr(ce, "failing_property", "") or ""
+    parts = prop.split(".")
+    # Drop trailing numeric index, e.g. "f.pointer_dereference.1" → "f.pointer_dereference"
+    while parts and parts[-1].isdigit():
+        parts.pop()
+    base = ".".join(parts) or prop
+    loc = getattr(ce, "failure_location", None) or {}
+    line = loc.get("line", "") if isinstance(loc, dict) else ""
+    return f"{base}@{line}"
+
+
+def _verified_clean_validation(prev_validation):
+    """Build a ValidationResult that records the function as verified
+    clean after feedback convergence. Reuses the previous validation's
+    caller_path / system_entry_input so downstream serialization works.
+    """
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
+    # Synthesise a "no-CE" counterexample for downstream code that
+    # expects a CE shape.
+    synthetic = Counterexample(failing_property="(verified clean after feedback loop)")
+    return ValidationResult(
+        outcome=CExOutcome.SPURIOUS,
+        function_name=getattr(prev_validation, "function_name", ""),
+        counterexample=synthetic,
+        reasoning="Verified clean after in-sweep feedback-loop iteration.",
+        caller_path=getattr(prev_validation, "caller_path", []) or [],
+        system_entry_input=getattr(prev_validation, "system_entry_input", "") or "",
+        final_precondition=getattr(prev_validation, "final_precondition", None),
+        is_real_bug=False,
+        system_entry_reached=False,
+        over_refinement_rejected=False,
+    )
+
+
+def _realism_verified():
+    """Realism result for a function that verified clean after feedback.
+
+    Marks the verdict UNREALISTIC (no real bug) with explicit reasoning
+    so the bug-reporter downgrades it appropriately.
+    """
+    from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+    return RealismCheckResult(
+        verdict=RealismVerdict.UNREALISTIC,
+        reasoning=(
+            "After applying learned constraints in-sweep, CBMC verified "
+            "the function clean. The earlier counterexample required a "
+            "state that the constraint excludes; no real bug remains."
+        ),
+        key_concern="[feedback-converged] in-sweep iteration succeeded",
+        llm_confidence="high",
+    )
+
+
 def _dedup_counterexamples(cexs: list) -> list:
     """Keep one counterexample per property type, preserving order.
 
@@ -294,7 +356,7 @@ class AMCPipeline:
                     else:
                         confirmed_real_bugs.add(bug_key)
                         logger.info("REAL BUG confirmed in '%s'", fn_name)
-                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
                 else:
@@ -399,7 +461,7 @@ class AMCPipeline:
                         else:
                             confirmed_real_bugs.add(bug_key)
                             logger.info("REAL BUG (Phase 3c) confirmed in '%s'", fn_name)
-                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
                             self.reporter.save_report(report, driver_name)
                             bug_reports.append(report)
                     else:
@@ -475,7 +537,7 @@ class AMCPipeline:
                         else:
                             confirmed_real_bugs.add(bug_key)
                             logger.info("REAL BUG (recheck) confirmed in '%s'", fn_name)
-                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
                             self.reporter.save_report(report, driver_name)
                             bug_reports.append(report)
                             phase3b_bugs_by_fn.setdefault(fn_name, []).append(
@@ -559,6 +621,7 @@ class AMCPipeline:
         parsed: ParsedCFile,
         all_funcs: "dict[str, FunctionInfo]",
         driver_name: str,
+        all_specs: "dict[str, Spec] | None" = None,
     ) -> BugReport:
         """Run realism check then create and save a BugReport.
 
@@ -609,8 +672,201 @@ class AMCPipeline:
                 all_funcs=all_funcs,
                 spec=spec,
             )
+        # Feedback loop: if realism rejected and the loop is enabled,
+        # distill the rejection into a remediation (code-change TODO,
+        # function-spec clause, or project invariant), persist it,
+        # then re-run CBMC on this function so the new clause takes
+        # effect in this sweep. Loop until the function verifies
+        # clean, a REALISTIC/UNCERTAIN verdict emerges, the same CE
+        # class repeats (clause was a no-op), or feedback_max_iters
+        # is exhausted. ``validation`` and ``realism`` are mutated
+        # by reference through this loop.
+        if getattr(self.config, "enable_feedback_loop", False):
+            try:
+                validation, realism = self._feedback_iterate(
+                    validation, realism, func, spec, parsed, all_funcs,
+                    driver_name, all_specs or {},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Feedback-loop iteration failed for '%s': %s",
+                    func.name, exc,
+                )
+
         realism_arg = realism if self.config.enable_realism_check else None
         return self.reporter.create_report(validation, func, realism_check=realism_arg)
+
+    def _feedback_record(self, func, validation, realism):
+        """Distill an UNREALISTIC realism verdict into a Remediation and
+        persist via the LearnedConstraintsStore.
+
+        Returns the Remediation so callers can decide whether to
+        re-run CBMC. Idempotent: re-recording an existing clause is a
+        no-op (returns the remediation; the store reports unchanged).
+        """
+        from bmc_agent.feedback_loop import (
+            LearnedConstraintsStore,
+            learn_from_rejection,
+        )
+        store = LearnedConstraintsStore(self.config.artifact_dir)
+        existing = store.project_clauses() + store.function_clauses(func.name)
+        remediation = learn_from_rejection(
+            self.config,
+            self.llm,
+            func,
+            validation.counterexample,
+            realism,
+            existing_project_clauses=existing,
+        )
+        store.record(
+            func.name,
+            remediation,
+            source_property=getattr(validation.counterexample, "failing_property", ""),
+        )
+        return remediation
+
+    def _feedback_iterate(
+        self,
+        validation: "ValidationResult",
+        realism: "RealismCheckResult | None",
+        func: "FunctionInfo",
+        spec: "Spec",
+        parsed: "ParsedCFile",
+        all_funcs: "dict[str, FunctionInfo]",
+        driver_name: str,
+        all_specs: "dict[str, Spec]",
+    ) -> "tuple[ValidationResult, RealismCheckResult | None]":
+        """In-sweep convergence loop driven by realism rejections.
+
+        Implements the architecture sketched in
+        ``findings/bounty/FP_REFLECTIONS.md``:
+
+          CBMC → CE → UNREALISTIC → distill clause → persist
+            → re-harness this function with the clause active
+            → re-run CBMC on this function
+            → If verified clean: stop (the clause closed the gap)
+            → If new CE class: classify + realism, recurse
+            → If SAME CE class as before: stop (clause was a no-op)
+            → If REALISTIC / UNCERTAIN verdict: stop (return that)
+            → After feedback_max_iters: stop (return last verdict)
+
+        Side effects:
+          - learned_constraints.json gets a new clause per iteration.
+          - The harness file is overwritten in place (last iteration wins).
+          - The cbmc_result.json is overwritten in place.
+
+        Logs every iteration so the dev/operator can see convergence.
+        """
+        from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+        from bmc_agent.feedback_loop import RemediationScope
+
+        max_iters = int(getattr(self.config, "feedback_max_iters", 3) or 0)
+        if (
+            max_iters <= 0 or realism is None
+            or realism.verdict not in (RealismVerdict.UNREALISTIC, RealismVerdict.UNCERTAIN)
+        ):
+            # Nothing to iterate — REALISTIC findings are kept as-is,
+            # and verdicts we can't classify are out of scope.
+            return validation, realism
+
+        prev_ce_class = _ce_class_key(validation.counterexample)
+
+        for iteration in range(1, max_iters + 1):
+            # (1) Distill + persist.
+            remediation = self._feedback_record(func, validation, realism)
+            if remediation.scope not in (
+                RemediationScope.FUNCTION_SPEC,
+                RemediationScope.PROJECT_INVARIANT,
+            ):
+                logger.info(
+                    "Feedback iter %d (%s): nothing to apply in-sweep "
+                    "(scope=%s) — stopping",
+                    iteration, func.name, remediation.scope.value,
+                )
+                return validation, realism
+
+            # (2) Re-run CBMC on this function. The harness generator
+            # reads learned_constraints.json from disk and emits
+            # __CPROVER_assume(clause) at Step 1.7, so the new clause
+            # is active on this call.
+            new_verdict = self.bmc_engine.check_function(
+                func, spec, parsed, driver_name, all_funcs=all_funcs,
+            )
+
+            if new_verdict.verified or not new_verdict.counterexamples:
+                logger.info(
+                    "Feedback iter %d (%s): function VERIFIES CLEAN after "
+                    "applying learned clause '%s' — convergence",
+                    iteration, func.name, remediation.clause[:80],
+                )
+                return _verified_clean_validation(validation), _realism_verified()
+
+            # (3) New CE — classify + realism.
+            new_ce = new_verdict.counterexamples[0]
+            new_ce_class = _ce_class_key(new_ce)
+            if new_ce_class == prev_ce_class:
+                logger.info(
+                    "Feedback iter %d (%s): same CE class repeated "
+                    "(clause '%s' was a no-op for CBMC) — stopping to "
+                    "avoid loop",
+                    iteration, func.name, remediation.clause[:80],
+                )
+                return validation, realism
+            prev_ce_class = new_ce_class
+
+            new_validation = self.cex_validator.validate(
+                func=func, spec=spec, counterexample=new_ce,
+                all_funcs=all_funcs, all_specs=all_specs,
+                parsed_file=parsed, driver_name=driver_name,
+            )
+
+            # (4) Realism on the new CE.
+            from bmc_agent.dynamic_validator import DynamicOutcome
+            dyn = getattr(new_validation, "dynamic_result", None)
+            if (
+                self.config.enable_realism_check
+                and dyn is not None
+                and dyn.outcome == DynamicOutcome.NOT_TRIGGERED
+            ):
+                new_realism = RealismCheckResult(
+                    verdict=RealismVerdict.UNREALISTIC,
+                    reasoning=(
+                        "Feedback iter %d: dynamic validation NOT_TRIGGERED "
+                        "on new CE class." % iteration
+                    ),
+                    key_concern="dynamic validation did not reproduce the fault",
+                    llm_confidence="high",
+                )
+            else:
+                new_realism = self.realism_checker.check(
+                    func=func, counterexample=new_ce,
+                    validation_result=new_validation, parsed_file=parsed,
+                    all_funcs=all_funcs, spec=spec,
+                )
+
+            validation = new_validation
+            realism = new_realism
+
+            if realism.verdict not in (RealismVerdict.UNREALISTIC, RealismVerdict.UNCERTAIN):
+                logger.info(
+                    "Feedback iter %d (%s): new CE class with verdict=%s "
+                    "— escalating",
+                    iteration, func.name, realism.verdict.value,
+                )
+                return validation, realism
+
+            # Still UNREALISTIC or UNCERTAIN — continue loop.
+            logger.info(
+                "Feedback iter %d (%s): new CE class still UNREALISTIC; "
+                "iterating", iteration, func.name,
+            )
+
+        logger.info(
+            "Feedback iter %d (%s): max iterations exhausted, returning "
+            "last UNREALISTIC verdict",
+            max_iters, func.name,
+        )
+        return validation, realism
 
     # ------------------------------------------------------------------
     # Multi-file / whole-codebase entry point
