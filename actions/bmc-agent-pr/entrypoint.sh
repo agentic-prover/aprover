@@ -153,7 +153,14 @@ for src in "${SELECTED[@]}"; do
     set -e
     if [[ "${rc}" -ne 0 ]]; then
         warn "bmc-agent verify exited with status ${rc} on ${src}; see log."
+        tail -n 80 "${ARTIFACT_DIR}/${driver}.log" || true
+    else
+        # Even on rc=0, surface a short tail of the log so the runner can
+        # show progress and Phase-by-Phase milestones. Without this, fast
+        # zero-finding runs look indistinguishable from silent failures.
+        echo "::group::bmc-agent log tail (${src})"
         tail -n 40 "${ARTIFACT_DIR}/${driver}.log" || true
+        echo "::endgroup::"
     fi
     endgroup
 
@@ -208,7 +215,8 @@ if [[ -n "${PR_NUMBER}" && -n "${GITHUB_TOKEN:-}" ]]; then
                 "${FINDINGS_JSON}"
         fi
         echo
-        echo "<details><summary>All verdicts (\($(jq 'length' "${FINDINGS_JSON}")))</summary>"
+        total="$(jq 'length' "${FINDINGS_JSON}")"
+        echo "<details><summary>All verdicts (${total})</summary>"
         echo
         echo '```json'
         jq '.' "${FINDINGS_JSON}"
@@ -225,9 +233,17 @@ else
 fi
 
 # Surface outputs back to subsequent steps in the user's workflow.
+# Copy artifact-dir into a workspace-relative location so an
+# actions/upload-artifact step can grab it (the tmp dirs we used live
+# inside the action's container, but mapping /github/workspace makes them
+# visible to subsequent workflow steps).
+if [[ -d "${ARTIFACT_DIR}" ]]; then
+    cp -r "${ARTIFACT_DIR}" "${WORKSPACE}/.bmc-agent-artifacts" 2>/dev/null || true
+fi
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "findings-json=${FINDINGS_JSON}" >> "${GITHUB_OUTPUT}"
     echo "real-bug-count=${REAL_BUG_COUNT}" >> "${GITHUB_OUTPUT}"
+    echo "artifact-dir=${WORKSPACE}/.bmc-agent-artifacts" >> "${GITHUB_OUTPUT}"
 fi
 
 if [[ "${INPUT_FAIL_ON_REAL_BUG:-false}" == "true" && "${REAL_BUG_COUNT}" -gt 0 ]]; then

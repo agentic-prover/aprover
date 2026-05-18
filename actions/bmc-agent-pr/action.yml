@@ -83,6 +83,10 @@ outputs:
     description: 'Number of functions where bmc-agent reported real_bug.'
     value: ${{ steps.bmc-run.outputs.real-bug-count }}
 
+  artifact-dir:
+    description: 'Workspace-relative directory containing per-function bmc-agent artifacts (specs, harnesses, CEXs, logs).'
+    value: ${{ steps.bmc-run.outputs.artifact-dir }}
+
 runs:
   using: 'docker'
   image: 'Dockerfile'

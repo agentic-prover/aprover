@@ -47,3 +47,14 @@ jobs:
         run: |
           echo "real_bug_count: ${{ steps.bmc.outputs.real-bug-count }}"
           echo "findings_json:  ${{ steps.bmc.outputs.findings-json }}"
+          echo "artifact_dir:   ${{ steps.bmc.outputs.artifact-dir }}"
+
+      - name: Upload bmc-agent artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmc-agent-artifacts
+          path: |
+            .bmc-agent-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
