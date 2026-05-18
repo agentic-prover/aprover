@@ -236,6 +236,41 @@ class RealismChecker:
                 llm_confidence="high",
             )
 
+        # PHY-framework-invariant detector (from dp83tc811_set_wol
+        # finding, 2026-05-18): symmetric to the USB-serial detector for
+        # ``struct phy_driver`` dispatch tables. When a callback
+        # (``set_wol``, ``config_aneg``, ``handle_interrupt``, …) gets a
+        # witness with ``phydev == NULL`` or
+        # ``phydev->attached_dev == NULL``, the framework's attach
+        # lifecycle (which sets both ``phydev->attached_dev = dev`` and
+        # ``dev->phydev = phydev`` in the same conditional block, and
+        # whose ethtool wrapper reaches the callback only via
+        # ``dev->phydev``) rules out the NULL state along any
+        # in-tree-reachable path.
+        phy_cause = _witness_indicates_phy_framework_invariant(
+            func, counterexample, parsed_file
+        )
+        if phy_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by PHY framework "
+                "invariant — %s", func.name, phy_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"PHY framework lifecycle invariant: {phy_cause}. "
+                    "Linux's phy_attach_direct sets phydev->attached_dev = "
+                    "dev and dev->phydev = phydev in the same ``if (dev) "
+                    "{ ... }`` block; phy_ethtool_set_wol and its sibling "
+                    "wrappers reach the driver callback only via "
+                    "dev->phydev, so attached_dev != NULL is a structural "
+                    "invariant of every in-tree path that can dispatch "
+                    "this callback."
+                ),
+                key_concern=f"[phy-framework-invariant] {phy_cause}",
+                llm_confidence="high",
+            )
+
         # Path-divergent unwind detector (from feedback-loop arm (a) TODO,
         # 2026-05-13): CBMC reports a *.unwind.* property fail when its
         # symbolic exploration on SOME path hits the loop bound; the
@@ -811,6 +846,150 @@ def _witness_indicates_usb_serial_framework_invariant(
         f"struct usb_serial_driver dispatch table; witness assigns NULL to "
         f"framework-managed pointer(s) [{sample}{more}] that the core's "
         f"wrapper derefs before dispatching"
+    )
+
+
+# PHY-framework counterpart to the USB-serial detector. The Linux PHY
+# subsystem's ``phy_ethtool_set_wol`` / ``phy_ethtool_get_wol`` /
+# ``phy_start_aneg`` / ``phy_config_aneg`` wrappers all reach the driver
+# callback only after the PHY has been attached via
+# ``phy_attach_direct(dev, phydev, ...)``, which in the same ``if (dev) {
+# ... }`` block sets both ``phydev->attached_dev = dev`` and
+# ``dev->phydev = phydev``. The ethtool path uses ``dev->phydev`` to
+# locate the phy, so any path that reaches a registered callback has
+# ``attached_dev != NULL`` by construction. All in-tree callers of
+# ``phy_attach_direct`` pass non-NULL ``dev``; the ``if (dev)`` guard
+# exists for an explicitly-allowed but in-tree-unused configuration.
+_PHY_FRAMEWORK_POINTER_NAMES = {
+    "phydev", "attached_dev", "ndev", "dev",
+}
+
+# Field-name shortlist for ``struct phy_driver`` callback slots that
+# the framework guarantees are reached only after attach. Sourced from
+# include/linux/phy.h. The list deliberately excludes ``probe`` and
+# ``remove`` because those run *during* attach and may legitimately
+# see ``attached_dev == NULL``.
+_PHY_DRIVER_CALLBACKS = {
+    "soft_reset", "config_init", "config_aneg", "aneg_done",
+    "read_status", "config_intr", "handle_interrupt", "did_interrupt",
+    "ack_interrupt", "suspend", "resume",
+    "get_wol", "set_wol",
+    "link_change_notify", "read_mmd", "write_mmd",
+    "get_tunable", "set_tunable", "get_features", "config_index",
+    "get_strings", "get_sset_count", "get_stats", "get_phy_stats",
+    "get_link_stats", "set_loopback", "get_loopback",
+    "match_phy_device", "module_info", "module_eeprom",
+    "cable_test_start", "cable_test_get_status", "led_brightness_set",
+    "led_blink_set", "led_hw_is_supported", "led_hw_control_get",
+    "led_hw_control_set", "led_polarity_set",
+}
+
+_PHY_DRIVER_DEF_RE = re.compile(
+    r"struct\s+phy_driver\s+\w+(?:\s*\[\s*\w*\s*\])?\s*=\s*\{(.*?)\}\s*;",
+    re.DOTALL,
+)
+
+
+def _function_registered_as_phy_driver_callback(
+    func_name: str, parsed_file: "ParsedCFile"
+) -> str | None:
+    """If *func_name* appears as ``.<callback> = <func_name>`` in any
+    ``struct phy_driver`` definition or array in the parsed file,
+    return the slot name. Otherwise None.
+
+    Many PHY drivers register an *array* of struct phy_driver entries
+    (one per supported PHY ID), so the regex accepts both
+    ``struct phy_driver X = {...}`` and
+    ``struct phy_driver X[] = { {...}, {...} }`` shapes.
+    """
+    if not parsed_file or not func_name:
+        return None
+    source = getattr(parsed_file, "preprocessed_source", None)
+    if source is None:
+        source = "\n".join((parsed_file.function_bodies or {}).values())
+    if not source:
+        return None
+    for m in _PHY_DRIVER_DEF_RE.finditer(source):
+        block = m.group(1)
+        slot_re = re.compile(
+            rf"\.(\w+)\s*=\s*(?:&\s*)?{re.escape(func_name)}\b"
+        )
+        for slot_m in slot_re.finditer(block):
+            slot = slot_m.group(1)
+            if slot in _PHY_DRIVER_CALLBACKS:
+                return slot
+    return None
+
+
+def _witness_assigns_null_to_phy_framework_pointer(
+    cex: "Counterexample",
+) -> list[str]:
+    """Return a list of witness variable basenames assigned NULL whose
+    name matches a known PHY-framework-set pointer
+    (``phydev``, ``attached_dev``, ``ndev``, …) — including field-access
+    forms like ``phydev.attached_dev`` and ``phydev->attached_dev``.
+    """
+    if not cex or not getattr(cex, "variable_assignments", None):
+        return []
+    matches: list[str] = []
+    for var, val in cex.variable_assignments.items():
+        val_str = (val or "").upper()
+        if "NULL" not in val_str or "NOTNULL" in val_str:
+            continue
+        base = re.split(r"[!\$@\.\[]", var, 1)[0].lstrip("_")
+        if not base or not base.isidentifier():
+            continue
+        if base in _PHY_FRAMEWORK_POINTER_NAMES:
+            matches.append(var)
+            continue
+        # Field-access shape: ``phydev.attached_dev``,
+        # ``phydev->attached_dev`` (CBMC may render as the former).
+        if "." in var or "->" in var:
+            head = re.split(r"[\.\->\[]", var, 1)[0].lstrip("_")
+            tail = var[len(re.split(r"[\.\->\[]", var, 1)[0]):]
+            if head in _PHY_FRAMEWORK_POINTER_NAMES:
+                matches.append(var)
+                continue
+            # ``phydev.attached_dev`` — match attached_dev as a field.
+            if any(f in tail for f in ("attached_dev", "dev_addr")):
+                matches.append(var)
+    return matches
+
+
+def _witness_indicates_phy_framework_invariant(
+    func: "FunctionInfo", cex: "Counterexample", parsed_file: "ParsedCFile"
+) -> str | None:
+    """Detect the dp83tc811-style false positive: a function registered
+    as a ``struct phy_driver`` callback, with a witness that sets a
+    framework-managed pointer (``phydev``, ``phydev->attached_dev``) to
+    NULL. The PHY framework's ``phy_ethtool_*`` wrappers only reach the
+    driver callback after ``phy_attach_direct(dev, phydev, ...)`` has
+    set both ``phydev->attached_dev = dev`` and ``dev->phydev = phydev``
+    in the same ``if (dev) { ... }`` block; the ethtool path uses
+    ``dev->phydev`` to locate the phy, so ``attached_dev != NULL`` is a
+    structural invariant of any framework-constructed path.
+
+    Conservative: requires BOTH (a) explicit registration as a
+    ``struct phy_driver`` callback in the parsed file (excluding
+    ``probe``/``remove`` which run *during* attach), AND (b) at least
+    one framework-pointer witness assignment to NULL.
+    """
+    callback_slot = _function_registered_as_phy_driver_callback(
+        func.name, parsed_file
+    )
+    if not callback_slot:
+        return None
+    null_witnesses = _witness_assigns_null_to_phy_framework_pointer(cex)
+    if not null_witnesses:
+        return None
+    sample = ", ".join(sorted(set(null_witnesses))[:3])
+    more = "" if len(null_witnesses) <= 3 else f" (+{len(null_witnesses)-3} more)"
+    return (
+        f"'{func.name}' is registered as the '.{callback_slot}' slot of a "
+        f"struct phy_driver dispatch table; witness assigns NULL to "
+        f"framework-managed pointer(s) [{sample}{more}] that the PHY core's "
+        f"attach lifecycle guarantees non-NULL before any callback "
+        f"dispatch reachable from in-tree code"
     )
 
 

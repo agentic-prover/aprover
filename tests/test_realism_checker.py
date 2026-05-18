@@ -1007,6 +1007,144 @@ def test_usb_serial_framework_invariant_skips_when_witness_has_no_null():
     assert _witness_indicates_usb_serial_framework_invariant(func, cex, pf) is None
 
 
+def test_phy_framework_invariant_detects_attached_dev_null_on_set_wol():
+    """dp83tc811-style FP: function registered as ``.set_wol`` slot of a
+    ``struct phy_driver`` array; witness sets
+    ``phydev.attached_dev = NULL``. Detector must classify UNREALISTIC.
+    """
+    from bmc_agent.realism_checker import (
+        _witness_indicates_phy_framework_invariant,
+    )
+    from bmc_agent.parser import ParsedCFile
+    from bmc_agent.cbmc import Counterexample
+    pf = ParsedCFile(
+        path="/tmp/fake.c",
+        functions={}, call_graph={}, function_bodies={}, function_definitions={},
+        preprocessed_source=(
+            "static int dp83811_set_wol(struct phy_device *phydev, "
+            "struct ethtool_wolinfo *wol) { return 0; }\n"
+            "static struct phy_driver dp83811_driver[] = {\n"
+            "    {\n"
+            "        .phy_id = 0x2000a211,\n"
+            "        .set_wol = dp83811_set_wol,\n"
+            "        .config_init = dp83811_config_init,\n"
+            "    },\n"
+            "};\n"
+        ),
+    )
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    sig = FunctionSignature(
+        name="dp83811_set_wol", return_type="int", parameters=[], is_static=True,
+    )
+    func = FunctionInfo(
+        name="dp83811_set_wol", source_file="/tmp/fake.c",
+        signature=sig, body="{ return 0; }", callees=set(),
+    )
+    cex = Counterexample(
+        failing_property="dp83811_set_wol.pointer_dereference.13",
+        variable_assignments={
+            "phydev.attached_dev": "((struct net_device *)NULL)",
+            "wol.wolopts": "32",  # WAKE_MAGIC
+        },
+    )
+    cause = _witness_indicates_phy_framework_invariant(func, cex, pf)
+    assert cause is not None
+    assert ".set_wol" in cause
+
+
+def test_phy_framework_invariant_detects_phydev_null():
+    """Phydev itself NULL — the wrapper would have crashed before dispatch."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_phy_framework_invariant,
+    )
+    from bmc_agent.parser import ParsedCFile
+    from bmc_agent.cbmc import Counterexample
+    pf = ParsedCFile(
+        path="/tmp/fake.c",
+        functions={}, call_graph={}, function_bodies={}, function_definitions={},
+        preprocessed_source=(
+            "static int foo_config_aneg(struct phy_device *phydev) { return 0; }\n"
+            "static struct phy_driver foo_driver = {\n"
+            "    .config_aneg = foo_config_aneg,\n"
+            "};\n"
+        ),
+    )
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    sig = FunctionSignature(
+        name="foo_config_aneg", return_type="int", parameters=[], is_static=True,
+    )
+    func = FunctionInfo(
+        name="foo_config_aneg", source_file="/tmp/fake.c",
+        signature=sig, body="{ return 0; }", callees=set(),
+    )
+    cex = Counterexample(
+        failing_property="foo_config_aneg.pointer_dereference.1",
+        variable_assignments={"phydev": "((struct phy_device *)NULL)"},
+    )
+    cause = _witness_indicates_phy_framework_invariant(func, cex, pf)
+    assert cause is not None
+    assert "phy_driver" in cause
+
+
+def test_phy_framework_invariant_skips_when_not_registered():
+    """Function not registered in any phy_driver — detector returns None."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_phy_framework_invariant,
+    )
+    from bmc_agent.parser import ParsedCFile
+    from bmc_agent.cbmc import Counterexample
+    pf = ParsedCFile(
+        path="/tmp/fake.c",
+        functions={}, call_graph={}, function_bodies={}, function_definitions={},
+        preprocessed_source="static int helper(struct phy_device *phydev) { return 0; }\n",
+    )
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    sig = FunctionSignature(
+        name="helper", return_type="int", parameters=[], is_static=True,
+    )
+    func = FunctionInfo(
+        name="helper", source_file="/tmp/fake.c", signature=sig,
+        body="{ return 0; }", callees=set(),
+    )
+    cex = Counterexample(
+        failing_property="helper.pointer_dereference.1",
+        variable_assignments={"phydev": "NULL"},
+    )
+    assert _witness_indicates_phy_framework_invariant(func, cex, pf) is None
+
+
+def test_phy_framework_invariant_skips_probe_callback():
+    """``.probe`` runs *during* attach where attached_dev may be NULL —
+    don't auto-reject NULL-attached_dev witnesses on probe paths."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_phy_framework_invariant,
+    )
+    from bmc_agent.parser import ParsedCFile
+    from bmc_agent.cbmc import Counterexample
+    pf = ParsedCFile(
+        path="/tmp/fake.c",
+        functions={}, call_graph={}, function_bodies={}, function_definitions={},
+        preprocessed_source=(
+            "static int foo_probe(struct phy_device *phydev) { return 0; }\n"
+            "static struct phy_driver foo_driver = { .probe = foo_probe };\n"
+        ),
+    )
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    sig = FunctionSignature(
+        name="foo_probe", return_type="int", parameters=[], is_static=True,
+    )
+    func = FunctionInfo(
+        name="foo_probe", source_file="/tmp/fake.c", signature=sig,
+        body="{ return 0; }", callees=set(),
+    )
+    cex = Counterexample(
+        failing_property="foo_probe.pointer_dereference.1",
+        variable_assignments={"phydev.attached_dev": "NULL"},
+    )
+    # ``.probe`` is intentionally NOT in _PHY_DRIVER_CALLBACKS — should not match.
+    assert _witness_indicates_phy_framework_invariant(func, cex, pf) is None
+
+
 def test_usb_serial_framework_invariant_ignores_unrelated_slot():
     """If a function name matches a slot name that ISN'T in our known
     USB-serial callback list (e.g. ``.foo = my_fn``), don't fire."""
