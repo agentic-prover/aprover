@@ -2582,7 +2582,9 @@ class HarnessGenerator:
         # naive scanner; stripping them leaves orphan body fragments
         # ("syntax error before ')'", "syntax error after enum end").
         _intermediate = _strip_inline_asm(
-            _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
+            _strip_static_assert(
+                _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
+            )
         )
         if not _preprocessed:
             _intermediate = _strip_static_inline_defs(_intermediate)
@@ -3064,6 +3066,94 @@ def _read_source(source_file: str) -> str:
         return Path(source_file).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+
+
+def _strip_static_assert(text: str) -> str:
+    """Strip ``_Static_assert(condition, "msg");`` calls.
+
+    The Linux kernel embeds ``_Static_assert`` inside ``sizeof(struct{...})``
+    constructs to perform bounds checks at compile time (e.g.
+    ``GENMASK_INPUT_CHECK`` in linux/bits.h, ``BUILD_BUG_ON*`` family).
+    These expressions reference function parameters (``size``, ``offset``,
+    ``shift``) which are runtime values from CBMC's point of view —
+    CBMC's parser then errors with ``expected constant expression, but
+    got 'size + 18446744073709551615ul >= offset'``. Strip the assert
+    entirely; for verification purposes the check would only catch
+    misuse with literal constants anyway, which is orthogonal to model
+    checking.
+
+    Replace each match with a typed expression (``(int)0``) so the
+    enclosing ``struct{...}`` member declaration remains syntactically
+    valid (it expects an expression-statement in the field-decl list).
+    """
+    # Match ``_Static_assert(`` and consume to the matching ``)``;
+    # then expect ``;`` after.  Track paren depth + comments/strings
+    # so we don't trip on nested constructs.
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    pat = re.compile(r'\b_Static_assert\s*\(')
+    while i < n:
+        m = pat.search(text, i)
+        if m is None:
+            out.append(text[i:])
+            break
+        out.append(text[i:m.start()])
+        j = m.end()  # position right after the opening '('
+        depth = 1
+        while j < n and depth > 0:
+            ch = text[j]
+            if ch == '/' and j + 1 < n and text[j + 1] == '*':
+                end = text.find('*/', j + 2)
+                j = n if end == -1 else end + 2
+                continue
+            if ch == '/' and j + 1 < n and text[j + 1] == '/':
+                end = text.find('\n', j + 2)
+                j = n if end == -1 else end
+                continue
+            if ch == '"':
+                j += 1
+                while j < n:
+                    if text[j] == '\\' and j + 1 < n:
+                        j += 2
+                        continue
+                    if text[j] == '"':
+                        j += 1
+                        break
+                    j += 1
+                continue
+            if ch == "'":
+                j += 1
+                while j < n:
+                    if text[j] == '\\' and j + 1 < n:
+                        j += 2
+                        continue
+                    if text[j] == "'":
+                        j += 1
+                        break
+                    j += 1
+                continue
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        # Optionally consume the trailing ``;``
+        while j < n and text[j] in ' \t':
+            j += 1
+        if j < n and text[j] == ';':
+            j += 1
+        # Replace with a trivially-valid ``_Static_assert(1, "")`` so
+        # the construct is well-formed in all C11 contexts (TU-scope
+        # declaration, function-body declaration, struct field-list).
+        # Keeps the semantic shape but drops the runtime-dependent
+        # condition CBMC was choking on.
+        out.append('_Static_assert(1, "");')
+        i = j
+    return ''.join(out)
 
 
 def _rewrite_auto_type(text: str) -> str:

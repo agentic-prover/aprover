@@ -2519,6 +2519,42 @@ def test_strip_inline_asm_still_consumes_semicolon_for_statement_form():
     assert "/* asm removed */;" not in out
 
 
+def test_strip_static_assert_replaces_runtime_condition():
+    """The Linux kernel embeds ``_Static_assert(cond, "msg");`` inside
+    ``sizeof(struct{...})`` macros for compile-time bound checks. When
+    ``cond`` references function parameters (runtime values), CBMC's
+    parser reports ``expected constant expression``. Replace with a
+    trivially-true ``_Static_assert(1, "")`` so the construct is valid
+    in every C11 context (TU/body/struct-field-list)."""
+    from bmc_agent.harness_generator import _strip_static_assert
+    src = (
+        '_Static_assert(sizeof(int) == 4, "");\n'
+        'int x = (sizeof(struct { _Static_assert(offset > size - 1, "msg"); int _; }));\n'
+        'void foo(int n) {\n'
+        '    _Static_assert(n > 0, "runtime");\n'
+        '}\n'
+    )
+    out = _strip_static_assert(src)
+    # No bare _Static_assert(<non-1>) survives.
+    import re as _re
+    surviving_static_asserts = _re.findall(r'_Static_assert\([^,]+,', out)
+    for sa in surviving_static_asserts:
+        # Argument must be the literal ``1`` (allowing whitespace).
+        assert _re.match(r'_Static_assert\(\s*1\s*,', sa), f"unexpected static_assert: {sa}"
+    # Three replacements should have fired (one per original).
+    assert out.count('_Static_assert(1, "")') == 3
+
+
+def test_strip_static_assert_handles_nested_parens():
+    """Conditions can contain nested function calls / commas / parens.
+    The paren-balance scanner must skip them."""
+    from bmc_agent.harness_generator import _strip_static_assert
+    src = '_Static_assert(__builtin_choose_expr(1, 1, 0) > 0, "x");\n'
+    out = _strip_static_assert(src)
+    assert '__builtin_choose_expr' not in out
+    assert '_Static_assert(1, "")' in out
+
+
 def test_rewrite_auto_type_simple_pointer_init():
     """GCC's ``__auto_type`` keyword is used throughout the kernel's
     ``min``/``max``/``clamp`` macro family. CBMC's parser doesn't
