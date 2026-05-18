@@ -3603,6 +3603,49 @@ unsigned int ggml_hash(struct ggml_context * ctx) {
     assert sig.return_type == "unsigned int", sig.return_type
 
 
+def test_source_precondition_allows_all_caps_macro_const():
+    """``assert(k % QK_K == 0)`` at the top of a function body is a
+    classic precondition the caller is expected to obey. ``QK_K`` is
+    an ALL_CAPS ``#define``d constant (256 in ggml), not a runtime
+    variable. The extractor must promote this to
+    ``__CPROVER_assume`` so the harness mirrors the caller contract.
+    Regression: ggml-cpu/quants.c 2026-05-19 raised 7 confirmed_dynamic
+    findings of exactly this shape (quantize_row_q5_K / q6_K / q4_K /
+    iq4_nl / iq4_xs / tq1_0 / tq2_0)."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = """\
+{
+    assert(k % QK_K == 0);
+    block_q5_K * GGML_RESTRICT y = vy;
+    quantize_row_q5_K_ref(x, y, k);
+}
+"""
+    out = _extract_source_precondition_asserts(body, ["x", "vy", "k"])
+    assert any("__CPROVER_assume(k % QK_K == 0)" in s for s in out), out
+
+
+def test_source_precondition_rejects_unknown_lowercase_identifier():
+    """``assert(k > my_global)`` where ``my_global`` is a lowercase
+    free identifier must NOT be promoted — that's a load-bearing
+    runtime check, not a compile-time precondition. The macro-detection
+    heuristic is ALL_CAPS only; lowercase identifiers still get
+    rejected as before."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = "{ assert(k > my_global); return; }"
+    out = _extract_source_precondition_asserts(body, ["k"])
+    assert out == [], out
+
+
+def test_source_precondition_rejects_double_underscore_identifier():
+    """``__builtin_*`` and ``_Static_*`` names start with underscore;
+    they are not stable compile-time constants and must not be
+    swallowed by the macro heuristic."""
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+    body = "{ assert(k > __MAX_VAL); return; }"
+    out = _extract_source_precondition_asserts(body, ["k"])
+    assert out == [], out
+
+
 def test_parser_recovers_param_name_through_restrict_macro(tmp_path):
     """``T * GGML_RESTRICT s`` is a tree-sitter misparse: the macro
     qualifier is consumed as the declarator identifier and the real

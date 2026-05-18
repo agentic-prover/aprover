@@ -858,6 +858,25 @@ def _extract_source_precondition_asserts(
                 "LONG_MAX", "LONG_MIN", "ULONG_MAX",
                 "sizeof",
             }
+            # ALL_CAPS_WITH_UNDERSCORE identifiers are conventionally
+            # ``#define``d constants or enum members — ggml's ``QK_K``,
+            # ``QK4_0`` family, Linux's ``PAGE_SIZE``/``L1_CACHE_BYTES``,
+            # etc. Real callers obey ``assert(k % QK_K == 0)``; the
+            # bmc-agent harness, passing nondet params, would otherwise
+            # explore the violating state and trip a "confirmed" bug
+            # that is actually an internal precondition the function
+            # imposes on its caller. Regression: ggml-cpu/quants.c run
+            # 2026-05-19 raised 7 confirmed_dynamic findings of exactly
+            # this shape on quantize_row_q5_K / q6_K / q4_K / iq4_nl /
+            # iq4_xs / tq1_0 / tq2_0.
+            non_param = {
+                n for n in non_param
+                if not (
+                    "_" in n
+                    and n.isupper()
+                    and not n.startswith("_")  # exclude __builtin_*, _Static_*
+                )
+            }
             if non_param:
                 continue
             if expr in seen:
