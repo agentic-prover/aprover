@@ -551,12 +551,18 @@ def test_extract_type_decls_strips_multi_line_return_types():
     finally:
         os.unlink(path)
     out = _extract_type_decls_using_bodies(src, parsed)
-    # Both function names should be excised entirely — no orphan return type.
-    assert "first" not in out
-    assert "second" not in out
+    # The function BODIES should be gone: no return statements survive.
+    assert "return (uint64_t)p[0]" not in out
+    assert "return (uint64_t)p[1]" not in out
+    # Forward declarations REPLACE the bodies (so TU-scope dispatch
+    # tables can take addresses of these symbols by name). The forward
+    # decls end with `;` and have no body.
+    assert "uint64_t first(const char *p);" in out or "uint64_t first(const char* p);" in out
+    assert "uint64_t second(const char *p);" in out or "uint64_t second(const char* p);" in out
     # The struct typedef should survive.
     assert "typedef struct { int x; } S;" in out
-    # No dangling `uint64_t` line on its own (the regression symptom).
+    # No dangling `uint64_t` line on its own (the original regression
+    # symptom: a return-type fragment with no declarator below it).
     for line in out.splitlines():
         assert line.strip() != "uint64_t"
 

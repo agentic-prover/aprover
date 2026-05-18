@@ -125,7 +125,9 @@ def _find_decl_preamble(source_text: str, def_start: int) -> int:
 
 def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile") -> str:
     """
-    Exclude function definitions from *source_text*.
+    Exclude function definitions from *source_text*, leaving a forward
+    declaration in place so downstream code (TU-scope dispatch tables)
+    can still take addresses by name.
 
     Preferred path: use ``parsed_file.function_definitions`` (full text from the
     tree-sitter ``function_definition`` node, including return type and body),
@@ -135,9 +137,26 @@ def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile
     Fallback path (for parsers that didn't populate ``function_definitions``):
     locate each function body and walk backward to pick up the return-type
     line.  Only reliably handles single-line signatures.
+
+    Each excised function definition is replaced with a forward
+    declaration emitted at the original byte position. Without this,
+    Linux drivers' TU-scope module-registration tables (``static struct
+    usb_serial_driver ch341_device = { .open = ch341_open, ... };``)
+    reference functions before any prior declaration, and CBMC errors
+    out with ``failed to find symbol 'ch341_open'``. Emitting a
+    forward decl in the original spot preserves the source ordering
+    so the dispatch table sees the name already declared.
     """
-    exclude: list[tuple[int, int]] = []  # (start, end) char offsets to drop
+    # (start, end, forward_decl) tuples; forward_decl can be empty.
+    excise: list[tuple[int, int, str]] = []
     function_defs = getattr(parsed_file, "function_definitions", None) or {}
+
+    def _make_forward_decl(name: str) -> str:
+        sig = parsed_file.functions.get(name)
+        if sig is None:
+            return ""
+        params = _params_str(sig.parameters)
+        return f"{sig.return_type.strip()} {name}({params});"
 
     for func_name, body_text in parsed_file.function_bodies.items():
         if not body_text:
@@ -148,7 +167,11 @@ def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile
             def_start = source_text.find(full_def)
             if def_start != -1:
                 preamble_start = _find_decl_preamble(source_text, def_start)
-                exclude.append((preamble_start, def_start + len(full_def)))
+                excise.append((
+                    preamble_start,
+                    def_start + len(full_def),
+                    _make_forward_decl(func_name),
+                ))
                 continue
 
         # Fallback: walk back from body to the signature's '(' line.
@@ -180,25 +203,31 @@ def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile
             j -= 1
         sig_start = j
 
-        exclude.append((sig_start, body_end))
+        excise.append((sig_start, body_end, _make_forward_decl(func_name)))
 
-    if not exclude:
+    if not excise:
         return source_text.strip()
 
-    # Merge overlapping spans, sort, then build output
-    exclude.sort()
-    merged: list[tuple[int, int]] = []
-    for span in exclude:
-        if merged and span[0] <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], span[1]))
+    # Merge overlapping spans, sort, then build output. When merging,
+    # concatenate the forward decls of the merged spans (separated by
+    # newlines) so each removed function still gets a declaration.
+    excise.sort()
+    merged: list[list] = []
+    for start, end, fwd in excise:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+            if fwd:
+                merged[-1][2] = (merged[-1][2] + "\n" + fwd).strip()
         else:
-            merged.append(list(span))  # type: ignore[arg-type]
+            merged.append([start, end, fwd])
 
     parts: list[str] = []
     pos = 0
-    for start, end in merged:
+    for start, end, fwd in merged:
         if pos < start:
             parts.append(source_text[pos:start])
+        if fwd:
+            parts.append(fwd + "\n")
         pos = end
     if pos < len(source_text):
         parts.append(source_text[pos:])
@@ -2638,6 +2667,50 @@ class HarnessGenerator:
                 f"static {cfi.signature.return_type} {cname}({cparams})\n{cbody}"
             )
 
+        # --- 3b. Emit placeholder bodies for sibling functions ---
+        # Any function defined in the same file as the FUT but not called
+        # by it. Linux drivers register a dispatch table at TU scope
+        # (``static struct usb_serial_driver ch341_device = { .open =
+        # ch341_open, .close = ch341_close, ... };``) that takes the
+        # address of every entry-point function. With the FUT body
+        # excised from type_decls and only the FUT's body added back,
+        # those address-of references fail to resolve and CBMC errors:
+        # ``failed to find symbol 'ch341_open'``.
+        #
+        # The fix is to emit a no-op body with the ORIGINAL name (not
+        # the ``_stub`` suffix used for callees, because the dispatch
+        # table references the original). The body is a havoc: declare
+        # a result of the return type, return it. Sibling bodies are
+        # never actually invoked in the per-function harness — the
+        # dispatch table is at TU scope, not called from anywhere in
+        # ``main()`` — so the body shape is irrelevant; we just need
+        # the symbol to exist.
+        sibling_func_defs: list[str] = []
+        already_defined = (
+            {fn_name}
+            | inline_local_callees
+            | {f"{c}_stub" for c in all_stub_callees}
+        )
+        for sib_name in sorted(parsed_file.functions.keys()):
+            if sib_name in already_defined:
+                continue
+            if sib_name in all_stub_callees:
+                continue
+            sib_sig = parsed_file.functions[sib_name]
+            sib_params = _params_str(sib_sig.parameters)
+            sib_ret = sib_sig.return_type.strip()
+            body_lines = [
+                f"/* Sibling placeholder (referenced by TU-scope dispatch table): {sib_name} */",
+                f"{sib_ret} {sib_name}({sib_params}) {{",
+            ]
+            if sib_ret == "void":
+                body_lines.append("    /* void sibling — no return */")
+            else:
+                body_lines.append(f"    {sib_ret} _r;")
+                body_lines.append("    return _r;")
+            body_lines.append("}")
+            sibling_func_defs.append("\n".join(body_lines))
+
         defined_callees = all_stub_callees  # used below for substitution
 
         # --- 4. Build the function body with callee calls substituted ---
@@ -2738,6 +2811,14 @@ class HarnessGenerator:
         if inline_func_defs:
             sections.append("/* --- Inlined real callee bodies --- */")
             sections.extend(inline_func_defs)
+
+        # Sibling placeholders — provide a definition for every same-file
+        # function the FUT doesn't call directly, so address-of references
+        # from TU-scope dispatch tables (Linux driver registration structs)
+        # link successfully.
+        if sibling_func_defs:
+            sections.append("/* --- Sibling placeholders (for TU-scope dispatch tables) --- */")
+            sections.extend(sibling_func_defs)
 
         # Original function (with stubs substituted for callee calls)
         sections.append(
