@@ -1170,3 +1170,81 @@ def test_usb_serial_framework_invariant_ignores_unrelated_slot():
     )
     # ``undocumented_slot`` not in _USB_SERIAL_DRIVER_CALLBACKS → no match.
     assert _witness_indicates_usb_serial_framework_invariant(func, cex, pf) is None
+
+
+# ---------------------------------------------------------------------------
+# Intentional-truncation detector (r8125_fiber round-2 FP, 2026-05-18)
+# ---------------------------------------------------------------------------
+
+
+def test_intentional_truncation_u8_fires():
+    """CBMC's --conversion-check description ``in (u8)expr`` matches the
+    narrow-int allowlist; detector should fire."""
+    from bmc_agent.realism_checker import _witness_indicates_intentional_truncation
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="rtl8125_check_fiber_mode_support.overflow.1",
+        description=(
+            "arithmetic overflow on unsigned to unsigned type conversion "
+            "in (u8)return_value_rtl8125_mac_ocp_read"
+        ),
+    )
+    result = _witness_indicates_intentional_truncation(cex)
+    assert result is not None
+    assert "u8" in result
+
+
+def test_intentional_truncation_uint16_t_fires():
+    """uint16_t is also in the narrow-int allowlist."""
+    from bmc_agent.realism_checker import _witness_indicates_intentional_truncation
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.overflow.2",
+        description=(
+            "arithmetic overflow on signed to unsigned type conversion "
+            "in (uint16_t)len"
+        ),
+    )
+    result = _witness_indicates_intentional_truncation(cex)
+    assert result is not None
+    assert "uint16_t" in result
+
+
+def test_intentional_truncation_non_narrow_type_no_fire():
+    """A cast to a non-narrow-int type (struct, pointer) should NOT fire;
+    we don't want to mask real bugs in domain-specific narrowing."""
+    from bmc_agent.realism_checker import _witness_indicates_intentional_truncation
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.overflow.1",
+        description=(
+            "arithmetic overflow on signed to unsigned type conversion "
+            "in (custom_handle_t)x"
+        ),
+    )
+    assert _witness_indicates_intentional_truncation(cex) is None
+
+
+def test_intentional_truncation_non_conversion_description_no_fire():
+    """Descriptions that aren't type-conversion overflows (e.g. addition
+    overflow) must not match — they're a different bug class."""
+    from bmc_agent.realism_checker import _witness_indicates_intentional_truncation
+    from bmc_agent.cbmc import Counterexample
+    cex = Counterexample(
+        failing_property="f.overflow.1",
+        description="arithmetic overflow on unsigned + in a + b",
+    )
+    assert _witness_indicates_intentional_truncation(cex) is None
+
+
+def test_intentional_truncation_empty_description_no_fire():
+    """Defensive: an empty or missing description must return None,
+    not crash."""
+    from bmc_agent.realism_checker import _witness_indicates_intentional_truncation
+    from bmc_agent.cbmc import Counterexample
+    assert _witness_indicates_intentional_truncation(
+        Counterexample(failing_property="f.x.1", description="")
+    ) is None
+    assert _witness_indicates_intentional_truncation(
+        Counterexample(failing_property="f.x.1")
+    ) is None

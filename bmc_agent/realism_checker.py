@@ -305,6 +305,34 @@ class RealismChecker:
                 llm_confidence="high",
             )
 
+        # Intentional-narrow-cast detector (from r8125_fiber round-2 FP,
+        # 2026-05-18): --conversion-check flags ``(u8)read_u32_register()``
+        # as "arithmetic overflow on unsigned to unsigned type conversion"
+        # even though the cast is explicit in source. Driver register-IO
+        # code routinely truncates a u32 return to extract a low byte;
+        # this is defined C behavior and intentional. The realism stage
+        # rejects the CEX without an LLM call when the failing description
+        # localizes the conversion to a known narrow-integer target type.
+        truncation_cause = _witness_indicates_intentional_truncation(counterexample)
+        if truncation_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by intentional "
+                "narrow-integer cast — %s", func.name, truncation_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"Intentional narrow-integer truncation: {truncation_cause}. "
+                    "C explicitly defines the value-narrowing semantics of "
+                    "``(uN)expr`` casts; the programmer used the cast to take "
+                    "the low N bits. --conversion-check flags every such cast "
+                    "where the input may exceed the target's range — that is "
+                    "almost always the entire point of the cast. Not a bug."
+                ),
+                key_concern=f"[intentional-truncation] {truncation_cause}",
+                llm_confidence="high",
+            )
+
         # Path-divergent unwind detector (from feedback-loop arm (a) TODO,
         # 2026-05-13): CBMC reports a *.unwind.* property fail when its
         # symbolic exploration on SOME path hits the loop bound; the
@@ -1145,6 +1173,66 @@ def _witness_indicates_netdev_private_framework_invariant(
         "net_device_ops/ethtool_ops/pci_driver dispatch table, so "
         "callbacks reachable in-tree run only after probe() has set the "
         "field"
+    )
+
+
+# Narrow-integer target types where an explicit cast in C is conventionally
+# used to *take the low bits*, not to assert the value fits. CBMC's
+# --conversion-check fires on every cast where the source value can be
+# wider than the target; for register reads and bit-extraction idioms,
+# that's the entire purpose of the cast and not a bug.
+_NARROW_INT_TARGET_TYPES = frozenset({
+    "u8", "u16", "u32",
+    "__u8", "__u16", "__u32",
+    "uint8_t", "uint16_t", "uint32_t",
+    "int8_t", "int16_t", "int32_t",
+    "char", "short", "signed char", "unsigned char",
+    "u_int8_t", "u_int16_t", "u_int32_t",
+    "uchar", "byte",
+})
+
+# Match the cast target in CBMC's overflow description, which has the
+# canonical form:
+#   "arithmetic overflow on <kind> to <kind> type conversion in (TARGET)expr"
+# We extract TARGET and check if it's in the narrow-int allowlist.
+_CONVERSION_DESC_RE = re.compile(
+    r"arithmetic\s+overflow\s+on\s+\w+\s+to\s+\w+\s+type\s+conversion\s+in\s+\(([\w\s_]+)\)",
+    re.IGNORECASE,
+)
+
+
+def _witness_indicates_intentional_truncation(
+    cex: "Counterexample",
+) -> str | None:
+    """Detect the r8125_fiber-style false positive: CBMC's
+    --conversion-check flags an explicit narrow-int cast in source
+    (``(u8)read_u32(...)``) as overflow. The cast is intentional C
+    truncation, not a bug. Returns a description string when the
+    detector fires; otherwise None.
+
+    Conservative: requires BOTH (a) the failing description matches the
+    "overflow on ... type conversion in (T)expr" template, AND (b) the
+    target type T is in the narrow-int allowlist. We deliberately do
+    NOT fire on user-defined narrowing target types — those are
+    typically pointer-sized or struct types where unintended narrowing
+    is the actual bug.
+    """
+    desc = getattr(cex, "description", "") or ""
+    if "type conversion" not in desc.lower():
+        return None
+    m = _CONVERSION_DESC_RE.search(desc)
+    if not m:
+        return None
+    target_type = m.group(1).strip()
+    # Normalize whitespace within compound type names (e.g. "signed char").
+    target_type = re.sub(r"\s+", " ", target_type)
+    if target_type not in _NARROW_INT_TARGET_TYPES:
+        return None
+    return (
+        f"explicit cast to narrow integer '{target_type}' "
+        f"(description: '{desc[:80]}...'); --conversion-check fires "
+        "because the source value may exceed the target's range, but "
+        "C semantics define the truncation and the programmer chose it"
     )
 
 
