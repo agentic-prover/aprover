@@ -347,12 +347,47 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         domain_knowledge=domain_knowledge,
     )
 
+    # Filter out bug_reports whose realism check returned UNREALISTIC
+    # OR whose final classification (saved to classification.json) was
+    # later re-marked as ``spurious`` (e.g. by the feedback loop's
+    # CEGAR re-verification with a tighter precondition). Without this
+    # filter, the printed list contains stale ``REAL BUG confirmed``
+    # entries that the system itself has since rejected, wasting
+    # triage time and giving a false impression of the run's success.
+    def _final_classification_is_spurious(driver_name: str, fn_name: str) -> bool:
+        import json, os
+        path = os.path.join(config.artifact_dir, driver_name, fn_name, "classification.json")
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return (data.get("classification") or {}).get("outcome") == "spurious"
+        except Exception:
+            return False
+
+    def _realism_was_unrealistic(report) -> bool:
+        rc = getattr(report, "realism_check", None) or {}
+        if isinstance(rc, dict):
+            return (rc.get("verdict") or "").lower() == "unrealistic"
+        return getattr(rc, "verdict", "").lower() == "unrealistic" if rc else False
+
+    survivors = [
+        r for r in bug_reports
+        if not _realism_was_unrealistic(r)
+        and not _final_classification_is_spurious(args.driver, r.function_name)
+    ]
+    dropped = len(bug_reports) - len(survivors)
+
     print(f"\n=== Results ===")
-    if not bug_reports:
+    if dropped > 0:
+        print(
+            f"(suppressed {dropped} stale finding(s): rejected by realism check "
+            f"or re-classified as spurious after refinement)"
+        )
+    if not survivors:
         print("No bugs confirmed.")
     else:
-        print(f"Confirmed bugs: {len(bug_reports)}")
-        for report in bug_reports:
+        print(f"Confirmed bugs: {len(survivors)}")
+        for report in survivors:
             print(f"\n  [{report.bug_type.upper()}] {report.function_name}")
             print(f"    Property: {report.violated_property}")
             print(f"    Confidence: {report.confidence}")

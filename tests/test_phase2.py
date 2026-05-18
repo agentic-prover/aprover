@@ -220,6 +220,43 @@ def test_postcond_to_assert_disjunct_strips_natural_language_conjunct():
     assert "result < 0" in joined
 
 
+def test_translate_atom_drops_vacuous_self_null_comparison():
+    """LLMs occasionally produce ``X != null(X)`` or ``X == null(X)``
+    as a malformed precondition. The DSL's ``null(X)`` predicate
+    means ``X == NULL``, so ``X != null(X)`` is the tautology
+    ``X != (X == NULL)`` which (a) has no semantic meaning and
+    (b) when X is a struct-by-value member (``hid->dev``, with
+    ``struct device dev`` embedded), produces an
+    ``assume(hid->dev == NULL)`` that CBMC rejects as a
+    type-incompatible comparison.
+
+    Regression: ``hid_pidff_init`` spec generated
+    ``valid(hid) && hid->dev != null(hid->dev) && ...``. The
+    translator must drop the vacuous clause instead of emitting
+    a live ``__CPROVER_assume``.
+    """
+    from bmc_agent.dsl_to_cbmc import translate_atom
+    out = translate_atom("hid->dev != null(hid->dev)", context="assume")
+    # Translator must NOT emit a live assume on this pathological shape.
+    assert out is None or "/*" in out
+    assert "assume" not in (out or "")
+
+
+def test_translate_atom_X_neq_null_negation_detected():
+    """``!= null(X)`` is the new negation-detection shape. Historical
+    behaviour translated ``null(X)`` to ``X == NULL`` regardless of any
+    leading ``!=``; the broadened lookback now detects ``!=`` and
+    flips to ``X != NULL`` so the spec ``p != null(p)`` (less malformed
+    than ``p != null(p)`` self-tautology) translates correctly."""
+    from bmc_agent.dsl_to_cbmc import translate_atom
+    # Use a single-side null check: this exercises the broader negation
+    # lookback. The vacuous filter does not fire because the LHS of !=
+    # is empty after stripping (no self-tautology to match).
+    out = translate_atom("!= null(q)", context="assume")
+    assert out is not None
+    assert "q != NULL" in out
+
+
 def test_atom_to_expr_drops_natural_language_tail_in_conjunct():
     """Direct unit test on ``_atom_to_expr``: when a clause is
     ``<C cmp> && <NL>``, only the C side should be returned."""

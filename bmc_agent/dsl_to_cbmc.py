@@ -170,8 +170,38 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     m = _NULL_RE.search(atom)
     if m:
         ptr = m.group(1).strip()
-        # Detect negation: character immediately before the match is '!'
-        negated = m.start() > 0 and atom[m.start() - 1] == "!"
+        # ----- Pathological-LLM-spec filter -----
+        # Drop the self-tautology shape ``X != null(X)`` / ``X == null(X)``
+        # where the same expression appears on both sides. This is a
+        # well-observed LLM artefact (hid_pidff_init produced
+        # ``hid->dev != null(hid->dev)``) which has no semantic
+        # meaning and, worse, translates to ``X == NULL`` over a
+        # struct-by-value member, breaking CBMC's type-check.
+        # Look at the atom's text BEFORE the ``null(...)`` match: if
+        # it contains the same expression as ``ptr`` joined to it
+        # via ``==`` or ``!=``, the predicate is vacuous.
+        prefix = atom[: m.start()].rstrip()
+        for op in ("!=", "=="):
+            sep_idx = prefix.rfind(op)
+            if sep_idx != -1:
+                lhs = prefix[:sep_idx].strip()
+                # Normalise (strip outer parens) and compare.
+                if _strip_outer_parens(lhs).strip() == ptr:
+                    return f"/* condition (vacuous self-comparison dropped): {atom} */"
+        # ----- End filter -----
+        # Detect negation. The historic check inspected only the
+        # immediate previous char for ``!``; broaden it to recognise
+        # the ``X != null(...)`` shape (where ``!=`` precedes the
+        # match, possibly with whitespace).
+        negated = False
+        if m.start() > 0:
+            prev = atom[m.start() - 1]
+            if prev == "!":
+                negated = True
+        if not negated:
+            prev_chunk = atom[: m.start()].rstrip()
+            if prev_chunk.endswith("!="):
+                negated = True
         return wrap(f"{ptr} != NULL" if negated else f"{ptr} == NULL")
 
     # in_bounds(arr, idx)

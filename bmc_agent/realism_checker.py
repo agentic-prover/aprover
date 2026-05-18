@@ -576,7 +576,7 @@ def _witness_indicates_uninitialized_library(cex: "Counterexample") -> str | Non
     for var, val in cex.variable_assignments.items():
         if var in _LIB_INIT_GLOBAL_FN_PTRS:
             # CBMC formats NULL as "NULL" or "(... *)NULL" / "((xmlMallocFunc)NULL)"
-            val_str = (val or "").upper()
+            val_str = ("" if val is None else str(val)).upper()
             if "NULL" in val_str and "!=" not in val_str:
                 nulled.append(var)
     if len(nulled) >= 2:
@@ -686,7 +686,9 @@ def _witness_indicates_null_guard_violation(
         return None
     nulled_names: list[str] = []
     for var, val in (cex.variable_assignments or {}).items():
-        val_str = (val or "")
+        # Witness values can be non-str (bool, int, dict, …) — CBMC's
+        # ``variable_assignments`` is heterogeneous. Coerce defensively.
+        val_str = "" if val is None else str(val)
         # Look for ``NULL`` or ``((...)NULL)`` patterns and exclude ``NOTNULL``.
         if "NULL" in val_str.upper() and "NOTNULL" not in val_str.upper():
             # Strip CBMC qualifier suffixes (``priv!0@1``, ``priv$$1``)
@@ -793,7 +795,7 @@ def _witness_assigns_null_to_framework_pointer(cex: "Counterexample") -> list[st
         return []
     matches: list[str] = []
     for var, val in cex.variable_assignments.items():
-        val_str = (val or "").upper()
+        val_str = ("" if val is None else str(val)).upper()
         if "NULL" not in val_str or "NOTNULL" in val_str:
             continue
         base = re.split(r"[!\$@\.\[]", var, 1)[0].lstrip("_")
@@ -933,7 +935,7 @@ def _witness_assigns_null_to_phy_framework_pointer(
         return []
     matches: list[str] = []
     for var, val in cex.variable_assignments.items():
-        val_str = (val or "").upper()
+        val_str = ("" if val is None else str(val)).upper()
         if "NULL" not in val_str or "NOTNULL" in val_str:
             continue
         base = re.split(r"[!\$@\.\[]", var, 1)[0].lstrip("_")
