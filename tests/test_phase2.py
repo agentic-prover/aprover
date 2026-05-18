@@ -3388,3 +3388,33 @@ def test_strip_glibc_internal_struct_bodies_kernel_mode_noop():
     src = "struct __kernel_fsid_t { int __val[2]; };"
     out = _strip_glibc_internal_struct_bodies(src, kernel_mode=True)
     assert out == src
+
+
+def test_strip_glibc_internal_struct_bodies_allowlist():
+    """Glibc structs without _IO_/__/_G_ prefix must also be stripped
+    (timeval, timespec, random_data, etc.) — they're in the allowlist
+    of known POSIX/glibc-internal names that CBMC's libc redefines."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_struct_bodies
+    src = """\
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
+struct timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+struct random_data {
+    int *fptr;
+};
+struct ggml_tensor {
+    int x;
+};
+"""
+    out = _strip_glibc_internal_struct_bodies(src)
+    assert "struct timeval; /* glibc-internal body stripped */" in out, out
+    assert "struct timespec; /* glibc-internal body stripped */" in out, out
+    assert "struct random_data; /* glibc-internal body stripped */" in out, out
+    # Project struct untouched
+    assert "struct ggml_tensor {" in out, out
+    assert "tv_sec" not in out, out

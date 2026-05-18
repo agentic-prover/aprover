@@ -4061,14 +4061,57 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
     """
     if kernel_mode:
         return text
-    # The pattern: an optional ``typedef`` keyword, the literal ``struct``,
-    # a name that starts with one of the glibc-internal prefixes
-    # (``_IO_``, ``__``, ``_G_``), an opening brace, an arbitrary body
-    # (one level of nested braces is allowed), and a closing brace,
-    # optionally followed by a trailing alias and ``;``.
+    # Strip struct definitions whose names match either:
+    #   * A glibc-internal prefix (_IO_, __, _G_), OR
+    #   * A known POSIX/glibc struct that CBMC's built-in libc
+    #     redefines. The allowlist below is empirically grown from
+    #     observed "redefinition of body of 'struct X'" failures.
+    #
+    # Empirical: llama.cpp ggml-alloc.c trips on _IO_FILE, __pthread_*,
+    # __locale_struct (prefix matched), AND timeval, timespec,
+    # random_data, drand48_data (allowlist).
     _GLIBC_STRUCT_NAME = re.compile(
         r"\b(_IO_[A-Za-z0-9_]+|__[A-Za-z0-9_]+|_G_[A-Za-z0-9_]+)\b"
     )
+    _GLIBC_KNOWN_STRUCTS = frozenset({
+        # <sys/time.h> / <time.h>
+        "timeval", "timespec", "itimerval", "itimerspec", "tm",
+        "timezone", "tms", "utimbuf",
+        # <sys/types.h>, <sys/stat.h>
+        "stat", "stat64",
+        # <sys/socket.h>, <netinet/in.h>
+        "sockaddr", "sockaddr_in", "sockaddr_in6", "sockaddr_un",
+        "sockaddr_storage", "msghdr", "cmsghdr", "iovec",
+        # <netdb.h>
+        "hostent", "addrinfo", "servent", "protoent", "netent",
+        # <locale.h>
+        "lconv",
+        # <sys/resource.h>
+        "rusage", "rlimit",
+        # <pwd.h>, <grp.h>
+        "passwd", "group",
+        # <dirent.h>
+        "dirent", "dirent64",
+        # <signal.h>
+        "sigaction", "siginfo_t", "sigevent",
+        # <fcntl.h>
+        "flock",
+        # <termios.h>
+        "termios",
+        # <sys/utsname.h>
+        "utsname",
+        # <stdlib.h> RNG state
+        "random_data", "drand48_data",
+        # <sched.h>
+        "sched_param",
+        # <stdio.h> generic
+        "fpos_t",
+    })
+
+    def _struct_name_is_glibc(name: str) -> bool:
+        if _GLIBC_STRUCT_NAME.fullmatch(name):
+            return True
+        return name in _GLIBC_KNOWN_STRUCTS
     result: list[str] = []
     i = 0
     n = len(text)
@@ -4128,8 +4171,8 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
                 i += 1
                 continue
             # We have ``struct NAME {``. Only strip if the name matches
-            # a glibc-internal pattern. Otherwise leave the struct alone.
-            if not _GLIBC_STRUCT_NAME.fullmatch(name):
+            # a glibc-internal pattern or a known POSIX/glibc struct.
+            if not _struct_name_is_glibc(name):
                 result.append(text[i])
                 i += 1
                 continue
