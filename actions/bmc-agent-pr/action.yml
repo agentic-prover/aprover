@@ -66,6 +66,14 @@ inputs:
     required: false
     default: 'false'
 
+  github-token:
+    description: >-
+      Token for posting PR comments via `gh`. The calling workflow should
+      pass ${{ github.token }} (or a PAT with pull_requests:write).
+      Optional — the action skips commenting if absent.
+    required: false
+    default: ''
+
 outputs:
   findings-json:
     description: 'Path to a JSON file aggregating per-function bmc-agent verdicts.'
@@ -88,4 +96,4 @@ runs:
     INPUT_FEATURE_FLAGS: ${{ inputs.feature-flags }}
     INPUT_MAX_FUNCTIONS: ${{ inputs.max-functions }}
     INPUT_FAIL_ON_REAL_BUG: ${{ inputs.fail-on-real-bug }}
-    GITHUB_TOKEN: ${{ github.token }}
+    GITHUB_TOKEN: ${{ inputs.github-token }}

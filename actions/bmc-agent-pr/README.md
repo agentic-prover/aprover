@@ -42,6 +42,7 @@ jobs:
       - uses: agentic-prover/bmc-agent-pr@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           # Project-specific include paths and defines. Match what your build
           # system passes to the compiler.
           cflags: '-I./include -DHAVE_CONFIG_H'
@@ -54,6 +55,7 @@ jobs:
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `anthropic-api-key` | yes | — | LLM credential. Pass via `secrets`. |
+| `github-token` | no | `''` | Token for posting PR comments via `gh`. Pass `${{ secrets.GITHUB_TOKEN }}` from the workflow. |
 | `llm-base-url` | no | `https://api.anthropic.com` | LLM endpoint. Override for OpenRouter / Azure / self-hosted. |
 | `llm-model` | no | `claude-sonnet-4-6` | Model id. |
 | `source-globs` | no | `**/*.c **/*.h` | Which changed files to analyse. |

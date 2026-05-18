@@ -27,6 +27,7 @@ jobs:
         uses: agentic-prover/bmc-agent-pr@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           # Match these to your project's actual build flags.
           cflags: '-I./include -I./src -DHAVE_CONFIG_H'
           # Tighten the threat model for security-critical code.
