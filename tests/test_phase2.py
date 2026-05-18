@@ -3315,3 +3315,76 @@ def test_strip_cpp_linemarkers_leaves_non_linemarker_preproc_alone():
     assert "#endif" in out
     assert '"foo.c"' not in out
     assert "int y = 2;" in out
+
+
+def test_strip_glibc_internal_struct_bodies_basic():
+    """llama.cpp ggml-alloc.c regression (2026-05-18): preprocessed C
+    that ``#include <stdio.h>`` contains a full ``struct _IO_FILE { ... }``
+    body. CBMC's own libc redefines the same struct, producing
+    'redefinition of body' at parse time → exit code 6 across all
+    87 functions. Strip the body, leaving a forward declaration.
+    """
+    from bmc_agent.harness_generator import _strip_glibc_internal_struct_bodies
+    src = """\
+struct _IO_FILE {
+    int _flags;
+    char *_IO_buf_base;
+};
+struct ggml_context {
+    int unrelated;
+};
+"""
+    out = _strip_glibc_internal_struct_bodies(src)
+    assert "struct _IO_FILE; /* glibc-internal body stripped */" in out, out
+    # Non-glibc struct must survive intact.
+    assert "struct ggml_context {" in out, out
+    assert "_flags" not in out, out
+
+
+def test_strip_glibc_internal_struct_bodies_nested_braces():
+    """``struct _IO_FILE`` contains anonymous unions / arrays with nested
+    braces; the strip must walk brace depth correctly to find the
+    matching close-brace."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_struct_bodies
+    src = """\
+struct __pthread_mutex_s {
+    int __lock;
+    union {
+        unsigned int __wseq;
+        struct { unsigned int __low; unsigned int __high; } __wseq32;
+    };
+};
+int after_struct;
+"""
+    out = _strip_glibc_internal_struct_bodies(src)
+    assert "struct __pthread_mutex_s; /* glibc-internal body stripped */" in out, out
+    assert "int after_struct;" in out, out
+    assert "__wseq" not in out, out
+
+
+def test_strip_glibc_internal_struct_bodies_preserves_non_glibc():
+    """Non-glibc struct names must NOT be stripped, even if they happen
+    to start with a single underscore (kernel convention)."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_struct_bodies
+    src = """\
+struct _xmlPattern {
+    int x;
+};
+struct rtl8125_private {
+    void *mmio_addr;
+};
+"""
+    out = _strip_glibc_internal_struct_bodies(src)
+    assert "struct _xmlPattern {" in out, out
+    assert "struct rtl8125_private {" in out, out
+    assert "glibc-internal body stripped" not in out, out
+
+
+def test_strip_glibc_internal_struct_bodies_kernel_mode_noop():
+    """In kernel mode, the strip is a no-op so kernel struct internals
+    (which use __-prefixed names like ``__kernel_size_t`` but are NOT
+    glibc-internal) survive."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_struct_bodies
+    src = "struct __kernel_fsid_t { int __val[2]; };"
+    out = _strip_glibc_internal_struct_bodies(src, kernel_mode=True)
+    assert out == src

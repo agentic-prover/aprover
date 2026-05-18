@@ -2635,9 +2635,11 @@ class HarnessGenerator:
         # Bare-metal sources (e.g. VibeOS) contain ARM64 asm blocks and expanded
         # libc stubs (signal(), setjmp(), ...) that won't compile on x86.
         type_decls = _strip_stdlib_decls(
-            _strip_glibc_internal_typedefs(
-                _strip_static_inline_defs(
-                    _strip_inline_asm(_strip_gcc_addr_space_quals(type_decls))
+            _strip_glibc_internal_struct_bodies(
+                _strip_glibc_internal_typedefs(
+                    _strip_static_inline_defs(
+                        _strip_inline_asm(_strip_gcc_addr_space_quals(type_decls))
+                    )
                 )
             )
         )
@@ -2842,7 +2844,10 @@ class HarnessGenerator:
         # a stub provides.
         _intermediate = _strip_static_inline_defs(_intermediate)
         type_decls = _strip_stdlib_decls(
-            _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed),
+            _strip_glibc_internal_struct_bodies(
+                _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed),
+                kernel_mode=_preprocessed,
+            ),
             kernel_mode=_preprocessed,
         )
 
@@ -4031,6 +4036,158 @@ _KERNEL_PRIMITIVE_PAT = re.compile(
     r'|__nocast'
     r')$'
 )
+
+
+def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False) -> str:
+    """Strip the BODY of glibc-internal struct definitions while keeping
+    the forward declaration intact.
+
+    Preprocessed sources that ``#include <stdio.h>`` etc. emit full
+    definitions of ``struct _IO_FILE``, ``struct __pthread_mutex_s``,
+    etc. CBMC's own libc internals re-define these with the same body
+    when it sees ``FILE`` / ``pthread_mutex_t`` references in the
+    harness, producing ``redefinition of body of 'struct _IO_FILE'``
+    parse errors that abort the whole verification with exit code 6.
+    The fix is to strip the body so CBMC's libc gets to define them
+    uncontested, leaving a forward declaration that keeps pointer-to-
+    struct typechecking happy.
+
+    Discovered on a llama.cpp ggml-alloc.c run, 2026-05-18: all 87
+    functions errored out with the same redefinition message.
+
+    ``kernel_mode``: the kernel headers define their own version of
+    these structs (often empty stubs); there's no libc prepend that
+    would re-define them. Suppress the strip in that mode.
+    """
+    if kernel_mode:
+        return text
+    # The pattern: an optional ``typedef`` keyword, the literal ``struct``,
+    # a name that starts with one of the glibc-internal prefixes
+    # (``_IO_``, ``__``, ``_G_``), an opening brace, an arbitrary body
+    # (one level of nested braces is allowed), and a closing brace,
+    # optionally followed by a trailing alias and ``;``.
+    _GLIBC_STRUCT_NAME = re.compile(
+        r"\b(_IO_[A-Za-z0-9_]+|__[A-Za-z0-9_]+|_G_[A-Za-z0-9_]+)\b"
+    )
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        # Skip over comments and string/char literals so we don't try
+        # to interpret a struct keyword inside one.
+        ch = text[i]
+        if ch == '/' and i + 1 < n and text[i + 1] == '*':
+            end = text.find('*/', i + 2)
+            stop = n if end == -1 else end + 2
+            result.append(text[i:stop])
+            i = stop
+            continue
+        if ch == '/' and i + 1 < n and text[i + 1] == '/':
+            end = text.find('\n', i + 2)
+            stop = n if end == -1 else end
+            result.append(text[i:stop])
+            i = stop
+            continue
+        if ch == '"' or ch == "'":
+            quote = ch
+            k = i + 1
+            while k < n:
+                if text[k] == '\\' and k + 1 < n:
+                    k += 2
+                    continue
+                if text[k] == quote:
+                    k += 1
+                    break
+                k += 1
+            result.append(text[i:k])
+            i = k
+            continue
+        # Look for "struct" at the current position. Match only when
+        # the preceding character isn't an identifier char (so we don't
+        # match the middle of a longer word).
+        if text.startswith("struct", i) and (i == 0 or not text[i - 1].isalnum() and text[i - 1] != '_'):
+            # Find the struct name. There must be whitespace then an
+            # identifier.
+            j = i + len("struct")
+            while j < n and text[j].isspace():
+                j += 1
+            name_m = re.match(r"\w+", text[j:])
+            if not name_m:
+                result.append(text[i])
+                i += 1
+                continue
+            name = name_m.group(0)
+            j += len(name)
+            # Skip whitespace, then expect '{' for a body.
+            k = j
+            while k < n and text[k].isspace():
+                k += 1
+            if k >= n or text[k] != '{':
+                # No body — leave the forward declaration alone.
+                result.append(text[i])
+                i += 1
+                continue
+            # We have ``struct NAME {``. Only strip if the name matches
+            # a glibc-internal pattern. Otherwise leave the struct alone.
+            if not _GLIBC_STRUCT_NAME.fullmatch(name):
+                result.append(text[i])
+                i += 1
+                continue
+            # Walk past the body, tracking brace depth. The body can have
+            # nested braces (anonymous struct/union members are common in
+            # _IO_FILE).
+            depth = 0
+            m = k
+            while m < n:
+                c = text[m]
+                # Skip comments and strings inside the body too.
+                if c == '/' and m + 1 < n and text[m + 1] == '*':
+                    e = text.find('*/', m + 2)
+                    m = n if e == -1 else e + 2
+                    continue
+                if c == '"' or c == "'":
+                    q = c
+                    p = m + 1
+                    while p < n:
+                        if text[p] == '\\' and p + 1 < n:
+                            p += 2
+                            continue
+                        if text[p] == q:
+                            p += 1
+                            break
+                        p += 1
+                    m = p
+                    continue
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        m += 1
+                        break
+                m += 1
+            if m >= n or depth != 0:
+                # Couldn't find closing brace; leave the struct alone.
+                result.append(text[i])
+                i += 1
+                continue
+            # Skip trailing alias and ``;``. The full pattern is
+            #   struct NAME { ... } [alias [, alias]...];
+            # We need to strip up to and including the next ``;`` at
+            # brace depth 0.
+            tail = m
+            while tail < n and text[tail] != ';':
+                tail += 1
+            if tail < n:
+                tail += 1  # include the ``;``
+            # Replace the entire ``struct NAME { ... };`` with just a
+            # forward declaration so pointer typechecking still works.
+            result.append(f"struct {name}; /* glibc-internal body stripped */")
+            i = tail
+            continue
+        result.append(text[i])
+        i += 1
+    return ''.join(result)
 
 
 def _strip_glibc_internal_typedefs(text: str, *, kernel_mode: bool = False) -> str:
