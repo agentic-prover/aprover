@@ -3603,6 +3603,66 @@ unsigned int ggml_hash(struct ggml_context * ctx) {
     assert sig.return_type == "unsigned int", sig.return_type
 
 
+def test_parser_prefers_longer_function_body_on_duplicate(tmp_path):
+    """C source files commonly define a function twice under
+    ``#ifdef X ... #else /* stub */ #endif``. Tree-sitter parses
+    both because it doesn't process preprocessor; without
+    disambiguation, the SECOND (stub) definition overwrites the
+    first (real) one. Result: the real body's call graph vanishes
+    and callees get mis-classified as system-entry points.
+
+    Regression: curl/parsedate.c 2026-05-19 — the ``#else`` stub
+    for ``parsedate`` (3 statements) overwrote the real body
+    (~30 statements), and ``datenum`` / ``time2epoch`` were
+    promoted to confirmed_system_entry false positives."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+#ifndef DISABLE
+int real_fn(int *p) {
+    if (*p < 0) return -1;
+    if (*p > 100) return 1;
+    helper_a(p);
+    helper_b(p);
+    return 0;
+}
+#else
+int real_fn(int *p) { (void)p; return 0; }
+#endif
+
+int helper_a(int *p) { return *p; }
+int helper_b(int *p) { return *p + 1; }
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    real = parsed.function_bodies.get("real_fn", "")
+    # The body kept must be the long one, not the stub.
+    assert "(void)p" not in real, real
+    assert "helper_a" in real, real
+    # Call graph must reflect the real body's callees.
+    assert "helper_a" in parsed.call_graph.get("real_fn", set())
+    assert "helper_b" in parsed.call_graph.get("real_fn", set())
+
+
+def test_parser_keeps_first_definition_when_second_is_same_length(tmp_path):
+    """If a name is genuinely defined twice with identical body length
+    (unlikely in practice — usually means duplicate detection mis-fires),
+    the parser must NOT replace the existing entry. This prevents the
+    disambiguation rule from being non-deterministic on file order."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+int f(int x) { return x + 1; }
+int g(void) { return 0; }
+int f(int x) { return x + 2; }
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    body = parsed.function_bodies.get("f", "")
+    assert "x + 1" in body, body
+    assert "x + 2" not in body, body
+
+
 def test_source_precondition_allows_all_caps_macro_const():
     """``assert(k % QK_K == 0)`` at the top of a function body is a
     classic precondition the caller is expected to obey. ``QK_K`` is

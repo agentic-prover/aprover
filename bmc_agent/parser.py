@@ -330,9 +330,6 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
     for node in _collect_function_defs(root):
         sig = _extract_sig_ts(node, src_bytes)
         if sig:
-            functions[sig.name] = sig
-            call_graph[sig.name] = set()
-
             # Tree-sitter's parse-error tolerance occasionally reports a
             # function_definition end_byte that lands on a `}` belonging
             # to an inner GCC statement-expression ``({ ... })`` rather
@@ -346,30 +343,48 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
                 src_bytes, node.start_byte, node.end_byte
             )
 
-            function_definitions[sig.name] = src_bytes[
+            new_def_text = src_bytes[
                 node.start_byte:true_end
             ].decode("utf-8", errors="replace")
-            # Tag the function with its originating source file, looked up
-            # in the cpp ``# N "filename"`` map. ``start_point`` is a
-            # ``(row, column)`` tuple with 0-indexed row.
-            row = node.start_point[0]
-            if 0 <= row < len(line_to_source):
-                function_source_files[sig.name] = line_to_source[row]
             # Body is the compound_statement child
             body_node = node.child_by_field_name("body")
+            new_body_text = ""
+            new_callees: set[str] = set()
             if body_node:
-                # Extend the body end too, using the same brace-balance
-                # walk so the body text exactly matches what the
-                # function_definition covers (minus the signature).
                 body_end = _brace_balanced_end_byte(
                     src_bytes, body_node.start_byte, body_node.end_byte
                 )
-                body_text = src_bytes[body_node.start_byte:body_end].decode(
-                    "utf-8", errors="replace"
-                )
-                function_bodies[sig.name] = body_text
-                # Collect call expressions within the body
-                _collect_calls_ts(body_node, call_graph[sig.name], src_bytes)
+                new_body_text = src_bytes[
+                    body_node.start_byte:body_end
+                ].decode("utf-8", errors="replace")
+                _collect_calls_ts(body_node, new_callees, src_bytes)
+
+            # Two-definition disambiguation: when a function name appears
+            # twice in the TU (typical ``#ifdef CURL_DISABLE_X ... #else
+            # static stub ... #endif`` shape — tree-sitter parses both
+            # branches because it doesn't process preprocessor), prefer
+            # the entry with the LONGER body. Stubs are short
+            # (``{ (void)x; return 0; }``); real implementations are
+            # multi-statement. Without this, the empty-body stub
+            # overwrites the real one, the call graph for the real
+            # function vanishes, and any function the real one called
+            # gets mis-classified as a system-entry point.
+            # Regression: curl/parsedate.c run 2026-05-19 flagged
+            # ``datenum`` and ``time2epoch`` as caller-less entry points
+            # (false confirmed_system_entry verdicts) because the
+            # ``#else`` stub of ``parsedate`` overwrote the real body.
+            prev_body = function_bodies.get(sig.name)
+            if prev_body is not None and len(new_body_text) <= len(prev_body):
+                continue
+
+            functions[sig.name] = sig
+            call_graph[sig.name] = new_callees
+            function_definitions[sig.name] = new_def_text
+            row = node.start_point[0]
+            if 0 <= row < len(line_to_source):
+                function_source_files[sig.name] = line_to_source[row]
+            if new_body_text:
+                function_bodies[sig.name] = new_body_text
 
     struct_definitions = _collect_struct_defs(root, src_bytes)
 
