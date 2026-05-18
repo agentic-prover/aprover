@@ -1606,6 +1606,20 @@ _NETDEV_DEV_POINTEE_TYPES = {
     "struct net_device", "struct device", "struct pci_dev",
 }
 
+# Field-name shortlist for kernel MMIO-base pointer fields. The harness
+# can't recover the actual BAR size from the source; we model it as a
+# 4 KiB region, large enough for every Realtek r8125 register offset
+# observed in practice (offsets up to ~0xF00). Drivers accessing
+# registers outside this range will produce a genuine OOB pointer-
+# arithmetic finding rather than a harness-modelling FP; tune this
+# constant upward if a real driver legitimately uses larger offsets.
+_MMIO_FIELD_NAMES = {
+    "mmio_addr",
+    # Common aliases observed across kernel NIC drivers:
+    "hw_addr", "regs", "io_base",
+}
+_MMIO_BAR_REGION_BYTES = 4096
+
 
 def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
@@ -1675,6 +1689,30 @@ def _emit_struct_field_init(
             # ``!= NULL`` alone fixes only subtype #1. Use ``r_ok`` so
             # the kernel framework invariant is modelled as "set to a
             # valid object" — closer to the actual probe() postcondition.
+            #
+            # MMIO pointers (``void *`` or ``void __iomem *``) need
+            # special treatment: ``sizeof(*p)`` on ``void *`` is 1 byte
+            # (GCC extension), so the region's read-bound is 1 and any
+            # register access at offset > 1 looks OOB. Drivers
+            # legitimately access registers across the whole BAR (4 KiB
+            # or larger). Give MMIO-named fields a typical-BAR-sized
+            # backing region instead (rtl8125_dash round-2 FP, 2026-05-18:
+            # rtl8125_clear_ipc2_soc_imr_bit accesses offset 0xD20 on a
+            # 4 KiB BAR2, which the 1-byte region rejected as OOB).
+            base_clean = re.sub(r"\b(const|volatile|__iomem)\b", "", base).strip()
+            is_void_pointer = (base_clean == "void")
+            if is_void_pointer and fname in _MMIO_FIELD_NAMES:
+                bar_size = _MMIO_BAR_REGION_BYTES
+                backing_name = f"_{obj_name}_{fname}_iomem"
+                out.append(
+                    f"    /* MMIO backing region for {obj_name}.{fname} "
+                    f"({bar_size} bytes, typical BAR size) */"
+                )
+                out.append(f"    static char {backing_name}[{bar_size}];")
+                out.append(
+                    f"    {obj_name}.{fname} = (void *){backing_name};"
+                )
+                return out
             out.append(
                 f"    __CPROVER_assume({obj_name}.{fname} != NULL && "
                 f"__CPROVER_r_ok({obj_name}.{fname}, "

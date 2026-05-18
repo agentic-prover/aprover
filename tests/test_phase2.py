@@ -1792,6 +1792,69 @@ def test_struct_field_init_netdev_backpointer_assumes_nonnull_and_valid():
     assert "__CPROVER_r_ok" in out, out
 
 
+def test_struct_field_init_mmio_addr_gets_bar_sized_region():
+    """rtl8125_dash round-2 FP fix (2026-05-18): ``void *mmio_addr``
+    in a kernel-driver private struct must get a BAR-sized backing
+    region, not a 1-byte ``__CPROVER_r_ok(p, sizeof(void))`` assume.
+    Otherwise legitimate register accesses at offsets > 0 (e.g.
+    rtl8125_set_ipc2_soc_imr_bit at RISC_IMR_8125BP = 0xD20) look OOB.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    lines = _emit_struct_field_init(
+        obj_name="_tp_obj",
+        ftype="void *",
+        fname="mmio_addr",
+        cbmc_unwind=4,
+        enclosing_struct_tag="rtl8125_private",
+    )
+    out = "\n".join(lines)
+    # BAR-sized region allocated, pointer assigned to it. The backing
+    # variable name is ``_<obj>_<field>_iomem``; since obj_name itself
+    # starts with ``_`` in CBMC harness convention, the actual name has
+    # a doubled underscore prefix.
+    assert "tp_obj_mmio_addr_iomem" in out, out
+    assert "[4096]" in out, out
+    assert "_tp_obj.mmio_addr = (void *)" in out, out
+    # And: must NOT fall through to the 1-byte __CPROVER_r_ok branch.
+    assert "sizeof(*_tp_obj.mmio_addr)" not in out, out
+
+
+def test_struct_field_init_mmio_addr_with_iomem_qualifier():
+    """The same fix must apply when the type is spelled
+    ``void __iomem *`` (the canonical kernel form for MMIO pointers).
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    lines = _emit_struct_field_init(
+        obj_name="_tp_obj",
+        ftype="void __iomem *",
+        fname="mmio_addr",
+        cbmc_unwind=4,
+        enclosing_struct_tag="rtl8125_private",
+    )
+    out = "\n".join(lines)
+    assert "[4096]" in out, out
+    assert "_tp_obj.mmio_addr = (void *)" in out, out
+
+
+def test_struct_field_init_non_mmio_void_pointer_unchanged():
+    """A field named like ``data`` of type ``void *`` (not a known MMIO
+    alias) is NOT in the MMIO whitelist and stays nondet — we don't
+    want to start allocating BAR-sized regions for arbitrary ``void *``
+    fields.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    lines = _emit_struct_field_init(
+        obj_name="_o",
+        ftype="void *",
+        fname="user_data",
+        cbmc_unwind=4,
+        enclosing_struct_tag="foo",
+    )
+    out = "\n".join(lines)
+    assert "iomem" not in out, out
+    assert "[4096]" not in out, out
+
+
 def test_struct_field_init_netdev_dev_field_qualified_by_pointee():
     """``dev`` alone is too generic a name to blanket-assume non-NULL.
     Only assume when its pointee is one of the canonical kernel types

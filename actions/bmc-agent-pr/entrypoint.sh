@@ -39,6 +39,20 @@ cd "${WORKSPACE}"
 # inside the action run.
 git config --global --add safe.directory "${WORKSPACE}"
 
+# Env-var diagnostics. We print *presence* and *length*, never the value,
+# so secret values stay redacted. Helps diagnose "missing authentication"
+# style failures (live-runner self-test, 2026-05-18).
+log "Environment diagnostics"
+for var in ANTHROPIC_API_KEY BMC_AGENT_LLM_BASE_URL BMC_AGENT_LLM_MODEL GITHUB_TOKEN; do
+    val="${!var:-}"
+    if [[ -z "${val}" ]]; then
+        echo "  ${var}: UNSET"
+    else
+        echo "  ${var}: set (length ${#val}, prefix '${val:0:3}...')"
+    fi
+done
+endgroup
+
 # ---------------------------------------------------------------------------
 # Determine the base ref to diff against. On pull_request events GitHub
 # provides github.event.pull_request.base.sha; on push events we diff
