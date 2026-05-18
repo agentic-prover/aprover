@@ -69,7 +69,7 @@ inputs:
   github-token:
     description: >-
       Token for posting PR comments via `gh`. The calling workflow should
-      pass ${{ github.token }} (or a PAT with pull_requests:write).
+      pass `github.token` (or a PAT with pull_requests:write).
       Optional — the action skips commenting if absent.
     required: false
     default: ''
