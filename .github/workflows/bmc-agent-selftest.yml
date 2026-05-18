@@ -1,0 +1,48 @@
+name: bmc-agent self-test
+
+# Runs only when files under examples/bmc-action-selftest/ change.
+# This restricts the workflow to deliberate testing of the action,
+# not every PR to AProver.
+on:
+  pull_request:
+    paths:
+      - 'examples/bmc-action-selftest/**'
+      - 'actions/bmc-agent-pr/**'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  bmc-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage bmc-agent into action build context
+        run: |
+          ./actions/bmc-agent-pr/prepare-build.sh
+
+      - name: Run bmc-agent on changed C files
+        id: bmc
+        uses: ./actions/bmc-agent-pr
+        with:
+          anthropic-api-key: ${{ secrets.BMC_AGENT_LLM_KEY }}
+          llm-base-url: 'https://openrouter.ai/api'
+          llm-model: 'anthropic/claude-sonnet-4.5'
+          source-globs: 'examples/bmc-action-selftest/**/*.c'
+          cflags: ''
+          threat-model: 'security'
+          feature-flags: '--enable-realism-check --enable-flag-selection'
+          max-functions: '5'
+          fail-on-real-bug: 'false'
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "real_bug_count: ${{ steps.bmc.outputs.real-bug-count }}"
+          echo "findings_json:  ${{ steps.bmc.outputs.findings-json }}"
