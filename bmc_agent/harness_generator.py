@@ -1584,6 +1584,29 @@ def _matches_struct_tag(pointee_base: str, struct_tag: str) -> bool:
     return _norm(pointee_base) == _norm(struct_tag)
 
 
+# Kernel framework back-pointer fields. The kernel-conventional rule is
+# that these are populated during probe() before the driver registers
+# its netdev/pci/phy callbacks, so any callback that the framework can
+# dispatch sees them non-NULL. Limited to names whose meaning is
+# unambiguous and well-established across drivers.
+_NETDEV_BACKPOINTER_FIELD_NAMES = {
+    "pci_dev",  # struct pci_dev * — set in pci_probe before alloc_netdev
+    "netdev",   # struct net_device * — driver back-pointer to net_device
+    "pdev",     # alias for pci_dev in many drivers
+    "mii_bus",  # struct mii_bus * — set by mdio_alloc / probe
+    "mmio_addr",  # void __iomem * — ioremap result, set in probe
+    "phydev",   # struct phy_device * — set by phy_connect_direct
+}
+
+# Pointee types that legitimize assuming ``priv->dev != NULL``. ``dev``
+# alone is a too-generic name to assume; require the field to point to
+# the kernel's netdev/device structures (the canonical back-pointer
+# convention).
+_NETDEV_DEV_POINTEE_TYPES = {
+    "struct net_device", "struct device", "struct pci_dev",
+}
+
+
 def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
     enclosing_struct_tag: Optional[str] = None,
@@ -1629,6 +1652,34 @@ def _emit_struct_field_init(
             out.append(
                 f"    {obj_name}.{fname} = NULL;  "
                 f"/* terminate self-ref chain ({enclosing_struct_tag}.{fname}) */"
+            )
+            return out
+        # Kernel framework back-pointers set unconditionally during
+        # probe() before register_netdev/register_pci_driver makes the
+        # device visible to any registered ndo_*/ethtool_ops/phy
+        # callback. Assume non-NULL so CBMC doesn't explore the
+        # unreachable NULL state that produces spurious "NULL deref on
+        # tp->pci_dev / tp->dev" reports (rtl8125 OOT batch,
+        # 2026-05-18). The list is intentionally short and
+        # name-anchored to fields whose kernel-conventional NAME is the
+        # back-pointer; we avoid blanket-assuming for generic field
+        # names. ``dev`` is qualified by pointee type to avoid
+        # over-constraining unrelated fields named ``dev`` whose type
+        # is something else (e.g. driver-specific opaque struct).
+        if (
+            fname in _NETDEV_BACKPOINTER_FIELD_NAMES
+            or (fname == "dev" and base in _NETDEV_DEV_POINTEE_TYPES)
+        ):
+            # CBMC's pointer_dereference property checks 5 subtypes:
+            # NULL, deallocated, dead, out-of-bounds, invalid-int-addr.
+            # ``!= NULL`` alone fixes only subtype #1. Use ``r_ok`` so
+            # the kernel framework invariant is modelled as "set to a
+            # valid object" — closer to the actual probe() postcondition.
+            out.append(
+                f"    __CPROVER_assume({obj_name}.{fname} != NULL && "
+                f"__CPROVER_r_ok({obj_name}.{fname}, "
+                f"sizeof(*{obj_name}.{fname})));  "
+                f"/* framework back-pointer set in probe() */"
             )
             return out
         buf_size = cbmc_unwind + 1

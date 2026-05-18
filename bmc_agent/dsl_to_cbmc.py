@@ -115,15 +115,19 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     # Normalise \result → result
     atom = _RESULT_RE.sub("result", atom)
 
-    # locked(x)  → skip (ghost state, not checkable in C)
-    if _LOCKED_RE.search(atom):
-        return f"/* ghost: {atom} — skipped */"
-
     # Split on top-level && FIRST — before any pattern matching.
     # This ensures that compound conditions like "valid(hub) && sid >= 0 && sid < N"
     # are split into individual atoms and each is translated independently.
     # Without this, valid(hub) would match first and the rest of the condition
     # would be silently discarded.
+    #
+    # The split is done before the locked()/comment fallbacks so that a
+    # compound like ``valid(tp) && !locked(tp->phy_lock)`` retains the
+    # translatable ``valid(tp)`` clause instead of being dropped wholesale
+    # (rtl8125 OOT batch, 2026-05-18). It is also done before the
+    # comment-wrap fallback so we don't nest ``/* */`` produced by
+    # ``_sanitize_condition`` inside another ``/* ghost: … */`` wrapper
+    # (the nesting caused a CBMC parse error and lost the whole harness).
     parts_and = _top_level_split(atom, "&&")
     if len(parts_and) > 1:
         stmts = []
@@ -132,6 +136,13 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
             if s:
                 stmts.append(s)
         return "\n    ".join(stmts) if stmts else None
+
+    # locked(x)  → skip (ghost state, not checkable in C). Reached only
+    # for *single-clause* atoms after the && split above; escape any
+    # nested comment markers carried in by upstream sanitization so the
+    # outer ``/* … */`` wrapper doesn't break C parsing.
+    if _LOCKED_RE.search(atom):
+        return f"/* ghost: {_escape_for_c_comment(atom)} — skipped */"
 
     # Split on top-level || SECOND — before individual predicate matching.
     # This ensures that "valid(a) || valid(b)" produces a disjunction rather
@@ -630,13 +641,20 @@ def _sanitize_condition(condition: str) -> str:
         parts = _top_level_split(text, "&&")
         safe = []
         def _comment_out(clause: str) -> str:
-            """Wrap clause in /* */ after neutralising internal semicolons.
+            """Wrap clause in /* */ after neutralising internal semicolons
+            and any nested comment markers.
 
             Semicolons inside a block comment would cause the later
             re.split(r';') in _condition_to_stmts to break the comment apart,
             leaking non-C constructs (forall, ==>, …) into generated C code.
+
+            Nested ``/*`` / ``*/`` would prematurely terminate the wrapper
+            when downstream code re-wraps the joined text (rtl8125 OOT
+            batch, 2026-05-18: an "invented-field" hit on the real kernel
+            field ``mmio_addr`` produced ``/* valid(tp->mmio_addr) */``
+            which the later ``/* ghost: … */`` wrap unable to nest).
             """
-            return f"/* {clause.replace(';', ' ')} */"
+            return f"/* {_escape_for_c_comment(clause).replace(';', ' ')} */"
 
         for p in parts:
             ps = p.strip()
@@ -652,10 +670,14 @@ def _sanitize_condition(condition: str) -> str:
             #    b) "Latest" / "index" variants: ->latest_x, ->prev_x, ->next_x
             #    c) Pure compound inventions: ->latest_index, ->read_index …
             elif re.search(
-                r'->\w*_(?:before|after|old|prev|initial|orig|index|idx|addr|ref|new|copy|tmp|snapshot|cache|prev|start|end|begin|first|last)\b'
+                # Note: ``addr`` was previously in the suffix list but
+                # matches real kernel fields (``mmio_addr``, ``phy_addr``,
+                # ``mac_addr``) and is dropped here to avoid silently
+                # commenting out legitimate clauses (rtl8125 OOT batch).
+                r'->\w*_(?:before|after|old|prev|initial|orig|index|idx|ref|new|copy|tmp|snapshot|cache|prev|begin|first|last)\b'
                 r'|->(?:latest|current|previous|next|prev|first|last|read|write)_\w+\b'
                 # Also catch dot-access invented fields on nested structs
-                r'|\.\w*_(?:before|after|old|prev|initial|orig|index|idx|addr|ref|new|copy|tmp|snapshot|cache|start|end|begin|first|last)\b'
+                r'|\.\w*_(?:before|after|old|prev|initial|orig|index|idx|ref|new|copy|tmp|snapshot|cache|begin|first|last)\b'
                 r'|\.(?:latest|current|previous|next|prev|first|last|read|write)_\w+\b',
                 ps,
             ):

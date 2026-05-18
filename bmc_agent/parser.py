@@ -508,6 +508,17 @@ def _collect_struct_defs(root, src_bytes: bytes) -> dict[str, list[tuple[str, st
         "preproc_if", "preproc_ifdef", "preproc_ifndef",
         "preproc_else", "preproc_elif", "preproc_elifdef", "preproc_elifndef",
         "linkage_specification",
+        # Tree-sitter parse-recovery wrappers. On large preprocessed kernel
+        # TUs (e.g. rtltool.i / r8125_rss.i) a recovery error earlier in
+        # the file causes tree-sitter to put subsequent top-level
+        # declarations — including ``struct rtl8125_private`` — inside a
+        # phantom ``function_definition > compound_statement`` block.
+        # Recurse into both so the collector still finds the struct
+        # (rtl8125 OOT batch, 2026-05-18). The same fix was applied to
+        # _collect_function_defs in 2026-05-18 for buried nested
+        # function bodies.
+        "function_definition", "compound_statement",
+        "ERROR",
     }
     structs: dict[str, list[tuple[str, str]]] = {}
     # Aliases declared via a separate ``typedef struct Tag Alias;``

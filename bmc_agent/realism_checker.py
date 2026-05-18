@@ -271,6 +271,40 @@ class RealismChecker:
                 llm_confidence="high",
             )
 
+        # Netdev-private framework-invariant detector (from rtl8125 OOT
+        # finding batch, 2026-05-18): for any function in a driver file
+        # that registers ``struct net_device_ops``, a witness setting
+        # ``priv->{pci_dev,dev,netdev,pdev,mii_bus,mmio_addr}`` to NULL
+        # contradicts the kernel's probe-time invariant — these back-
+        # pointers are assigned in alloc_netdev/pci_probe before any
+        # netdev callback can dispatch. Symmetric to the USB-serial and
+        # PHY detectors for a third framework class. Excludes the probe
+        # function itself, where these fields are legitimately
+        # transitionally NULL.
+        netdev_cause = _witness_indicates_netdev_private_framework_invariant(
+            func, counterexample, parsed_file
+        )
+        if netdev_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by netdev-private "
+                "framework invariant — %s", func.name, netdev_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"Netdev-private framework lifecycle invariant: "
+                    f"{netdev_cause}. PCI/netdev drivers set the private "
+                    "struct's back-pointers (pci_dev, dev/netdev, pdev) "
+                    "during probe(), before alloc_netdev/register_netdev "
+                    "makes the device visible to any of the registered "
+                    "ndo_*/ethtool_ops callbacks. A counterexample with "
+                    "these fields NULL violates the kernel's "
+                    "probe-before-dispatch contract."
+                ),
+                key_concern=f"[netdev-private-framework-invariant] {netdev_cause}",
+                llm_confidence="high",
+            )
+
         # Path-divergent unwind detector (from feedback-loop arm (a) TODO,
         # 2026-05-13): CBMC reports a *.unwind.* property fail when its
         # symbolic exploration on SOME path hits the loop bound; the
@@ -992,6 +1026,125 @@ def _witness_indicates_phy_framework_invariant(
         f"framework-managed pointer(s) [{sample}{more}] that the PHY core's "
         f"attach lifecycle guarantees non-NULL before any callback "
         f"dispatch reachable from in-tree code"
+    )
+
+
+# Netdev-private framework-invariant: probe-time back-pointer fields the
+# Linux PCI/netdev cores guarantee non-NULL before any registered callback
+# (ndo_*, ethtool_ops.*, etc.) can be dispatched. ``alloc_etherdev`` /
+# ``alloc_netdev`` allocate the private struct as part of the net_device
+# layout and probe() conventionally sets the back-pointers below before
+# returning success. Drivers that fail probe never register, so these
+# are framework invariants of every dispatch-reachable path.
+_NETDEV_BACKPOINTER_FIELDS = (
+    "pci_dev", "netdev", "pdev", "mii_bus", "mmio_addr",
+    # ``dev`` alone is broad; we match it only as a child field of an
+    # identifier (``priv->dev``, ``tp->dev``), which is the standard
+    # back-pointer convention. Bare ``dev`` parameters are handled by
+    # the host-identifier check in the regex below.
+    "dev",
+)
+
+# Net_device_ops / ethtool_ops registrations a driver file is expected
+# to contain. Listing both keeps the gate firing on ethtool-only sub-
+# files (e.g. r8125_rss.c which provides .set_rxnfc but no .ndo_*).
+_NETDEV_REGISTRATION_RE = re.compile(
+    r"\bstruct\s+(?:net_device_ops|ethtool_ops|pci_driver)\s+\w+(?:\s*\[\s*\w*\s*\])?\s*=\s*\{",
+)
+
+# Failing description shape from CBMC:
+#   "dereference failure: pointer NULL in tp->dev"
+#   "dereference failure: pointer NULL in tp->pci_dev->resource[...]..."
+#   "dereference failure: pointer NULL in (&tp->pci_dev->resource[2])->end"
+# We extract the *first* host->field pair in the description text and
+# check whether ``field`` is in _NETDEV_BACKPOINTER_FIELDS.
+_BACKPOINTER_FIELD_RE = re.compile(
+    r"(?:[\(\&\*\s])([A-Za-z_]\w*)\s*->\s*([A-Za-z_]\w*)"
+)
+
+
+def _file_registers_netdev_ops(parsed_file: "ParsedCFile") -> bool:
+    """True if the parsed source contains at least one
+    ``struct net_device_ops``/``ethtool_ops``/``pci_driver`` table
+    definition — a strong signal the file is a PCI/netdev driver.
+    """
+    if not parsed_file:
+        return False
+    source = getattr(parsed_file, "preprocessed_source", None)
+    if source is None:
+        source = "\n".join((parsed_file.function_bodies or {}).values())
+    if not source:
+        return False
+    return bool(_NETDEV_REGISTRATION_RE.search(source))
+
+
+def _failing_deref_is_netdev_backpointer(
+    description: str,
+) -> tuple[str, str] | None:
+    """Parse CBMC's failing-property description for the first
+    ``<host>-><field>`` expression and return ``(host, field)`` iff
+    *field* is one of the netdev back-pointer names. Otherwise None.
+
+    The host identifier requirement filters out unrelated
+    ``something->dev`` accesses where ``something`` is itself a
+    framework type (e.g. ``netdev->dev`` is fine to leave to the LLM).
+    """
+    if not description:
+        return None
+    if "NULL" not in description.upper():
+        return None
+    for m in _BACKPOINTER_FIELD_RE.finditer(description):
+        host, field = m.group(1), m.group(2)
+        if field in _NETDEV_BACKPOINTER_FIELDS:
+            # Skip the trivial ``netdev->dev`` / ``net_device->dev``
+            # cases — those are *into* the framework struct, not a
+            # back-pointer set by probe.
+            if field == "dev" and host in ("netdev", "net_device", "ndev"):
+                continue
+            return host, field
+    return None
+
+
+def _witness_indicates_netdev_private_framework_invariant(
+    func: "FunctionInfo", cex: "Counterexample", parsed_file: "ParsedCFile"
+) -> str | None:
+    """Detect the rtl8125-style false positive: a function in a PCI/
+    netdev driver file whose failing dereference is on a probe-set
+    back-pointer of the driver's private struct
+    (``priv->pci_dev``/``priv->dev``/…). The kernel's
+    ``alloc_etherdev`` + driver ``probe`` lifecycle assigns these
+    fields before ``register_netdev`` makes the device visible to any
+    registered callback, so the NULL state is unreachable along any
+    framework-constructed dispatch path.
+
+    Conservative: requires BOTH (a) at least one
+    ``struct net_device_ops``/``ethtool_ops``/``pci_driver`` table in
+    the parsed file, AND (b) the failing dereference description
+    matches a ``<host>-><backpointer-field>`` expression. Excludes
+    probe-shaped function names where the back-pointers are
+    legitimately transient.
+    """
+    if not _file_registers_netdev_ops(parsed_file):
+        return None
+    desc = getattr(cex, "description", "") or ""
+    hit = _failing_deref_is_netdev_backpointer(desc)
+    if not hit:
+        return None
+    host, field = hit
+    # Exclude probe-shaped functions where these back-pointers may
+    # legitimately be NULL transiently. The kernel-style names below
+    # cover the common cases; we err on the side of *not* filtering
+    # if we can't be sure.
+    name_lc = (func.name or "").lower()
+    probe_markers = ("probe", "_init_one", "_init_module", "_create", "_alloc")
+    if any(tag in name_lc for tag in probe_markers):
+        return None
+    return (
+        f"failing dereference '{host}->{field}' is a probe-time back-pointer "
+        "of the driver-private struct; the file registers a "
+        "net_device_ops/ethtool_ops/pci_driver dispatch table, so "
+        "callbacks reachable in-tree run only after probe() has set the "
+        "field"
     )
 
 

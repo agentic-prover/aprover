@@ -822,6 +822,57 @@ def test_translate_atom_locked_is_comment():
     assert "/*" in stmt
 
 
+def test_translate_compound_with_locked_keeps_other_clauses():
+    """rtl8125 OOT regression (2026-05-18): a compound precondition
+    like ``valid(tp) && !locked(tp->phy_lock)`` was being dropped
+    wholesale when ``locked`` was detected anywhere in the atom,
+    losing the translatable ``valid(tp)`` constraint. The translator
+    must split on top-level && BEFORE the locked() fallback so each
+    clause is processed independently.
+    """
+    from bmc_agent.dsl_to_cbmc import translate_atom
+
+    stmt = translate_atom(
+        "valid(tp) && !locked(tp->phy_lock)", context="assume"
+    )
+    assert stmt is not None
+    # The valid(tp) clause must survive as a __CPROVER_assume.
+    assert "tp != NULL" in stmt
+    # The locked clause should still get the ghost comment.
+    assert "ghost" in stmt or "locked" in stmt
+
+
+def test_precond_to_assume_no_nested_comments():
+    """rtl8125 OOT regression (2026-05-18): precondition containing both
+    an ``invented-field``-flagged clause (e.g. mmio_addr matched the
+    addr-suffix heuristic) AND a ``locked()`` clause produced
+    ``/* ghost: ... /* valid(tp->mmio_addr) */ ... */`` — nested
+    comments that broke CBMC's parser and lost the whole harness.
+    Verify no nested ``/*`` appears inside any wrapper comment.
+    """
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
+
+    stmts = precond_to_assume(
+        "requires valid(tp) && valid(tp->mmio_addr) "
+        "&& valid(tp->pci_dev) && !locked(tp->phy_lock)",
+        ["tp"],
+    )
+    joined = "\n".join(stmts)
+    # No nested block-comment markers anywhere.
+    for line in joined.splitlines():
+        if "/*" in line:
+            # Count occurrences and check pairing — every ``/*`` should
+            # be closed by ``*/`` BEFORE the next ``/*`` on the same line.
+            opens = [i for i, _ in enumerate(line) if line[i:i+2] == "/*"]
+            closes = [i for i, _ in enumerate(line) if line[i:i+2] == "*/"]
+            for j in range(len(opens) - 1):
+                # Each /* must have a matching */ before the next /*.
+                next_close = next((c for c in closes if c > opens[j]), None)
+                assert next_close is not None and next_close < opens[j+1], (
+                    f"nested /* */ in line: {line!r}"
+                )
+
+
 def test_translate_atom_natural_language():
     """Natural language condition produces a comment."""
     from bmc_agent.dsl_to_cbmc import translate_atom
@@ -1717,6 +1768,59 @@ def test_struct_field_init_self_ref_pointer_emits_null():
     )
     out = "\n".join(lines)
     assert "= NULL" in out, out
+
+
+def test_struct_field_init_netdev_backpointer_assumes_nonnull_and_valid():
+    """rtl8125-style FP fix: netdev driver private structs have probe-set
+    back-pointer fields (pci_dev, netdev, pdev, mii_bus, mmio_addr) that
+    the kernel framework guarantees non-NULL before any registered
+    ndo_*/ethtool_ops callback can dispatch. Harness must encode this
+    invariant or CBMC produces spurious NULL-deref CEXs (rtl8125 OOT
+    batch, 2026-05-18: rtl8125_tool_ioctl, rtl8125_rx_hash,
+    rtl8125_set_rxnfc all surfaced the same FP class).
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    lines = _emit_struct_field_init(
+        obj_name="_tp_obj",
+        ftype="struct pci_dev *",
+        fname="pci_dev",
+        cbmc_unwind=4,
+        enclosing_struct_tag="rtl8125_private",
+    )
+    out = "\n".join(lines)
+    assert "_tp_obj.pci_dev != NULL" in out, out
+    assert "__CPROVER_r_ok" in out, out
+
+
+def test_struct_field_init_netdev_dev_field_qualified_by_pointee():
+    """``dev`` alone is too generic a name to blanket-assume non-NULL.
+    Only assume when its pointee is one of the canonical kernel types
+    (struct net_device, struct device, struct pci_dev).
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+    # Should fire: struct net_device * dev field.
+    lines = _emit_struct_field_init(
+        obj_name="_tp_obj",
+        ftype="struct net_device *",
+        fname="dev",
+        cbmc_unwind=4,
+        enclosing_struct_tag="rtl8125_private",
+    )
+    out = "\n".join(lines)
+    assert "_tp_obj.dev != NULL" in out, out
+
+    # Should NOT fire: ``foo_t *dev`` where foo_t is something driver-
+    # specific. We don't have a complete enum of every driver-specific
+    # pointee, so we conservatively stay silent.
+    lines2 = _emit_struct_field_init(
+        obj_name="_obj",
+        ftype="foo_t *",
+        fname="dev",
+        cbmc_unwind=4,
+        enclosing_struct_tag="bar",
+    )
+    out2 = "\n".join(lines2)
+    assert "_obj.dev != NULL" not in out2, out2
 
 
 def test_struct_field_init_non_self_ref_pointer_stays_default():
