@@ -256,8 +256,32 @@ def _looks_like_c_expr(atom: str) -> bool:
 
 
 def _atom_to_expr(atom: str) -> Optional[str]:
-    """Return a bare C expression (no statement wrapper) for an atom, or None."""
+    """Return a bare C expression (no statement wrapper) for an atom, or None.
+
+    Used by the disjunction path (top-level ``||`` split) where each
+    disjunct must be a single bare expression. If the atom is itself a
+    conjunction (``cmp && NL_prose``), the bare ``_C_COMPARISON_RE``
+    match would historically return the whole atom verbatim, leaking
+    natural-language text into ``assert(...)``. Strip the atom first
+    by splitting on top-level ``&&`` and keeping only sub-clauses that
+    translate cleanly. If nothing translates, return None.
+    """
     atom = _RESULT_RE.sub("result", atom).strip()
+
+    # If the atom is itself a top-level conjunction, recursively
+    # translate each clause and AND-join the clean ones. A clause that
+    # does not translate is dropped (this is a soundness choice: we
+    # prefer to under-constrain than to embed prose into C).
+    inner_parts = _top_level_split(_strip_outer_parens(atom), "&&")
+    if len(inner_parts) > 1:
+        sub_exprs: list[str] = []
+        for p in inner_parts:
+            e = _atom_to_expr(p.strip())
+            if e:
+                sub_exprs.append(e)
+        if not sub_exprs:
+            return None
+        return " && ".join(f"({e})" for e in sub_exprs) if len(sub_exprs) > 1 else sub_exprs[0]
 
     m = _VALID_STRING_RE.search(atom)
     if m:
@@ -284,8 +308,18 @@ def _atom_to_expr(atom: str) -> Optional[str]:
         arr, idx = m.group(1).strip(), m.group(2).strip()
         return f"{idx} >= 0 && {idx} < (int)(sizeof({arr})/sizeof({arr}[0]))"
 
-    if _C_COMPARISON_RE.search(atom):
-        return atom
+    # Bare-comparison fallback: only accept if the full atom (modulo
+    # whitespace/outer parens/casts) is a single C comparison. A clause
+    # like ``result == 0`` matches; a clause like ``otherwise result >=
+    # 0`` or ``result == 0 and the device is reset`` does not, because
+    # the prose tail makes the atom non-C.
+    atom_norm = _normalize_casts(atom)
+    m = _C_COMPARISON_RE.search(atom_norm)
+    if m and _looks_like_c_expr(atom):
+        stripped_norm = _normalize_casts(_strip_outer_parens(atom).strip()).strip()
+        matched_span = m.group(0).strip()
+        if matched_span == stripped_norm:
+            return _strip_outer_parens(atom).strip()
 
     return None
 
@@ -648,8 +682,13 @@ def _condition_to_stmts(condition: str, context: str) -> list[str]:
     # Sanitize non-C constructs before splitting
     condition = _sanitize_condition(condition)
 
-    # Split on explicit " AND " (from merged specs), newlines, semicolons
-    parts = re.split(r"\s+AND\s+|\n|;", condition, flags=re.IGNORECASE)
+    # Split on explicit " AND " (case-sensitive: emitted by the spec
+    # merger in spec.py with uppercase), newlines, semicolons. Lowercase
+    # "and" inside natural-language atoms ("the reset write failed and
+    # the PHY state is unchanged") must NOT split, otherwise the
+    # surrounding C expression's parens get torn apart and downstream
+    # translation drops half the postcondition silently.
+    parts = re.split(r"\s+AND\s+|\n|;", condition)
     stmts: list[str] = []
     for part in parts:
         part = part.strip()

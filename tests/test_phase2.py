@@ -186,6 +186,51 @@ def test_postcond_to_assert_comparisons():
     assert "result >= 0" in joined
 
 
+def test_postcond_to_assert_disjunct_strips_natural_language_conjunct():
+    """A disjunctive postcondition where each disjunct mixes a real C
+    comparison with natural-language commentary must NOT leak the prose
+    into ``assert(...)``.
+
+    Regression: ``dp83811_phy_reset`` postcondition was
+    ``(result == 0 && the DP83811 PHY has been issued a software reset
+    command via register 0x1f with bit 15 set) || (result < 0 && the
+    reset write failed and the PHY state is unchanged)``. The
+    top-level ``||`` split fed each disjunct to ``_atom_to_expr``,
+    whose bare-comparison fallback returned the full atom (including
+    prose) verbatim. CBMC then rejected the harness with ``syntax
+    error before 'DP83811'``.
+
+    The fix splits each disjunct on its inner ``&&`` and keeps only
+    sub-clauses that translate cleanly. Sound (we only drop prose; the
+    C parts of the disjunct are preserved).
+    """
+    from bmc_agent.dsl_to_cbmc import postcond_to_assert
+    stmts = postcond_to_assert(
+        "(result == 0 && the DP83811 PHY has been issued a software reset "
+        "command via register 0x1f with bit 15 set) || "
+        "(result < 0 && the reset write failed and the PHY state is unchanged)",
+        ["phydev"],
+        return_var="result",
+    )
+    joined = "\n".join(stmts)
+    # No prose tokens make it into a live assert expression.
+    assert "DP83811 PHY has been" not in joined or "/*" in joined.split("DP83811 PHY has been")[0].rsplit("assert", 1)[-1]
+    # The C disjuncts survive in the emitted assertion.
+    assert "result == 0" in joined
+    assert "result < 0" in joined
+
+
+def test_atom_to_expr_drops_natural_language_tail_in_conjunct():
+    """Direct unit test on ``_atom_to_expr``: when a clause is
+    ``<C cmp> && <NL>``, only the C side should be returned."""
+    from bmc_agent.dsl_to_cbmc import _atom_to_expr
+    out = _atom_to_expr("result == 0 && the device has been reset")
+    # The prose conjunct is dropped; the C comparison survives.
+    assert out is not None
+    assert "result == 0" in out
+    assert "device has been reset" not in out
+
+
 def test_postcond_to_assert_refuses_tautology_from_stripped_old():
     """When the postcondition references ``\\old(X)`` and the DSL
     sanitiser strips it, the resulting ``X OP X`` is a tautological
