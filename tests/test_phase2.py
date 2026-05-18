@@ -3536,6 +3536,174 @@ def test_owns_two_arg_with_member_access():
     assert "__CPROVER_assume(p->buf != NULL)" in pre_joined, pre_joined
 
 
+def test_parser_recovers_struct_keyword_through_macro_prefix(tmp_path):
+    """``GGML_API struct ggml_tensor * fn(...)`` is a tree-sitter
+    misparse: the macro prefix causes ``struct`` to be consumed as a
+    stray declaration, leaving the function's return-type as the bare
+    tag ``ggml_tensor *``. The harness then emits
+    ``ggml_tensor *result = fn(...)`` which CBMC rejects with a syntax
+    error. The parser must scan back over whitespace and recover the
+    keyword. Regression: ggml.c run 2026-05-19, 2 functions affected
+    (ggml_cont_*) but the pattern hits any C library that uses an
+    export macro plus tag types without typedefs."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+#define GGML_API
+GGML_API struct ggml_tensor * ggml_cont_1d(
+        struct ggml_context * ctx,
+        int64_t ne0) {
+    return 0;
+}
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    sig = parsed.functions.get("ggml_cont_1d")
+    assert sig is not None
+    assert sig.return_type == "struct ggml_tensor *", sig.return_type
+
+
+def test_parser_struct_keyword_recovery_no_macro_unchanged(tmp_path):
+    """Without a macro prefix, the parser already returns the correct
+    ``struct ggml_tensor *`` type; the recovery code must NOT prepend
+    a second ``struct`` keyword (regression guard against
+    ``struct struct ggml_tensor *``)."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+struct ggml_tensor * ggml_cont_1d(struct ggml_context * ctx, int64_t ne0) {
+    return 0;
+}
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    sig = parsed.functions.get("ggml_cont_1d")
+    assert sig is not None
+    assert sig.return_type == "struct ggml_tensor *", sig.return_type
+    assert "struct struct" not in sig.return_type
+
+
+def test_parser_struct_keyword_recovery_stops_at_semicolon(tmp_path):
+    """The recovery must NOT pick up a ``struct`` keyword from an
+    UNRELATED earlier declaration. If the preceding line is
+    ``struct foo {} bar;``, the `;` terminates and the recovery should
+    return nothing (no false prepend)."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+struct foo { int x; } bar;
+unsigned int ggml_hash(struct ggml_context * ctx) {
+    return 0;
+}
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    sig = parsed.functions.get("ggml_hash")
+    assert sig is not None
+    assert sig.return_type == "unsigned int", sig.return_type
+
+
+def test_is_address_taken_detects_qsort_comparator():
+    """A function passed to qsort by name is taken by address — must
+    NOT be classified as a system entry point. Regression: ggml-quants
+    iq1_sort_helper / iq2_compare_func / iq3_compare_func raised
+    confirmed_dynamic SIGSEGV findings via NULL deref because the
+    classifier saw "no direct callers" and promoted the CEx."""
+    from bmc_agent.cex_validator import _is_address_taken
+    from bmc_agent.parser import ParsedCFile
+
+    pf = ParsedCFile(
+        path="t.c",
+        functions={},
+        call_graph={},
+        function_bodies={
+            "caller": (
+                "qsort(arr, n, sizeof(int), iq1_sort_helper);"
+            ),
+        },
+    )
+    assert _is_address_taken("iq1_sort_helper", pf) is True
+
+
+def test_is_address_taken_negative_on_direct_call():
+    """Functions called directly (``foo(x, y);``) must NOT be reported
+    as address-taken — that would mask real entry-function findings."""
+    from bmc_agent.cex_validator import _is_address_taken
+    from bmc_agent.parser import ParsedCFile
+
+    pf = ParsedCFile(
+        path="t.c", functions={}, call_graph={},
+        function_bodies={"caller": "int r = compute_score(x, y); return r;"},
+    )
+    assert _is_address_taken("compute_score", pf) is False
+
+
+def test_is_address_taken_handles_whitespace_before_paren():
+    """``foo (x)`` with whitespace before the paren is still a direct
+    call (legal C); the detector must NOT flag it as address-taken."""
+    from bmc_agent.cex_validator import _is_address_taken
+    from bmc_agent.parser import ParsedCFile
+
+    pf = ParsedCFile(
+        path="t.c", functions={}, call_graph={},
+        function_bodies={"caller": "int r = compute_score   (x, y);"},
+    )
+    assert _is_address_taken("compute_score", pf) is False
+
+
+def test_is_address_taken_via_struct_initializer():
+    """Function-pointer table entries (``.cb = my_callback,``) are a
+    common Linux/POSIX idiom. The detector must catch this form too —
+    not just qsort-style argument passing."""
+    from bmc_agent.cex_validator import _is_address_taken
+    from bmc_agent.parser import ParsedCFile
+
+    pf = ParsedCFile(
+        path="t.c", functions={}, call_graph={},
+        function_bodies={},
+        preprocessed_source=(
+            "static const struct ops driver_ops = {\n"
+            "    .open = my_open,\n"
+            "    .close = my_close,\n"
+            "};\n"
+        ),
+    )
+    assert _is_address_taken("my_open", pf) is True
+    assert _is_address_taken("my_close", pf) is True
+    assert _is_address_taken("missing_fn", pf) is False
+
+
+def test_is_address_taken_ignores_comments_and_strings():
+    """A function name appearing inside a ``/* … */`` comment, a ``//``
+    line comment, or a string literal must NOT be flagged as
+    address-taken — only real code references count. Regression: the
+    cross-file caller test fixture stamps ``/* leaf_fn */`` into stub
+    bodies; that should not poison the detector."""
+    from bmc_agent.cex_validator import _is_address_taken
+    from bmc_agent.parser import ParsedCFile
+
+    pf = ParsedCFile(
+        path="t.c", functions={}, call_graph={},
+        function_bodies={
+            "f1": "/* leaf_fn is documented here */\nreturn 0;",
+            "f2": "// see leaf_fn for details\nreturn 0;",
+            "f3": 'const char *s = "leaf_fn not address-taken";',
+        },
+    )
+    assert _is_address_taken("leaf_fn", pf) is False
+
+
+def test_is_address_taken_empty_source_returns_false():
+    """When no source text is available (parsed_file has no bodies
+    and no preprocessed_source), return False rather than crashing.
+    Conservative: under-detect rather than spuriously suppress bugs."""
+    from bmc_agent.cex_validator import _is_address_taken
+    from bmc_agent.parser import ParsedCFile
+
+    pf = ParsedCFile(path="t.c", functions={}, call_graph={}, function_bodies={})
+    assert _is_address_taken("any_fn", pf) is False
+
+
 def test_coverage_diagnostics_no_cbmc_results_noop(tmp_path):
     """Driver dir exists but no cbmc_result.json files yet (e.g. crashed
     during Phase 1): helper must not create a misleading artifact."""

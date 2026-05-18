@@ -233,6 +233,46 @@ class CExValidator:
 
         # Step 2 / Step 3: no callers within file → check if cross-file callers exist
         if not callers:
+            # Step 2a: detect functions taken by address. The call graph
+            # only records direct calls (``foo(...)``); functions passed
+            # to qsort / bsearch / pthread_create / signal / atexit etc.
+            # appear as bare identifiers and the call-graph misses them.
+            # Classifying such a function as a "system entry point"
+            # promotes its CEx straight to REAL_BUG even though the
+            # real invocation goes through a library function with a
+            # controlled argument contract (qsort guarantees non-NULL
+            # pointers to array elements). Mark UNRESOLVED so the
+            # finding doesn't masquerade as a confirmed bug.
+            # Regression: ggml-quants.c run 2026-05-19 raised 3
+            # confirmed_dynamic SIGSEGV findings on qsort comparators
+            # (iq1_sort_helper, iq2_compare_func, iq3_compare_func)
+            # that are exactly this FP class.
+            if _is_address_taken(func_name, parsed_file):
+                logger.info(
+                    "'%s' has no direct callers but is taken by address "
+                    "(likely a library callback) — marking UNRESOLVED",
+                    func_name,
+                )
+                return ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[func_name],
+                    system_entry_input=None,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"'{func_name}' has no direct callers but its "
+                        "address is taken (passed to a library function "
+                        "such as qsort/bsearch/pthread_create, or stored "
+                        "in a function-pointer table). The CEx assumed "
+                        "direct invocation with arbitrary nondet inputs; "
+                        "real invocation goes through the library function "
+                        "with a controlled contract that may exclude the "
+                        "violating state. Marking UNRESOLVED."
+                    ),
+                    outcome=CExOutcome.UNRESOLVED,
+                )
+
             has_cross_file_caller = bool(
                 cross_file_callers and func_name in cross_file_callers
             )
@@ -1404,6 +1444,101 @@ class CExValidator:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _strip_c_comments_and_strings(text: str) -> str:
+    """Replace C/C++ comments and string/char literals with spaces of
+    equal length so identifier offsets stay aligned. Used by
+    ``_is_address_taken`` so a function name appearing inside a comment
+    (``/* foo */``) doesn't get mistaken for an address-taking
+    reference."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = text.find("\n", i)
+            if j == -1:
+                j = n
+            out.append(" " * (j - i))
+            i = j
+            continue
+        if c == "/" and nxt == "*":
+            j = text.find("*/", i + 2)
+            if j == -1:
+                j = n
+            else:
+                j += 2
+            out.append(" " * (j - i))
+            i = j
+            continue
+        if c == '"' or c == "'":
+            quote = c
+            j = i + 1
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == quote:
+                    j += 1
+                    break
+                j += 1
+            out.append(" " * (j - i))
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _is_address_taken(func_name: str, parsed_file) -> bool:
+    """Return True if ``func_name`` appears anywhere in the parsed source
+    as an address (i.e. NOT followed by ``(``).
+
+    Used to detect callback functions passed to qsort/bsearch/
+    pthread_create/atexit/signal etc. — the call graph only records
+    direct calls, so these functions look caller-less even though they
+    are reachable via a library indirection. Marking such a function
+    a "system entry point" promotes its CEx to a confirmed real_bug
+    even though the library function's contract typically excludes
+    the violating state (qsort guarantees non-NULL element pointers).
+
+    Detection: strip comments and string literals first (so a function
+    name mentioned in a ``/* foo */`` doesn't count), then scan every
+    occurrence of ``func_name`` as a whole word. If at least one
+    occurrence is NOT immediately followed by ``(``, the function is
+    address-taken.
+
+    Conservative: false positives here only push a finding from
+    REAL_BUG to UNRESOLVED, which is safe (under-confirming a bug is
+    preferable to over-confirming one).
+    """
+    if not func_name or not func_name.isidentifier():
+        return False
+
+    # Prefer the full preprocessed source (covers function-pointer
+    # initializers in static structs and global tables); fall back to
+    # the concatenation of function bodies.
+    text = getattr(parsed_file, "preprocessed_source", None)
+    if not text:
+        bodies = getattr(parsed_file, "function_bodies", None) or {}
+        text = "\n".join(bodies.values()) if bodies else ""
+    if not text:
+        return False
+
+    text = _strip_c_comments_and_strings(text)
+    pattern = re.compile(r"\b" + re.escape(func_name) + r"\b")
+    for m in pattern.finditer(text):
+        end = m.end()
+        # Skip whitespace after the match — ``foo (`` is still a call.
+        i = end
+        while i < len(text) and text[i] in " \t":
+            i += 1
+        if i >= len(text) or text[i] != "(":
+            return True
+    return False
 
 
 def _witness_obvious_artifact(counterexample) -> Optional[str]:

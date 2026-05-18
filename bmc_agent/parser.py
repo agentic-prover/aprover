@@ -744,11 +744,68 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
     # Return type: base type node + any pointer stars from the declarator
     type_node = node.child_by_field_name("type")
     ret_type = _slice_bytes(src_bytes, type_node).strip() if type_node else "unknown"
+
+    # Recover from tree-sitter's misparse of ``MACRO struct T * fn(...)``.
+    # When an unknown macro prefixes the signature (GGML_API, EXPORT,
+    # __attribute__((...)), …), tree-sitter consumes ``MACRO struct`` as
+    # a stray declaration and the function_definition's ``type`` field
+    # picks up only the ``T`` half — yielding ``T *`` instead of
+    # ``struct T *``. CBMC then rejects the harness because the bare
+    # tag is not a valid type without a typedef.
+    #
+    # Look at the source bytes immediately before type_node.start_byte:
+    # skip whitespace, then check whether the preceding token is one of
+    # ``struct``, ``union``, ``enum``. If so, prepend it. We stop at the
+    # nearest statement separator (``;``, ``{``, ``}``) so a struct/
+    # union keyword from an UNRELATED prior declaration is not picked up.
+    if type_node is not None:
+        prepend = _recover_struct_keyword(src_bytes, type_node.start_byte)
+        if prepend and not ret_type.split()[:1] == [prepend]:
+            ret_type = f"{prepend} {ret_type}"
+
     if pointer_stars:
         ret_type = ret_type + " " + pointer_stars
 
     is_static = "static" in ret_type.split()
     return FunctionSignature(name=fn_name, return_type=ret_type, parameters=params, is_static=is_static)
+
+
+_STRUCT_TAG_KEYWORDS = (b"struct", b"union", b"enum")
+
+
+def _recover_struct_keyword(src_bytes: bytes, type_start: int) -> str:
+    """Return ``struct`` / ``union`` / ``enum`` if it precedes the type
+    in the source text (separated only by whitespace and statement-
+    local tokens), else ``""``.
+
+    Used to repair the tree-sitter misparse where a macro prefix
+    (GGML_API, EXPORT) causes the parser to consume the struct keyword
+    as part of a stray declaration. We scan backwards from ``type_start``
+    over whitespace, then check whether the next preceding token is
+    one of struct/union/enum. We stop at ``;``, ``{``, or ``}`` so
+    keywords from an unrelated earlier declaration are not picked up.
+    """
+    i = type_start - 1
+    # Skip whitespace
+    while i >= 0 and src_bytes[i:i + 1] in (b" ", b"\t", b"\n", b"\r"):
+        i -= 1
+    if i < 0:
+        return ""
+    # Stop at statement boundaries — don't claim a struct keyword from
+    # an unrelated earlier declaration.
+    if src_bytes[i:i + 1] in (b";", b"{", b"}", b")", b"("):
+        return ""
+    # Walk back to the start of the preceding identifier-like token.
+    end = i + 1
+    while i >= 0 and (
+        src_bytes[i:i + 1].isalpha() or src_bytes[i:i + 1].isdigit() or src_bytes[i:i + 1] == b"_"
+    ):
+        i -= 1
+    start = i + 1
+    token = src_bytes[start:end]
+    if token in _STRUCT_TAG_KEYWORDS:
+        return token.decode("ascii")
+    return ""
 
 
 def _extract_param_ts(param_node, src_bytes: bytes) -> tuple[str, str]:
