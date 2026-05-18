@@ -328,8 +328,22 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
         if sig:
             functions[sig.name] = sig
             call_graph[sig.name] = set()
+
+            # Tree-sitter's parse-error tolerance occasionally reports a
+            # function_definition end_byte that lands on a `}` belonging
+            # to an inner GCC statement-expression ``({ ... })`` rather
+            # than the actual function close. This leaves orphan body
+            # statements after end_byte that the harness emitter's body
+            # excision misses, leading to "syntax error before 'if'"
+            # in CBMC. Detect this by brace-counting the captured text;
+            # if the count is positive (more ``{`` than ``}``), walk
+            # forward from end_byte until balanced.
+            true_end = _brace_balanced_end_byte(
+                src_bytes, node.start_byte, node.end_byte
+            )
+
             function_definitions[sig.name] = src_bytes[
-                node.start_byte:node.end_byte
+                node.start_byte:true_end
             ].decode("utf-8", errors="replace")
             # Tag the function with its originating source file, looked up
             # in the cpp ``# N "filename"`` map. ``start_point`` is a
@@ -340,7 +354,13 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
             # Body is the compound_statement child
             body_node = node.child_by_field_name("body")
             if body_node:
-                body_text = src_bytes[body_node.start_byte:body_node.end_byte].decode(
+                # Extend the body end too, using the same brace-balance
+                # walk so the body text exactly matches what the
+                # function_definition covers (minus the signature).
+                body_end = _brace_balanced_end_byte(
+                    src_bytes, body_node.start_byte, body_node.end_byte
+                )
+                body_text = src_bytes[body_node.start_byte:body_end].decode(
                     "utf-8", errors="replace"
                 )
                 function_bodies[sig.name] = body_text
@@ -359,6 +379,117 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
         function_source_files=function_source_files,
         primary_source=primary_source,
     )
+
+
+def _brace_balanced_end_byte(src_bytes: bytes, start: int, ts_end: int) -> int:
+    """Return the byte offset of the function's true closing ``}``.
+
+    Tree-sitter occasionally truncates a function_definition's
+    ``end_byte`` on macro-heavy kernel bodies (FIELD_PREP +
+    _Static_assert inside ``struct{}`` inside GCC statement-expressions
+    ``({ ... })``). The grammar mistakes a ``}`` of an inner expression
+    for the body close.
+
+    Count ``{`` / ``}`` over the captured slice, skipping over string
+    literals, character literals, and ``/* */`` / ``//`` comments. If
+    the count is positive (more ``{`` than ``}``), walk forward from
+    ``ts_end`` byte-by-byte (using the same skip rules) until the count
+    reaches zero. Return that offset (inclusive of the final ``}``).
+
+    Conservative fallback: if walking forward never balances within a
+    safety cap, return the original ``ts_end`` unchanged. Better to
+    leave a faulty bound than chew the rest of the TU.
+    """
+    # Phase 1: scan captured slice and compute imbalance + end-position
+    # of the scanner inside the slice. We then continue the scanner
+    # past ``ts_end`` if needed.
+    depth = 0
+    i = start
+    end = ts_end
+    n = len(src_bytes)
+    # Safety cap: don't walk more than 200KB beyond ts_end. The largest
+    # kernel function we've encountered is ~225KB; 200KB beyond is
+    # enough headroom for the recovery while preventing runaway scans
+    # on truly broken input.
+    cap = min(n, ts_end + 200_000)
+
+    def _skip_string_or_char(j: int, quote: int) -> int:
+        j += 1
+        while j < n and src_bytes[j] != quote:
+            if src_bytes[j] == 0x5C:  # backslash
+                j += 2
+            else:
+                j += 1
+        return j + 1
+
+    def _skip_block_comment(j: int) -> int:
+        k = src_bytes.find(b"*/", j + 2)
+        return k + 2 if k != -1 else n
+
+    def _skip_line_comment(j: int) -> int:
+        k = src_bytes.find(b"\n", j + 2)
+        return k + 1 if k != -1 else n
+
+    # Walk through [start, end) first to compute depth at ts_end.
+    while i < end:
+        b = src_bytes[i]
+        if b == 0x22:  # "
+            i = _skip_string_or_char(i, 0x22)
+            continue
+        if b == 0x27:  # '
+            i = _skip_string_or_char(i, 0x27)
+            continue
+        if b == 0x2F and i + 1 < n:
+            nxt = src_bytes[i + 1]
+            if nxt == 0x2A:
+                i = _skip_block_comment(i)
+                continue
+            if nxt == 0x2F:
+                i = _skip_line_comment(i)
+                continue
+        if b == 0x7B:  # {
+            depth += 1
+        elif b == 0x7D:  # }
+            depth -= 1
+            if depth == 0:
+                # tree-sitter's end is correct; nothing to do.
+                return end
+        i += 1
+
+    # Tree-sitter's end_byte was reached but the captured slice has
+    # depth != 0. If depth < 0, we already over-shot inside the slice
+    # — leave as-is (rare; means tree-sitter included a stray ``}``).
+    if depth <= 0:
+        return end
+
+    # Phase 2: continue scanning past ts_end until balanced.
+    i = end
+    while i < cap:
+        b = src_bytes[i]
+        if b == 0x22:
+            i = _skip_string_or_char(i, 0x22)
+            continue
+        if b == 0x27:
+            i = _skip_string_or_char(i, 0x27)
+            continue
+        if b == 0x2F and i + 1 < n:
+            nxt = src_bytes[i + 1]
+            if nxt == 0x2A:
+                i = _skip_block_comment(i)
+                continue
+            if nxt == 0x2F:
+                i = _skip_line_comment(i)
+                continue
+        if b == 0x7B:
+            depth += 1
+        elif b == 0x7D:
+            depth -= 1
+            if depth == 0:
+                return i + 1  # inclusive of closing ``}``
+        i += 1
+
+    # Couldn't balance within cap — give up and keep ts_end.
+    return ts_end
 
 
 def _collect_struct_defs(root, src_bytes: bytes) -> dict[str, list[tuple[str, str]]]:

@@ -2746,7 +2746,8 @@ class HarnessGenerator:
         if not _preprocessed:
             _intermediate = _strip_static_inline_defs(_intermediate)
         type_decls = _strip_stdlib_decls(
-            _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed)
+            _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed),
+            kernel_mode=_preprocessed,
         )
 
         # --- 2. Identify callees to stub ---
@@ -3917,7 +3918,7 @@ def _strip_glibc_internal_typedefs(text: str, *, kernel_mode: bool = False) -> s
     return ''.join(result)
 
 
-def _strip_stdlib_decls(text: str) -> str:
+def _strip_stdlib_decls(text: str, *, kernel_mode: bool = False) -> str:
     """
     Remove forward declarations (no body) for standard C/POSIX functions.
 
@@ -3938,7 +3939,16 @@ def _strip_stdlib_decls(text: str) -> str:
     the comment, prematurely closing the outer ``*/``, and (b) lets the
     regex match a system-function name (``read``, ``write``, …) that only
     appears in commentary, corrupting unrelated declarations.
+
+    ``kernel_mode=True``: the harness has *no* libc prepend (kernel
+    headers are already inlined in the preprocessed TU), so stripping
+    standard-function declarations leaves CBMC without any prototype
+    for ``memset`` / ``memcpy`` / ``strlen`` etc., breaking
+    type-checking of bodies that call them (kernel ``memzero_explicit``
+    wraps ``memset``). In this mode, return *text* unchanged.
     """
+    if kernel_mode:
+        return text
     # Match function declarations at brace depth 0: lines/blocks ending in ';'
     # that look like "... funcname ( ... );"
     _DECL_PAT = re.compile(r'\b(\w+)\s*\(')

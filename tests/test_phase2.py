@@ -394,6 +394,56 @@ def test_parser_recovers_function_defs_buried_in_parse_error_recovery():
     assert parsed.function_definitions.get("buried_a", "").startswith("static int buried_a")
 
 
+def test_parser_extends_truncated_function_end_byte_to_balanced_close():
+    """Tree-sitter's parse-error tolerance occasionally reports an
+    ``end_byte`` that lands on an inner GCC statement-expression ``}``
+    rather than the actual function close, leaving orphan body
+    statements unattached to the function_definition node.
+
+    Regression: ``pidff_find_special_fields`` in
+    ``drivers/hid/usbhid/hid-pidff.i`` was captured as 3449 bytes (truncated
+    at the close of one inner ``({...})``), so the harness emitter's
+    body-excision left ~2400 bytes of statements orphaned in the source,
+    triggering ``syntax error before 'if'`` at CBMC parse time. The fix
+    is to brace-count the captured slice and, if positive, extend the
+    end byte forward until balanced.
+
+    We exercise the helper directly on a synthetic source that bakes in
+    the imbalance shape: a function whose body has an inner ``({ ... })``
+    statement-expression that — if tree-sitter mis-anchored on its
+    inner ``}`` — would leave the subsequent statements orphaned.
+    """
+    from bmc_agent.parser import _brace_balanced_end_byte
+    src = b"""\
+static int f(int x) {
+    int y = ({ int t = x + 1; t * 2; });
+    if (y > 0) return 1;
+    return 0;
+}
+"""
+    # Pretend tree-sitter mis-anchored on the ``}`` that closes
+    # ``{ int t = x + 1; t * 2; }`` — locate that close and use it as
+    # the bogus end_byte.
+    open_paren_brace = src.find(b"({")
+    inner_close = src.index(b"})", open_paren_brace) + 1  # position of '}' itself
+    bogus_end = inner_close + 1  # one past the inner '}'
+    start = src.index(b"static int")
+    true_end = _brace_balanced_end_byte(src, start, bogus_end)
+    captured = src[start:true_end]
+    # True end should include the function's closing ``}`` after ``return 0;``
+    assert captured.rstrip().endswith(b"}")
+    assert b"return 0" in captured
+    # And the captured slice must be brace-balanced.
+    depth = 0
+    in_str = False
+    for ch in captured:
+        if ch == 0x7B:
+            depth += 1
+        elif ch == 0x7D:
+            depth -= 1
+    assert depth == 0
+
+
 def test_parser_recovers_function_defs_nested_inside_prior_function_body():
     """Second parse-error-recovery shape: tree-sitter's tolerance for
     macro-heavy bodies (kernel FIELD_PREP, _Static_assert) can land
@@ -2382,6 +2432,56 @@ def test_strip_stdlib_decls_ignores_semicolons_inside_strings():
     assert "/* read decl removed */" in out
     # The string literal is preserved verbatim.
     assert '"split ; here"' in out
+
+
+def test_strip_stdlib_decls_kernel_mode_preserves_memset_decl():
+    """In kernel-preprocessed-TU mode, the harness has no libc
+    prepend; kernel headers in the TU are the *only* source of
+    prototypes for ``memset`` / ``memcpy`` / ``strlen``. Stripping
+    these leaves CBMC type-checking ``memzero_explicit`` (which calls
+    ``memset``) with no declaration in scope.
+
+    Regression: ``hid-pidff.i`` ``pidff_rescale`` harness produced
+    ``function 'memset' is not declared`` at the call site inside
+    ``memzero_explicit``. ``kernel_mode=True`` must skip the strip.
+    """
+    from bmc_agent.harness_generator import _strip_stdlib_decls
+    src = (
+        'extern void *memset(void *, int, size_t);\n'
+        'extern void *memcpy(void *, const void *, size_t);\n'
+        'int unrelated(void) { return 0; }\n'
+    )
+    out_kernel = _strip_stdlib_decls(src, kernel_mode=True)
+    assert "memset" in out_kernel
+    assert "memcpy" in out_kernel
+    assert "/* memset decl removed */" not in out_kernel
+    # Default (non-kernel) mode still strips, so the libc-prepend
+    # path keeps working.
+    out_default = _strip_stdlib_decls(src)
+    assert "/* memset decl removed */" in out_default
+
+
+def test_escape_for_c_comment_neutralises_embedded_terminators():
+    """LLM-generated natural-language spec atoms occasionally contain
+    ``/*`` or ``*/``; wrapping such an atom in a ``/* condition: ... */``
+    comment splits the comment, leaving orphan tokens that CBMC then
+    rejects.
+
+    Regression: ``pidff_find_special_fields`` spec contained
+    ``/* all initialized pointer fields ... */ point to valid memory``;
+    the unwrapped ``*/`` closed the outer condition comment and left
+    ``point to valid memory`` and a trailing ``*/`` as live tokens in
+    the harness.
+    """
+    from bmc_agent.dsl_to_cbmc import _escape_for_c_comment
+    s = "/* inline note */ trailing text */ more"
+    out = _escape_for_c_comment(s)
+    # No live ``*/`` or ``/*`` sequence survives.
+    assert "*/" not in out
+    assert "/*" not in out
+    # Words remain human-readable.
+    assert "trailing text" in out
+    assert "more" in out
 
 
 def test_strip_cpp_linemarkers_removes_directive_lines():

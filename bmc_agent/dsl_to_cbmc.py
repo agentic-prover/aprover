@@ -204,10 +204,27 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         # "result is the value if Y"). The qualifying word changes the
         # condition's meaning, so wrapping just the matched comparison
         # would over-constrain. Comment it out instead.
-        return f"/* condition: {atom} */"
+        return f"/* condition: {_escape_for_c_comment(atom)} */"
 
     # Fall through: emit as a comment (natural language / unknown)
-    return f"/* condition: {atom} */"
+    return f"/* condition: {_escape_for_c_comment(atom)} */"
+
+
+def _escape_for_c_comment(text: str) -> str:
+    """Make *text* safe to embed inside a ``/* ... */`` C comment.
+
+    The LLM-generated natural-language spec atoms occasionally contain
+    ``/*`` or ``*/`` sequences (typed-pointer commentary like ``/* all
+    initialized pointer fields */ point to valid memory``). Embedding
+    them verbatim splits the wrapping comment, leaving orphan tokens
+    that CBMC then rejects as ``syntax error before '/'``.
+
+    Replace each comment-terminator/opener with a visually similar but
+    non-breaking form: ``*/`` becomes ``* /`` and ``/*`` becomes ``/
+    *``. The text remains human-readable while the C lexer no longer
+    sees a comment boundary.
+    """
+    return text.replace("*/", "* /").replace("/*", "/ *")
 
 
 def _looks_like_c_expr(atom: str) -> bool:
