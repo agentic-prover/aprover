@@ -3706,6 +3706,49 @@ def test_source_precondition_rejects_double_underscore_identifier():
     assert out == [], out
 
 
+def test_parser_recovers_return_type_through_storage_class_macro(tmp_path):
+    """``UNITTEST CURLUcode parse_port(...)`` — curl uses the ``UNITTEST``
+    macro to make a function externally linkable in test builds and
+    static otherwise. tree-sitter parses ``UNITTEST`` as the type
+    field and stashes the real return type ``CURLUcode`` in a sibling
+    ERROR node. Parser must fold the macro into the type so the
+    harness emits ``UNITTEST CURLUcode result = ...`` (which the
+    preprocessor will reduce to ``static CURLUcode result = ...``).
+
+    Regression: curl/urlapi.c run 2026-05-19, parse_port harness
+    compiled to ``UNITTEST result = parse_port(...);`` which CBMC
+    rejected with ``expected constant expression``."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+#define UNITTEST static
+UNITTEST CURLUcode parse_port(struct U *u, int b) {
+    return 0;
+}
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    sig = parsed.functions.get("parse_port")
+    assert sig is not None
+    assert "CURLUcode" in sig.return_type, sig.return_type
+    assert "UNITTEST" in sig.return_type, sig.return_type
+
+
+def test_parser_does_not_treat_short_uppercase_as_macro(tmp_path):
+    """Short uppercase tokens like ``T`` (template/single-letter convention
+    typically; but also ``OK``, ``NO`` enum-style return codes) must NOT
+    trigger the macro-prefix recovery. Threshold is ≥4 chars all-caps
+    or any all-caps-with-underscore."""
+    from bmc_agent.parser import _looks_like_macro
+    assert _looks_like_macro("T") is False
+    assert _looks_like_macro("OK") is False
+    assert _looks_like_macro("NO") is False
+    assert _looks_like_macro("INT") is False
+    assert _looks_like_macro("UNITTEST") is True
+    assert _looks_like_macro("GGML_RESTRICT") is True
+    assert _looks_like_macro("__attribute__") is True
+
+
 def test_parser_recovers_param_name_through_restrict_macro(tmp_path):
     """``T * GGML_RESTRICT s`` is a tree-sitter misparse: the macro
     qualifier is consumed as the declarator identifier and the real

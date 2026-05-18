@@ -783,6 +783,27 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
     type_node = node.child_by_field_name("type")
     ret_type = _slice_bytes(src_bytes, type_node).strip() if type_node else "unknown"
 
+    # Recover from tree-sitter's misparse of ``MACRO RealType fn(...)``
+    # where MACRO is an unknown storage-class macro (curl's ``UNITTEST``
+    # expands to ``static`` or empty; OpenSSL's ``OSSL_API`` adds
+    # visibility; Linux's ``__init`` / ``__cold`` are linker-section
+    # annotations). tree-sitter consumes MACRO as the ``type`` field
+    # and stashes ``RealType`` in a sibling ERROR node. When (a) the
+    # parsed type looks like a macro (ALL_CAPS-with-underscore or
+    # leading ``__``) and (b) one of the function_definition's
+    # children is an ERROR containing a single identifier, fold the
+    # macro into the type prefix and use the ERROR identifier as
+    # the actual return type. Regression: curl/urlapi.c run 2026-05-19
+    # produced ``UNITTEST result = parse_port(...)`` harness lines
+    # that CBMC rejected with "expected constant expression".
+    if type_node is not None and _looks_like_macro(ret_type):
+        for c in node.children:
+            if c.type == "ERROR":
+                err_text = _slice_bytes(src_bytes, c).strip()
+                if err_text and err_text.isidentifier():
+                    ret_type = f"{ret_type} {err_text}"
+                    break
+
     # Recover from tree-sitter's misparse of ``MACRO struct T * fn(...)``.
     # When an unknown macro prefixes the signature (GGML_API, EXPORT,
     # __attribute__((...)), …), tree-sitter consumes ``MACRO struct`` as
@@ -812,20 +833,30 @@ _STRUCT_TAG_KEYWORDS = (b"struct", b"union", b"enum")
 
 
 def _looks_like_macro(name: str) -> bool:
-    """Heuristic: identifier is a parameter-qualifier macro (not a real
-    parameter name). True when the identifier is all-uppercase /
-    underscores / digits with at least one underscore, OR begins with
-    a double underscore (``__restrict__``, ``__nonnull__``,
-    ``__attribute__``). Used to detect tree-sitter's misparse of
-    ``T * MACRO name`` so the qualifier is folded into the type and
-    the real param name is recovered from a sibling ERROR node.
-    Conservative — a single-letter uppercase param (``T`` template-
-    style) would not match (no underscore, no leading ``__``)."""
+    """Heuristic: identifier is a parameter-qualifier or storage-class
+    macro (not a real parameter name or type).
+
+    True when the identifier is:
+      * all-uppercase with at least one underscore (``GGML_RESTRICT``,
+        ``OSSL_API``), OR
+      * a single all-uppercase word of >= 4 chars (``UNITTEST``,
+        ``EXPORT``, ``INLINE``), OR
+      * begins with a double underscore (``__restrict__``,
+        ``__nonnull__``, ``__attribute__``).
+
+    Used to detect tree-sitter's misparse of ``MACRO RealType name``
+    (return type) or ``T * MACRO name`` (param) so the qualifier is
+    folded into the type and the real identifier is recovered from a
+    sibling ERROR node. Conservative — single-letter caps (``T``
+    template-style) and 2-3 letter words (``OK``, ``NO``) do not match.
+    """
     if not name:
         return False
     if name.startswith("__"):
         return True
     if "_" in name and name.isupper():
+        return True
+    if len(name) >= 4 and name.isupper() and name.isalpha():
         return True
     return False
 
