@@ -1,0 +1,45 @@
+# Example workflow: drop into .github/workflows/bmc-agent.yml of a C project
+# that wants bmc-agent analysis on every pull request.
+
+name: bmc-agent
+
+on:
+  pull_request:
+    paths:
+      - '**/*.c'
+      - '**/*.h'
+
+jobs:
+  bmc-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Check out PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history to diff base..head
+
+      - name: Run bmc-agent
+        id: bmc
+        uses: agentic-prover/bmc-agent-pr@main
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Match these to your project's actual build flags.
+          cflags: '-I./include -I./src -DHAVE_CONFIG_H'
+          # Tighten the threat model for security-critical code.
+          threat-model: security
+          # Don't fail the build on a finding — surface via the PR comment only.
+          fail-on-real-bug: 'false'
+          # Cap analysed files to keep LLM cost predictable.
+          max-functions: '15'
+
+      - name: Annotate run with findings count
+        if: always()
+        run: |
+          echo "bmc-agent: real_bug verdicts = ${{ steps.bmc.outputs.real-bug-count }}"
+          if [[ -f "${{ steps.bmc.outputs.findings-json }}" ]]; then
+            jq '.' "${{ steps.bmc.outputs.findings-json }}"
+          fi

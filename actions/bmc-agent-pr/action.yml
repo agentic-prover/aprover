@@ -1,0 +1,91 @@
+name: 'bmc-agent PR analysis'
+description: >-
+  Run bmc-agent on C functions changed by a pull request and post a comment
+  with confirmed-real-bug findings. Inspired by Google CIFuzz; works on any
+  project whose .c files compile via gcc -E with user-supplied cflags.
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  anthropic-api-key:
+    description: 'API key for the LLM backend (Anthropic-compatible). Pass via secrets.'
+    required: true
+
+  llm-base-url:
+    description: 'Base URL for the LLM backend. Default uses api.anthropic.com directly.'
+    required: false
+    default: 'https://api.anthropic.com'
+
+  llm-model:
+    description: 'LLM model identifier (e.g. claude-sonnet-4-6, anthropic/claude-sonnet-4.5).'
+    required: false
+    default: 'claude-sonnet-4-6'
+
+  source-globs:
+    description: >-
+      Space-separated glob patterns selecting which changed files to analyse.
+      Files outside these globs are skipped. Default: all .c and .h files.
+    required: false
+    default: '**/*.c **/*.h'
+
+  cflags:
+    description: >-
+      Compiler flags forwarded to ``gcc -E`` for preprocessing. Use this to
+      add -I include directories and -D defines that the project would
+      normally get from its build system.
+    required: false
+    default: ''
+
+  threat-model:
+    description: 'bmc-agent threat model: security | safety | functional.'
+    required: false
+    default: 'security'
+
+  feature-flags:
+    description: >-
+      Space-separated bmc-agent CLI flags to enable. Default enables the full
+      pipeline (realism check, dynamic validation, feedback loop,
+      per-function flag selection).
+    required: false
+    default: '--enable-realism-check --enable-dynamic-validation --enable-feedback-loop --enable-flag-selection'
+
+  max-functions:
+    description: >-
+      Safety cap on number of changed functions to analyse per PR. Large
+      diffs can exceed reasonable LLM token budgets; cap defaults to 25.
+    required: false
+    default: '25'
+
+  fail-on-real-bug:
+    description: >-
+      If true, the action fails (non-zero exit) when bmc-agent reports any
+      real_bug verdict. If false, the action always succeeds and only the
+      PR comment surfaces findings.
+    required: false
+    default: 'false'
+
+outputs:
+  findings-json:
+    description: 'Path to a JSON file aggregating per-function bmc-agent verdicts.'
+    value: ${{ steps.bmc-run.outputs.findings-json }}
+
+  real-bug-count:
+    description: 'Number of functions where bmc-agent reported real_bug.'
+    value: ${{ steps.bmc-run.outputs.real-bug-count }}
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  env:
+    ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+    BMC_AGENT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
+    BMC_AGENT_LLM_MODEL: ${{ inputs.llm-model }}
+    INPUT_SOURCE_GLOBS: ${{ inputs.source-globs }}
+    INPUT_CFLAGS: ${{ inputs.cflags }}
+    INPUT_THREAT_MODEL: ${{ inputs.threat-model }}
+    INPUT_FEATURE_FLAGS: ${{ inputs.feature-flags }}
+    INPUT_MAX_FUNCTIONS: ${{ inputs.max-functions }}
+    INPUT_FAIL_ON_REAL_BUG: ${{ inputs.fail-on-real-bug }}
+    GITHUB_TOKEN: ${{ github.token }}
