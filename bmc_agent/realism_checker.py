@@ -199,6 +199,43 @@ class RealismChecker:
                 llm_confidence="high",
             )
 
+        # USB-serial framework-invariant detector (from pl2303 finding,
+        # 2026-05-18): the Linux USB-serial core wraps every driver
+        # callback in a thin shim (``serial_tiocmset``, ``serial_open``,
+        # …) that dereferences ``tty->driver_data`` (or ``port``)
+        # *before* dispatching to the driver. The framework guarantees
+        # the deref is safe by setting ``driver_data`` in
+        # ``serial_install`` and gating any other op behind that install.
+        # When CBMC explores a callback registered on a
+        # ``struct usb_serial_driver`` dispatch table and the witness
+        # shows the framework-set pointer as NULL, the framework's
+        # wrapper would have crashed first — the deref is unreachable
+        # along any framework-constructed path. Symmetric to the
+        # library-init globals detector for a different framework class.
+        usb_serial_cause = _witness_indicates_usb_serial_framework_invariant(
+            func, counterexample, parsed_file
+        )
+        if usb_serial_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by USB-serial framework "
+                "invariant — %s", func.name, usb_serial_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"USB-serial framework lifecycle invariant: {usb_serial_cause}. "
+                    "The Linux USB-serial core's wrapper (serial_tiocmset, "
+                    "serial_open, …) derefs tty->driver_data / port before "
+                    "dispatching to the driver callback, so the framework "
+                    "guarantees these pointers are non-NULL along any path "
+                    "it can construct. A counterexample setting them NULL "
+                    "violates the framework's install-time contract — the "
+                    "wrapper would have crashed before reaching the callback."
+                ),
+                key_concern=f"[usb-serial-framework-invariant] {usb_serial_cause}",
+                llm_confidence="high",
+            )
+
         # Path-divergent unwind detector (from feedback-loop arm (a) TODO,
         # 2026-05-13): CBMC reports a *.unwind.* property fail when its
         # symbolic exploration on SOME path hits the loop bound; the
@@ -645,6 +682,136 @@ def _witness_indicates_null_guard_violation(
                     "near the top of the body"
                 )
     return None
+
+
+# Per-callback witness-pointer names we treat as "framework-set" for the
+# USB-serial dispatch. ``tty->driver_data`` and the ``port`` argument are
+# both populated by the core before the callback runs; ``priv`` is the
+# usb_get_serial_port_data() result for which the framework guarantees a
+# valid driver-allocated struct between probe/remove.
+_USB_SERIAL_FRAMEWORK_POINTER_NAMES = {
+    "tty", "port", "priv", "serial",
+    # Common per-driver private struct names follow ``priv``/``port``,
+    # not enumerated here; the body-scan picks up the witness var by name
+    # only — see _looks_like_framework_null_witness.
+}
+
+# Field-name shortlist for ``struct usb_serial_driver`` callback slots.
+# Sourced from drivers/usb/serial/usb-serial.c — these are the dispatch
+# table entries whose wrappers all deref tty->driver_data / port before
+# invoking the driver callback. Restricting to this list keeps the
+# detector precise (won't fire on functions registered into OTHER kernel
+# subsystems that happen to be named in a usb_serial_driver struct).
+_USB_SERIAL_DRIVER_CALLBACKS = {
+    "open", "close", "dtr_rts", "carrier_raised", "init_termios",
+    "throttle", "unthrottle", "tiocmget", "tiocmset", "tiocmiwait",
+    "get_icount", "set_termios", "break_ctl", "chars_in_buffer",
+    "wait_until_sent", "write_room", "write", "read_int_callback",
+    "read_bulk_callback", "write_bulk_callback", "process_read_urb",
+    "prepare_write_buffer", "port_probe", "port_remove", "attach",
+    "release", "calc_num_ports", "probe", "disconnect", "suspend",
+    "resume", "reset_resume", "ioctl",
+}
+
+# Regex matches ``struct usb_serial_driver <name> = { ... };`` — captures
+# the body so we can scan for the ``.<callback> = <func.name>`` line.
+_USB_SERIAL_DRIVER_DEF_RE = re.compile(
+    r"struct\s+usb_serial_driver\s+\w+\s*=\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}",
+    re.DOTALL,
+)
+
+
+def _function_registered_as_usb_serial_callback(
+    func_name: str, parsed_file: "ParsedCFile"
+) -> str | None:
+    """If *func_name* appears as a ``.<callback> = <func_name>`` slot in a
+    ``struct usb_serial_driver`` definition in the parsed file, return
+    the slot name (e.g. ``"tiocmset"``). Otherwise None.
+    """
+    if not parsed_file or not func_name:
+        return None
+    source = getattr(parsed_file, "preprocessed_source", None)
+    if source is None:
+        # Fall back to concatenated bodies — unlikely to catch top-level
+        # dispatch tables, but cheap if preprocessed_source is unset.
+        source = "\n".join((parsed_file.function_bodies or {}).values())
+    if not source:
+        return None
+    for m in _USB_SERIAL_DRIVER_DEF_RE.finditer(source):
+        block = m.group(1)
+        # Look for ``.callback = func_name`` (allowing ws + optional trailing comma/whitespace).
+        slot_re = re.compile(
+            rf"\.(\w+)\s*=\s*(?:&\s*)?{re.escape(func_name)}\b"
+        )
+        for slot_m in slot_re.finditer(block):
+            slot = slot_m.group(1)
+            if slot in _USB_SERIAL_DRIVER_CALLBACKS:
+                return slot
+    return None
+
+
+def _witness_assigns_null_to_framework_pointer(cex: "Counterexample") -> list[str]:
+    """Return a list of witness variable basenames assigned NULL whose
+    name matches a known framework-set pointer (tty, port, priv, …).
+    """
+    if not cex or not getattr(cex, "variable_assignments", None):
+        return []
+    matches: list[str] = []
+    for var, val in cex.variable_assignments.items():
+        val_str = (val or "").upper()
+        if "NULL" not in val_str or "NOTNULL" in val_str:
+            continue
+        base = re.split(r"[!\$@\.\[]", var, 1)[0].lstrip("_")
+        if not base or not base.isidentifier():
+            continue
+        # Direct framework-pointer name (``tty``, ``port``, ``priv``, ``serial``)
+        # OR a field-access on ``tty`` (e.g. ``tty.driver_data``,
+        # ``tty->driver_data`` rendered as ``tty.driver_data`` by CBMC).
+        if base in _USB_SERIAL_FRAMEWORK_POINTER_NAMES:
+            matches.append(var)
+            continue
+        # ``tty->driver_data`` appears as ``tty.driver_data`` or
+        # ``*tty.driver_data`` in CBMC output. ``var`` may contain ``.``
+        # after the basename strip; split the raw var to look for it.
+        if "." in var or "->" in var:
+            # Pull the head segment of the raw var
+            head = re.split(r"[\.\->\[]", var, 1)[0].lstrip("_")
+            if head in _USB_SERIAL_FRAMEWORK_POINTER_NAMES:
+                matches.append(var)
+    return matches
+
+
+def _witness_indicates_usb_serial_framework_invariant(
+    func: "FunctionInfo", cex: "Counterexample", parsed_file: "ParsedCFile"
+) -> str | None:
+    """Detect the pl2303-style false positive: a function registered as a
+    USB-serial driver callback, with a witness that sets a
+    framework-managed pointer (``tty``, ``port``, ``priv``, or
+    ``tty->driver_data``) to NULL. The USB-serial core's wrapper
+    derefs these before dispatching, so NULL is unreachable along any
+    framework-constructed path.
+
+    Conservative: requires BOTH (a) explicit registration as a
+    USB-serial callback in a ``struct usb_serial_driver`` definition
+    present in the parsed file, AND (b) at least one framework-pointer
+    witness assignment to NULL.
+    """
+    callback_slot = _function_registered_as_usb_serial_callback(
+        func.name, parsed_file
+    )
+    if not callback_slot:
+        return None
+    null_witnesses = _witness_assigns_null_to_framework_pointer(cex)
+    if not null_witnesses:
+        return None
+    sample = ", ".join(sorted(set(null_witnesses))[:3])
+    more = "" if len(null_witnesses) <= 3 else f" (+{len(null_witnesses)-3} more)"
+    return (
+        f"'{func.name}' is registered as the '.{callback_slot}' slot of a "
+        f"struct usb_serial_driver dispatch table; witness assigns NULL to "
+        f"framework-managed pointer(s) [{sample}{more}] that the core's "
+        f"wrapper derefs before dispatching"
+    )
 
 
 def _witness_indicates_path_divergent_unwind(cex: "Counterexample") -> str | None:

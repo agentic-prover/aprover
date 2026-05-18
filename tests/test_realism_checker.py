@@ -877,3 +877,158 @@ def test_dynamic_validation_result_has_harness_source():
     assert r.harness_source == "int main() { return 0; }"
     d = r.to_dict()
     assert d["harness_source"] == "int main() { return 0; }"
+
+
+# ---------------------------------------------------------------------------
+# 9. USB-serial framework-invariant witness detector
+# ---------------------------------------------------------------------------
+
+def _make_parsed_file_with_usb_serial_table(callback_slot: str, fn_name: str):
+    """Build a minimal ParsedCFile whose preprocessed_source contains a
+    ``struct usb_serial_driver`` registering *fn_name* in *callback_slot*."""
+    from bmc_agent.parser import ParsedCFile
+    src = (
+        f"static int {fn_name}(struct tty_struct *tty) {{ return 0; }}\n"
+        f"static struct usb_serial_driver some_device = {{\n"
+        f"    .description = \"some\",\n"
+        f"    .{callback_slot} = {fn_name},\n"
+        f"    .num_ports = 1,\n"
+        f"}};\n"
+    )
+    return ParsedCFile(
+        path="/tmp/fake.c",
+        functions={},
+        call_graph={},
+        function_bodies={},
+        function_definitions={},
+        preprocessed_source=src,
+    )
+
+
+def _make_func_info_named(fn_name: str):
+    """Build a FunctionInfo stub with just a name and minimal signature."""
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    sig = FunctionSignature(
+        name=fn_name, return_type="int", parameters=[], is_static=True
+    )
+    return FunctionInfo(
+        name=fn_name,
+        source_file="/tmp/fake.c",
+        signature=sig,
+        body="{ return 0; }",
+        callees=set(),
+    )
+
+
+def test_usb_serial_framework_invariant_detects_tiocmset_null_witness():
+    """pl2303-style false positive: ``pl2303_tiocmset`` registered as
+    ``.tiocmset`` in a ``struct usb_serial_driver``, witness has
+    ``tty == NULL``. Detector must short-circuit to UNREALISTIC.
+    """
+    from bmc_agent.realism_checker import (
+        _witness_indicates_usb_serial_framework_invariant,
+    )
+    from bmc_agent.cbmc import Counterexample
+    pf = _make_parsed_file_with_usb_serial_table("tiocmset", "pl2303_tiocmset")
+    func = _make_func_info_named("pl2303_tiocmset")
+    cex = Counterexample(
+        failing_property="pl2303_tiocmset.pointer_dereference.1",
+        variable_assignments={
+            "tty": "((struct tty_struct *)NULL)",
+            "set": "1",
+            "clear": "0",
+        },
+    )
+    cause = _witness_indicates_usb_serial_framework_invariant(func, cex, pf)
+    assert cause is not None
+    assert ".tiocmset" in cause
+    assert "pl2303_tiocmset" in cause
+
+
+def test_usb_serial_framework_invariant_detects_port_null_for_dtr_rts():
+    """``pl2303_dtr_rts`` registered as ``.dtr_rts`` with the framework's
+    ``port`` argument NULL in the witness."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_usb_serial_framework_invariant,
+    )
+    from bmc_agent.cbmc import Counterexample
+    pf = _make_parsed_file_with_usb_serial_table("dtr_rts", "pl2303_dtr_rts")
+    func = _make_func_info_named("pl2303_dtr_rts")
+    cex = Counterexample(
+        failing_property="pl2303_dtr_rts.pointer_dereference.1",
+        variable_assignments={
+            "port": "((struct usb_serial_port *)NULL)",
+            "on": "1",
+        },
+    )
+    cause = _witness_indicates_usb_serial_framework_invariant(func, cex, pf)
+    assert cause is not None
+    assert "dtr_rts" in cause
+
+
+def test_usb_serial_framework_invariant_skips_when_not_registered():
+    """A function NOT registered in any ``struct usb_serial_driver`` —
+    e.g. a helper used internally — should NOT trigger the detector
+    even if its witness has a NULL framework-named pointer."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_usb_serial_framework_invariant,
+    )
+    from bmc_agent.parser import ParsedCFile
+    from bmc_agent.cbmc import Counterexample
+    pf = ParsedCFile(
+        path="/tmp/fake.c",
+        functions={}, call_graph={}, function_bodies={}, function_definitions={},
+        preprocessed_source=(
+            # No usb_serial_driver registration in this file
+            "static int helper(struct tty_struct *tty) { return 0; }\n"
+        ),
+    )
+    func = _make_func_info_named("helper")
+    cex = Counterexample(
+        failing_property="helper.pointer_dereference.1",
+        variable_assignments={"tty": "NULL"},
+    )
+    assert _witness_indicates_usb_serial_framework_invariant(func, cex, pf) is None
+
+
+def test_usb_serial_framework_invariant_skips_when_witness_has_no_null():
+    """Registered as a callback but the witness pointers are non-NULL —
+    detector returns None so the LLM can audit normally."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_usb_serial_framework_invariant,
+    )
+    from bmc_agent.cbmc import Counterexample
+    pf = _make_parsed_file_with_usb_serial_table("open", "ch341_open")
+    func = _make_func_info_named("ch341_open")
+    cex = Counterexample(
+        failing_property="ch341_open.bounds.1",
+        variable_assignments={"tty": "0x1234", "i": "5"},
+    )
+    assert _witness_indicates_usb_serial_framework_invariant(func, cex, pf) is None
+
+
+def test_usb_serial_framework_invariant_ignores_unrelated_slot():
+    """If a function name matches a slot name that ISN'T in our known
+    USB-serial callback list (e.g. ``.foo = my_fn``), don't fire."""
+    from bmc_agent.realism_checker import (
+        _witness_indicates_usb_serial_framework_invariant,
+    )
+    from bmc_agent.parser import ParsedCFile
+    from bmc_agent.cbmc import Counterexample
+    pf = ParsedCFile(
+        path="/tmp/fake.c",
+        functions={}, call_graph={}, function_bodies={}, function_definitions={},
+        preprocessed_source=(
+            "static int my_fn(void *port) { return 0; }\n"
+            "static struct usb_serial_driver dev = {\n"
+            "    .undocumented_slot = my_fn,\n"
+            "};\n"
+        ),
+    )
+    func = _make_func_info_named("my_fn")
+    cex = Counterexample(
+        failing_property="my_fn.pointer_dereference.1",
+        variable_assignments={"port": "NULL"},
+    )
+    # ``undocumented_slot`` not in _USB_SERIAL_DRIVER_CALLBACKS → no match.
+    assert _witness_indicates_usb_serial_framework_invariant(func, cex, pf) is None

@@ -277,17 +277,47 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
     # CURL_DISABLE_PARSEDATE`` (curl/parsedate.c) or ``#ifdef __linux__``
     # are invisible to the parser even though they're in the build by
     # default.
+    #
+    # ``compound_statement`` and ``ERROR`` appear at the top level only
+    # under tree-sitter's parse-error recovery: when a macro-heavy kernel
+    # body (FIELD_PREP nests, _Static_assert inside struct{} type-exprs)
+    # confuses the C grammar, tree-sitter wraps a span of trailing
+    # function_definitions into a synthetic ``compound_statement`` (or
+    # ``ERROR``) child of the translation_unit instead of failing the
+    # whole parse. The functions inside are still valid; we just need to
+    # walk through the wrapper. Without this, ~15% of the functions in
+    # ``drivers/net/ethernet/airoha/airoha_eth.i`` go invisible and the
+    # harness emitter's body-excision misses their definitions, leaving
+    # 73KB of orphaned ``FIELD_PREP`` expansions in the type-decls.
     _PREPROC_CONTAINER_TYPES = {
         "preproc_if", "preproc_ifdef", "preproc_ifndef",
         "preproc_else", "preproc_elif", "preproc_elifdef", "preproc_elifndef",
         "linkage_specification",  # extern "C" { ... }
+        "compound_statement",     # parse-error recovery wrapper (kernel TUs)
+        "ERROR",                  # parse-error recovery wrapper (kernel TUs)
     }
 
     def _collect_function_defs(node):
         """Yield every function_definition node, recursing through
-        preprocessor / linkage wrappers but not into other function defs."""
+        preprocessor / linkage wrappers and parse-error-recovery
+        compound_statement wrappers.
+
+        At a ``function_definition`` we yield the node *and* recurse
+        into its compound_statement body. The recursion is needed
+        because tree-sitter's error recovery on macro-heavy kernel TUs
+        often nests trailing functions inside an earlier function's
+        body (parent chain: ``function_definition → compound_statement
+        → function_definition``). Without this, ``hid-pidff.c``'s
+        ``pidff_rescale`` and ~10 siblings vanish. Real GCC nested
+        function defs are extremely rare in kernel/driver code, so the
+        spurious recurse cost is negligible.
+        """
         if node.type == "function_definition":
             yield node
+            for child in node.children:
+                if child.type == "compound_statement":
+                    for sub in child.children:
+                        yield from _collect_function_defs(sub)
             return
         if node.type in _PREPROC_CONTAINER_TYPES or node.type == "translation_unit":
             for child in node.children:

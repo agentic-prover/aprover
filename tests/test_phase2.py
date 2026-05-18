@@ -350,6 +350,94 @@ def test_parser_recurses_into_preproc_ifdef():
     assert "linux_only" in parsed.functions
 
 
+def test_parser_recovers_function_defs_buried_in_parse_error_recovery():
+    """Kernel TUs with macro-heavy bodies (FIELD_PREP+_Static_assert nests)
+    push tree-sitter into parse-error recovery, which wraps trailing
+    function_definitions in a synthetic ``compound_statement`` child of
+    the translation_unit rather than failing the parse. The collector
+    must recurse through that wrapper.
+
+    Regression: ``airoha_set_gdm_port_fwd_cfg`` in
+    ``drivers/net/ethernet/airoha/airoha_eth.i`` parsed under such a
+    wrapper, so the harness emitter's body-excision missed it and
+    emitted 18KB of FIELD_PREP expansions verbatim, producing
+    ``syntax error before ')'`` at CBMC frontend time.
+    """
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+
+    # Construct a synthetic TU where the first function has a body that
+    # confuses tree-sitter enough to drop into recovery. Easiest trigger
+    # we can do hermetically: a top-level ``compound_statement`` directly
+    # under the TU. This is the *exact* shape recovery produces.
+    src = (
+        "static int before_fn(int x) { return x; }\n"
+        "{ /* synthetic top-level block, simulates parse-error recovery */\n"
+        "static int buried_a(int x) { return x + 1; }\n"
+        "static int buried_b(int x) { return x * 2; }\n"
+        "}\n"
+        "static int after_fn(int x) { return x - 1; }\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as tf:
+        tf.write(src)
+        path = tf.name
+    try:
+        parsed = parse_c_file(path)
+    finally:
+        os.unlink(path)
+
+    assert "before_fn" in parsed.functions
+    assert "after_fn" in parsed.functions
+    assert "buried_a" in parsed.functions, "function inside top-level compound_statement (parse-recovery shape) was not collected"
+    assert "buried_b" in parsed.functions
+    # And we want the full definitions captured so the harness can excise them.
+    assert parsed.function_definitions.get("buried_a", "").startswith("static int buried_a")
+
+
+def test_parser_recovers_function_defs_nested_inside_prior_function_body():
+    """Second parse-error-recovery shape: tree-sitter's tolerance for
+    macro-heavy bodies (kernel FIELD_PREP, _Static_assert) can land
+    trailing function_definitions INSIDE the prior function's body,
+    yielding the chain ``function_definition → compound_statement →
+    function_definition``. The collector must yield the outer
+    function_definition *and* recurse into its body for buried
+    siblings.
+
+    Regression: ``pidff_rescale`` and ~10 siblings in
+    ``drivers/hid/usbhid/hid-pidff.i`` were invisible because the
+    collector returned at the outer function_definition without
+    looking inside.
+    """
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+
+    # Construct a TU that lexically *looks* like one function body
+    # contains trailing function definitions. Real C wouldn't reach
+    # this — but tree-sitter's error-recovery shape does, and that's
+    # what we test against.
+    src = (
+        "static int outer_fn(int x) {\n"
+        "  return x;\n"
+        "}\n"
+        "static int sibling_a(int x) { return x + 1; }\n"
+        "static int sibling_b(int x) { return x * 2; }\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as tf:
+        tf.write(src)
+        path = tf.name
+    try:
+        parsed = parse_c_file(path)
+    finally:
+        os.unlink(path)
+    # All three must be collected — the normal walk catches them at
+    # translation_unit level. This guards against a future change
+    # that breaks the "recurse into function_definition body" path
+    # also breaking the simple top-level case.
+    assert "outer_fn" in parsed.functions
+    assert "sibling_a" in parsed.functions
+    assert "sibling_b" in parsed.functions
+
+
 def test_generate_nd_decls_struct_pointer_per_field_init():
     """Single-pointer to a known struct gets per-field initialisation:
     char* fields → bounded backing buffer; length fields → assume ≥ 0.
