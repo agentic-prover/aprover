@@ -576,15 +576,45 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
 
 
 def _extract_param_ts(param_node, src_bytes: bytes) -> tuple[str, str]:
-    """Return (type_str, name_str) from a parameter_declaration node."""
+    """Return (type_str, name_str) from a parameter_declaration node.
+
+    Handles three declarator shapes that put non-identifier punctuation
+    onto the "name" half of a whitespace split:
+
+      * pointer prefix:   ``T *p``      → type=``T*``     name=``p``
+      * double pointer:   ``T **pp``    → type=``T**``    name=``pp``
+      * array decay:      ``T buf[N]``  → type=``T*``     name=``buf``
+        (the array size is lost — that's correct for C, where array
+        parameters decay to pointers at the call site; a downstream
+        harness that emits ``buf[N]`` from this string would be passing
+        an element, not the array. ch341/pl2303 sweep regression.)
+    """
     full_text = _slice_bytes(src_bytes, param_node).strip()
-    # Last whitespace-separated token is the name (possibly prefixed with *)
     parts = full_text.rsplit(None, 1)
     if len(parts) == 2:
-        last = parts[1]           # e.g. "*rb", "**pp", "len"
-        name = last.lstrip("*")   # strip leading stars from the name
-        stars = "*" * (len(last) - len(name))  # stars belong to the type
+        last = parts[1]
+        # Strip leading pointer stars from the name; they belong on the
+        # type. ``**pp`` → name=``pp`` + 2 trailing stars on type.
+        name = last.lstrip("*")
+        stars = "*" * (len(last) - len(name))
         type_str = parts[0].strip() + stars
+        # Array-decay: ``buf[N]`` (or ``buf[]``) on the name half means
+        # the parameter is logically a pointer. Strip ``[...]`` from
+        # the name and add one ``*`` to the type. Multi-dimensional
+        # arrays (``buf[N][M]``) also decay — first dim only becomes a
+        # pointer; later dims stay as part of the type.
+        if "[" in name:
+            bracket = name.index("[")
+            tail = name[bracket:]
+            name = name[:bracket]
+            # First ``[...]`` decays to ``*``; any remaining brackets
+            # stay on the type. ``buf[N][M]`` → name=``buf``,
+            # type=``T (*)[M]`` (we approximate as ``T*[M]`` because the
+            # downstream harness gen doesn't currently use the inner
+            # dimension and the value-arg form is what matters).
+            first_close = tail.find("]")
+            remainder = tail[first_close + 1:] if first_close >= 0 else ""
+            type_str = type_str + "*" + remainder
         return type_str, name
     return full_text, ""
 

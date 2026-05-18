@@ -2432,6 +2432,43 @@ def test_parsed_file_restrict_no_op_without_primary_source():
         os.unlink(path)
 
 
+def test_param_extraction_handles_array_decay():
+    """``T name[N]`` in a function parameter list is array-decay
+    syntax: the parameter is logically ``T *name``. The parser must
+    return name=``name``, type=``T*`` — NOT name=``name[N]``, type=
+    ``T``. Otherwise the harness emits ``f(buf[N])`` at the call
+    site, which passes the past-the-end element instead of the
+    buffer pointer. Regression from the 2026-05-18 pl2303 sweep
+    (pl2303_get_line_request, _vendor_read, _set_line_request,
+    _encode_baud_rate_*) where CBMC reported spurious array_bounds
+    violations originating in the harness ``main`` rather than in
+    the function body.
+    """
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+
+    src = (
+        "int f1(struct foo *port, unsigned char buf[7]) { return 0; }\n"
+        "int f2(int *p, char arr[]) { return 0; }\n"
+        "int f3(int **pp, int matrix[3][4]) { return 0; }\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        pf = parse_c_file(path)
+        f1_params = list(pf.functions["f1"].parameters)
+        assert f1_params == [("struct foo*", "port"), ("unsigned char*", "buf")], f1_params
+        f2_params = list(pf.functions["f2"].parameters)
+        assert f2_params == [("int*", "p"), ("char*", "arr")], f2_params
+        # Multi-dim array: first dim decays, second stays in type.
+        f3_params = list(pf.functions["f3"].parameters)
+        assert f3_params[0] == ("int**", "pp")
+        assert f3_params[1] == ("int*[4]", "matrix"), f3_params[1]
+    finally:
+        os.unlink(path)
+
+
 def test_kernel_api_return_contract_constrains_usb_control_msg():
     """Linux USB API functions (``usb_control_msg``, ``usb_submit_urb``,
     etc.) return 0 on success or a negative ERRNO. CBMC's default nondet
