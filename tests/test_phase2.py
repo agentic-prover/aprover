@@ -15,6 +15,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -2423,6 +2424,118 @@ def test_parsed_file_restrict_no_op_without_primary_source():
         assert set(pf.functions.keys()) == before
     finally:
         os.unlink(path)
+
+
+def test_kernel_primitive_typedefs_survive_glibc_strip():
+    """``__u8``/``__s8``/``__be32``/``__kernel_off_t``/``__poll_t`` are
+    Linux kernel UAPI primitives, NOT glibc-internal types. The generic
+    ``__``-prefix rule used to strip glibc internals like ``__fpos_t``
+    must NOT also remove these — driver code uses ``u8/u16/u32`` (which
+    derive from ``__u8/__u16/__u32``) in function signatures, and POSIX
+    shape types like ``__kernel_off_t`` show up in struct definitions
+    that the driver code references."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef unsigned char __u8;\n"
+        "typedef signed char __s8;\n"
+        "typedef unsigned int __be32;\n"
+        "typedef long __kernel_off_t;\n"
+        "typedef unsigned int __poll_t;\n"
+        # Real glibc-internal — should be stripped as before
+        "typedef struct { int __val[2]; } __fsid_t;\n"
+        "typedef long __pid_t;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    # Kernel primitives preserved
+    assert "typedef unsigned char __u8;" in out
+    assert "typedef signed char __s8;" in out
+    assert "typedef unsigned int __be32;" in out
+    assert "typedef long __kernel_off_t;" in out
+    assert "typedef unsigned int __poll_t;" in out
+    # Genuine glibc internals still stripped
+    assert "/* typedef __fsid_t" in out
+    assert "/* typedef __pid_t" in out
+
+
+def test_c99_stdint_typedefs_get_stripped_so_libc_wins():
+    """Linux's linux/types.h defines ``typedef u8 uint8_t;`` /
+    ``typedef u8 u_int8_t;`` etc. The harness includes ``<stdint.h>``
+    which provides authoritative ``uint8_t``. To avoid the conflict,
+    the C99 stdint / BSD u_int*_t typedefs must be stripped from the
+    inlined kernel source."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef unsigned char __u8;\n"
+        "typedef __u8 u8;\n"
+        "typedef u8 uint8_t;\n"
+        "typedef u8 u_int8_t;\n"
+        "typedef int int32_t;\n"
+        "typedef long intptr_t;\n"
+    )
+    out = _strip_glibc_internal_typedefs(src)
+    # Kernel chain root + u8 preserved (used directly in driver signatures)
+    assert "typedef unsigned char __u8;" in out
+    assert "typedef __u8 u8;" in out
+    # libc conflicts stripped
+    assert "/* typedef uint8_t" in out
+    assert "/* typedef u_int8_t" in out
+    assert "/* typedef int32_t" in out
+    assert "/* typedef intptr_t" in out
+
+
+def test_strip_inline_asm_preserves_semicolon_on_register_clause():
+    """``register unsigned long sp asm("rsp");`` is a register-storage
+    declaration with a GCC asm-name clause; the trailing ``;``
+    terminates the declaration, not the asm clause. The asm stripper
+    must NOT consume it. Stripping the asm clause to a comment plus
+    swallowing the ``;`` left the next ``struct ...`` token attached to
+    a declaration without a terminator — CBMC reports ``syntax error
+    before 'struct'`` and refuses the whole TU."""
+    from bmc_agent.harness_generator import _strip_inline_asm
+    src = (
+        'register unsigned long current_stack_pointer asm("rsp");\n'
+        'struct bug_entry;\n'
+    )
+    out = _strip_inline_asm(src)
+    # asm clause text gone, but the semicolon stays so the declaration
+    # is well-terminated.
+    assert "/* asm removed */" in out
+    assert "register unsigned long current_stack_pointer /* asm removed */;" in out
+    # The follow-on declaration is untouched.
+    assert "struct bug_entry;" in out
+
+
+def test_strip_inline_asm_still_consumes_semicolon_for_statement_form():
+    """Counterpart to the register-clause case. ``asm volatile ("nop");``
+    is a top-level/statement asm — the ``;`` IS part of the asm and
+    must continue to be consumed. Otherwise we'd leave a stray
+    ``/* asm removed */;`` which most C parsers reject at translation-
+    unit scope."""
+    from bmc_agent.harness_generator import _strip_inline_asm
+    src = 'asm volatile ("nop");\nint x = 1;\n'
+    out = _strip_inline_asm(src)
+    # No stray semicolon between the comment and the next declaration.
+    assert "/* asm removed */\nint x" in out
+    assert "/* asm removed */;" not in out
+
+
+def test_strip_gcc_addr_space_quals_removes_seg_gs_seg_fs():
+    """GCC's named-address-space keywords ``__seg_gs`` and ``__seg_fs``
+    survive cpp (they're bare identifiers, not macros). CBMC's frontend
+    doesn't recognise them and reports ``syntax error before '__seg_gs'``.
+    Erase them; they have no verification value in single-threaded
+    model checking."""
+    from bmc_agent.harness_generator import _strip_gcc_addr_space_quals
+    src = (
+        "extern __typeof__(struct task_struct * const __seg_gs) current_task;\n"
+        "extern __typeof__(int __seg_fs) per_cpu_var;\n"
+        # Look-alike that must NOT be touched
+        "int __seg_gs_var = 0;\n"
+    )
+    out = _strip_gcc_addr_space_quals(src)
+    assert "__seg_gs" not in re.sub(r"__seg_gs_var", "", out)
+    assert "__seg_fs" not in out
+    assert "__seg_gs_var" in out
 
 
 def test_strip_cpp_linemarkers_leaves_non_linemarker_preproc_alone():

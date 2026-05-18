@@ -2390,7 +2390,9 @@ class HarnessGenerator:
         # libc stubs (signal(), setjmp(), ...) that won't compile on x86.
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_typedefs(
-                _strip_static_inline_defs(_strip_inline_asm(type_decls))
+                _strip_static_inline_defs(
+                    _strip_inline_asm(_strip_gcc_addr_space_quals(type_decls))
+                )
             )
         )
         func_def   = _strip_inline_asm(func_def)
@@ -2564,7 +2566,9 @@ class HarnessGenerator:
         # work; the CBMC harness path was missed).
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_typedefs(
-                _strip_static_inline_defs(_strip_inline_asm(type_decls))
+                _strip_static_inline_defs(
+                    _strip_inline_asm(_strip_gcc_addr_space_quals(type_decls))
+                )
             )
         )
 
@@ -3044,8 +3048,42 @@ def _read_source(source_file: str) -> str:
         return ""
 
 
+# GCC named address-space qualifiers used by the x86_64 Linux kernel to
+# place data in the GS/FS segment (per-CPU areas). They're emitted as
+# bare keywords surviving preprocessing (not macros), and CBMC's frontend
+# doesn't understand them. They have no verification-relevant semantics
+# in single-threaded model checking, so erase them entirely. Pattern is
+# anchored on word boundaries so it doesn't accidentally match names
+# like ``__seg_gs_var``.
+_GCC_ADDR_SPACE_PAT = re.compile(r'\b__seg_(?:gs|fs)\b')
+
+
+def _strip_gcc_addr_space_quals(text: str) -> str:
+    """Erase GCC named-address-space qualifiers (``__seg_gs`` / ``__seg_fs``)
+    surviving the cpp pass. They tag types with x86 segment registers
+    used for per-CPU storage in the kernel; CBMC's frontend doesn't
+    recognise them and emits ``syntax error before '__seg_gs'``. They
+    have no verification value, so just remove the token."""
+    return _GCC_ADDR_SPACE_PAT.sub("", text)
+
+
 def _strip_inline_asm(text: str) -> str:
-    """Remove asm/asm volatile/__asm__/etc. statements so the harness compiles on x86."""
+    """Remove asm/asm volatile/__asm__/etc. statements so the harness compiles on x86.
+
+    Two shapes the kernel uses:
+
+      * Statement form:   ``asm volatile ("nop");``  — the ``;`` is part of
+        the asm statement itself and SHOULD be consumed.
+      * Clause form:      ``register unsigned long sp asm("rsp");`` — the
+        ``;`` belongs to the surrounding declaration (the asm() is a
+        GCC asm-name clause on a register-storage variable). Consuming
+        it leaves a declaration without a terminator and the next token
+        (typically the following declaration) trips a syntax error.
+
+    Distinguish by looking backward from the ``asm`` match: if we see a
+    ``register`` token before reaching a statement boundary (``;`` / ``{``
+    / ``}``) , we're in clause form and must NOT eat the trailing ``;``.
+    """
     result: list[str] = []
     i = 0
     pat = re.compile(r'\b(asm|__asm__|__asm)\b')
@@ -3055,6 +3093,14 @@ def _strip_inline_asm(text: str) -> str:
             result.append(text[i:])
             break
         result.append(text[i:m.start()])
+        # Look backward for ``register`` in the current declaration so we
+        # can decide whether the trailing ``;`` belongs to us. Scan back
+        # from m.start() to the previous statement boundary.
+        scan_start = max(0, m.start() - 200)  # bounded look-back
+        prev = text[scan_start:m.start()]
+        last_term = max(prev.rfind(";"), prev.rfind("{"), prev.rfind("}"))
+        in_decl_window = prev[last_term + 1:] if last_term >= 0 else prev
+        is_register_clause = bool(re.search(r'\bregister\b', in_decl_window))
         j = m.end()
         # optional volatile qualifier
         vol = re.match(r'\s+(?:volatile|__volatile__)\b', text[j:])
@@ -3076,7 +3122,7 @@ def _strip_inline_asm(text: str) -> str:
                 j += 1
             while j < len(text) and text[j] in ' \t':
                 j += 1
-            if j < len(text) and text[j] == ';':
+            if j < len(text) and text[j] == ';' and not is_register_clause:
                 j += 1
             result.append('/* asm removed */')
             i = j
@@ -3190,6 +3236,21 @@ _SYSTEM_TYPEDEF_NAMES: frozenset[str] = frozenset({
     "max_align_t", "size_t", "ptrdiff_t", "wchar_t",
     # C99 <wchar.h>
     "wint_t", "wctrans_t", "wctype_t",
+    # C99 <stdint.h> — Linux's linux/types.h re-defines these (``typedef u8
+    # uint8_t;`` etc.) and the chain references kernel primitives (``u8``).
+    # The harness includes <stdint.h>, which provides authoritative
+    # definitions — strip the kernel's variants so they don't conflict.
+    "int8_t", "int16_t", "int32_t", "int64_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "int_least8_t", "int_least16_t", "int_least32_t", "int_least64_t",
+    "uint_least8_t", "uint_least16_t", "uint_least32_t", "uint_least64_t",
+    "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
+    "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t",
+    "intmax_t", "uintmax_t", "intptr_t", "uintptr_t",
+    # BSD-style historical aliases that glibc <sys/types.h> provides; Linux
+    # linux/types.h re-defines them (``typedef u8 u_int8_t;`` etc.). Same
+    # rationale as the stdint block — strip the kernel variant.
+    "u_int8_t", "u_int16_t", "u_int32_t", "u_int64_t",
     # POSIX <sys/types.h>
     "FILE", "fpos_t", "clock_t", "time_t",
     "pid_t", "uid_t", "gid_t", "mode_t", "nlink_t",
@@ -3197,6 +3258,35 @@ _SYSTEM_TYPEDEF_NAMES: frozenset[str] = frozenset({
     "rlim_t", "id_t", "suseconds_t", "useconds_t",
     "ssize_t", "socklen_t", "sa_family_t",
 })
+
+
+# Linux-kernel UAPI typedefs to preserve through the ``__``-prefix
+# strip. Despite the leading ``__`` (the convention the generic strip
+# rule uses to identify glibc internals like ``__fpos_t``), these are
+# kernel-side primitives or POSIX-shape types defined by
+# include/uapi/asm-generic/{int-ll64,posix_types,types}.h. Stripping
+# any of them cascade-breaks the entire ``__u8 → u8 → uint8_t`` /
+# ``__kernel_daddr_t → struct ustat`` chains and orphans every
+# function signature referencing them.
+#
+# Three families:
+#   1. Integer primitives (``__u8``, ``__s16``, ``__be32``, ``__sum16``)
+#   2. POSIX/UAPI shape types (``__kernel_off_t``, ``__kernel_daddr_t``,
+#      ``__kernel_pid_t``, …) — all defined under ``__kernel_<name>``
+#   3. Misc kernel-specific (``__poll_t``, ``__bitwise``, …)
+_KERNEL_PRIMITIVE_PAT = re.compile(
+    r'^(?:'
+    r'__[us](?:8|16|32|64|128)'         # __u8, __s16, __u128, ...
+    r'|__[lb]e(?:16|32|64)'             # __le16, __be32, ...
+    r'|__sum(?:16|32|64)'               # __sum16 (checksum types)
+    r'|__wsum'
+    r'|__kernel_\w+'                    # __kernel_off_t, __kernel_pid_t, …
+    r'|__poll_t'
+    r'|__bitwise'
+    r'|__rwonce_type'
+    r'|__nocast'
+    r')$'
+)
 
 
 def _strip_glibc_internal_typedefs(text: str) -> str:
@@ -3253,10 +3343,17 @@ def _strip_glibc_internal_typedefs(text: str) -> str:
         target = name_m.group(1) if name_m else None
 
         # Primary strip rule: name starts with `__` or is a C-standard typedef.
+        # Kernel primitive integer typedefs (``__u8``/``__s8``/``__le16``/…)
+        # are NOT glibc-internal: they're defined in
+        # include/uapi/asm-generic/int-ll64.h and downstream Linux types
+        # (``u8 = __u8``) inherit from them. Exempt them so the
+        # ``u8/u16/u32/u64`` chain stays intact for kernel driver
+        # signatures (``ch341_set_handshake(... u8 control)``).
         strip = False
         reason = ""
         if target and (
-            target.startswith('__') or target in _SYSTEM_TYPEDEF_NAMES
+            (target.startswith('__') and not _KERNEL_PRIMITIVE_PAT.match(target))
+            or target in _SYSTEM_TYPEDEF_NAMES
         ):
             strip = True
             reason = "removed"
