@@ -2432,6 +2432,110 @@ def test_parsed_file_restrict_no_op_without_primary_source():
         os.unlink(path)
 
 
+def test_kernel_api_return_contract_constrains_usb_control_msg():
+    """Linux USB API functions (``usb_control_msg``, ``usb_submit_urb``,
+    etc.) return 0 on success or a negative ERRNO. CBMC's default nondet
+    stub allows arbitrary positive returns, producing the ch341 false
+    positive (CE: ``result == 2`` from a NULL-buffer call). Verify the
+    helper emits a 0-or-negative-ERRNO contract.
+
+    Acts on TODO #2 from the 2026-05-18 ch341 sweep.
+    """
+    from bmc_agent.harness_generator import _kernel_api_return_contract
+    contract = _kernel_api_return_contract("usb_control_msg", "int")
+    assert any("result <= 0" in c and "result >= -4095" in c for c in contract)
+
+
+def test_kernel_api_return_contract_matches_family_members():
+    """Match ``usb_control_msg_send`` / ``usb_control_msg_recv`` via the
+    prefix rule (so the entire family is covered without listing every
+    variant)."""
+    from bmc_agent.harness_generator import _kernel_api_return_contract
+    assert _kernel_api_return_contract("usb_control_msg_send", "int")
+    assert _kernel_api_return_contract("usb_control_msg_recv", "int")
+    assert _kernel_api_return_contract("usb_submit_urb", "int")
+
+
+def test_kernel_api_return_contract_skips_pointer_returns():
+    """Only int-returning APIs follow the 0/-ERRNO convention.
+    Pointer-returning ones (``usb_get_serial_port_data``) take a
+    different path (the existing builtin allocator-family table)."""
+    from bmc_agent.harness_generator import _kernel_api_return_contract
+    assert _kernel_api_return_contract("usb_control_msg", "struct foo *") == []
+
+
+def test_kernel_api_return_contract_no_false_match_on_unrelated_names():
+    """Names that don't follow the kernel API prefix MUST return empty.
+    Prefix match requires the next char (if any) to be ``_`` — so
+    ``usb_control_msgxyz`` doesn't match ``usb_control_msg``."""
+    from bmc_agent.harness_generator import _kernel_api_return_contract
+    assert _kernel_api_return_contract("ch341_open", "int") == []
+    assert _kernel_api_return_contract("usb_control_msgxyz", "int") == []
+    assert _kernel_api_return_contract("printf", "int") == []
+
+
+def test_witness_null_guard_violation_detects_early_return():
+    """When the witness has ``priv == NULL`` but the function body has
+    ``if (!priv) return 0;`` near the top, the violation is unreachable
+    on the witnessed state — pre-LLM auto-reject as UNREALISTIC."""
+    from bmc_agent.realism_checker import _witness_indicates_null_guard_violation
+    from dataclasses import dataclass
+
+    @dataclass
+    class _CEX:
+        variable_assignments: dict
+        failing_property: str = ""
+        trace: list = None
+
+    @dataclass
+    class _Fn:
+        name: str
+        body: str
+
+    body = (
+        "{\n"
+        "    struct ch341_private *priv = usb_get_serial_port_data(port);\n"
+        "    if (!priv)\n"
+        "        return 0;\n"
+        "    return ch341_configure(port->serial->dev, priv);\n"
+        "}"
+    )
+    fn = _Fn(name="ch341_reset_resume", body=body)
+    cex = _CEX(variable_assignments={"priv": "((struct ch341_private *)NULL)"})
+    cause = _witness_indicates_null_guard_violation(fn, cex)
+    assert cause is not None
+    assert "priv" in cause
+
+
+def test_witness_null_guard_no_false_positive_without_guard():
+    """Function body without an early-return guard MUST return None,
+    even if the witness has a NULL pointer var. Otherwise we'd reject
+    real bugs."""
+    from bmc_agent.realism_checker import _witness_indicates_null_guard_violation
+    from dataclasses import dataclass
+
+    @dataclass
+    class _CEX:
+        variable_assignments: dict
+        failing_property: str = ""
+        trace: list = None
+
+    @dataclass
+    class _Fn:
+        name: str
+        body: str
+
+    body = (
+        "{\n"
+        "    struct foo *priv = get_foo();\n"
+        "    return priv->x;\n"   # genuinely derefs NULL — real bug
+        "}"
+    )
+    fn = _Fn(name="genuine_bug", body=body)
+    cex = _CEX(variable_assignments={"priv": "((struct foo *)NULL)"})
+    assert _witness_indicates_null_guard_violation(fn, cex) is None
+
+
 def test_kernel_primitive_typedefs_survive_glibc_strip():
     """``__u8``/``__s8``/``__be32``/``__kernel_off_t``/``__poll_t`` are
     Linux kernel UAPI primitives, NOT glibc-internal types. The generic

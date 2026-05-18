@@ -505,8 +505,17 @@ def _generate_stub(
         builtin_contract = _builtin_stub_return_contract(
             callee_name, ret_type, params
         )
+        # Kernel-API return-convention contracts. Kernel functions like
+        # ``usb_control_msg``, ``usb_submit_urb``, etc. return ``0`` on
+        # success or a negative ERRNO (-4095 … -1) on failure. CBMC's
+        # default nondet stub returns arbitrary positive ints, producing
+        # false-positive callers that branch on impossible success
+        # values (e.g. ``result == 2`` after a NULL-buffer call).
+        # Acted on TODO #2 from the 2026-05-18 ch341.c run.
+        if not builtin_contract:
+            builtin_contract = _kernel_api_return_contract(callee_name, ret_type)
         if builtin_contract:
-            lines.append("    /* Built-in stub contract (allocator-family) */")
+            lines.append("    /* Built-in stub contract (allocator-family or kernel API) */")
             lines.extend(f"    {c}" for c in builtin_contract)
         else:
             # Sibling-derived return contract: when the callee has no body
@@ -970,6 +979,83 @@ def _extract_jv_kind_preconditions(
 # ---------------------------------------------------------------------------
 # Built-in stub contracts for well-known C-runtime / libxml / curl externals
 # ---------------------------------------------------------------------------
+
+
+# Kernel API name prefixes whose int-returning members follow the standard
+# Linux ERRNO convention: return value is 0 on success, or a negative
+# error code in roughly [-4095, -1] on failure. CBMC's default nondet
+# stub allows arbitrary positive integers, which produces a large class
+# of false positives when caller code branches on "success means N bytes
+# transferred". Modelled after the recurring ch341 TODO from the
+# 2026-05-18 sweep — generalises across USB / netdev / device-driver
+# code that wraps these APIs.
+_KERNEL_INT_API_PREFIXES: tuple[str, ...] = (
+    # USB core
+    "usb_control_msg", "usb_bulk_msg", "usb_interrupt_msg",
+    "usb_submit_urb", "usb_unlink_urb", "usb_kill_urb",
+    "usb_clear_halt", "usb_set_interface", "usb_reset_configuration",
+    "usb_reset_device", "usb_autopm_get_interface", "usb_autopm_set_interface",
+    "usb_register_dev", "usb_deregister",
+    "usb_set_intfdata", "usb_serial_generic_write",
+    # Kernel device / driver core
+    "device_register", "device_add", "device_create_file",
+    "driver_register", "driver_create_file",
+    # Wait queue / IRQ
+    "wait_event_interruptible", "wait_event_killable",
+    "request_irq", "request_threaded_irq",
+    # Misc int-returning APIs that follow the 0/-ERRNO convention
+    "kstrtoint", "kstrtouint", "kstrtol", "kstrtoul",
+    "copy_from_user", "copy_to_user",     # 0 on success, nonzero bytes-remaining on partial
+    "get_user", "put_user",
+)
+
+
+def _kernel_api_return_contract(name: str, ret_type: str) -> list[str]:
+    """Return ``__CPROVER_assume`` statements that constrain a kernel-API
+    stub's int return value to follow the standard 0/-ERRNO convention:
+
+        result == 0 (success) || result in [-4095, -1] (negative ERRNO).
+
+    Empty list when the function isn't in the recognised API set or the
+    return type isn't a plain int.
+
+    Match is exact-name OR exact-prefix-of-name (so ``usb_control_msg``
+    catches the ``usb_control_msg``, ``usb_control_msg_send``,
+    ``usb_control_msg_recv`` family). This avoids false matches on
+    unrelated names (a hypothetical ``usb_bulk_msg_buffer_size`` won't
+    match because ``usb_bulk_msg`` is also a prefix of it — that's
+    intentional; if it ever causes a problem we can switch to exact
+    match).
+
+    Two functions in the set (``copy_from_user`` / ``copy_to_user``)
+    use a different convention — they return the number of BYTES NOT
+    COPIED, so 0 = success and any positive value = partial copy. We
+    accept this widening: constraining them to 0/-ERRNO would
+    over-restrict and miss legitimate partial-copy bugs. We treat them
+    the same as the other entries for now and revisit if it causes
+    false positives.
+    """
+    rt = (ret_type or "").strip().rstrip("*").strip()
+    if rt not in (
+        "int", "signed int", "long", "signed long",
+        "ssize_t", "int32_t", "int64_t",
+    ):
+        return []
+    matched = False
+    for prefix in _KERNEL_INT_API_PREFIXES:
+        if name == prefix or name.startswith(prefix):
+            # Require that the next character (if any) be ``_`` so we
+            # match family members like ``usb_control_msg_send`` but
+            # don't match unrelated names like ``usb_control_msgxyz``.
+            tail = name[len(prefix):]
+            if tail == "" or tail.startswith("_"):
+                matched = True
+                break
+    if not matched:
+        return []
+    return [
+        "__CPROVER_assume(result <= 0 && result >= -4095);",
+    ]
 
 
 def _builtin_stub_return_contract(

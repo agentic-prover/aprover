@@ -171,6 +171,34 @@ class RealismChecker:
                 llm_confidence="high",
             )
 
+        # NULL-guarded pointer-deref detector (from ch341 TODO #3,
+        # 2026-05-18, ch341_reset_resume): the function body has an
+        # explicit ``if (!ptr) return 0;`` early-return guard, but the
+        # counterexample shows the guarded pointer as NULL and then
+        # reports a deref violation at a later line. CBMC's symbolic
+        # exploration didn't honour the path-condition imposed by the
+        # guard (path-divergence inside the function). Reject pre-LLM:
+        # the witness contradicts itself.
+        guard_cause = _witness_indicates_null_guard_violation(func, counterexample)
+        if guard_cause:
+            logger.info(
+                "Realism check for '%s': UNREALISTIC by NULL-guard violation — %s",
+                func.name, guard_cause,
+            )
+            return RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    f"NULL-guard early-return artifact: {guard_cause}. "
+                    "The function body has an explicit guard that returns "
+                    "before any further use of the pointer; a counterexample "
+                    "showing the pointer NULL at a deref site contradicts "
+                    "that guard's path condition. This is CBMC's symbolic "
+                    "execution failing to prune the infeasible path."
+                ),
+                key_concern=f"[null-guard-violation] {guard_cause}",
+                llm_confidence="high",
+            )
+
         # Path-divergent unwind detector (from feedback-loop arm (a) TODO,
         # 2026-05-13): CBMC reports a *.unwind.* property fail when its
         # symbolic exploration on SOME path hits the loop bound; the
@@ -555,6 +583,67 @@ def _witness_indicates_jv_stub_disconnect(cex: "Counterexample") -> str | None:
             f"jv_get_kind reports refcnt-backed/out-of-range kinds "
             f"[{sample}{more}] — real jv constructors never pair these"
         )
+    return None
+
+
+def _witness_indicates_null_guard_violation(
+    func: "FunctionInfo", cex: "Counterexample"
+) -> str | None:
+    """Return a description if the counterexample shows a pointer
+    variable as NULL where the function body has an explicit
+    early-return guard ``if (!<ptr>) return ...;`` (or the equivalent
+    ``if (<ptr> == NULL)`` / ``if (NULL == <ptr>)`` shapes). Otherwise
+    None.
+
+    Detection from the ch341.c sweep (2026-05-18, ch341_reset_resume):
+    CBMC reports a NULL-deref via ``usb_get_serial_port_data`` even
+    though the function explicitly has ``if (!priv) return 0;``
+    immediately after the call. Symbolic execution should be unable
+    to reach the deref under the witnessed state — this is a path-
+    divergence artifact, not a bug.
+
+    Conservative: only emits a reason when (a) the witness has at
+    least one variable explicitly set to NULL, (b) that variable's
+    NAME appears in a guard pattern near the top of the function
+    body, and (c) the guard returns (rather than falling through).
+    """
+    if not cex or not getattr(cex, "variable_assignments", None):
+        return None
+    body = getattr(func, "body", None) or ""
+    if not body:
+        return None
+    nulled_names: list[str] = []
+    for var, val in (cex.variable_assignments or {}).items():
+        val_str = (val or "")
+        # Look for ``NULL`` or ``((...)NULL)`` patterns and exclude ``NOTNULL``.
+        if "NULL" in val_str.upper() and "NOTNULL" not in val_str.upper():
+            # Strip CBMC qualifier suffixes (``priv!0@1``, ``priv$$1``)
+            # and leading ``_`` decorations. Take the base identifier.
+            base = re.split(r"[!\$@\.\[]", var, 1)[0].lstrip("_")
+            if base and base.isidentifier():
+                nulled_names.append(base)
+    if not nulled_names:
+        return None
+    # Inspect the first ~80 statements of the function body for guards.
+    body_head = body[:4000]  # generous slice; guards usually appear early
+    for name in nulled_names:
+        # Match: ``if (!name) return ...;`` / ``if (name == NULL) return ...;``
+        # / ``if (NULL == name) return ...;`` (with optional whitespace).
+        patterns = [
+            rf"\bif\s*\(\s*!\s*{re.escape(name)}\s*\)\s*\{{?\s*return\b",
+            rf"\bif\s*\(\s*{re.escape(name)}\s*==\s*NULL\s*\)\s*\{{?\s*return\b",
+            rf"\bif\s*\(\s*NULL\s*==\s*{re.escape(name)}\s*\)\s*\{{?\s*return\b",
+            # And the same shapes spelled as ``== 0`` / ``!= 0``-less
+            # variants we sometimes see in kernel code.
+            rf"\bif\s*\(\s*{re.escape(name)}\s*==\s*0\s*\)\s*\{{?\s*return\b",
+        ]
+        for pat in patterns:
+            if re.search(pat, body_head):
+                return (
+                    f"witness assigns NULL to '{name}' but the function has "
+                    f"an explicit early-return guard 'if (!{name}) return …;' "
+                    "near the top of the body"
+                )
     return None
 
 
