@@ -3308,19 +3308,69 @@ def _strip_static_assert(text: str) -> str:
     enclosing ``struct{...}`` member declaration remains syntactically
     valid (it expects an expression-statement in the field-decl list).
     """
-    # Match ``_Static_assert(`` and consume to the matching ``)``;
-    # then expect ``;`` after.  Track paren depth + comments/strings
-    # so we don't trip on nested constructs.
+    # Walk the text looking for top-level ``_Static_assert(``
+    # occurrences (NOT inside string or char literals or comments).
+    # The kernel's BUILD_BUG_ON family expands to attribute strings
+    # like ``__error__("BUILD_BUG_ON failed: ... _Static_assert(...) ...")``
+    # — those embedded ``_Static_assert`` tokens are part of an error
+    # message and must NOT be rewritten, or we'd terminate the string
+    # in the middle. The inner paren-counting scan was already
+    # string-aware; the outer search was not.
     out: list[str] = []
     i = 0
     n = len(text)
     pat = re.compile(r'\b_Static_assert\s*\(')
     while i < n:
-        m = pat.search(text, i)
-        if m is None:
+        # Skip leading runs of comment/string content to find the next
+        # genuine ``_Static_assert(`` outside of any quoting.
+        k = i
+        match_pos = -1
+        while k < n:
+            ch = text[k]
+            if ch == '/' and k + 1 < n and text[k + 1] == '*':
+                end = text.find('*/', k + 2)
+                k = n if end == -1 else end + 2
+                continue
+            if ch == '/' and k + 1 < n and text[k + 1] == '/':
+                end = text.find('\n', k + 2)
+                k = n if end == -1 else end
+                continue
+            if ch == '"':
+                # Consume the entire string literal — even if it
+                # contains ``_Static_assert(`` as part of an
+                # attribute-style error message.
+                k += 1
+                while k < n:
+                    if text[k] == '\\' and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == '"':
+                        k += 1
+                        break
+                    k += 1
+                continue
+            if ch == "'":
+                k += 1
+                while k < n:
+                    if text[k] == '\\' and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == "'":
+                        k += 1
+                        break
+                    k += 1
+                continue
+            # Try matching ``_Static_assert(`` at this position.
+            mm = pat.match(text, k)
+            if mm:
+                match_pos = k
+                m = mm
+                break
+            k += 1
+        if match_pos == -1:
             out.append(text[i:])
             break
-        out.append(text[i:m.start()])
+        out.append(text[i:match_pos])
         j = m.end()  # position right after the opening '('
         depth = 1
         while j < n and depth > 0:
@@ -3519,19 +3569,25 @@ def _strip_gcc_addr_space_quals(text: str) -> str:
 def _strip_inline_asm(text: str) -> str:
     """Remove asm/asm volatile/__asm__/etc. statements so the harness compiles on x86.
 
-    Two shapes the kernel uses:
+    Two shapes the kernel uses — handled uniformly by NEVER consuming
+    the trailing ``;``:
 
-      * Statement form:   ``asm volatile ("nop");``  — the ``;`` is part of
-        the asm statement itself and SHOULD be consumed.
-      * Clause form:      ``register unsigned long sp asm("rsp");`` — the
-        ``;`` belongs to the surrounding declaration (the asm() is a
-        GCC asm-name clause on a register-storage variable). Consuming
-        it leaves a declaration without a terminator and the next token
-        (typically the following declaration) trips a syntax error.
+      * Statement form:   ``asm volatile ("nop");``  ⇒ ``/* asm removed */;``
+        (the ``;`` becomes an empty statement — valid C anywhere).
+      * Clause form:      ``register unsigned long sp asm("rsp");``
+        ⇒ ``register unsigned long sp /* asm removed */;`` (the ``;``
+        terminates the surrounding declaration as before).
 
-    Distinguish by looking backward from the ``asm`` match: if we see a
-    ``register`` token before reaching a statement boundary (``;`` / ``{``
-    / ``}``) , we're in clause form and must NOT eat the trailing ``;``.
+    Previously the stripper consumed the ``;`` in statement form. That
+    broke if the asm statement was the *entire body of a control-flow
+    branch* such as ``if (cond) X; else asm("hlt");`` — after stripping
+    the ``else`` body, the next token was the enclosing block's ``}``
+    and CBMC reported ``syntax error before '}'``. Leaving the ``;``
+    in place gives the ``else`` a valid empty-statement body.
+
+    The earlier ``register``-backward-scan distinction is retained as a
+    comment-only doc — it's no longer necessary for correctness, but
+    documents why we end up with the right output in both shapes.
     """
     result: list[str] = []
     i = 0
@@ -3542,17 +3598,6 @@ def _strip_inline_asm(text: str) -> str:
             result.append(text[i:])
             break
         result.append(text[i:m.start()])
-        # Look backward for ``register`` in the current declaration so we
-        # can decide whether the trailing ``;`` belongs to us. The
-        # look-back is unbounded back to the previous statement
-        # boundary — kernel macro expansions (e.g. ``__get_user`` family)
-        # put the ``register`` keyword arbitrarily far from the ``asm``
-        # clause, so an earlier 200-byte cap missed them and produced
-        # malformed declarations.
-        prev = text[:m.start()]
-        last_term = max(prev.rfind(";"), prev.rfind("{"), prev.rfind("}"))
-        in_decl_window = prev[last_term + 1:] if last_term >= 0 else prev
-        is_register_clause = bool(re.search(r'\bregister\b', in_decl_window))
         j = m.end()
         # optional volatile qualifier
         vol = re.match(r'\s+(?:volatile|__volatile__)\b', text[j:])
@@ -3572,9 +3617,14 @@ def _strip_inline_asm(text: str) -> str:
                         j += 1
                         break
                 j += 1
+            # Skip trailing whitespace but do NOT consume the ``;``.
+            # Leaving the ``;`` in place ensures the resulting text is a
+            # valid statement in every context: ``X; else asm("hlt");``
+            # → ``X; else /* asm removed */;`` (empty statement);
+            # ``register T x asm("rsp");`` →
+            # ``register T x /* asm removed */;`` (the declaration's
+            # terminator is preserved naturally).
             while j < len(text) and text[j] in ' \t':
-                j += 1
-            if j < len(text) and text[j] == ';' and not is_register_clause:
                 j += 1
             result.append('/* asm removed */')
             i = j

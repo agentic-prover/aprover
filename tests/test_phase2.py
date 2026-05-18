@@ -2652,18 +2652,44 @@ def test_strip_inline_asm_preserves_semicolon_on_register_clause():
     assert "struct bug_entry;" in out
 
 
-def test_strip_inline_asm_still_consumes_semicolon_for_statement_form():
-    """Counterpart to the register-clause case. ``asm volatile ("nop");``
-    is a top-level/statement asm — the ``;`` IS part of the asm and
-    must continue to be consumed. Otherwise we'd leave a stray
-    ``/* asm removed */;`` which most C parsers reject at translation-
-    unit scope."""
+def test_strip_inline_asm_preserves_semicolon_as_empty_statement():
+    """Always leave the trailing ``;`` after stripped asm. ``asm volatile
+    ("nop");`` becomes ``/* asm removed */;`` — the ``;`` is now an
+    empty statement (always valid C: at TU scope under C11; at
+    function-body scope unconditionally). This is required so that a
+    branch like ``if (1) X; else asm("hlt");`` becomes ``if (1) X;
+    else /* asm removed */;`` rather than leaving ``else`` with no
+    statement at all. Regression from the 2026-05-18 airoha_eth
+    sweep where ``napi_synchronize``'s ``if/else asm("...")``
+    crashed CBMC with ``syntax error before '}'`` after the strip
+    consumed both the asm body and its terminating ``;``."""
     from bmc_agent.harness_generator import _strip_inline_asm
     src = 'asm volatile ("nop");\nint x = 1;\n'
     out = _strip_inline_asm(src)
-    # No stray semicolon between the comment and the next declaration.
-    assert "/* asm removed */\nint x" in out
-    assert "/* asm removed */;" not in out
+    # The ``;`` is preserved as an empty statement after the comment.
+    assert "/* asm removed */;" in out
+    # The follow-on declaration is intact.
+    assert "int x = 1;" in out
+
+
+def test_strip_inline_asm_handles_else_branch_asm_only():
+    """The ch341/pl2303 cases never exercised this, but airoha_eth's
+    ``napi_synchronize`` does: ``else asm volatile ("hlt");`` was the
+    entire body of an ``else``. After strip the ``else`` must still
+    have a syntactically valid statement; ``/* asm removed */;`` does."""
+    from bmc_agent.harness_generator import _strip_inline_asm
+    src = (
+        "if (cond)\n"
+        "    do_x();\n"
+        "else\n"
+        "    asm volatile (\"hlt\");\n"
+        "do_y();\n"
+    )
+    out = _strip_inline_asm(src)
+    # ``else`` retains a statement (the empty-statement ``;``).
+    assert "else\n    /* asm removed */;" in out or "else\n/* asm removed */;" in out.replace("    ", "")
+    # do_y() is preserved (no boundary corruption).
+    assert "do_y();" in out
 
 
 def test_strip_static_assert_replaces_runtime_condition():
@@ -2690,6 +2716,33 @@ def test_strip_static_assert_replaces_runtime_condition():
         assert _re.match(r'_Static_assert\(\s*1\s*,', sa), f"unexpected static_assert: {sa}"
     # Three replacements should have fired (one per original).
     assert out.count('_Static_assert(1, "")') == 3
+
+
+def test_strip_static_assert_skips_string_literal_occurrences():
+    """The Linux kernel's BUILD_BUG_ON macro family embeds the failing-
+    condition source text inside ``__attribute__((__error__("...")))``
+    diagnostic strings — those strings can contain literal
+    ``_Static_assert(...)`` tokens as part of the human-readable error
+    message. The stripper MUST NOT rewrite those: doing so terminates
+    the surrounding string literal in the middle and produces tens of
+    thousands of cascading parse errors. Regression from the
+    2026-05-18 airoha_eth sweep where ``FIELD_PREP`` macro expansions
+    embedded ``_Static_assert(`` in error strings.
+    """
+    from bmc_agent.harness_generator import _strip_static_assert
+    src = (
+        'extern void f(void) __attribute__((__error__('
+        '"BUILD_BUG_ON failed: _Static_assert(x, \\"msg\\")")));\n'
+        '_Static_assert(sizeof(int) == 4, "");\n'
+    )
+    out = _strip_static_assert(src)
+    # Top-level _Static_assert rewritten (the size-of-int check).
+    assert out.count('_Static_assert(1, "")') == 1
+    # The string-embedded ``_Static_assert(x, "msg")`` is preserved
+    # verbatim, NOT rewritten.
+    assert "_Static_assert(x," in out
+    # The surrounding string literal stays intact.
+    assert '__error__("BUILD_BUG_ON failed' in out
 
 
 def test_strip_static_assert_handles_nested_parens():
