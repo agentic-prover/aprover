@@ -2224,3 +2224,66 @@ def test_strip_cascade_only_fires_for_glibc_internal_reference():
     )
     out = _strip_glibc_internal_typedefs(src)
     assert "typedef orphan_t removed: references stripped __my_internal" in out
+
+
+def test_strip_stdlib_decls_ignores_semicolons_inside_comments():
+    """Regression: source-file doc comments that contain ``;`` were
+    splitting the surrounding declaration text mid-comment. The injected
+    ``/* foo decl removed */`` marker prematurely closed the outer ``*/``
+    block, leaving the comment tail (``0 if empty */``) as garbage that
+    CBMC parsed as code. Observed on simple_driver.c: the harness for
+    every function failed to compile because the doc-comment for
+    dev_write contained a ``;`` and the next ``;``-delimited "statement"
+    contained ``read(`` (from a rb_read comment), wrongly triggering
+    the system-function-decl branch.
+    """
+    from bmc_agent.harness_generator import _strip_stdlib_decls
+    src = (
+        "typedef int foo_t;\n"
+        "/*\n"
+        " * Postcondition: returns bytes written (<= len); 0 if empty\n"
+        " * Calls: read() under the hood\n"
+        " */\n"
+        "typedef int bar_t;\n"
+    )
+    out = _strip_stdlib_decls(src)
+    # The output must preserve the doc comment intact — no decl marker
+    # injected inside the comment, no premature ``*/``.
+    assert "/* read decl removed */" not in out
+    assert "Postcondition: returns bytes written (<= len); 0 if empty" in out
+    # Both typedefs survive.
+    assert "typedef int foo_t;" in out
+    assert "typedef int bar_t;" in out
+
+
+def test_strip_stdlib_decls_still_strips_real_posix_redeclaration():
+    """The fix to skip comments must not regress the original purpose:
+    a real ``int read(...);`` forward declaration at depth 0 still gets
+    replaced with the marker. Surrounding typedefs are preserved."""
+    from bmc_agent.harness_generator import _strip_stdlib_decls
+    src = (
+        "typedef int foo_t;\n"
+        "int read(int fd, void *buf, int n);\n"
+        "typedef int bar_t;\n"
+    )
+    out = _strip_stdlib_decls(src)
+    assert "/* read decl removed */" in out
+    # Surrounding typedefs survive — the decl-removal only replaces the
+    # statement chunk containing the read() declarator.
+    assert "typedef int foo_t;" in out
+    assert "typedef int bar_t;" in out
+    # The real declarator is gone.
+    assert "int read(int fd, void *buf, int n);" not in out
+
+
+def test_strip_stdlib_decls_ignores_semicolons_inside_strings():
+    """A ``;`` inside a string literal must not be treated as a
+    statement boundary either. Less common in declaration text, but
+    the same scanner now handles it for free; lock it in."""
+    from bmc_agent.harness_generator import _strip_stdlib_decls
+    src = 'static const char *msg = "split ; here";\nint read(int);\n'
+    out = _strip_stdlib_decls(src)
+    # The real read() declaration after the string is still stripped.
+    assert "/* read decl removed */" in out
+    # The string literal is preserved verbatim.
+    assert '"split ; here"' in out

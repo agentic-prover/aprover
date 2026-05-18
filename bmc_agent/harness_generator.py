@@ -3272,18 +3272,65 @@ def _strip_stdlib_decls(text: str) -> str:
     declaration — a statement ending in ``;`` at brace depth 0 that contains
     a ``(`` and whose function name is in _SYSTEM_FUNCTION_NAMES — from the
     preprocessed type_decls.
+
+    The scanner is comment- and string-literal-aware: a ``;`` inside a
+    ``/* … */`` block comment, a ``// …`` line comment, or a string/char
+    literal does NOT count as a statement boundary.  Without this, source-
+    file doc comments like ``Postcondition: returns n (<= len); 0 if empty``
+    split the surrounding declaration text in the middle of a comment,
+    which both (a) emits a stray ``/* foo decl removed */`` marker inside
+    the comment, prematurely closing the outer ``*/``, and (b) lets the
+    regex match a system-function name (``read``, ``write``, …) that only
+    appears in commentary, corrupting unrelated declarations.
     """
     # Match function declarations at brace depth 0: lines/blocks ending in ';'
     # that look like "... funcname ( ... );"
     _DECL_PAT = re.compile(r'\b(\w+)\s*\(')
     result: list[str] = []
     i = 0
-    while i < len(text):
-        # Find the next ';' at depth 0
+    n = len(text)
+    while i < n:
+        # Find the next ';' at depth 0, skipping over comments and string/char literals
         j = i
         depth = 0
-        while j < len(text):
+        while j < n:
             ch = text[j]
+            # /* ... */ block comment
+            if ch == '/' and j + 1 < n and text[j + 1] == '*':
+                end = text.find('*/', j + 2)
+                j = n if end == -1 else end + 2
+                continue
+            # // ... line comment (consume up to newline; do not consume the newline)
+            if ch == '/' and j + 1 < n and text[j + 1] == '/':
+                end = text.find('\n', j + 2)
+                j = n if end == -1 else end
+                continue
+            # "..." string literal (handle escapes)
+            if ch == '"':
+                k = j + 1
+                while k < n:
+                    if text[k] == '\\' and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == '"':
+                        k += 1
+                        break
+                    k += 1
+                j = k
+                continue
+            # '...' char literal (handle escapes)
+            if ch == "'":
+                k = j + 1
+                while k < n:
+                    if text[k] == '\\' and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == "'":
+                        k += 1
+                        break
+                    k += 1
+                j = k
+                continue
             if ch == '{':
                 depth += 1
             elif ch == '}':
@@ -3291,18 +3338,67 @@ def _strip_stdlib_decls(text: str) -> str:
             elif ch == ';' and depth == 0:
                 break
             j += 1
-        if j >= len(text):
+        if j >= n:
             result.append(text[i:])
             break
         stmt = text[i:j + 1]
-        # Does this statement look like a function declaration (has parens, no body)?
-        m = _DECL_PAT.search(stmt)
-        if m and m.group(1) in _SYSTEM_FUNCTION_NAMES and '{' not in stmt:
+        # Strip comments and string/char literals before checking for a
+        # system-function declaration. A ``read(`` token in a doc comment
+        # must not be treated as a declaration of ``read``.
+        stmt_code = _strip_c_comments_and_strings(stmt)
+        m = _DECL_PAT.search(stmt_code)
+        if m and m.group(1) in _SYSTEM_FUNCTION_NAMES and '{' not in stmt_code:
             result.append(f'/* {m.group(1)} decl removed */')
         else:
             result.append(stmt)
         i = j + 1
     return ''.join(result)
+
+
+def _strip_c_comments_and_strings(text: str) -> str:
+    """Return *text* with /* ... */, // ..., and "..."/'...' contents
+    replaced by whitespace of equal length. Preserves overall offsets and
+    line counts so any downstream regex sees only the code portion.
+    Used by _strip_stdlib_decls so a system-function name appearing only
+    inside a comment doesn't get matched as a declaration.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '/' and i + 1 < n and text[i + 1] == '*':
+            end = text.find('*/', i + 2)
+            stop = n if end == -1 else end + 2
+            # Replace with spaces, keeping newlines so line counts match.
+            chunk = text[i:stop]
+            out.append(''.join('\n' if c == '\n' else ' ' for c in chunk))
+            i = stop
+            continue
+        if ch == '/' and i + 1 < n and text[i + 1] == '/':
+            end = text.find('\n', i + 2)
+            stop = n if end == -1 else end
+            out.append(' ' * (stop - i))
+            i = stop
+            continue
+        if ch in ('"', "'"):
+            quote = ch
+            k = i + 1
+            while k < n:
+                if text[k] == '\\' and k + 1 < n:
+                    k += 2
+                    continue
+                if text[k] == quote:
+                    k += 1
+                    break
+                k += 1
+            chunk = text[i:k]
+            out.append(''.join('\n' if c == '\n' else ' ' for c in chunk))
+            i = k
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
 
 
 def _is_simple_value(val: str) -> bool:
