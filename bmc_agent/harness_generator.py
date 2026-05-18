@@ -2729,22 +2729,29 @@ class HarnessGenerator:
         # stripper. For non-preprocessed input the default is
         # preserved (strip system typedefs; libc headers fill them in).
         _preprocessed = parsed_file.preprocessed_source is not None
-        # In kernel mode (preprocessed TU, no libc prepend) we skip the
-        # static-inline strip. Its purpose was to remove VibeOS-style
-        # inline libc stubs (``signal()``, ``setjmp()``, …) that conflict
-        # with the prepended system headers. With no libc prepend, no
-        # conflict — and kernel headers are full of complex
-        # macro-expanded static inlines (``READ_ONCE``, ``GENMASK``,
-        # ``__compiletime_assert``) whose brace structure trips the
-        # naive scanner; stripping them leaves orphan body fragments
-        # ("syntax error before ')'", "syntax error after enum end").
+        # In kernel mode the preprocessed TU carries
+        # ``__attribute__((__aligned__(...)))`` annotations whose
+        # arguments contain GCC's binary-conditional ``?:`` operator
+        # (kernel cacheline-padding macros). CBMC rejects ``?:`` as a
+        # constant expression. Strip these annotations before any
+        # further processing.
+        if _preprocessed:
+            type_decls = _strip_aligned_attributes(type_decls)
         _intermediate = _strip_inline_asm(
             _strip_static_assert(
                 _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
             )
         )
-        if not _preprocessed:
-            _intermediate = _strip_static_inline_defs(_intermediate)
+        # Kernel TU: strip ALL static inlines defined in headers,
+        # since most are unrelated kernel infrastructure that
+        # exercises CBMC-unsupported features (anonymous-tag
+        # struct inclusion, GCC statement-expression macros) and
+        # produces CONVERSION ERROR at type-check time. The FUT's
+        # direct callees are stubbed separately via the
+        # callee-stub path, so stripping them here is safe: CBMC
+        # treats unresolved calls as nondet, which is exactly what
+        # a stub provides.
+        _intermediate = _strip_static_inline_defs(_intermediate)
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed),
             kernel_mode=_preprocessed,
@@ -3567,6 +3574,69 @@ def _strip_gcc_addr_space_quals(text: str) -> str:
     return _GCC_ADDR_SPACE_PAT.sub("", text)
 
 
+def _strip_aligned_attributes(text: str) -> str:
+    """Remove ``__attribute__((__aligned__(...)))`` annotations.
+
+    Kernel cacheline-padding macros expand to alignment annotations
+    whose arguments use the GCC binary conditional ``( EXPR ) ? : ( ALT )``
+    (e.g. ``__attribute__((__aligned__(( + 0) ? : (1 << (6)))))``).
+    CBMC's frontend rejects ``?:`` inside a constant-expression context
+    with CONVERSION ERROR ``expected constant expression, but got
+    'irep(... gcc_conditional_expression ...)'``.
+
+    Alignment is a memory-layout concern with no effect on CBMC's
+    semantic verification, so the simplest fix is to strip the
+    annotation entirely. The scanner handles ``__attribute__((...))``
+    wherever it appears (declaration, field, etc.) by matching the
+    outer ``__attribute__(( ... ))`` and walking balanced parens.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        # Find next ``__attribute__``
+        idx = text.find('__attribute__', i)
+        if idx == -1:
+            result.append(text[i:])
+            break
+        # Quick filter: look for the `(__aligned__` or `(aligned` keyword
+        # in the annotation; if absent, skip this annotation. Otherwise
+        # strip it entirely (we don't try to preserve unrelated attribute
+        # clauses bundled in the same annotation; in practice they're
+        # rare on the lines that exercise this bug).
+        j = idx + len('__attribute__')
+        # Expect ``((``
+        while j < n and text[j] in ' \t':
+            j += 1
+        if j + 1 >= n or text[j] != '(' or text[j + 1] != '(':
+            result.append(text[i:idx + len('__attribute__')])
+            i = idx + len('__attribute__')
+            continue
+        # Walk balanced parens starting at j.
+        depth = 0
+        k = j
+        while k < n:
+            ch = text[k]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    k += 1
+                    break
+            k += 1
+        clause = text[j:k]
+        if '__aligned__' in clause or ' aligned' in clause or '(aligned' in clause:
+            # Strip the entire ``__attribute__((...))`` clause.
+            result.append(text[i:idx])
+            i = k
+        else:
+            # Keep unrelated __attribute__ clauses verbatim.
+            result.append(text[i:k])
+            i = k
+    return ''.join(result)
+
+
 def _strip_inline_asm(text: str) -> str:
     """Remove asm/asm volatile/__asm__/etc. statements so the harness compiles on x86.
 
@@ -3635,7 +3705,9 @@ def _strip_inline_asm(text: str) -> str:
     return ''.join(result)
 
 
-def _strip_static_inline_defs(text: str) -> str:
+def _strip_static_inline_defs(
+    text: str, *, keep_names: Optional[set[str]] = None
+) -> str:
     """
     Remove static inline function *definitions* from preprocessed type declarations.
 
@@ -3643,50 +3715,130 @@ def _strip_static_inline_defs(text: str) -> str:
     setjmp(), etc.) into the preprocessed source.  These conflict with the system
     headers we include in the dynamic harness.  Strip the definitions; forward
     declarations (ending in ';') are kept so callers still compile.
+
+    Kernel TUs additionally inline ~thousands of static inlines from
+    ``include/linux/*.h`` (e.g. ``is_ns_init_id``, ``uncached_acl_sentinel``,
+    ``hlist_*_rcu``) that the FUT does not transitively call. Many of
+    these touch struct features CBMC's frontend doesn't fully model
+    (anonymous-tag struct inclusion via ``struct ns_tree;`` inside
+    ``struct ns_common``), producing CONVERSION ERROR at type-check
+    time. Stripping them is the simplest fix: CBMC treats their call
+    sites — if any survive — as nondet stubs.
+
+    The scanner is now comment- and string-literal-aware, so braces
+    inside ``/* */``, ``// ``, ``"..."``, or ``'.'`` literals do not
+    confuse the depth tracking. Without this, complex kernel macros
+    (``_Generic`` selections, statement-expression nests) left orphan
+    body fragments earlier and we had to disable the strip in kernel
+    mode entirely.
+
+    ``keep_names``: when non-None, an inline whose function name is in
+    this set is preserved verbatim. Callers can use this to keep, for
+    example, all inlines transitively reachable from the FUT.
     """
+    keep_names = keep_names or set()
+    pat = re.compile(r'\bstatic\s+(?:inline|__inline__)\b')
+    name_pat = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
+
+    def _scan_forward_skipping_literals(t: str, start: int, stop_predicate) -> int:
+        """Walk ``t`` from ``start`` skipping over /* */ comments,
+        // line comments, "..." strings, and '...' char literals. At
+        each non-skipped char, call ``stop_predicate(i, ch, depth)``.
+        If it returns a non-None value, return it. Otherwise return
+        len(t)."""
+        i = start
+        depth = 0
+        n = len(t)
+        while i < n:
+            ch = t[i]
+            # /* ... */
+            if ch == '/' and i + 1 < n and t[i + 1] == '*':
+                end = t.find('*/', i + 2)
+                i = n if end == -1 else end + 2
+                continue
+            # // ...
+            if ch == '/' and i + 1 < n and t[i + 1] == '/':
+                end = t.find('\n', i + 2)
+                i = n if end == -1 else end
+                continue
+            # "..."
+            if ch == '"':
+                k = i + 1
+                while k < n:
+                    if t[k] == '\\' and k + 1 < n:
+                        k += 2; continue
+                    if t[k] == '"':
+                        k += 1; break
+                    k += 1
+                i = k; continue
+            # '...'
+            if ch == "'":
+                k = i + 1
+                while k < n:
+                    if t[k] == '\\' and k + 1 < n:
+                        k += 2; continue
+                    if t[k] == "'":
+                        k += 1; break
+                    k += 1
+                i = k; continue
+            ret = stop_predicate(i, ch, depth)
+            if ret is not None:
+                return ret
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            i += 1
+        return n
+
     result: list[str] = []
     i = 0
-    pat = re.compile(r'\bstatic\s+(?:inline|__inline__)\b')
-    while i < len(text):
+    n = len(text)
+    while i < n:
         m = pat.search(text, i)
         if m is None:
             result.append(text[i:])
             break
-        j = m.end()
-        # Scan forward for the first '{' or ';' at top brace depth.
-        depth = 0
-        found_brace = False
-        while j < len(text):
-            ch = text[j]
-            if ch == '{':
-                if depth == 0:
-                    found_brace = True
-                    break
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-            elif ch == ';' and depth == 0:
-                break
-            j += 1
-        if found_brace:
-            # Function definition — strip from 'static' to matching '}'
-            result.append(text[i:m.start()])
-            depth = 0
-            while j < len(text):
-                if text[j] == '{':
-                    depth += 1
-                elif text[j] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        j += 1
-                        break
-                j += 1
-            result.append('/* static inline removed */')
-            i = j
+        # Find next '{' or ';' at depth 0 (literal-aware).
+        body_start = _scan_forward_skipping_literals(
+            text, m.end(),
+            lambda idx, ch, d: idx if d == 0 and (ch == '{' or ch == ';') else None,
+        )
+        if body_start >= n:
+            result.append(text[i:])
+            break
+        if text[body_start] == ';':
+            # Forward declaration; keep verbatim.
+            result.append(text[i:body_start + 1])
+            i = body_start + 1
+            continue
+        # Function definition — find the matching closing '}' (literal-aware).
+        body_end = _scan_forward_skipping_literals(
+            text, body_start + 1,
+            # depth starts at 0 inside the body (we're past the opening '{').
+            # A '}' at depth 0 closes the body.
+            lambda idx, ch, d: idx + 1 if d == 0 and ch == '}' else None,
+        )
+        # Extract the function name from the chunk between 'static inline' and '{'.
+        head = text[m.end():body_start]
+        # Strip out any nested ``(...)``-grouped attribute clauses to make
+        # the regex robust against ``__attribute__((...))`` annotations.
+        # Find the LAST identifier before the first '(' that introduces the
+        # parameter list — walk paren depth from the end of head backward
+        # to find the matching '(' of the function declarator.
+        fn_name = None
+        # Simpler: collect all IDENT-followed-by-'(' matches; pick the last.
+        matches = list(name_pat.finditer(head))
+        if matches:
+            fn_name = matches[-1].group(1)
+        if fn_name and fn_name in keep_names:
+            # Keep this inline verbatim.
+            result.append(text[i:body_end])
+            i = body_end
         else:
-            # Declaration ending in ';' — keep it
-            result.append(text[i:j + 1])
-            i = j + 1
+            result.append(text[i:m.start()])
+            result.append('/* static inline removed */')
+            i = body_end
     return ''.join(result)
 
 

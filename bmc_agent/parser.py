@@ -113,11 +113,15 @@ class ParsedCFile:
             self.function_definitions.pop(n, None)
             self.call_graph.pop(n, None)
             self.function_source_files.pop(n, None)
-        # Prune call-graph edges to functions we just dropped — keep edges
-        # to extern callees (those were never in ``functions`` anyway) but
-        # don't carry stale references to inlined helpers.
-        for callees in self.call_graph.values():
-            callees.intersection_update(keep | {c for c in callees if c not in dropped})
+        # Don't prune call-graph edges. Each primary-file function's
+        # callee set was populated from its own body and lists every
+        # call site verbatim, including kernel-header inlines like
+        # ``phy_write``. Dropping those edges leaves the harness
+        # generator unable to recognise the callee and emit a proper
+        # stub, which is fatal when the dropped-but-called inline
+        # exercises CBMC-unsupported features (anonymous-tag struct
+        # inclusion, statement-expression macros). Keeping the edge
+        # treats header inlines uniformly with truly external symbols.
         return len(dropped)
 
     def get_function_info(self, name: str) -> Optional["FunctionInfo"]:
