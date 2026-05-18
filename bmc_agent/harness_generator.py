@@ -35,10 +35,43 @@ def _extract_type_declarations(source_text: str, parsed_file: Optional["ParsedCF
     both K&R brace-on-same-line and ANSI brace-on-next-line styles.
 
     Without *parsed_file* we fall back to a conservative line-by-line scan.
+
+    Always strips cpp ``# N "filename" [flags]`` line directives at the end —
+    these only appear when the input was preprocessed (``cc -E`` / ``make foo.i``).
+    They are diagnostic hints for compilers that *can* re-resolve the named
+    headers; CBMC's frontend tries to re-read them from disk (relative paths)
+    and either fails or pulls in conflicting kernel typedefs (``u_int8_t``
+    in ``./include/linux/types.h``) on top of our libc ``<stdint.h>``.
+    Stripping them is safe: the inlined content is still present, only the
+    "this line came from header X" annotation goes away.
     """
     if parsed_file is not None and parsed_file.function_bodies:
-        return _extract_type_decls_using_bodies(source_text, parsed_file)
-    return _extract_type_decls_heuristic(source_text)
+        text = _extract_type_decls_using_bodies(source_text, parsed_file)
+    else:
+        text = _extract_type_decls_heuristic(source_text)
+    return _strip_cpp_linemarkers(text)
+
+
+# Match cpp ``# N "filename" [flags]`` line directives anchored at line start.
+# The optional trailing digits are the cpp ``flags`` ( 1=enter file, 2=exit,
+# 3=system, 4=extern). Whole line is removed.
+_CPP_LINEMARKER_RE = re.compile(r'^\s*#\s+\d+\s+"[^"]*"(?:\s+[0-9 ]+)?\s*$', re.MULTILINE)
+
+
+def _strip_cpp_linemarkers(text: str) -> str:
+    """Remove cpp ``# N "filename" [flags]`` line directives left over from
+    preprocessing. They carry no semantic content for CBMC; their original
+    purpose was to let downstream compilers report errors against the
+    untouched source. CBMC's frontend treats them either as hints to
+    re-include (which fails when relative paths don't resolve from the
+    harness's working dir) or processes the nested context as live header
+    inclusions (which conflicts with the libc types the harness already
+    pulled in via system ``#include``s).
+
+    Replace each matched line with an empty line so downstream byte/line
+    counts stay aligned with whatever was before the strip.
+    """
+    return _CPP_LINEMARKER_RE.sub("", text)
 
 
 def _find_decl_preamble(source_text: str, def_start: int) -> int:

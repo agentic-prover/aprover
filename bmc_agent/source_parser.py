@@ -30,8 +30,10 @@ class UnsupportedSourceLanguage(ValueError):
 
 # Extension -> parser entry-point, in the form expected at the call site.
 # Header files are routed to the C parser because header-only specs are
-# the dominant pattern in AProver's existing C corpus.
-_C_EXTS = frozenset({".c", ".h"})
+# the dominant pattern in AProver's existing C corpus. ``.i`` is the
+# conventional output of ``cc -E`` / kernel ``make foo.i`` — a
+# preprocessed C translation unit — so it routes to the C parser too.
+_C_EXTS = frozenset({".c", ".h", ".i"})
 _RUST_EXTS = frozenset({".rs"})
 
 
@@ -47,7 +49,7 @@ def detect_language(path: str | Path) -> str:
         return "rust"
     raise UnsupportedSourceLanguage(
         f"No parser registered for extension {ext!r} (path={path!r}). "
-        "Supported: .c, .h, .rs"
+        "Supported: .c, .h, .i, .rs"
     )
 
 

@@ -444,6 +444,26 @@ class SpecGenerator:
         logger.info("Parsing source file: %s", source_file)
         parsed = parse_source_file(source_file, source_text=source_text)
 
+        # If the input was a preprocessed translation unit (cpp ``# N "..."``
+        # line directives present), drop functions that originated in
+        # included headers. A Linux driver TU pulls in several thousand
+        # ``static inline`` helpers from ``include/linux/*.h``; without
+        # this filter, the pipeline tries to spec all of them and the run
+        # is intractable. The first ``# N "..."`` directive in the file
+        # identifies the original ``.c`` source — keep only functions
+        # tagged with that origin. Plain ``.c`` input has no directives,
+        # so this is a no-op there.
+        primary = getattr(parsed, "primary_source", None)
+        if primary and hasattr(parsed, "restrict_to_primary_source"):
+            kept_before = len(parsed.functions)
+            dropped = parsed.restrict_to_primary_source()
+            if dropped:
+                logger.info(
+                    "Preprocessed TU detected (origin %s): kept %d functions, "
+                    "dropped %d header-inlined helpers",
+                    primary, kept_before - dropped, dropped,
+                )
+
         # Select the language-appropriate system prompt for this run so
         # Rust input gets Rust-aware DSL notes (references, slices,
         # wrapping arithmetic) rather than C-flavored ones.  When

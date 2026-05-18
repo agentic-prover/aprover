@@ -2287,3 +2287,161 @@ def test_strip_stdlib_decls_ignores_semicolons_inside_strings():
     assert "/* read decl removed */" in out
     # The string literal is preserved verbatim.
     assert '"split ; here"' in out
+
+
+def test_strip_cpp_linemarkers_removes_directive_lines():
+    """``# N "filename" [flags]`` lines left over from ``cc -E`` /
+    ``make foo.i`` carry no semantic content for CBMC. CBMC's frontend
+    either tries to re-resolve the named file (fails when the path is
+    relative to the kernel build dir) or processes the nested context
+    as a live header inclusion, which conflicts with the libc types the
+    harness already pulled in. Strip them; preserve actual code."""
+    from bmc_agent.harness_generator import _strip_cpp_linemarkers
+    src = (
+        '# 0 "drivers/usb/serial/ch341.c"\n'
+        '# 0 "<built-in>"\n'
+        '# 1 "./include/linux/types.h" 1\n'
+        'typedef unsigned int u32;\n'
+        '# 17 "drivers/usb/serial/ch341.c" 2\n'
+        'static int ch341_get_divisor(u32 speed) { return speed / 8; }\n'
+    )
+    out = _strip_cpp_linemarkers(src)
+    # All four ``# N "..."`` directives gone.
+    assert '"drivers/usb/serial/ch341.c"' not in out
+    assert '"<built-in>"' not in out
+    assert '"./include/linux/types.h"' not in out
+    # Code lines preserved verbatim.
+    assert "typedef unsigned int u32;" in out
+    assert "static int ch341_get_divisor(u32 speed) { return speed / 8; }" in out
+
+
+def test_parser_extracts_function_source_origin_from_cpp_directives():
+    """When the input has cpp ``# N "filename"`` line directives (i.e.
+    a preprocessed TU), the parser tags each function with the source
+    file it originated from, and records the first non-synthetic
+    filename as ``primary_source``. Critical for Linux-driver work:
+    a preprocessed ``.i`` pulls in thousands of header-inlined helpers,
+    and we need to filter them out of spec generation."""
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+    src = (
+        '# 0 "drivers/usb/serial/ch341.c"\n'
+        '# 0 "<built-in>"\n'
+        '# 1 "./include/linux/types.h" 1\n'
+        'static inline unsigned int header_helper(unsigned int x) { return x + 1; }\n'
+        '# 17 "drivers/usb/serial/ch341.c" 2\n'
+        'static int ch341_local(int x) { return x * 2; }\n'
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        pf = parse_c_file(path)
+        # Both functions parsed.
+        assert "header_helper" in pf.functions
+        assert "ch341_local" in pf.functions
+        # primary_source is the first NON-synthetic directive (skipping
+        # "<built-in>") — the original .c file.
+        assert pf.primary_source == "drivers/usb/serial/ch341.c"
+        # Per-function origin recorded.
+        assert pf.function_source_files["header_helper"] == "./include/linux/types.h"
+        assert pf.function_source_files["ch341_local"] == "drivers/usb/serial/ch341.c"
+    finally:
+        os.unlink(path)
+
+
+def test_parser_primary_source_none_for_unpreprocessed_input():
+    """A plain hand-written .c without cpp directives must have
+    ``primary_source=None`` and an empty ``function_source_files``
+    map. The downstream auto-filter is a no-op in that case."""
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+    src = "static int foo(int x) { return x + 1; }\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        pf = parse_c_file(path)
+        assert "foo" in pf.functions
+        assert pf.primary_source is None
+        # No cpp directives → every recorded origin is empty (or the
+        # dict is empty entirely); restrict_to_primary_source is a
+        # no-op either way. The contract is "no per-function origin
+        # information available", which both shapes satisfy.
+        assert all(v == "" for v in pf.function_source_files.values())
+    finally:
+        os.unlink(path)
+
+
+def test_parsed_file_restrict_to_primary_source_drops_header_inlines():
+    """``restrict_to_primary_source`` keeps only functions tagged with
+    the primary source's origin. Header-derived functions get dropped
+    from ``functions``, ``function_bodies``, ``function_definitions``,
+    ``call_graph``, and ``function_source_files``."""
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+    src = (
+        '# 1 "drivers/usb/serial/ch341.c"\n'
+        '# 1 "./include/linux/kernel.h" 1\n'
+        'static inline int header_a(int x) { return x; }\n'
+        'static inline int header_b(int x) { return header_a(x); }\n'
+        '# 2 "drivers/usb/serial/ch341.c" 2\n'
+        'static int ch341_driver_fn(int x) { return header_b(x) + 1; }\n'
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        pf = parse_c_file(path)
+        assert len(pf.functions) == 3
+        dropped = pf.restrict_to_primary_source()
+        assert dropped == 2
+        assert set(pf.functions.keys()) == {"ch341_driver_fn"}
+        assert "header_a" not in pf.function_bodies
+        assert "header_b" not in pf.function_definitions
+        assert "header_a" not in pf.call_graph
+        assert "header_a" not in pf.function_source_files
+    finally:
+        os.unlink(path)
+
+
+def test_parsed_file_restrict_no_op_without_primary_source():
+    """When the input has no cpp directives, primary_source is None
+    and restrict_to_primary_source is a no-op (returns 0, leaves
+    everything intact)."""
+    import tempfile, os
+    from bmc_agent.parser import parse_c_file
+    src = "static int foo(int x) { return x; }\nstatic int bar(int x) { return foo(x); }\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        pf = parse_c_file(path)
+        before = set(pf.functions.keys())
+        dropped = pf.restrict_to_primary_source()
+        assert dropped == 0
+        assert set(pf.functions.keys()) == before
+    finally:
+        os.unlink(path)
+
+
+def test_strip_cpp_linemarkers_leaves_non_linemarker_preproc_alone():
+    """``#define`` / ``#include`` / ``#if`` directives MUST NOT be
+    stripped — they're real preprocessor controls. The pattern only
+    catches the cpp-emitted ``# DIGIT "..."`` variant."""
+    from bmc_agent.harness_generator import _strip_cpp_linemarkers
+    src = (
+        '#define X 1\n'
+        '#include <stdint.h>\n'
+        '#if X\n'
+        '# 17 "foo.c"\n'        # cpp linemarker — should be stripped
+        'int y = 2;\n'
+        '#endif\n'
+    )
+    out = _strip_cpp_linemarkers(src)
+    assert "#define X 1" in out
+    assert "#include <stdint.h>" in out
+    assert "#if X" in out
+    assert "#endif" in out
+    assert '"foo.c"' not in out
+    assert "int y = 2;" in out

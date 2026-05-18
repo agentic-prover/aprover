@@ -65,6 +65,60 @@ class ParsedCFile:
     # stored here so harness generators can use it instead of re-reading the
     # original (unexpanded) file.
     preprocessed_source: Optional[str] = None
+    # cpp ``# N "filename"`` line directives let us tell which header (or
+    # the original .c) each function body came from. Populated only when the
+    # parser sees those directives in the input (i.e. a preprocessed ``.i``
+    # or ``.c`` file dumped from ``make foo.i``). Empty otherwise.
+    # Keyed by function name (matches ``functions``); value is the originating
+    # source path as written in the cpp directive (e.g.
+    # ``drivers/usb/serial/ch341.c`` or ``./include/linux/usb.h``).
+    function_source_files: dict[str, str] = field(default_factory=dict)
+    # Primary source the TU came from — taken from the first ``# N "..."``
+    # directive at line 1. For a preprocessed kernel driver, this is the
+    # original .c file. None for non-preprocessed input. Used by
+    # ``restrict_to_primary_source`` to drop header-inlined functions
+    # (kernel preprocessing inlines several thousand ``static inline``
+    # helpers from ``linux/*.h``; without filtering, the pipeline tries
+    # to spec all of them).
+    primary_source: Optional[str] = None
+
+    def restrict_to_primary_source(self) -> int:
+        """Drop functions whose body did NOT originate in
+        ``self.primary_source``. No-op if ``primary_source`` is None or
+        ``function_source_files`` is empty (i.e. the input wasn't
+        preprocessed and we have no provenance info).
+
+        Returns the number of functions dropped, so the caller can log
+        the filtering action.
+        """
+        if not self.primary_source or not self.function_source_files:
+            return 0
+        primary_base = self.primary_source.rsplit("/", 1)[-1]
+        keep: set[str] = set()
+        for name, origin in self.function_source_files.items():
+            if not origin:
+                continue
+            if origin == self.primary_source:
+                keep.add(name)
+                continue
+            # Match on basename too — cpp may show the same file with
+            # different prefixes (``./drivers/...`` vs ``drivers/...``)
+            # depending on how the build was invoked.
+            if origin.rsplit("/", 1)[-1] == primary_base:
+                keep.add(name)
+        dropped = [n for n in list(self.functions) if n not in keep]
+        for n in dropped:
+            self.functions.pop(n, None)
+            self.function_bodies.pop(n, None)
+            self.function_definitions.pop(n, None)
+            self.call_graph.pop(n, None)
+            self.function_source_files.pop(n, None)
+        # Prune call-graph edges to functions we just dropped — keep edges
+        # to extern callees (those were never in ``functions`` anyway) but
+        # don't carry stale references to inlined helpers.
+        for callees in self.call_graph.values():
+            callees.intersection_update(keep | {c for c in callees if c not in dropped})
+        return len(dropped)
 
     def get_function_info(self, name: str) -> Optional["FunctionInfo"]:
         """Return a FunctionInfo for the named function, or None if not found."""
@@ -164,6 +218,39 @@ def parse_c_file(
 # ---------------------------------------------------------------------------
 
 
+def _build_line_to_source_map(source: str) -> tuple[list[str], Optional[str]]:
+    """Walk cpp ``# N "filename" [flags]`` line directives and return
+    ``(line_to_source, primary_source)``:
+
+    * ``line_to_source[i]`` is the originating source filename for the
+      0-indexed line ``i`` (empty string for lines that fall outside any
+      directive).
+    * ``primary_source`` is the first non-cpp-synthetic filename seen
+      (i.e. the original ``.c`` the TU was built from), or ``None`` if
+      the input has no cpp line directives.
+
+    The map covers each non-directive line. Directive lines themselves
+    get the file they introduce — they're tagged with the same source as
+    the lines below them.
+    """
+    lines = source.split("\n")
+    line_to_source: list[str] = [""] * len(lines)
+    primary: Optional[str] = None
+    current: str = ""
+    # Match ``# 12 "file.c"`` (with optional trailing flag digits)
+    pat = re.compile(r'^#\s+\d+\s+"([^"]+)"')
+    for i, line in enumerate(lines):
+        m = pat.match(line)
+        if m:
+            current = m.group(1)
+            # First "real" source seen — synthetic ones look like
+            # ``<built-in>``, ``<command-line>``, ``<stdin>``.
+            if primary is None and not (current.startswith("<") and current.endswith(">")):
+                primary = current
+        line_to_source[i] = current
+    return line_to_source, primary
+
+
 def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedCFile:
     """Parse using tree-sitter. Uses byte offsets for all node slicing."""
     from tree_sitter import Parser
@@ -176,6 +263,8 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
     call_graph: dict[str, set[str]] = {}
     function_bodies: dict[str, str] = {}
     function_definitions: dict[str, str] = {}
+    function_source_files: dict[str, str] = {}
+    line_to_source, primary_source = _build_line_to_source_map(source)
 
     # Preprocessor wrapper node types whose children must also be walked.
     # Without recursing into these, functions guarded by ``#ifndef
@@ -206,6 +295,12 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
             function_definitions[sig.name] = src_bytes[
                 node.start_byte:node.end_byte
             ].decode("utf-8", errors="replace")
+            # Tag the function with its originating source file, looked up
+            # in the cpp ``# N "filename"`` map. ``start_point`` is a
+            # ``(row, column)`` tuple with 0-indexed row.
+            row = node.start_point[0]
+            if 0 <= row < len(line_to_source):
+                function_source_files[sig.name] = line_to_source[row]
             # Body is the compound_statement child
             body_node = node.child_by_field_name("body")
             if body_node:
@@ -225,6 +320,8 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
         function_bodies=function_bodies,
         function_definitions=function_definitions,
         struct_definitions=struct_definitions,
+        function_source_files=function_source_files,
+        primary_source=primary_source,
     )
 
 
