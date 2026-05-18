@@ -3418,3 +3418,128 @@ struct ggml_tensor {
     # Project struct untouched
     assert "struct ggml_tensor {" in out, out
     assert "tv_sec" not in out, out
+
+
+def _make_pipeline_for_diag_test(tmp_path):
+    """Build an AMCPipeline with config wired to tmp_path's artifact dir.
+
+    Sidesteps __init__ (which creates an LLM client) by allocating the
+    instance bare and attaching only what `_emit_coverage_diagnostics`
+    touches: `config` and `store`.
+    """
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+
+    p = AMCPipeline.__new__(AMCPipeline)
+    p.config = Config(artifact_dir=str(tmp_path))
+    p.store = ArtifactStore(str(tmp_path))
+    return p
+
+
+def _write_fake_cbmc_result(store, driver, fn, raw_output="", error="", verified=False, counterexamples=None):
+    """Save a synthetic cbmc_result.json for diagnostics tests."""
+    result = {
+        "verified": verified,
+        "counterexamples": counterexamples or [],
+        "raw_output": raw_output,
+        "error": error,
+    }
+    store.save_cbmc_result(driver, fn, result)
+
+
+def test_coverage_diagnostics_undefined_symbol_aggregation(tmp_path):
+    """5 functions failing with the same missing symbol must surface a
+    single -D recommendation in the log and a JSON artifact, not be
+    silently buried under '0 real bugs found'."""
+    p = _make_pipeline_for_diag_test(tmp_path)
+    p.store.init_driver("d")
+    raw = (
+        '[{"messageText":"failed to find symbol \'GGML_VERSION\'","messageType":"ERROR"},'
+        '{"messageText":"CONVERSION ERROR","messageType":"ERROR"}]'
+    )
+    for fn in ["f1", "f2", "f3", "f4", "f5"]:
+        _write_fake_cbmc_result(p.store, "d", fn, raw_output=raw, error="cbmc exited with code 6")
+    p._emit_coverage_diagnostics("d")
+    diag = json.loads((tmp_path / "d" / "coverage_diagnostics.json").read_text())
+    assert diag["total_cbmc_runs"] == 5
+    assert diag["failed_before_verdict"] == 5
+    assert diag["produced_verdict"] == 0
+    assert diag["undefined_symbols"] == {"GGML_VERSION": 5}
+
+
+def test_coverage_diagnostics_assert_arity_bug(tmp_path):
+    """Multi-arg assert() is a harness bug (LLM emitted >1 arg). Count
+    it separately from build-config failures so the maintainer fixes
+    the spec prompt rather than chasing missing -D flags."""
+    p = _make_pipeline_for_diag_test(tmp_path)
+    p.store.init_driver("d")
+    raw = (
+        'harness.c:25: error: macro "assert" passed 2 arguments, but takes just 1\n'
+        'GCC preprocessing failed\nPARSING ERROR'
+    )
+    for fn in ["f1", "f2"]:
+        _write_fake_cbmc_result(p.store, "d", fn, raw_output=raw, error="cbmc exited with code 6")
+    p._emit_coverage_diagnostics("d")
+    diag = json.loads((tmp_path / "d" / "coverage_diagnostics.json").read_text())
+    assert diag["bad_assert_arity_count"] == 2
+    assert diag["undefined_symbols"] == {}
+
+
+def test_coverage_diagnostics_clean_run_no_warning(tmp_path):
+    """Genuine clean verifies must NOT trigger the 'run blocked'
+    warning — diagnostic only fires when functions failed pre-verdict."""
+    p = _make_pipeline_for_diag_test(tmp_path)
+    p.store.init_driver("d")
+    for fn in ["f1", "f2", "f3"]:
+        _write_fake_cbmc_result(p.store, "d", fn, raw_output="[]", verified=True)
+    p._emit_coverage_diagnostics("d")
+    diag = json.loads((tmp_path / "d" / "coverage_diagnostics.json").read_text())
+    assert diag["failed_before_verdict"] == 0
+    assert diag["produced_verdict"] == 3
+    assert diag["undefined_symbols"] == {}
+
+
+def test_owns_two_arg_form_emits_single_ptr():
+    """LLM-emitted ``owns(ctx, a)`` (context-allocated APIs like ggml's
+    ggml_context) must translate to ``a != NULL``, not ``ctx, a != NULL``
+    which CBMC parses as a 2-arg assert and rejects.
+    Regression: ggml.c run 2026-05-19 produced ~34 broken harnesses
+    of the shape ``assert(ctx, result != NULL)`` from this exact bug."""
+    from bmc_agent.dsl_to_cbmc import precond_to_assume, postcond_to_assert
+    pre = precond_to_assume("owns(ctx, a)", ["ctx", "a"])
+    post = postcond_to_assert("owns(ctx, result) && result == a", ["ctx", "a"])
+    pre_joined = " ".join(pre)
+    post_joined = " ".join(post)
+    assert "__CPROVER_assume(a != NULL)" in pre_joined, pre_joined
+    assert "ctx," not in pre_joined, pre_joined
+    assert "assert(result != NULL)" in post_joined, post_joined
+    assert "ctx," not in post_joined, post_joined
+
+
+def test_owns_one_arg_form_unchanged():
+    """Single-arg ``owns(p)`` (the original form) must still translate
+    cleanly to ``p != NULL`` after the two-arg extension."""
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
+    pre = precond_to_assume("owns(p)", ["p"])
+    pre_joined = " ".join(pre)
+    assert "__CPROVER_assume(p != NULL)" in pre_joined, pre_joined
+
+
+def test_owns_two_arg_with_member_access():
+    """The two-arg form must still work when the pointer is a struct
+    member access, e.g. ``owns(ctx, p->buf)`` — common in C APIs that
+    pass both the context and a member."""
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
+    pre = precond_to_assume("owns(ctx, p->buf)", ["ctx", "p"])
+    pre_joined = " ".join(pre)
+    assert "__CPROVER_assume(p->buf != NULL)" in pre_joined, pre_joined
+
+
+def test_coverage_diagnostics_no_cbmc_results_noop(tmp_path):
+    """Driver dir exists but no cbmc_result.json files yet (e.g. crashed
+    during Phase 1): helper must not create a misleading artifact."""
+    p = _make_pipeline_for_diag_test(tmp_path)
+    p.store.init_driver("d")
+    p._emit_coverage_diagnostics("d")
+    assert not (tmp_path / "d" / "coverage_diagnostics.json").exists()

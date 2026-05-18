@@ -710,6 +710,8 @@ class AMCPipeline:
                     self.store.save_spec_quality(driver_name, fn_name, report)
             logger.info("Phase 4 complete: spec quality analysis done")
 
+        self._emit_coverage_diagnostics(driver_name)
+
         logger.info(
             "=== AMC Pipeline END: %d real bug(s) found, %d unresolved ===",
             len(bug_reports),
@@ -808,6 +810,132 @@ class AMCPipeline:
 
         realism_arg = realism if self.config.enable_realism_check else None
         return self.reporter.create_report(validation, func, realism_check=realism_arg)
+
+    def _emit_coverage_diagnostics(self, driver_name: str) -> None:
+        """Aggregate CBMC parse/conversion errors and surface them.
+
+        A run with 0 real bugs is ambiguous: it could be a genuine
+        clean-verify, or every CBMC invocation could have failed at
+        parse time (build-config macro missing, harness syntax bug)
+        and produced no information. Scan all cbmc_result.json files
+        for failure patterns we can recognise and emit a single
+        summary log + a JSON artifact so the outcome is unambiguous.
+        """
+        import json as _json
+        import re as _re
+
+        driver_dir = self.store.base_dir / driver_name
+        if not driver_dir.exists():
+            return
+
+        undef_symbols: dict[str, int] = {}
+        bad_assert = 0
+        struct_typedef = 0
+        other_parse_err = 0
+        total_cbmc = 0
+        clean = 0
+        failed = 0
+
+        sym_re = _re.compile(r"failed to find symbol '([^']+)'")
+        assert_re = _re.compile(
+            r'macro "assert" passed \d+ arguments?, but takes just 1'
+        )
+        struct_re = _re.compile(r"syntax error before '='")
+
+        for fn_dir in sorted(driver_dir.iterdir()):
+            if not fn_dir.is_dir():
+                continue
+            cbmc_path = fn_dir / "cbmc_result.json"
+            if not cbmc_path.exists():
+                continue
+            total_cbmc += 1
+            try:
+                data = _json.loads(cbmc_path.read_text())
+            except Exception:
+                continue
+            result = data.get("result", {})
+            raw = result.get("raw_output", "") or ""
+            err = result.get("error", "") or ""
+            verified = bool(result.get("verified", False))
+            cexs = result.get("counterexamples", []) or []
+            if verified or cexs:
+                clean += 1
+                continue
+            failed += 1
+            for sym in sym_re.findall(raw):
+                undef_symbols[sym] = undef_symbols.get(sym, 0) + 1
+            if assert_re.search(raw):
+                bad_assert += 1
+            if struct_re.search(raw) and "PARSING ERROR" in raw:
+                struct_typedef += 1
+            if (
+                not sym_re.search(raw)
+                and not assert_re.search(raw)
+                and not struct_re.search(raw)
+                and ("PARSING ERROR" in raw or "CONVERSION ERROR" in raw or "code 6" in err)
+            ):
+                other_parse_err += 1
+
+        if total_cbmc == 0:
+            return
+
+        diag = {
+            "driver": driver_name,
+            "total_cbmc_runs": total_cbmc,
+            "produced_verdict": clean,
+            "failed_before_verdict": failed,
+            "undefined_symbols": undef_symbols,
+            "bad_assert_arity_count": bad_assert,
+            "struct_typedef_syntax_count": struct_typedef,
+            "other_parse_or_conv_error_count": other_parse_err,
+        }
+        try:
+            (driver_dir / "coverage_diagnostics.json").write_text(
+                _json.dumps(diag, indent=2)
+            )
+        except Exception:
+            pass
+
+        if failed == 0:
+            return
+
+        logger.warning(
+            "Coverage diagnostics: %d/%d CBMC runs failed before any "
+            "verdict was produced.",
+            failed,
+            total_cbmc,
+        )
+
+        if undef_symbols:
+            top = sorted(undef_symbols.items(), key=lambda kv: -kv[1])[:5]
+            d_flags = " ".join(
+                f"-D {sym}='\"undef\"'" for sym, _n in top
+            )
+            logger.warning(
+                "  Build-config macros likely missing: %s. "
+                "Re-run with: %s",
+                ", ".join(f"{s}({n})" for s, n in top),
+                d_flags,
+            )
+        if bad_assert:
+            logger.warning(
+                "  %d function(s) hit a bmc-agent harness bug: "
+                "multi-arg assert() in postcondition (C assert takes 1 arg).",
+                bad_assert,
+            )
+        if struct_typedef:
+            logger.warning(
+                "  %d function(s) hit a bmc-agent harness bug: missing "
+                "'struct' keyword on a non-typedef'd struct return type.",
+                struct_typedef,
+            )
+
+        if failed >= max(5, total_cbmc * 0.5):
+            logger.warning(
+                "  >=50%% of functions failed at parse/convert. The "
+                "'0 real bugs found' summary below is uninformative — "
+                "treat this run as BLOCKED, not as a clean verify."
+            )
 
     def _feedback_record(self, func, validation, realism):
         """Distill an UNREALISTIC realism verdict into a Remediation and

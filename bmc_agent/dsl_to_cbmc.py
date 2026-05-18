@@ -30,8 +30,15 @@ _VALID_RANGE_RE = re.compile(r"\bvalid_range\(\s*([^,)]+)\s*,\s*([^,)]+)\s*,\s*(
 # in_bounds(arr, idx)  → idx >= 0 && idx < sizeof(arr)/sizeof(arr[0])
 _IN_BOUNDS_RE = re.compile(r"\bin_bounds\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)")
 
-# owns(ptr)  → ptr != NULL (treat like valid)
-_OWNS_RE = re.compile(r"\bowns\(\s*([^)]+)\s*\)")
+# owns(ptr) or owns(scope, ptr)  → ptr != NULL
+# Two-arg form (the LLM emits ``owns(ctx, a)`` on context-allocated APIs
+# like ggml's ggml_context). The scope arg has no semantic content for
+# the safety property we're asserting, so we drop it and keep only the
+# trailing pointer. Group 1 captures the optional scope; group 2
+# captures the actual pointer (always present).
+_OWNS_RE = re.compile(
+    r"\bowns\(\s*(?:([^,()]+?)\s*,\s*)?([^,()]+?)\s*\)"
+)
 
 # locked(lock)  → skip (ghost state)
 _LOCKED_RE = re.compile(r"\blocked\(\s*([^)]+)\s*\)")
@@ -171,10 +178,19 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         hi = m.group(3).strip()
         return wrap(f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}")
 
-    # valid(ptr) / owns(ptr)  → ptr != NULL
-    m = _VALID_RE.search(atom) or _OWNS_RE.search(atom)
+    # valid(ptr)  → ptr != NULL
+    m = _VALID_RE.search(atom)
     if m:
         ptr = m.group(1).strip()
+        return wrap(f"{ptr} != NULL")
+
+    # owns(ptr) or owns(scope, ptr)  → ptr != NULL
+    # The two-group regex always populates group 2 with the actual
+    # pointer (single-arg form: group 1 is None; two-arg form: group 1
+    # is the scope we discard).
+    m = _OWNS_RE.search(atom)
+    if m:
+        ptr = m.group(2).strip()
         return wrap(f"{ptr} != NULL")
 
     # null(ptr)  → ptr == NULL  (but !null(ptr) → ptr != NULL)
@@ -335,9 +351,14 @@ def _atom_to_expr(atom: str) -> Optional[str]:
         hi = m.group(3).strip()
         return f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}"
 
-    m = _VALID_RE.search(atom) or _OWNS_RE.search(atom)
+    m = _VALID_RE.search(atom)
     if m:
         return f"{m.group(1).strip()} != NULL"
+
+    m = _OWNS_RE.search(atom)
+    if m:
+        # owns(ptr) or owns(scope, ptr) — group 2 is the pointer.
+        return f"{m.group(2).strip()} != NULL"
 
     m = _NULL_RE.search(atom)
     if m:
