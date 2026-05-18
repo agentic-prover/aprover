@@ -1567,13 +1567,55 @@ def _emit_struct_field_init(
         # over-constraining or compile errors on incomplete types.
         return out
 
-    # Integer / size fields with length-suggesting names.
-    if _is_likely_length_field(fname):
+    # Integer / size fields with length-suggesting names. Only emit
+    # the bound if the field's TYPE is a primitive integer — a name
+    # match against a struct/union field (``winsize_mutex`` is a
+    # ``struct mutex``; ``winsize`` is a ``struct winsize``) would
+    # produce an invalid ``__CPROVER_assume(<struct> >= 0)`` and
+    # CBMC errors with ``implicit arithmetic conversion not
+    # permitted``.
+    if _is_likely_length_field(fname) and _looks_like_integer_type(t):
         out.append(
             f"    __CPROVER_assume({obj_name}.{fname} >= 0 && "
             f"{obj_name}.{fname} <= (long)({cbmc_unwind}));"
         )
     return out
+
+
+def _looks_like_integer_type(t: str) -> bool:
+    """Return True if *t* names a primitive integer type, so a
+    ``__CPROVER_assume(x >= 0 && x <= N)`` against it is meaningful.
+    Returns False for struct/union types (where the assume would be a
+    type error) and for arrays, function pointers, etc.
+
+    We're conservative: only the names we recognise as integer
+    primitives return True. Unknown typedef names (which COULD be
+    integer aliases) return False so we don't risk an invalid assume.
+    """
+    s = re.sub(r"\b(const|volatile|register|signed|unsigned)\b", "", t).strip()
+    # Pointer / array / function-pointer types are never length fields
+    # for our purposes.
+    if "*" in s or "[" in s or "(" in s:
+        return False
+    # struct / union / enum prefixes — definitely aggregate types.
+    if re.match(r"\b(struct|union|enum)\b", s):
+        return False
+    # Recognised integer primitives and common kernel/POSIX aliases.
+    s = s.strip()
+    return s in {
+        "char", "short", "int", "long", "long long",
+        "size_t", "ssize_t", "ptrdiff_t",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        # Kernel primitives — preserved through the kernel-mode glibc
+        # strip and used in driver struct field declarations.
+        "__u8", "__u16", "__u32", "__u64",
+        "__s8", "__s16", "__s32", "__s64",
+        "u8", "u16", "u32", "u64",
+        "s8", "s16", "s32", "s64",
+        "__be16", "__be32", "__be64",
+        "__le16", "__le32", "__le64",
+    }
 
 
 def _generate_nd_decls(
@@ -2778,6 +2820,19 @@ class HarnessGenerator:
         preprocessed = parsed_file.preprocessed_source is not None
         if preprocessed:
             inc_lines: list[str] = []
+            # The kernel preprocessor expands ``NULL`` to ``((void *)0)``
+            # everywhere it appears in the original source, but our own
+            # harness emitter uses the literal token ``NULL`` (in
+            # self-ref-chain termination, nondet pointer init, etc.).
+            # Without ``<stddef.h>`` prepended (no libc in kernel mode)
+            # that token is undefined; CBMC reports ``failed to find
+            # symbol 'NULL'``. Provide a local fallback.
+            sections.append(
+                "/* Kernel-mode harness — provide minimal stddef/assert */\n"
+                "#ifndef NULL\n"
+                "#define NULL ((void *)0)\n"
+                "#endif"
+            )
         else:
             _stdlib_fns  = {"malloc", "free", "calloc", "realloc", "abort", "exit"}
             _stdio_fns   = {"printf", "fprintf", "sprintf", "snprintf", "puts", "putchar"}
