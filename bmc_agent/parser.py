@@ -731,9 +731,32 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
 
         param_list = declarator.child_by_field_name("parameters")
         if param_list:
-            for child in param_list.named_children:
+            siblings = list(param_list.named_children)
+            for idx, child in enumerate(siblings):
                 if child.type == "parameter_declaration":
                     p_type, p_name = _extract_param_ts(child, src_bytes)
+                    # Recover from tree-sitter's misparse of
+                    # ``T * MACRO name`` where MACRO is an unknown
+                    # qualifier (GGML_RESTRICT, __restrict__,
+                    # __attribute__((nonnull)), GGML_NORETURN, etc.).
+                    # tree-sitter consumes MACRO as the declarator
+                    # identifier and emits the real param name as a
+                    # sibling ERROR node. When (a) the parsed name is
+                    # ALL-CAPS / underscored (looks like a macro), and
+                    # (b) the next sibling is an ERROR containing one
+                    # identifier, fold the macro into the type and use
+                    # the ERROR identifier as the name.
+                    if (
+                        p_name
+                        and _looks_like_macro(p_name)
+                        and idx + 1 < len(siblings)
+                        and siblings[idx + 1].type == "ERROR"
+                    ):
+                        err_node = siblings[idx + 1]
+                        err_text = _slice_bytes(src_bytes, err_node).strip()
+                        if err_text and err_text.isidentifier():
+                            p_type = f"{p_type} {p_name}".strip()
+                            p_name = err_text
                     params.append((p_type, p_name))
                 elif child.type == "variadic_parameter":
                     params.append(("...", ""))
@@ -771,6 +794,25 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
 
 
 _STRUCT_TAG_KEYWORDS = (b"struct", b"union", b"enum")
+
+
+def _looks_like_macro(name: str) -> bool:
+    """Heuristic: identifier is a parameter-qualifier macro (not a real
+    parameter name). True when the identifier is all-uppercase /
+    underscores / digits with at least one underscore, OR begins with
+    a double underscore (``__restrict__``, ``__nonnull__``,
+    ``__attribute__``). Used to detect tree-sitter's misparse of
+    ``T * MACRO name`` so the qualifier is folded into the type and
+    the real param name is recovered from a sibling ERROR node.
+    Conservative — a single-letter uppercase param (``T`` template-
+    style) would not match (no underscore, no leading ``__``)."""
+    if not name:
+        return False
+    if name.startswith("__"):
+        return True
+    if "_" in name and name.isupper():
+        return True
+    return False
 
 
 def _recover_struct_keyword(src_bytes: bytes, type_start: int) -> str:

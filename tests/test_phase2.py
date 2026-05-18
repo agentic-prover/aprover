@@ -3603,6 +3603,52 @@ unsigned int ggml_hash(struct ggml_context * ctx) {
     assert sig.return_type == "unsigned int", sig.return_type
 
 
+def test_parser_recovers_param_name_through_restrict_macro(tmp_path):
+    """``T * GGML_RESTRICT s`` is a tree-sitter misparse: the macro
+    qualifier is consumed as the declarator identifier and the real
+    param name ``s`` lands in a sibling ERROR node. Parser must fold
+    the macro into the type and recover the real name. Regression:
+    ggml-cpu/quants.c run 2026-05-19, ALL 43 functions failed CBMC
+    with ``syntax error before '='`` because the harness wrote three
+    `GGML_RESTRICT` local variables (one per param)."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+void ggml_vec_dot(int n, float * GGML_RESTRICT s, size_t bs,
+                  const void * GGML_RESTRICT vx, int nrc) {
+    return;
+}
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    sig = parsed.functions.get("ggml_vec_dot")
+    assert sig is not None
+    names = [p[1] for p in sig.parameters]
+    assert names == ["n", "s", "bs", "vx", "nrc"], names
+    # Type qualifier folded in (not lost)
+    types = dict(zip(names, [p[0] for p in sig.parameters]))
+    assert "GGML_RESTRICT" in types["s"], types["s"]
+    assert "GGML_RESTRICT" in types["vx"], types["vx"]
+
+
+def test_parser_does_not_recover_through_lowercase_identifier(tmp_path):
+    """Recovery must trigger only on macro-like identifiers (all-caps
+    or leading ``__``). A regular lowercase ``foo bar`` pair should
+    not be reinterpreted — that would re-introduce ambiguity for
+    legitimate two-token type-name parses (``unsigned int x``)."""
+    from bmc_agent.parser import parse_c_file
+    src = """
+void f(int n, float * s, int nrc) { return; }
+"""
+    f = tmp_path / "t.c"
+    f.write_text(src)
+    parsed = parse_c_file(str(f))
+    sig = parsed.functions.get("f")
+    assert sig is not None
+    names = [p[1] for p in sig.parameters]
+    assert names == ["n", "s", "nrc"], names
+
+
 def test_is_address_taken_detects_qsort_comparator():
     """A function passed to qsort by name is taken by address — must
     NOT be classified as a system entry point. Regression: ggml-quants
