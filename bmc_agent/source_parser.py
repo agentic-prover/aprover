@@ -77,6 +77,20 @@ def parse_source_file(
     """
     lang = detect_language(path)
     if lang == "c":
-        return parse_c_file(path, source_text=source_text)
+        parsed = parse_c_file(path, source_text=source_text)
+        # When the input is a preprocessed translation unit (cpp ``# N
+        # "filename"`` line directives present, ``primary_source`` is
+        # set), automatically drop header-inlined functions. A kernel
+        # driver ``.i`` pulls in ~4400 ``static inline`` helpers from
+        # ``include/linux/*.h``; the pipeline cares only about the
+        # ~25 functions actually defined in the driver. Filtering here
+        # (rather than at each CLI command's parse call) ensures every
+        # entry point — generate, check, verify, verify-dir, baselines
+        # — sees a consistent set and the harness generator's
+        # type-decl extractor doesn't choke on byte-range mismatches
+        # against thousands of complex function bodies.
+        if getattr(parsed, "primary_source", None) and hasattr(parsed, "restrict_to_primary_source"):
+            parsed.restrict_to_primary_source()
+        return parsed
     # lang == "rust" — detect_language only returns "c" or "rust"
     return parse_rust_file(path, source_text=source_text)

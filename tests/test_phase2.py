@@ -2519,6 +2519,90 @@ def test_strip_inline_asm_still_consumes_semicolon_for_statement_form():
     assert "/* asm removed */;" not in out
 
 
+def test_rewrite_auto_type_simple_pointer_init():
+    """GCC's ``__auto_type`` keyword is used throughout the kernel's
+    ``min``/``max``/``clamp`` macro family. CBMC's parser doesn't
+    understand it. Rewrite to ``typeof(EXPR) VAR = EXPR;``."""
+    from bmc_agent.harness_generator import _rewrite_auto_type
+    src = "const __auto_type s0 = s;\n"
+    out = _rewrite_auto_type(src)
+    assert "__auto_type" not in out
+    assert "typeof(s) s0 = s;" in out
+
+
+def test_rewrite_auto_type_handles_nested_parens():
+    """The initializer can be an expression with nested parens (e.g.
+    ``__auto_type x = foo(a, b);``). The RHS scanner must skip ``;``
+    inside parens."""
+    from bmc_agent.harness_generator import _rewrite_auto_type
+    src = "__auto_type x = foo(a, b);\nint y = 1;\n"
+    out = _rewrite_auto_type(src)
+    assert "typeof(foo(a, b)) x = foo(a, b);" in out
+    assert "int y = 1;" in out
+
+
+def test_rewrite_auto_type_leaves_unrelated_text_alone():
+    from bmc_agent.harness_generator import _rewrite_auto_type
+    src = "int autotype_lookalike = 1; // not __auto_type\nint y;\n"
+    # Same word fragment but no ``__auto_type``: no rewrite.
+    out = _rewrite_auto_type(src)
+    assert out == src
+
+
+def test_kernel_mode_skips_system_and_glibc_typedef_strips():
+    """In kernel_mode, BOTH ``_SYSTEM_TYPEDEF_NAMES`` and the
+    ``__``-prefix rule are suppressed. The kernel TU defines its
+    own ``size_t``, ``ssize_t``, ``__sighandler_t``, etc., and
+    there's no libc prepend to fill them in if they were stripped."""
+    from bmc_agent.harness_generator import _strip_glibc_internal_typedefs
+    src = (
+        "typedef __kernel_size_t size_t;\n"
+        "typedef long ssize_t;\n"
+        "typedef void (*__sighandler_t)(int);\n"
+        "typedef long __pid_t;\n"  # genuine glibc-internal name
+        "typedef unsigned char __u8;\n"  # kernel primitive
+    )
+    out = _strip_glibc_internal_typedefs(src, kernel_mode=True)
+    # All preserved in kernel mode.
+    assert "typedef __kernel_size_t size_t;" in out
+    assert "typedef long ssize_t;" in out
+    assert "typedef void (*__sighandler_t)(int);" in out
+    assert "typedef long __pid_t;" in out  # __pid_t also kept (no libc to conflict)
+    assert "typedef unsigned char __u8;" in out
+    # Non-kernel-mode default: glibc internals + system types stripped
+    # (when target name is extractable), kernel primitives preserved.
+    # Function-pointer typedefs aren't matched by the simple name
+    # regex; that's a separate gap, irrelevant for kernel_mode.
+    out2 = _strip_glibc_internal_typedefs(src, kernel_mode=False)
+    assert "/* typedef size_t" in out2  # stripped
+    assert "/* typedef ssize_t" in out2  # stripped
+    assert "/* typedef __pid_t" in out2  # stripped
+    assert "typedef unsigned char __u8;" in out2  # kept (kernel primitive)
+
+
+def test_parse_source_file_auto_filters_preprocessed(tmp_path):
+    """``parse_source_file`` automatically calls
+    ``restrict_to_primary_source`` when cpp ``# N "..."`` directives
+    are present. Before this fix, only ``spec_generator`` was filtering;
+    ``cli._cmd_check`` re-parsed and saw all 4400+ kernel functions,
+    leading the harness generator's type-decl extractor to mis-locate
+    function bodies in the source text."""
+    src = tmp_path / "kernel.i"
+    src.write_text(
+        '# 1 "drivers/foo/bar.c"\n'
+        '# 1 "./include/linux/k.h" 1\n'
+        'static inline int header_helper(int x) { return x; }\n'
+        '# 2 "drivers/foo/bar.c" 2\n'
+        'static int driver_fn(int x) { return x + 1; }\n'
+    )
+    from bmc_agent.source_parser import parse_source_file
+    parsed = parse_source_file(str(src))
+    # Header function dropped automatically.
+    assert "header_helper" not in parsed.functions
+    assert "driver_fn" in parsed.functions
+    assert parsed.primary_source == "drivers/foo/bar.c"
+
+
 def test_strip_gcc_addr_space_quals_removes_seg_gs_seg_fs():
     """GCC's named-address-space keywords ``__seg_gs`` and ``__seg_fs``
     survive cpp (they're bare identifiers, not macros). CBMC's frontend

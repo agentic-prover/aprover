@@ -2564,12 +2564,30 @@ class HarnessGenerator:
         # and POSIX duplicates before emitting (mirrors the dynamic
         # validation harness, which has done this since the VibeOS
         # work; the CBMC harness path was missed).
+        #
+        # Kernel TUs (preprocessed source present) don't get libc
+        # headers prepended (see "Standard includes" section below),
+        # so the kernel's ``typedef __kernel_size_t size_t;`` etc.
+        # must survive — pass ``keep_system_typedefs=True`` to the
+        # stripper. For non-preprocessed input the default is
+        # preserved (strip system typedefs; libc headers fill them in).
+        _preprocessed = parsed_file.preprocessed_source is not None
+        # In kernel mode (preprocessed TU, no libc prepend) we skip the
+        # static-inline strip. Its purpose was to remove VibeOS-style
+        # inline libc stubs (``signal()``, ``setjmp()``, …) that conflict
+        # with the prepended system headers. With no libc prepend, no
+        # conflict — and kernel headers are full of complex
+        # macro-expanded static inlines (``READ_ONCE``, ``GENMASK``,
+        # ``__compiletime_assert``) whose brace structure trips the
+        # naive scanner; stripping them leaves orphan body fragments
+        # ("syntax error before ')'", "syntax error after enum end").
+        _intermediate = _strip_inline_asm(
+            _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
+        )
+        if not _preprocessed:
+            _intermediate = _strip_static_inline_defs(_intermediate)
         type_decls = _strip_stdlib_decls(
-            _strip_glibc_internal_typedefs(
-                _strip_static_inline_defs(
-                    _strip_inline_asm(_strip_gcc_addr_space_quals(type_decls))
-                )
-            )
+            _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed)
         )
 
         # --- 2. Identify callees to stub ---
@@ -3048,6 +3066,125 @@ def _read_source(source_file: str) -> str:
         return ""
 
 
+def _rewrite_auto_type(text: str) -> str:
+    """Rewrite GCC's ``__auto_type`` declarations into ``typeof()``
+    equivalents. CBMC's parser (5.95) doesn't recognise ``__auto_type``
+    and errors out with ``syntax error before '__auto_type'``. The
+    Linux kernel uses the keyword extensively in ``min``/``max``/
+    ``clamp``-family macros (linux/minmax.h), so a kernel TU has
+    hundreds of occurrences.
+
+    The transform is purely textual:
+
+        const __auto_type x = SOME_EXPR;
+        → const typeof(SOME_EXPR) x = SOME_EXPR;
+
+    The initializer is captured by scanning to the next ``;`` (or
+    ``,`` — for multi-declarators) at paren/brace depth 0, skipping
+    comments and string/char literals. The duplicated RHS evaluates
+    twice in principle, but the kernel's ``__auto_type`` initializers
+    are pure value-producing expressions (variables, simple casts,
+    arithmetic), so the duplication is harmless for verification.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    pat = re.compile(r'\b__auto_type\b')
+    while i < n:
+        m = pat.search(text, i)
+        if m is None:
+            out.append(text[i:])
+            break
+        out.append(text[i:m.start()])
+        # After ``__auto_type``, expect optional whitespace + identifier
+        # + optional whitespace + ``=`` + initializer + ``;`` (or ``,``).
+        j = m.end()
+        # Skip whitespace
+        while j < n and text[j] in ' \t\n\r':
+            j += 1
+        # Identifier
+        id_match = re.match(r'(\w+)', text[j:])
+        if not id_match:
+            # Not a recognisable declaration shape — leave as-is.
+            out.append(text[m.start():j])
+            i = j
+            continue
+        var_name = id_match.group(1)
+        j += len(var_name)
+        # Skip to ``=``
+        eq_pos = text.find('=', j)
+        # Sanity: ``=`` must come before the next ``;`` at depth 0
+        if eq_pos == -1:
+            out.append(text[m.start():j])
+            i = j
+            continue
+        # Scan from after ``=`` to the next ``;`` or ``,`` at depth 0,
+        # skipping comments and string/char literals.
+        rhs_start = eq_pos + 1
+        # Skip leading whitespace on RHS for cleanliness
+        k = rhs_start
+        while k < n and text[k] in ' \t':
+            k += 1
+        rhs_start = k
+        depth_p = 0
+        depth_b = 0
+        while k < n:
+            ch = text[k]
+            # /* ... */ block comment
+            if ch == '/' and k + 1 < n and text[k + 1] == '*':
+                end = text.find('*/', k + 2)
+                k = n if end == -1 else end + 2
+                continue
+            # // line comment
+            if ch == '/' and k + 1 < n and text[k + 1] == '/':
+                end = text.find('\n', k + 2)
+                k = n if end == -1 else end
+                continue
+            if ch == '"':
+                k += 1
+                while k < n:
+                    if text[k] == '\\' and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == '"':
+                        k += 1
+                        break
+                    k += 1
+                continue
+            if ch == "'":
+                k += 1
+                while k < n:
+                    if text[k] == '\\' and k + 1 < n:
+                        k += 2
+                        continue
+                    if text[k] == "'":
+                        k += 1
+                        break
+                    k += 1
+                continue
+            if ch in '([':
+                depth_p += 1
+            elif ch in ')]':
+                depth_p -= 1
+            elif ch == '{':
+                depth_b += 1
+            elif ch == '}':
+                depth_b -= 1
+            elif depth_p == 0 and depth_b == 0 and ch in ';,':
+                break
+            k += 1
+        rhs = text[rhs_start:k].strip()
+        if not rhs:
+            out.append(text[m.start():k])
+            i = k
+            continue
+        # Emit ``typeof(RHS) VAR = RHS``, preserving the trailing
+        # terminator (``;`` or ``,``) the caller's text had.
+        out.append(f'typeof({rhs}) {var_name} = {rhs}')
+        i = k
+    return ''.join(out)
+
+
 # GCC named address-space qualifiers used by the x86_64 Linux kernel to
 # place data in the GS/FS segment (per-CPU areas). They're emitted as
 # bare keywords surviving preprocessing (not macros), and CBMC's frontend
@@ -3094,10 +3231,13 @@ def _strip_inline_asm(text: str) -> str:
             break
         result.append(text[i:m.start()])
         # Look backward for ``register`` in the current declaration so we
-        # can decide whether the trailing ``;`` belongs to us. Scan back
-        # from m.start() to the previous statement boundary.
-        scan_start = max(0, m.start() - 200)  # bounded look-back
-        prev = text[scan_start:m.start()]
+        # can decide whether the trailing ``;`` belongs to us. The
+        # look-back is unbounded back to the previous statement
+        # boundary — kernel macro expansions (e.g. ``__get_user`` family)
+        # put the ``register`` keyword arbitrarily far from the ``asm``
+        # clause, so an earlier 200-byte cap missed them and produced
+        # malformed declarations.
+        prev = text[:m.start()]
         last_term = max(prev.rfind(";"), prev.rfind("{"), prev.rfind("}"))
         in_decl_window = prev[last_term + 1:] if last_term >= 0 else prev
         is_register_clause = bool(re.search(r'\bregister\b', in_decl_window))
@@ -3289,7 +3429,7 @@ _KERNEL_PRIMITIVE_PAT = re.compile(
 )
 
 
-def _strip_glibc_internal_typedefs(text: str) -> str:
+def _strip_glibc_internal_typedefs(text: str, *, kernel_mode: bool = False) -> str:
     """
     Remove typedef declarations that define names starting with '__' OR that
     define known C-standard / POSIX types (see _SYSTEM_TYPEDEF_NAMES).
@@ -3314,6 +3454,25 @@ def _strip_glibc_internal_typedefs(text: str) -> str:
     frontend errors with ``syntax error before 'va_list'``.  Source-order
     scanning is sufficient because C typedefs may only reference names
     declared earlier in the same translation unit.
+
+    When ``kernel_mode`` is True (CBMC harness path for preprocessed
+    kernel TUs that don't prepend libc system headers), BOTH primary
+    strip rules are suppressed:
+      * ``_SYSTEM_TYPEDEF_NAMES`` — the kernel provides ``size_t``,
+        ``ssize_t``, ``off_t``, … via ``typedef __kernel_size_t size_t;``
+        chains. There is no ``<stddef.h>`` to fill them back in.
+      * ``__``-prefix — the entire purpose of stripping ``__``-typedefs
+        was to resolve duplicate-definition conflicts when ``<signal.h>``
+        / ``<stdio.h>`` / etc. are prepended on top of preprocessed
+        sources that already define glibc internals. With no libc
+        prepend, no conflict. Kernel ``__name_t`` typedefs (which are
+        legion: ``__sighandler_t``, ``__sigset_t``, ``__sigaction``,
+        ``__kernel_*``, the various ``__u*/__s*`` primitives) all
+        survive and reference each other consistently.
+
+    The cascade strip is still active in both modes — it operates on
+    whatever names actually got stripped, so it remains a no-op when
+    nothing was stripped.
     """
     result: list[str] = []
     stripped_names: set[str] = set()
@@ -3342,16 +3501,21 @@ def _strip_glibc_internal_typedefs(text: str) -> str:
         name_m = re.search(r'\b(\w+)\s*;$', typedef_text)
         target = name_m.group(1) if name_m else None
 
-        # Primary strip rule: name starts with `__` or is a C-standard typedef.
-        # Kernel primitive integer typedefs (``__u8``/``__s8``/``__le16``/…)
-        # are NOT glibc-internal: they're defined in
-        # include/uapi/asm-generic/int-ll64.h and downstream Linux types
-        # (``u8 = __u8``) inherit from them. Exempt them so the
-        # ``u8/u16/u32/u64`` chain stays intact for kernel driver
-        # signatures (``ch341_set_handshake(... u8 control)``).
+        # Primary strip rule (libc-conflict mitigation only):
+        #   * Name starts with ``__`` — glibc internal that conflicts
+        #     with prepended ``<signal.h>`` / ``<stdio.h>`` etc.
+        #   * OR name is in ``_SYSTEM_TYPEDEF_NAMES`` — C-standard /
+        #     POSIX type that prepended ``<stddef.h>`` / ``<stdint.h>``
+        #     / ``<sys/types.h>`` provides.
+        # Kernel-primitive ``__``-typedefs (``__u8``/``__s8``/``__le16``/
+        # ``__kernel_*``) are exempted via ``_KERNEL_PRIMITIVE_PAT``.
+        # In ``kernel_mode`` (preprocessed kernel TU, no libc prepend),
+        # BOTH branches are suppressed: no conflict means no need to
+        # strip; and the kernel's own definitions are the only ones
+        # that can fill in ``size_t``, ``__sighandler_t``, etc.
         strip = False
         reason = ""
-        if target and (
+        if not kernel_mode and target and (
             (target.startswith('__') and not _KERNEL_PRIMITIVE_PAT.match(target))
             or target in _SYSTEM_TYPEDEF_NAMES
         ):

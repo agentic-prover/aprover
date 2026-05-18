@@ -201,14 +201,20 @@ def parse_c_file(
     if _TS_AVAILABLE:
         try:
             result = _parse_with_tree_sitter(source_bytes, source_text, str(path))
-            if provided_source:
+            if provided_source or result.primary_source:
+                # ``primary_source`` is populated from cpp ``# N "..."``
+                # line directives, which only appear when the input was
+                # preprocessed. Treating "directives present" as a
+                # synonym for "preprocessed" lets the harness emitter
+                # skip its libc-header prepend (which conflicts with the
+                # inlined glibc/kernel types).
                 result.preprocessed_source = source_text
             return result
         except Exception:
             pass  # fall through to regex
 
     result = _parse_with_regex(source_text, str(path))
-    if provided_source:
+    if provided_source or result.primary_source:
         result.preprocessed_source = source_text
     return result
 
