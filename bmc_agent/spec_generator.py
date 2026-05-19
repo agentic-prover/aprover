@@ -555,9 +555,15 @@ class SpecGenerator:
         )
 
         try:
+            # Critique prompt embeds the original prompt verbatim, so it's
+            # noticeably longer than the first call. K2 Think regularly
+            # consumed the full 16384-token floor on the first attempt and
+            # tripped finish_reason=length on the critique. Bump the cap
+            # so the reasoning model has room to think AND emit the answer.
             critique_response = self.llm.complete(
                 self._spec_system_prompt,
                 critique_prompt,
+                max_tokens=32768,
             )
         except LLMError as exc:
             logger.debug(
