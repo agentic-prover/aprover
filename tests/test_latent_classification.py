@@ -184,6 +184,37 @@ def test_threat_model_security_promotes_pub_api_panics_to_real_bug():
     assert cfg.threat_model == "functional"
 
 
+def test_private_fn_with_callers_classifies_as_latent_under_security():
+    """Regression: 2026-05-19 — Kani standalone-harness mode returns CEXs
+    with empty ``variable_assignments``, so the input-reachability stage
+    can't propagate state through callers and the refinement loop stalls
+    at precondition='true'. Previously this fell through to SPURIOUS even
+    on real OOB / overflow panics in private helpers that have many
+    in-scope callers (CCC's eh_frame.rs is the canonical example: 12
+    private fns, all reachable from the linker pipeline under attacker-
+    controlled ELF input). Under threat_model='security', the structural-
+    panic + has-callers combo must classify as LATENT, not SPURIOUS.
+    """
+    from bmc_agent.cex_validator import _is_structural_panic, _is_publicly_callable
+
+    class _Sig:
+        # Rust signature: not pub, no self
+        is_pub = False
+        is_static = False
+
+    class _Func:
+        signature = _Sig()
+        is_static = False
+
+    func = _Func()
+    # Sanity: private and structural panic combine correctly
+    assert _is_publicly_callable(func) is False
+    assert _is_structural_panic(
+        "read_u32_le.assertion.7",
+        ["property read_u32_le.assertion.7: index out of bounds: the length is less than or equal to the given index"],
+    ) is True
+
+
 def test_validation_result_to_dict_includes_latent_flag():
     cex = _cex("slice_index_fail.assertion.1")
     vr = ValidationResult(

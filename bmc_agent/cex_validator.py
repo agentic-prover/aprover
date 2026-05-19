@@ -1238,50 +1238,78 @@ class CExValidator:
                 f"iteration(s) for '{func_name}' — could not reach a stable precondition. "
                 f"Counterexample left unresolved."
             )
-        elif (
-            _is_publicly_callable(func)
-            and _is_structural_panic(
+        else:
+            threat_model = getattr(self.config, "threat_model", "security").lower()
+            is_panic = _is_structural_panic(
                 counterexample.failing_property,
                 getattr(counterexample, "trace", None),
             )
-        ):
-            # No in-tree caller produces the state, BUT the function is
-            # on the public API surface and the CEx is a structural panic
-            # (slice OOB, integer overflow, alloc-capacity, divide-by-zero).
-            # Under threat_model='security', attacker-controlled inputs are
-            # current callers — classify as REAL_BUG. Under other threat
-            # models, route to LATENT (hardening task; no in-tree path).
-            threat_model = getattr(self.config, "threat_model", "security").lower()
-            if threat_model == "security":
-                final_outcome = CExOutcome.REAL_BUG
-                reasoning = (
-                    f"Security-threat-model real bug in '{func_name}': no in-tree "
-                    f"caller produces the CEx state {counterexample.variable_assignments}, "
-                    f"but the function is publicly callable and the failing property "
-                    f"'{counterexample.failing_property}' is a structural Rust/C panic. "
-                    f"Under threat_model='security', the public API IS the attacker's "
-                    f"interface — adversarial inputs can trigger this panic. "
-                    f"Refinement stabilised after {len(refinement_history)} iteration(s)."
-                )
+            is_pub = _is_publicly_callable(func)
+            # Under threat_model='security', any function that has at least one
+            # caller anywhere in the codebase is treated as transitively reachable
+            # from an attacker-controlled input path (CCC, VibeOS, and similar
+            # binary-crate-style codebases have no useful 'pub fn' boundary —
+            # every fn in the crate is reachable from main()). This keeps the
+            # gate strict for true dead code (no callers at all) but stops the
+            # classifier from silently dropping real OOB / overflow bugs on
+            # private helpers whose Kani CEx lacks concrete variable_assignments.
+            reachable_security = (threat_model == "security") and bool(callers)
+
+            if is_panic and (is_pub or reachable_security):
+                if threat_model == "security":
+                    if is_pub:
+                        final_outcome = CExOutcome.REAL_BUG
+                        reasoning = (
+                            f"Security-threat-model real bug in '{func_name}': no in-tree "
+                            f"caller produces the CEx state {counterexample.variable_assignments}, "
+                            f"but the function is publicly callable and the failing property "
+                            f"'{counterexample.failing_property}' is a structural Rust/C panic. "
+                            f"Under threat_model='security', the public API IS the attacker's "
+                            f"interface — adversarial inputs can trigger this panic. "
+                            f"Refinement stabilised after {len(refinement_history)} iteration(s)."
+                        )
+                    else:
+                        # Private helper with at least one caller -- LATENT under security
+                        # (real panic on adversarial input, but BMC didn't extract a concrete
+                        # reproducer chain through callers). Distinct from REAL_BUG, which
+                        # requires either a pub-API entry or an explicit caller chain.
+                        final_outcome = CExOutcome.LATENT
+                        caller_names = ", ".join(list(callers.keys())[:3])
+                        if len(callers) > 3:
+                            caller_names += f", … (+{len(callers)-3} more)"
+                        reasoning = (
+                            f"Latent security panic in private helper '{func_name}': "
+                            f"failing property '{counterexample.failing_property}' is a "
+                            f"structural Rust/C panic, and the function is reachable from "
+                            f"in-scope callers ({caller_names}). BMC counterexample lacked "
+                            f"concrete variable_assignments so the input-reachability stage "
+                            f"could not construct a propagated reproducer chain, but under "
+                            f"threat_model='security' a panic reachable from the codebase "
+                            f"is exploitable if any upstream caller transitively processes "
+                            f"attacker input. Refinement stabilised after "
+                            f"{len(refinement_history)} iteration(s)."
+                        )
+                else:
+                    # Non-security threat model + structural panic + publicly callable
+                    # -> LATENT (hardening task, no in-tree path proven).
+                    final_outcome = CExOutcome.LATENT
+                    reasoning = (
+                        f"Latent panic on the public API of '{func_name}': no in-tree "
+                        f"caller produces the CEx state {counterexample.variable_assignments}, "
+                        f"but the function is publicly callable and the failing property "
+                        f"'{counterexample.failing_property}' is a structural Rust/C panic. "
+                        f"Threat model '{threat_model}' (not security): cargo-fuzz / future "
+                        f"caller can trigger via the public API; in-tree callers implicitly "
+                        f"satisfy the missing precondition through surrounding invariants. "
+                        f"Refinement stabilised after {len(refinement_history)} iteration(s)."
+                    )
             else:
-                final_outcome = CExOutcome.LATENT
+                final_outcome = CExOutcome.SPURIOUS
                 reasoning = (
-                    f"Latent panic on the public API of '{func_name}': no in-tree "
-                    f"caller produces the CEx state {counterexample.variable_assignments}, "
-                    f"but the function is publicly callable and the failing property "
-                    f"'{counterexample.failing_property}' is a structural Rust/C panic. "
-                    f"Threat model '{threat_model}' (not security): cargo-fuzz / future "
-                    f"caller can trigger via the public API; in-tree callers implicitly "
-                    f"satisfy the missing precondition through surrounding invariants. "
-                    f"Refinement stabilised after {len(refinement_history)} iteration(s)."
+                    f"Counterexample is spurious — no caller can produce the state "
+                    f"{counterexample.variable_assignments}. "
+                    f"Precondition refined over {len(refinement_history)} iteration(s)."
                 )
-        else:
-            final_outcome = CExOutcome.SPURIOUS
-            reasoning = (
-                f"Counterexample is spurious — no caller can produce the state "
-                f"{counterexample.variable_assignments}. "
-                f"Precondition refined over {len(refinement_history)} iteration(s)."
-            )
 
         return ValidationResult(
             function_name=func_name,
