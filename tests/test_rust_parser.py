@@ -166,18 +166,53 @@ def test_multiple_top_level_fns():
     assert set(p.functions) == {"a", "b", "c"}
 
 
-def test_impl_methods_are_skipped():
-    """M1 scope: only top-level fns. impl-block methods are deferred to M2."""
+def test_impl_methods_with_self_are_skipped():
+    """Methods that take self/&self/&mut self cannot be harnessed as free fns."""
     src = (
         "struct S;\n"
         "impl S {\n"
         "    fn inner(&self) -> i32 { 0 }\n"
+        "    fn inner_mut(&mut self) -> i32 { 0 }\n"
+        "    fn inner_owned(self) -> i32 { 0 }\n"
         "}\n"
         "fn outer() -> i32 { 0 }\n"
     )
     p = _parse(src)
     assert "outer" in p.functions
     assert "inner" not in p.functions
+    assert "inner_mut" not in p.functions
+    assert "inner_owned" not in p.functions
+
+
+def test_impl_static_methods_are_collected():
+    """Static methods inside impl blocks (no self) are harnessable as free fns."""
+    src = (
+        "struct S;\n"
+        "impl S {\n"
+        "    pub fn helper(x: i32) -> i32 { x + 1 }\n"
+        "    pub fn other(y: u32, z: u32) -> u32 { y.wrapping_add(z) }\n"
+        "    pub fn with_self(&self) -> i32 { 0 }\n"
+        "}\n"
+    )
+    p = _parse(src)
+    assert "helper" in p.functions
+    assert "other" in p.functions
+    assert "with_self" not in p.functions
+    assert p.functions["helper"].is_pub is True
+    assert p.functions["other"].parameters == [("u32", "y"), ("u32", "z")]
+
+
+def test_inline_mod_static_fns_are_collected():
+    """Functions inside `mod foo { ... }` blocks are reached."""
+    src = (
+        "mod inner_mod {\n"
+        "    pub fn nested(x: i32) -> i32 { x }\n"
+        "}\n"
+        "fn top() -> i32 { 0 }\n"
+    )
+    p = _parse(src)
+    assert "top" in p.functions
+    assert "nested" in p.functions
 
 
 def test_trait_signature_without_body_is_skipped():

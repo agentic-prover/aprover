@@ -160,22 +160,63 @@ def parse_rust_file(
     call_graph: dict[str, set[str]] = {}
     function_bodies: dict[str, str] = {}
 
-    for top in tree.root_node.children:
-        if top.type != "function_item":
-            continue
-        sig = _extract_signature(top, src_bytes)
+    def _ingest_function(fn_node) -> None:
+        sig = _extract_signature(fn_node, src_bytes)
         if sig is None:
-            continue
-        body_node = top.child_by_field_name("body")
+            return
+        body_node = fn_node.child_by_field_name("body")
         if body_node is None:
-            continue  # trait fn declaration without body
+            return  # trait fn declaration without body
+        # Skip methods that take a self receiver: their bodies reference
+        # `self.foo` which we can't harness without constructing an instance
+        # of the impl type, and the existing kani harness generator only
+        # knows how to materialise free-function parameters. Static methods
+        # in impl blocks (`impl Foo { fn bar(x: i32) {...} }`) work fine
+        # and are the high-value unlock.
+        if _function_has_self_param(fn_node):
+            return
         body_text = _slice(src_bytes, body_node)
         callees: set[str] = set()
         _collect_callees(body_node, callees, src_bytes)
+        # If we picked this up from inside an impl block, namespace it so
+        # name collisions across impls (e.g. multiple `pub fn new` definitions)
+        # don't clobber each other.
+        name = sig.name
+        if name in functions:
+            return  # first wins; avoid silent overwrite
+        functions[name] = sig
+        function_bodies[name] = body_text
+        call_graph[name] = callees
 
-        functions[sig.name] = sig
-        function_bodies[sig.name] = body_text
-        call_graph[sig.name] = callees
+    for top in tree.root_node.children:
+        if top.type == "function_item":
+            _ingest_function(top)
+        elif top.type == "impl_item":
+            # Walk the impl's declaration_list (or `body`) for method items.
+            body = top.child_by_field_name("body")
+            if body is None:
+                continue
+            for member in body.named_children:
+                if member.type == "function_item":
+                    _ingest_function(member)
+        elif top.type == "mod_item":
+            # Inline modules: `mod foo { fn bar() {} }`. Walk one level
+            # deeper. Nested modules will be reached on subsequent iterations
+            # via recursion in the same loop if we recursed -- but to keep
+            # behaviour close to the previous parser, stop at one level.
+            body = top.child_by_field_name("body")
+            if body is None:
+                continue
+            for member in body.named_children:
+                if member.type == "function_item":
+                    _ingest_function(member)
+                elif member.type == "impl_item":
+                    impl_body = member.child_by_field_name("body")
+                    if impl_body is None:
+                        continue
+                    for impl_member in impl_body.named_children:
+                        if impl_member.type == "function_item":
+                            _ingest_function(impl_member)
 
     return ParsedRustFile(
         path=str(path),
@@ -251,6 +292,22 @@ def _extract_signature(node, src: bytes) -> Optional[RustFunctionSignature]:
         type_parameters=type_parameters,
         where_clause=where_clause,
     )
+
+
+def _function_has_self_param(fn_node) -> bool:
+    """Return True if the function takes a ``self``/``&self``/``&mut self`` receiver.
+
+    Tree-sitter exposes the self receiver as a separate ``self_parameter``
+    node under the ``parameters`` list. Static methods inside ``impl`` blocks
+    have no ``self_parameter`` and are safe to harness as free functions.
+    """
+    params_node = fn_node.child_by_field_name("parameters")
+    if params_node is None:
+        return False
+    for child in params_node.named_children:
+        if child.type == "self_parameter":
+            return True
+    return False
 
 
 def _collect_callees(node, out: set[str], src: bytes) -> None:
