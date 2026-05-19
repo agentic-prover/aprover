@@ -156,9 +156,11 @@ def test_openai_request_payload_shape():
     assert body["model"] == "MBZUAI-IFM/K2-Think-v2"
     assert body["messages"][0] == {"role": "system", "content": "sys"}
     assert body["messages"][1] == {"role": "user", "content": "user"}
-    # K2/reasoning-model floor: small caller values are padded up to 16384 so
-    # the model has room for a <think> trace plus the answer.
-    assert body["max_tokens"] == 16384
+    # K2/reasoning-model floor: small caller values are padded up to 24576 so
+    # the model has comfortable room for a long <think> trace plus the answer.
+    # (Initially 16384 -- bumped after K2 was observed exhausting that floor
+    # on CCC spec-gen prompts.)
+    assert body["max_tokens"] == 24576
     assert body["temperature"] == 0.1
     assert body["stream"] is False
 

@@ -234,10 +234,14 @@ class LLMClient:
         url = base.rstrip("/") + "/chat/completions"
 
         # Pad max_tokens for reasoning models (K2 Think, R1-style, etc.).
-        # 16k floor gives the model room to emit a long <think> block plus a
-        # full spec answer; cheaper non-reasoning models on the same endpoint
-        # simply stop earlier on finish_reason=stop.
-        effective_max_tokens = max(max_tokens, 16384)
+        # Live K2 CCC sweep observed completion_tokens=16384 repeatedly --
+        # the model was exhausting the prior 16k floor on the spec-gen
+        # <think> trace and either emitting a truncated answer or failing
+        # with finish_reason=length. Raise the floor to 24k so the
+        # reasoning model has comfortable room for both the trace and a
+        # full algebraic spec. Cheaper non-reasoning models on the same
+        # endpoint simply stop earlier on finish_reason=stop.
+        effective_max_tokens = max(max_tokens, 24576)
         payload = {
             "model": self.config.llm_model,
             "messages": [
