@@ -156,9 +156,169 @@ def test_openai_request_payload_shape():
     assert body["model"] == "MBZUAI-IFM/K2-Think-v2"
     assert body["messages"][0] == {"role": "system", "content": "sys"}
     assert body["messages"][1] == {"role": "user", "content": "user"}
-    assert body["max_tokens"] == 64
+    # K2/reasoning-model floor: small caller values are padded up to 16384 so
+    # the model has room for a <think> trace plus the answer.
+    assert body["max_tokens"] == 16384
     assert body["temperature"] == 0.1
     assert body["stream"] is False
+
+
+def test_openai_path_preserves_high_max_tokens():
+    """A caller asking for >= 16384 should not be clipped."""
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        reason_phrase = "OK"
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {"content": "ok"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {},
+            }
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return _Resp()
+
+    class _FakeHttpx:
+        Client = _FakeClient
+
+        @staticmethod
+        def Timeout(*a, **k):  # noqa: N802
+            return None
+
+    config = Config(
+        llm_model="K",
+        llm_api_key="key",
+        llm_base_url="https://api.k2think.ai/v1",
+        llm_provider="openai",
+    )
+    client = LLMClient(config)
+    with patch.dict("sys.modules", {"httpx": _FakeHttpx}):
+        client.complete("s", "u", max_tokens=32_000, temperature=0.0)
+    assert captured["json"]["max_tokens"] == 32_000
+
+
+def test_openai_finish_reason_length_raises():
+    """No </think> closing tag + finish_reason=length must be loud, not silent."""
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient, LLMError
+
+    class _Resp:
+        status_code = 200
+        reason_phrase = "OK"
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {"content": "Let me think about the spec..."},
+                    "finish_reason": "length",
+                }],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 16384},
+            }
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            return _Resp()
+
+    class _FakeHttpx:
+        Client = _FakeClient
+
+        @staticmethod
+        def Timeout(*a, **k):  # noqa: N802
+            return None
+
+    config = Config(
+        llm_model="K",
+        llm_api_key="key",
+        llm_base_url="https://api.k2think.ai/v1",
+        llm_provider="openai",
+    )
+    config.max_spec_retries = 1
+    client = LLMClient(config)
+    with patch.dict("sys.modules", {"httpx": _FakeHttpx}):
+        with pytest.raises(LLMError) as exc_info:
+            client.complete("s", "u")
+    assert "max_tokens" in str(exc_info.value)
+
+
+def test_openai_finish_reason_length_with_think_returns_answer():
+    """finish_reason=length but </think> emitted -> still return the answer after the tag."""
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient
+
+    class _Resp:
+        status_code = 200
+        reason_phrase = "OK"
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {"content": "thinking...</think>final_answer_truncated"},
+                    "finish_reason": "length",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            return _Resp()
+
+    class _FakeHttpx:
+        Client = _FakeClient
+
+        @staticmethod
+        def Timeout(*a, **k):  # noqa: N802
+            return None
+
+    config = Config(
+        llm_model="K",
+        llm_api_key="key",
+        llm_base_url="https://api.k2think.ai/v1",
+        llm_provider="openai",
+    )
+    client = LLMClient(config)
+    with patch.dict("sys.modules", {"httpx": _FakeHttpx}):
+        out = client.complete("s", "u")
+    assert out == "final_answer_truncated"
 
 
 def test_openai_path_missing_key_raises(monkeypatch):

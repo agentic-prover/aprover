@@ -210,7 +210,16 @@ class LLMClient:
         max_tokens: int,
         temperature: float,
     ) -> str:
-        """OpenAI-compatible /v1/chat/completions request (used for K2 Think etc.)."""
+        """OpenAI-compatible /v1/chat/completions request (used for K2 Think etc.).
+
+        Reasoning models on this path (K2 Think, R1-style) fold a verbose
+        ``<think>...</think>`` trace into ``content`` before emitting the
+        answer. If ``max_tokens`` is too tight, the model spends the entire
+        budget on the trace and the answer never appears -- we observed this
+        on spec-generation prompts with the SDK default of 4096. We pad the
+        requested cap to a high floor on K2-style providers so the answer
+        has room to land.
+        """
         api_key = self.config.resolved_api_key()
         if not api_key:
             raise LLMError(
@@ -224,13 +233,18 @@ class LLMClient:
                 base = base + "/v1"
         url = base.rstrip("/") + "/chat/completions"
 
+        # Pad max_tokens for reasoning models (K2 Think, R1-style, etc.).
+        # 16k floor gives the model room to emit a long <think> block plus a
+        # full spec answer; cheaper non-reasoning models on the same endpoint
+        # simply stop earlier on finish_reason=stop.
+        effective_max_tokens = max(max_tokens, 16384)
         payload = {
             "model": self.config.llm_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             "temperature": temperature,
             "stream": False,
         }
@@ -272,7 +286,8 @@ class LLMClient:
         choices = data.get("choices") or []
         if not choices:
             raise LLMError(f"OpenAI-compatible response contained no choices: {data}")
-        msg = choices[0].get("message") or {}
+        choice = choices[0]
+        msg = choice.get("message") or {}
         content = msg.get("content")
         if isinstance(content, list):
             text = "".join(
@@ -284,7 +299,23 @@ class LLMClient:
             text = content
         else:
             raise LLMError(f"OpenAI-compatible response had no message content: {choices[0]}")
-        return _strip_reasoning_blocks(text)
+
+        finish_reason = choice.get("finish_reason")
+        stripped = _strip_reasoning_blocks(text)
+        # When a reasoning model burns its whole budget on <think>... and is
+        # cut off, finish_reason=='length' and we get no </think> closing
+        # tag, so the strip is a no-op and `stripped` is just chain-of-thought.
+        # Surface this loudly: the caller would otherwise parse the reasoning
+        # text as a spec, which silently corrupts the pipeline.
+        if finish_reason == "length" and "</think>" not in text:
+            raise LLMError(
+                "OpenAI-compatible response hit max_tokens before emitting the "
+                "final answer (no </think> closing tag). Bump max_tokens or "
+                "shorten the prompt. "
+                f"prompt_tokens={usage.get('prompt_tokens')} "
+                f"completion_tokens={usage.get('completion_tokens')}"
+            )
+        return stripped
 
     # ------------------------------------------------------------------
     # Internal helpers
