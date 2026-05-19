@@ -120,6 +120,7 @@ class BugReporter:
     def __init__(self, store: ArtifactStore) -> None:
         self.store = store
         self._reports: list[BugReport] = []
+        self._latent_reports: list[BugReport] = []
         self._unresolved: list = []
 
     def create_report(
@@ -240,6 +241,28 @@ class BugReporter:
             )
         except Exception as exc:
             logger.warning("Failed to save bug report: %s", exc)
+
+    def save_latent_report(self, report: BugReport, driver_name: str) -> None:
+        """Save a LATENT bug report — panic reachable on the pub API but no
+        in-tree caller produces the state. Routed to a separate
+        ``latent_report.json`` file so triage can distinguish
+        reachable-now from future-caller risk."""
+        report.driver_name = driver_name
+        if not hasattr(self, "_latent_reports"):
+            self._latent_reports = []
+        self._latent_reports.append(report)
+        try:
+            self.store.save_latent_report(
+                driver=driver_name,
+                function=report.function_name,
+                report=report.to_dict(),
+            )
+            logger.info(
+                "Saved LATENT report for '%s' in driver '%s'",
+                report.function_name, driver_name,
+            )
+        except Exception as exc:
+            logger.warning("Failed to save latent report: %s", exc)
 
     def generate_summary(self, driver_name: str) -> str:
         """Generate a human-readable summary of all bugs found for *driver_name*."""

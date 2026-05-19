@@ -399,6 +399,11 @@ class AMCPipeline:
         # ------------------------------------------------------------------
         logger.info("--- Phase 3: Validating counterexamples ---")
         bug_reports: list[BugReport] = []
+        # Latent reports: panics reachable on the pub API but no in-tree
+        # caller produces the state. cargo-fuzz / future-caller risk; tracked
+        # separately from bug_reports so triage can pick severity tier.
+        latent_reports: list[BugReport] = []
+        confirmed_latent: set[tuple[str, str]] = set()
         current_specs = dict(specs)  # may be updated by refinement
         recheck_queue: set[str] = set()   # callers to re-check after refinement
         self_recheck_queue: set[str] = set()  # refined fns to re-check themselves
@@ -467,6 +472,23 @@ class AMCPipeline:
                         report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
+                elif validation.is_latent_bug:
+                    latent_key = (fn_name, _prop_type(cex.failing_property))
+                    if latent_key in confirmed_latent:
+                        logger.debug(
+                            "Skipping duplicate latent bug for '%s' (type '%s')",
+                            fn_name, latent_key[1],
+                        )
+                    else:
+                        confirmed_latent.add(latent_key)
+                        logger.info(
+                            "LATENT panic on pub API of '%s' — no in-tree caller "
+                            "reaches state, future-caller / cargo-fuzz risk",
+                            fn_name,
+                        )
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                        self.reporter.save_latent_report(report, driver_name)
+                        latent_reports.append(report)
                 else:
                     logger.info(
                         "Spurious counterexample for '%s' — refined precondition: %s",
@@ -572,6 +594,17 @@ class AMCPipeline:
                             report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
                             self.reporter.save_report(report, driver_name)
                             bug_reports.append(report)
+                    elif validation.is_latent_bug:
+                        latent_key = (fn_name, _prop_type(cex.failing_property))
+                        if latent_key not in confirmed_latent:
+                            confirmed_latent.add(latent_key)
+                            logger.info(
+                                "LATENT (Phase 3c) panic on pub API of '%s'",
+                                fn_name,
+                            )
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                            self.reporter.save_latent_report(report, driver_name)
+                            latent_reports.append(report)
                     else:
                         logger.info(
                             "Phase 3c: spurious (further refined) for '%s': %s",
@@ -651,6 +684,16 @@ class AMCPipeline:
                             phase3b_bugs_by_fn.setdefault(fn_name, []).append(
                                 f"{fn_name}:{cex.failing_property}"
                             )
+                    elif validation.is_latent_bug:
+                        latent_key = (fn_name, _prop_type(cex.failing_property))
+                        if latent_key not in confirmed_latent:
+                            confirmed_latent.add(latent_key)
+                            logger.info(
+                                "LATENT (recheck) panic on pub API of '%s'", fn_name,
+                            )
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                            self.reporter.save_latent_report(report, driver_name)
+                            latent_reports.append(report)
 
             # RQ3: build PropagationEvent objects grouped by which refinement
             # triggered each caller recheck.
@@ -713,10 +756,15 @@ class AMCPipeline:
         self._emit_coverage_diagnostics(driver_name)
 
         logger.info(
-            "=== AMC Pipeline END: %d real bug(s) found, %d unresolved ===",
+            "=== AMC Pipeline END: %d real bug(s), %d latent, %d unresolved ===",
             len(bug_reports),
+            len(latent_reports),
             len(self.reporter._unresolved),
         )
+        # Stash latent reports on the pipeline so the CLI can access them
+        # without changing the long-stable return type. Callers that don't
+        # care (eval scripts, tests) keep working unchanged.
+        self.latent_reports = latent_reports
         return bug_reports
 
     # ------------------------------------------------------------------

@@ -49,6 +49,64 @@ class CExOutcome(Enum):
     REAL_BUG   = "real_bug"
     SPURIOUS   = "spurious"
     UNRESOLVED = "unresolved"
+    # LATENT — structural panic (slice OOB, integer overflow, etc.) on a
+    # publicly callable function. No in-tree caller produces the CEx state,
+    # but the function is part of the `pub` API surface, so cargo-fuzz or
+    # a future caller can hit it. This is the "implicit contract" case
+    # where the function lacks a defensive guard that every existing
+    # caller satisfies via surrounding invariants.
+    LATENT     = "latent"
+
+
+# Failing-property substrings that count as "structural panics" — i.e.
+# real Rust panic sites that any caller passing adversarial inputs can
+# trigger, as opposed to Kani-modelling artifacts. Matches both the Kani
+# property names and the human-readable trace messages.
+_STRUCTURAL_PANIC_MARKERS = (
+    "attempt to add with overflow",
+    "attempt to subtract with overflow",
+    "attempt to multiply with overflow",
+    "attempt to shift",
+    "attempt to divide by zero",
+    "attempt to calculate the remainder with a divisor of zero",
+    "slice_index_fail",
+    "index out of bounds",
+    "out of bounds",
+    "capacity_overflow",
+    "raw_vec",
+    "panicked at",
+    "called `Option::unwrap()` on a `None` value",
+    "unreachable code",
+)
+
+
+def _is_structural_panic(failing_property: str, trace: "list[str] | None" = None) -> bool:
+    """True iff the CEx looks like a real Rust/C panic (slice OOB,
+    overflow, divide-by-zero, alloc-capacity) — i.e. cargo-fuzz could
+    trigger it with adversarial inputs. False for everything else
+    (custom postcondition violations, Kani modelling artifacts, etc.)."""
+    needle = (failing_property or "")
+    if trace:
+        needle = needle + " " + " ".join(trace)
+    n = needle.lower()
+    return any(marker.lower() in n for marker in _STRUCTURAL_PANIC_MARKERS)
+
+
+def _is_publicly_callable(func) -> bool:
+    """True iff *func* is on the public API surface — i.e. exposed to
+    callers outside its defining file. For Rust this means ``pub fn``;
+    for C it means a non-``static`` function (no storage-class modifier).
+    Duck-typed against both FunctionInfo shapes.
+
+    Detection: Rust signatures define ``is_pub`` (default False) AND
+    ``is_static`` (kept for duck-typing). C signatures define only
+    ``is_static``. So presence of ``is_pub`` => Rust path; else C path.
+    """
+    sig = getattr(func, "signature", None) or func
+    if hasattr(sig, "is_pub"):
+        return bool(getattr(sig, "is_pub", False))
+    # C path: not declared `static` → externally visible
+    return not bool(getattr(sig, "is_static", False))
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +166,14 @@ class ValidationResult:
     def is_real_bug(self) -> bool:
         return self.outcome == CExOutcome.REAL_BUG
 
+    @property
+    def is_latent_bug(self) -> bool:
+        """True iff this CEx is a latent panic on the public API — the
+        function panics on inputs no in-tree caller produces, but
+        cargo-fuzz / a future caller can hit it. See
+        :class:`CExOutcome.LATENT`."""
+        return self.outcome == CExOutcome.LATENT
+
     def to_dict(self) -> dict:
         return {
             "function_name": self.function_name,
@@ -125,6 +191,7 @@ class ValidationResult:
             "over_refinement_rejected": self.over_refinement_rejected,
             "system_entry_reached": self.system_entry_reached,
             "is_real_bug": self.is_real_bug,
+            "is_latent_bug": self.is_latent_bug,
             "dynamic_result": self.dynamic_result.to_dict() if self.dynamic_result else None,
         }
 
@@ -430,6 +497,50 @@ class CExValidator:
                 all_funcs=all_funcs,
                 parsed_file=parsed_file,
             )
+            # Entry function (no in-scope callers) + public API + structural
+            # panic = LATENT, not REAL_BUG. The CEx panic is reachable via
+            # cargo-fuzz / a future caller through the public API, but no
+            # in-tree call site produces the state — so it's future-caller
+            # / fuzz risk rather than an active crash path. This distinction
+            # was previously collapsed into REAL_BUG with confirmed_system_entry
+            # confidence, which over-reported. (User feedback 2026-05-19.)
+            #
+            # Note: non-public entry points (C `static` fns called from out-of-
+            # scope code, or genuine system entries like kernel handlers
+            # whose callers are below the analysed boundary) still go to
+            # REAL_BUG — we can't tell those apart from `pub` API surface
+            # without additional ground truth, and conservatively flagging
+            # them as reachable bugs is the right call.
+            if (
+                _is_publicly_callable(func)
+                and _is_structural_panic(
+                    counterexample.failing_property,
+                    getattr(counterexample, "trace", None),
+                )
+            ):
+                latent_reason = (
+                    f"'{func_name}' is a public-API entry function (no callers "
+                    f"in any file in scope). The CEx panic "
+                    f"'{counterexample.failing_property}' is a structural Rust/C "
+                    f"panic reachable via cargo-fuzz / future-caller through the "
+                    f"public API, but no in-tree call site produces the state. "
+                    f"Classified as LATENT — separate from REAL_BUG (which "
+                    f"requires an in-tree-reachable call chain)."
+                )
+                result = ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[func_name],
+                    system_entry_input=reproducer,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=latent_reason,
+                    outcome=CExOutcome.LATENT,
+                    system_entry_reached=True,
+                )
+                self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+                return result
+
             result = ValidationResult(
                 function_name=func_name,
                 counterexample=counterexample,
@@ -1112,6 +1223,31 @@ class CExValidator:
                 f"Refinement budget exhausted after {self.config.max_refinement_iters} "
                 f"iteration(s) for '{func_name}' — could not reach a stable precondition. "
                 f"Counterexample left unresolved."
+            )
+        elif (
+            _is_publicly_callable(func)
+            and _is_structural_panic(
+                counterexample.failing_property,
+                getattr(counterexample, "trace", None),
+            )
+        ):
+            # No in-tree caller produces the state, BUT the function is
+            # on the public API surface and the CEx is a structural panic
+            # (slice OOB, integer overflow, alloc-capacity, divide-by-zero).
+            # cargo-fuzz / a future caller can trigger it via the pub API.
+            # Classify as LATENT — separate triage bucket from REAL_BUG
+            # (which requires an in-tree reachable path) and from SPURIOUS
+            # (which would be a Kani modelling artifact).
+            final_outcome = CExOutcome.LATENT
+            reasoning = (
+                f"Latent panic on the public API of '{func_name}': no in-tree "
+                f"caller produces the CEx state {counterexample.variable_assignments}, "
+                f"but the function is publicly callable and the failing property "
+                f"'{counterexample.failing_property}' is a structural Rust/C panic. "
+                f"Refinement stabilised after {len(refinement_history)} iteration(s). "
+                f"cargo-fuzz or a future caller can trigger this via the public API; "
+                f"in-tree callers implicitly satisfy the missing precondition through "
+                f"surrounding invariants."
             )
         else:
             final_outcome = CExOutcome.SPURIOUS

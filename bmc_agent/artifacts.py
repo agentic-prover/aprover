@@ -129,6 +129,32 @@ class ArtifactStore:
             return None
         return _read_json(path).get("report")
 
+    def save_latent_report(self, driver: str, function: str, report: Any) -> Path:
+        """Save a LATENT bug report to ``{driver}/{function}/latent_report.json``.
+
+        Latent reports are panics reachable via the public API but not
+        from any in-tree caller — cargo-fuzz / future-caller risk. They
+        live in a separate file from ``bug_report.json`` so triage can
+        pick severity tier (reachable vs latent) without parsing.
+        """
+        path = self._fn_dir(driver, function) / "latent_report.json"
+        payload: dict[str, Any] = {"saved_at": _utcnow()}
+        if isinstance(report, dict):
+            payload["report"] = report
+        elif hasattr(report, "__dataclass_fields__"):
+            import dataclasses
+            payload["report"] = dataclasses.asdict(report)
+        else:
+            payload["report"] = str(report)
+        _write_json(path, payload)
+        return path
+
+    def load_latent_report(self, driver: str, function: str) -> Optional[dict]:
+        path = self._fn_dir(driver, function) / "latent_report.json"
+        if not path.exists():
+            return None
+        return _read_json(path).get("report")
+
     # ------------------------------------------------------------------
     # Classification storage (per-counterexample validation result)
     # ------------------------------------------------------------------

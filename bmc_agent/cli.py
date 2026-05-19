@@ -394,6 +394,20 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             if report.call_chain:
                 print(f"    Call chain: {' → '.join(report.call_chain)}")
 
+    # Latent findings: panics reachable on the pub API but no in-tree
+    # caller produces the CEx state. Separate severity tier from reachable
+    # bugs — cargo-fuzz / future-caller risk, not an active crash path.
+    latent_reports = getattr(pipeline, "latent_reports", None) or []
+    if latent_reports:
+        print(f"\nLatent panics on pub API: {len(latent_reports)}")
+        print(
+            "  (panic reachable via cargo-fuzz / future-caller, "
+            "but no in-tree call site produces the state)"
+        )
+        for report in latent_reports:
+            print(f"\n  [{(report.bug_type or 'panic').upper()}] {report.function_name}")
+            print(f"    Property: {report.violated_property}")
+
     # Print summary from reporter
     summary = pipeline.reporter.generate_summary(args.driver)
     print(f"\n{summary}")
