@@ -220,35 +220,63 @@ postconditions cause VERIFIED-CLEAN runs to flip to spurious failures. Encode on
 the bug-class invariants the code is actually trying to enforce; if no such
 guard exists in the body, the function may genuinely have the bug.
 
-FUNCTIONAL CORRECTNESS (optional ``functional_spec`` field):
+FUNCTIONAL CORRECTNESS (``functional_spec`` field — STRONGLY ENCOURAGED):
 The defensive postcondition above rules out *bug classes*; the functional spec
-captures *what the function actually computes*. Use it to specify behaviour
-beyond safety — equivalence to a reference computation, algebraic laws,
-round-trip identities, structural invariants.
+captures *what the function actually computes*. This is where most of the
+verifier's power is. For ANY function that performs concrete computation
+(arithmetic, parsing, encoding, hashing, alignment, byte ops), you SHOULD
+emit a functional spec — not skip it. Leave empty only when the function
+returns a structured value (AST, hashmap) that genuinely can't be expressed
+as a boolean over scalars.
 
-  * **Reference equivalence**: ``result == n * sizeof(T)`` for an allocation
-    helper, or ``result == u16::from_le_bytes([data[off], data[off+1]])``
-    for a byte reader. Compare to the simpler computation the function
-    is replicating.
-  * **Algebraic identities**: ``align_up_64(val, align) >= val &&
-    align_up_64(val, align) - val < align && align_up_64(val, align) % align == 0``
-    — captures the *meaning* of alignment, not just absence of crashes.
-  * **Round-trip identities**: when the function is a wrapper like
-    ``bytes_to_str``, the spec should compare to the obvious reference
-    (e.g. ``std::str::from_utf8(bytes).unwrap() == result`` when the
-    precondition guarantees valid UTF-8).
-  * **Structural invariants**: "list result is acyclic", "tree result is
-    balanced", "no duplicate keys in the returned hashmap".
+Concrete templates that should work for most non-trivial functions:
 
-ONLY emit a functional spec when you can express it as a Rust/C boolean
-expression that the verifier can check — not prose. If the function's
-behaviour is too complex to capture this way (e.g. parser pass returning
-a structured AST), set ``functional_spec`` to the empty string or "true"
-and the field is ignored.
+  * **Reference equivalence — byte readers**:
+      result == u16::from_le_bytes([data[off], data[off+1]])
+      result == u32::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3]])
+    Yes, this looks tautological. Emit it anyway — the verifier checks
+    the actual bit operations match this reference, which catches
+    off-by-one bit-shift bugs, endianness reversal, etc.
 
-Don't fabricate functional specs either. A wrong functional spec triggers
-false-positive bug reports. If you can't be confident the spec is what a
-correct implementation would compute, leave it empty.
+  * **Algebraic identities — alignment**:
+      (result >= val) && (result - val < align) && (result % align == 0)
+    Captures the meaning of "round val up to a multiple of align". Works
+    for any align_up / align_down / round_to_boundary helper.
+
+  * **Reference equivalence — hashing**:
+      For a simple djb2-style hash (h = 5381; for b: h = h*33 + b):
+        // express the fold as a sum the verifier can check up to slice_bound
+        result == name.iter().fold(5381u32, |h, &b|
+            h.wrapping_mul(33).wrapping_add(b as u32))
+    The fold expression is exactly what the verifier needs to confirm.
+
+  * **Round-trip identities — wrappers**:
+      bytes_to_str(b, 0, b.len()) == std::str::from_utf8(b).unwrap()
+        (when pre guarantees valid UTF-8)
+      decode(encode(x)) == x
+
+  * **Bit-level computation**:
+      For ``high_bits(x) = x & 0xFF00``:
+        result == x & 0xFF00
+      For ``swap_bytes(x: u16)``:
+        result == ((x & 0xFF) << 8) | ((x >> 8) & 0xFF)
+    Direct equivalence to the bit formula.
+
+WHEN TO LEAVE EMPTY:
+- Function returns an AST, hashmap, or other structured value where
+  equality can't be expressed as a boolean over scalars
+- Function has side effects on out-of-scope state (file I/O, globals)
+  that the verifier can't model
+- Genuinely can't construct a reference computation simpler than the
+  implementation itself (parser passes, codegen, register allocation)
+
+ANTI-FABRICATION RULE:
+A wrong functional spec triggers false-positive bug reports. The spec
+must be what a correct implementation would compute, derivable from the
+function name + signature + body. If you have to guess, emit empty.
+Tautological specs (reference computation literally mirrors the body)
+are CORRECT and should be emitted — they prove the function executes
+the body without interference. Don't skip them as "obvious".
 
 {threat_model_context}
 
