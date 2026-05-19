@@ -776,6 +776,41 @@ fn target_caller(x: u64) -> u64 { helper(x) }
     assert "polluted_unrelated" not in out or "/* stripped" in out, out
 
 
+def test_strip_crate_local_fn_items_strips_impl_blocks():
+    """``impl`` blocks remain in the source after fn-stripping and
+    their bodies reference now-stripped sibling fns (E0425 cascade).
+    The parser's M1 scope only analyses top-level free fns, so impl
+    blocks are never the target — strip them whole.
+
+    Regression: CCC source.rs 2026-05-19 — 4 pure top-level fns
+    all failed Kani parse because impl Span / impl SourceManager
+    bodies still referenced compute_line_offsets, memchr_newline,
+    and FxHashMap (after their definitions were stripped)."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_fn_items
+    src = """
+pub struct Foo;
+
+impl Foo {
+    pub fn method_that_calls_stripped(&self) -> u32 {
+        sibling_fn(42)
+    }
+}
+
+fn my_target(x: u32) -> u32 { x + 1 }
+
+fn sibling_fn(x: u32) -> u32 { x }
+"""
+    out = _strip_crate_local_fn_items(src, keep_fn_name="my_target")
+    # Target survives.
+    assert "fn my_target(x: u32) -> u32 { x + 1 }" in out, out
+    # Sibling fn stripped.
+    assert "fn sibling_fn(x: u32) -> u32 { x }" not in out, out
+    # impl block stripped — body's reference to sibling_fn cannot survive.
+    assert "method_that_calls_stripped" not in out, out
+    # Struct definition (not an fn or impl) remains.
+    assert "pub struct Foo;" in out, out
+
+
 def test_strip_crate_local_fn_items_preserves_target_even_if_polluted():
     """If the TARGET function itself references crate paths it stays
     in the source — verification will then fail (parse error) for the

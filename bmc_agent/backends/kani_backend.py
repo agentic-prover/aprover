@@ -442,31 +442,43 @@ def _strip_crate_local_fn_items(
     parser = _TSParser(_load_language())
     tree = parser.parse(src_bytes)
 
-    # Gather (start, end, name) for each top-level function_item.
-    ranges: list[tuple[int, int, str]] = []
+    # Gather (start, end, kind, name) for each top-level function_item
+    # AND each impl_item. The Rust parser's M1 scope only analyses
+    # top-level free fns, so any impl block in the file is by definition
+    # NOT the target; their bodies typically call sibling fns we just
+    # stripped, which then cascade into a wall of E0425 ("cannot find
+    # function") errors. Strip every impl block; keep listed fns.
+    ranges: list[tuple[int, int, str, str]] = []
     for top in tree.root_node.children:
-        if top.type != "function_item":
-            continue
-        name_node = top.child_by_field_name("name")
-        name = (
-            src_bytes[name_node.start_byte:name_node.end_byte]
-            .decode("utf-8", errors="replace")
-            if name_node else ""
-        )
-        ranges.append((top.start_byte, top.end_byte, name))
+        if top.type == "function_item":
+            name_node = top.child_by_field_name("name")
+            name = (
+                src_bytes[name_node.start_byte:name_node.end_byte]
+                .decode("utf-8", errors="replace")
+                if name_node else ""
+            )
+            ranges.append((top.start_byte, top.end_byte, "fn", name))
+        elif top.type == "impl_item":
+            ranges.append((top.start_byte, top.end_byte, "impl", ""))
 
     if not ranges:
         return source
 
     # Walk back to front so byte offsets stay valid as we splice.
     out = bytearray(src_bytes)
-    for start, end, name in reversed(ranges):
-        if name == keep_fn_name or name in keep_callees:
+    for start, end, kind, name in reversed(ranges):
+        if kind == "fn" and (name == keep_fn_name or name in keep_callees):
             continue
-        replacement = (
-            f"// fn {name}(...) /* stripped: non-target sibling, kept "
-            f"out of standalone harness */"
-        ).encode("utf-8")
+        if kind == "fn":
+            replacement = (
+                f"// fn {name}(...) /* stripped: non-target sibling, kept "
+                f"out of standalone harness */"
+            ).encode("utf-8")
+        else:  # impl
+            replacement = (
+                b"// impl ... { ... } /* stripped: parser M1 scope is "
+                b"top-level free fns only; impl methods aren't the target */"
+            )
         out[start:end] = replacement
 
     return bytes(out).decode("utf-8", errors="replace")
