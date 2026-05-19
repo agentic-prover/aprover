@@ -380,8 +380,21 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
                 inner.append(line)
         text = "\n".join(inner).strip()
 
+    data = None
     try:
         data = json.loads(text)
+    except json.JSONDecodeError:
+        # Fallback: reasoning models (K2 Think etc.) sometimes bracket the JSON
+        # with a trailing prose line ("Hope this helps!", "Note: …") even after
+        # the </think> strip. Extract the first balanced top-level JSON object.
+        obj = _extract_first_json_object(text)
+        if obj is not None:
+            try:
+                data = json.loads(obj)
+            except json.JSONDecodeError:
+                data = None
+
+    if data is not None:
         pre = data.get("precondition", "").strip()
         post = data.get("postcondition", "").strip()
         # Optional functional spec (Phase 1). LLM may either omit the field,
@@ -405,9 +418,47 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
                 post = f"({post}) && ({functional})"
         if pre and post:
             return pre, post
-    except (json.JSONDecodeError, AttributeError):
-        pass
 
+    return None
+
+
+def _extract_first_json_object(text: str) -> Optional[str]:
+    """Return the first top-level ``{...}`` substring whose braces balance.
+
+    Used as a fallback when ``json.loads`` on the full response fails because
+    a reasoning model wrapped the JSON in surrounding prose. Counts brace
+    depth while respecting string literals and escape sequences so that braces
+    inside string values don't throw off the count. Returns ``None`` if no
+    balanced object is found.
+    """
+    if not text:
+        return None
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        i = start
+        in_str = False
+        esc = False
+        while i < len(text):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start : i + 1]
+            i += 1
+        start = text.find("{", start + 1)
     return None
 
 
