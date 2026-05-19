@@ -156,6 +156,31 @@ class BMCEngine:
             # verdict. Regression: CCC encoding.rs run 2026-05-19 —
             # bytes_to_string and encode_non_utf8 timed out at default
             # bound=4; encode_non_utf8 verifies clean at bound=1 in ~40s.
+            # Unwind-exhausted retry: when Kani reports "loop unwind
+            # bound exhausted" the result is inconclusive — the function
+            # would have verified clean if the solver had been allowed
+            # more loop iterations. Bump unwind 4 → 16 (one retry) and
+            # try again; keep slice_bound the same. Distinct from the
+            # timeout-retry path below, which shrinks state.
+            if (
+                cbmc_result.error
+                and "unwind bound exhausted" in cbmc_result.error
+                and getattr(self.backend, "generate_harness", None) is not None
+            ):
+                bumped_unwind = max(self.config.kani_unwind * 4, 16)
+                logger.info(
+                    "Kani unwind-exhausted for '%s' — retrying with unwind=%d",
+                    fn_name, bumped_unwind,
+                )
+                cbmc_result = self.backend.check(
+                    harness_path, unwind_override=bumped_unwind,
+                )
+                if not cbmc_result.error or "unwind bound" not in cbmc_result.error:
+                    logger.info(
+                        "Kani unwind-bump succeeded for '%s' at unwind=%d",
+                        fn_name, bumped_unwind,
+                    )
+
             if (
                 cbmc_result.error
                 and "timed out" in cbmc_result.error
