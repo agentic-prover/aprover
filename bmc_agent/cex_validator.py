@@ -75,7 +75,14 @@ _STRUCTURAL_PANIC_MARKERS = (
     "capacity_overflow",
     "raw_vec",
     "panicked at",
+    # Rust stdlib panic helpers for failed unwrap / expect on Option/Result.
+    # The property name lands as either ``std::result::unwrap_failed.assertion.N``
+    # or ``core::option::expect_failed.assertion.N`` — both are pure panic
+    # sites reachable via cargo-fuzz, so treat them as structural.
+    "unwrap_failed",
+    "expect_failed",
     "called `Option::unwrap()` on a `None` value",
+    "called `Result::unwrap()` on an `Err`",
     "unreachable code",
 )
 

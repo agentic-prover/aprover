@@ -69,6 +69,17 @@ def test_structural_panic_detects_capacity_overflow():
     assert _is_structural_panic("alloc::raw_vec::capacity_overflow.assertion.1")
 
 
+def test_structural_panic_detects_unwrap_failed():
+    """Rust ``Result::unwrap()`` / ``Option::unwrap()`` failure lands as
+    ``std::result::unwrap_failed`` or ``core::option::expect_failed``.
+    These are pure panic sites and should be classified as structural.
+    Regression: CCC ``bytes_to_str`` had an ``unwrap()`` on
+    ``str::from_utf8`` that was being classified REAL_BUG instead of
+    LATENT because the marker list missed unwrap_failed."""
+    assert _is_structural_panic("std::result::unwrap_failed.assertion.1")
+    assert _is_structural_panic("core::option::expect_failed.assertion.1")
+
+
 def test_structural_panic_rejects_custom_postconditions():
     """User-defined postcondition violations should NOT count as structural
     panics — they're modelling-level (LLM-generated postcond) not pure Rust
