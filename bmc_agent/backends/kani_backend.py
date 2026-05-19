@@ -52,6 +52,23 @@ _PRIMITIVE_RUST_TYPES = {
 _DEFAULT_SLICE_BOUND = 4
 
 
+# Element types we can safely nondet-init with ``kani::any()`` inside an
+# array. Kani auto-derives ``Arbitrary`` for primitives and tuples of
+# primitives but NOT for user-defined enums/structs (those need an
+# explicit derive). When the slice element is something else (e.g.
+# ``ExprToken`` from CCC asm_expr.rs), an empty-slice fallback keeps the
+# harness compilable so the function gets a verdict instead of E0277.
+def _element_is_arbitrary(elem_type: str) -> bool:
+    e = elem_type.strip()
+    if e in _PRIMITIVE_RUST_TYPES:
+        return True
+    # Strip a single ``&`` or ``&mut `` borrow — Kani auto-implements
+    # Arbitrary for refs whose pointee is Arbitrary, but raw byte arrays
+    # of references are not what we want anyway (no storage to point
+    # into), so be conservative.
+    return False
+
+
 def _is_pointer_type(rust_type: str) -> bool:
     """True iff *rust_type* is a Rust raw pointer or reference type."""
     t = rust_type.strip()
@@ -204,6 +221,18 @@ def _param_init_block(
         backing = f"_backing_{name}"
         length = f"_len_{name}"
         borrow = "&mut " if t.startswith("&mut ") else "&"
+        if not _element_is_arbitrary(elem):
+            # Element type isn't a primitive Kani knows how to nondet-init
+            # (e.g. user-defined enum ``ExprToken`` with `&'static str`
+            # variants). Without ``impl kani::Arbitrary for T`` the
+            # original ``[T; N] = kani::any()`` produces E0277. Fall back
+            # to an empty Vec backing so the harness compiles and the
+            # function gets *some* verdict — even if degenerate, an empty
+            # slice exercises the early-return / "no tokens" branch.
+            return [
+                f"    let mut {backing}: Vec<{elem}> = Vec::new();",
+                f"    let {name}: {t} = {borrow}{backing}[..];",
+            ]
         return [
             f"    let mut {backing}: [{elem}; {slice_bound}] = kani::any();",
             f"    let {length}: usize = kani::any();",
@@ -219,6 +248,12 @@ def _param_init_block(
         elem = _vec_element_type(t)
         backing = f"_backing_{name}"
         length = f"_len_{name}"
+        if not _element_is_arbitrary(elem):
+            # Same Arbitrary fallback as the slice case above. Empty Vec
+            # keeps the harness compilable when T is a user-defined type.
+            return [
+                f"    let {name}: Vec<{elem}> = Vec::new();",
+            ]
         return [
             f"    let {backing}: [{elem}; {slice_bound}] = kani::any();",
             f"    let {length}: usize = kani::any();",

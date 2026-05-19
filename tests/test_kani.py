@@ -776,6 +776,50 @@ fn target_caller(x: u64) -> u64 { helper(x) }
     assert "polluted_unrelated" not in out or "/* stripped" in out, out
 
 
+def test_param_init_block_slice_of_user_type_falls_back_to_empty_vec():
+    """``&[ExprToken]`` cannot use ``[T; N] = kani::any()`` because
+    ExprToken isn't Arbitrary. Fall back to an empty Vec backing so the
+    harness compiles and we get a (degenerate) verdict.
+
+    Regression: CCC asm_expr.rs eval_add — E0277 ``ExprToken: kani::Arbitrary
+    is not satisfied`` after the transitive-callee fix unblocked compilation
+    on the function side."""
+    out = _param_init_block("&[ExprToken]", "tokens")
+    text = "\n".join(out)
+    # Must NOT try to nondet-init [T; N] of a non-primitive.
+    assert "kani::any()" not in text, text
+    assert "[ExprToken; " not in text, text
+    # Must produce an empty-Vec backing + a shared-slice borrow.
+    assert "Vec<ExprToken> = Vec::new();" in text, text
+    assert "&_backing_tokens[..]" in text, text
+
+
+def test_param_init_block_mut_slice_of_user_type_falls_back_to_empty_vec():
+    """Same fallback for ``&mut [T]`` of a user-defined type."""
+    out = _param_init_block("&mut [SomeStruct]", "buf")
+    text = "\n".join(out)
+    assert "kani::any()" not in text, text
+    assert "Vec<SomeStruct> = Vec::new();" in text, text
+    assert "&mut _backing_buf[..]" in text, text
+
+
+def test_param_init_block_vec_of_user_type_falls_back_to_empty():
+    """``Vec<UserEnum>`` — same Arbitrary issue, same fallback."""
+    out = _param_init_block("Vec<ExprToken>", "tokens")
+    text = "\n".join(out)
+    assert "kani::any()" not in text, text
+    assert "Vec<ExprToken> = Vec::new();" in text, text
+
+
+def test_param_init_block_slice_of_primitive_still_uses_nondet():
+    """Sanity: primitive-element slices must NOT be empty-Vec-degraded.
+    The fallback should kick in ONLY when the element type isn't Arbitrary."""
+    out = _param_init_block("&[u8]", "data")
+    text = "\n".join(out)
+    assert "kani::any()" in text, text
+    assert "[u8; " in text, text
+
+
 def test_transitive_callees_walks_call_graph():
     """``func.callees`` records only direct calls, but the strip helper
     needs every transitively reachable sibling — otherwise indirectly
