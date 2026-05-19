@@ -884,6 +884,36 @@ fn wrap_result(v: i64) -> i64 { v }
     assert "fn wrap_result" in out, out
 
 
+def test_strip_pub_in_path_visibility_rewrites_pub_super():
+    """``pub(super)`` and ``pub(crate)`` are crate-internal visibility
+    restrictors that fail standalone compilation with E0433 ("too many
+    leading `super` keywords" or similar). Replace with plain ``pub``
+    so the harness compiles. Regression: CCC macro_defs.rs 2026-05-19
+    — every struct field used pub(super) and broke every harness."""
+    from bmc_agent.backends.kani_backend import _strip_pub_in_path_visibility
+    src = """
+pub struct State {
+    pub(super) asm_mode: bool,
+    pub(crate) flag: u32,
+    pub(self) inner: i32,
+    pub(in crate::module) path: String,
+    pub normal: i64,
+    pub final_field: u8,
+}
+"""
+    out = _strip_pub_in_path_visibility(src)
+    assert "pub(super)" not in out, out
+    assert "pub(crate)" not in out, out
+    assert "pub(self)" not in out, out
+    assert "pub(in" not in out, out
+    # Plain pub stays.
+    assert "pub normal: i64," in out, out
+    assert "pub final_field: u8," in out, out
+    # Replaced ones are now plain pub.
+    assert "pub asm_mode: bool," in out, out
+    assert "pub flag: u32," in out, out
+
+
 def test_strip_crate_local_use_handles_multiline_import():
     """``use super::utils::{ a, b, c, };`` wraps over multiple lines
     in the source. The stripper must match the whole statement up to

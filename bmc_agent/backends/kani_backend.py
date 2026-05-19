@@ -519,6 +519,28 @@ def _strip_crate_local_fn_items(
     return bytes(out).decode("utf-8", errors="replace")
 
 
+def _strip_pub_in_path_visibility(source: str) -> str:
+    """Replace ``pub(super)`` / ``pub(crate)`` / ``pub(self)`` /
+    ``pub(in ...)`` visibility modifiers with plain ``pub``.
+
+    These are only meaningful inside a crate — outside one, ``pub(super)``
+    fails with "too many leading `super` keywords" and the harness
+    won't compile. Replacing with bare ``pub`` keeps the type publicly
+    visible to the harness while losing the host-crate-specific scope
+    restriction (which doesn't apply in standalone compilation anyway).
+
+    Regression: CCC macro_defs.rs 2026-05-19 — every harness had
+    ``pub(super) asm_mode: bool`` in a struct field declaration,
+    failing rustc with E0433.
+    """
+    import re as _re
+    return _re.sub(
+        r"\bpub\s*\(\s*(?:super|crate|self|in\s+[A-Za-z_][\w:]*)\s*\)",
+        "pub",
+        source,
+    )
+
+
 def _strip_crate_local_use_statements(source: str) -> str:
     """Comment out ``use crate::*`` / ``use super::*`` / ``use self::*``
     lines so the harness compiles standalone.
@@ -764,6 +786,7 @@ class KaniBackend(BMCBackend):
         ]
         if file_source is not None:
             cleaned = _strip_crate_local_use_statements(file_source)
+            cleaned = _strip_pub_in_path_visibility(cleaned)
             cleaned = _strip_crate_local_fn_items(
                 cleaned,
                 keep_fn_name=func.name,
