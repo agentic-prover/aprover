@@ -278,6 +278,28 @@ Tautological specs (reference computation literally mirrors the body)
 are CORRECT and should be emitted — they prove the function executes
 the body without interference. Don't skip them as "obvious".
 
+CRITICAL — SPEC-EVALUATION OVERFLOW:
+The verifier runs the spec on Kani's nondeterministic inputs, which
+include extremes like ``usize::MAX``, ``i64::MIN``, empty slices.
+If your spec arithmetic overflows during evaluation, Kani reports
+a SPURIOUS bug (the overflow is in the spec, not the body).
+
+ALWAYS use overflow-safe operators in functional specs:
+  - ``a.wrapping_add(b)`` instead of ``a + b``
+  - ``a.wrapping_mul(b)`` instead of ``a * b``
+  - ``a.checked_sub(b).unwrap_or(0)`` if the spec needs subtraction
+  - ``a.saturating_add(b)`` when the spec is "min(a + b, MAX)"
+
+WRONG: ``result == val + align - 1 & !(align - 1)`` — overflows when
+       val near usize::MAX.
+RIGHT: ``result == val.wrapping_add(align).wrapping_sub(1) & !(align - 1)``
+       OR guard the spec with the precondition: ``val <= usize::MAX - align``.
+
+If the function's contract requires no overflow (e.g. align_up assumes
+the result fits in usize), express that as a PRECONDITION clause, not
+as plain arithmetic in the postcondition. The verifier will then only
+explore in-spec inputs and the post evaluates safely.
+
 {threat_model_context}
 
 Domain knowledge:

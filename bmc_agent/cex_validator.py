@@ -1710,6 +1710,32 @@ def _witness_obvious_artifact(counterexample) -> Optional[str]:
     classifier can skip expensive LLM reachability calls on findings
     that the realism stage would reject anyway.
     """
+    # Spec-evaluation overflow: when the failing property is
+    # ``check_<fn>.assertion.N`` (note the ``check_`` prefix — the
+    # generated harness wrapper) AND the trace says "attempt to add/
+    # subtract/multiply with overflow", the arithmetic is in the SPEC
+    # itself being evaluated on Kani's nondeterministic inputs (often
+    # ``usize::MAX`` / ``i64::MIN``), not in the function body. This
+    # is a Phase 1 functional-spec false positive — the spec author
+    # forgot to use wrapping_/checked_ ops, and the spec overflows
+    # during verification.
+    fp = (getattr(counterexample, "failing_property", "") or "")
+    trace_text = " ".join(getattr(counterexample, "trace", None) or [])
+    if (
+        fp.startswith("check_")
+        and any(
+            marker in trace_text
+            for marker in (
+                "attempt to add with overflow",
+                "attempt to subtract with overflow",
+                "attempt to multiply with overflow",
+                "attempt to shift left with overflow",
+                "attempt to shift right with overflow",
+            )
+        )
+    ):
+        return "spec-evaluation overflow (functional spec uses non-wrapping arithmetic on extreme inputs)"
+
     try:
         from bmc_agent.realism_checker import (
             _witness_indicates_uninitialized_library,
