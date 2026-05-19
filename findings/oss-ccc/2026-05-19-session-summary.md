@@ -85,10 +85,29 @@ Test count: 583 passing (was ~520 at session start). 60+ new unit tests.
   spec-encoding-mismatch false positives. Spec-overflow filter doesn't
   catch these because the failing property is "postcondition violated"
   not arithmetic overflow.
-- Mitigation requires either:
-  - Running with `--enable-realism-check` (extra LLM calls per finding)
-  - Manually disabling functional specs for known-difficult files
-  - Future: a "spec-vs-impl consistency" pre-check before declaring REAL_BUG
+- **Mitigation that works**: `--enable-realism-check`. Validated on
+  long_double v3 run — all 3 Phase 1 finds verdicted UNREALISTIC with
+  high confidence, CLI suppressed them, final count went from 3 to 0.
+  The LLM realism step ("could this CEX arise from a realistic call?")
+  reliably catches spec-fabrication false positives.
+
+## Recommended invocation for new CCC runs
+
+```
+ANTHROPIC_API_KEY="<openrouter key>" \
+BMC_AGENT_LLM_BASE_URL="https://openrouter.ai/api" \
+BMC_AGENT_LLM_MODEL="anthropic/claude-sonnet-4.5" \
+python -m bmc_agent.cli verify \
+  --source <file.rs> \
+  --driver <name> \
+  --output /tmp/aprover_<name> \
+  --enable-realism-check \
+  --threat-model security
+```
+
+The realism check is necessary for Phase 1 functional specs to be useful;
+without it, complex domain functions (bit encodings, multi-step parsers)
+produce false positives.
 
 ## Threat-model framing (clarified mid-session)
 
