@@ -397,6 +397,14 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
     if data is not None:
         pre = data.get("precondition", "").strip()
         post = data.get("postcondition", "").strip()
+        # K2 Think regularly emits an over-strict postcondition of the shape
+        # ``(result == E) && E`` -- a correct reference-equivalence clause
+        # ANDed with the same predicate standing on its own. The standalone
+        # clause turns the postcondition into "the input satisfies E" which
+        # is wrong: the function is defined for ALL inputs, returning
+        # whatever E evaluates to. Strip the redundant clause so the harness
+        # gets the correct ``result == E`` instead.
+        post = _strip_redundant_input_clause(post)
         # Optional functional spec (Phase 1). LLM may either omit the field,
         # leave it empty, or set it to "true" when no useful functional
         # property is derivable. Skip in all those cases.
@@ -420,6 +428,122 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
             return pre, post
 
     return None
+
+
+def _split_top_level_and(post: str) -> Optional[tuple[str, str]]:
+    """Split *post* on the rightmost top-level ``&&`` operator.
+
+    Top-level means brace/paren/bracket depth is zero. String literals and
+    char literals are skipped so a ``&&`` inside a quoted string doesn't
+    trigger the split. Returns ``(lhs, rhs)`` with the operator removed,
+    or ``None`` if no top-level ``&&`` exists.
+    """
+    depth = 0
+    i = 0
+    in_str = None  # None, '"', or "'"
+    esc = False
+    last_split = -1
+    while i < len(post):
+        ch = post[i]
+        if in_str is not None:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == in_str:
+                in_str = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_str = ch
+            i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0 and ch == "&" and i + 1 < len(post) and post[i + 1] == "&":
+            last_split = i
+            i += 2
+            continue
+        i += 1
+    if last_split < 0:
+        return None
+    return post[:last_split].rstrip(), post[last_split + 2:].lstrip()
+
+
+def _strip_outer_parens(s: str) -> str:
+    """Strip one layer of balanced outer parentheses if they wrap the whole expr."""
+    s = s.strip()
+    if not (s.startswith("(") and s.endswith(")")):
+        return s
+    depth = 0
+    for i, ch in enumerate(s):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0 and i < len(s) - 1:
+                return s  # the first ``(`` closed before the end -> not a single wrap
+    return s[1:-1].strip()
+
+
+def _normalise_expr(s: str) -> str:
+    """Cheap structural equality token-strip: collapse whitespace, strip outer parens."""
+    s = _strip_outer_parens(s.strip())
+    # Collapse interior whitespace
+    return " ".join(s.split())
+
+
+def _strip_redundant_input_clause(post: str) -> str:
+    """Strip the K2 ``(result == E) && E`` over-strictness pattern.
+
+    K2 Think functional-spec gen frequently emits postconditions of the shape::
+
+        (result == (P(x)))    &&    (P(x))
+
+    The first clause is the correct reference-equivalence spec for a pure
+    predicate. The second standalone clause turns the spec into "the input
+    satisfies P", which over-constrains the function to only verify on
+    "happy-path" inputs and produces a spurious CEX whenever Kani picks an
+    input that legitimately makes the function return ``false``. Three
+    instances observed live in the K2 CCC sweep (is_ident_start_byte,
+    is_ident_cont, …), all SPURIOUS.
+
+    The rewrite is deterministic and zero-cost: if ``post`` matches one of
+    these shapes, return just the reference-equivalence clause. Otherwise
+    return ``post`` unchanged.
+
+    Supported shapes (both orderings):
+        (result == E) && E        ->  result == E
+        E && (result == E)        ->  result == E
+        (result == E1 && extra)   left alone -- conservative
+    """
+    if not post or "&&" not in post:
+        return post
+
+    split = _split_top_level_and(post)
+    if split is None:
+        return post
+    lhs_raw, rhs_raw = split
+    lhs = _strip_outer_parens(lhs_raw)
+    rhs = _strip_outer_parens(rhs_raw)
+
+    # Case A: lhs is ``result == E`` and rhs is ``E``
+    for prefix in ("result == ", "result==", "(result) == ", "result.is_some() == "):
+        if lhs.startswith(prefix):
+            e_in_lhs = _normalise_expr(lhs[len(prefix):])
+            if e_in_lhs == _normalise_expr(rhs) and e_in_lhs:
+                return lhs_raw
+
+    # Case B: rhs is ``result == E`` and lhs is ``E``
+    for prefix in ("result == ", "result==", "(result) == "):
+        if rhs.startswith(prefix):
+            e_in_rhs = _normalise_expr(rhs[len(prefix):])
+            if e_in_rhs == _normalise_expr(lhs) and e_in_rhs:
+                return rhs_raw
+
+    return post
 
 
 def _extract_first_json_object(text: str) -> Optional[str]:
