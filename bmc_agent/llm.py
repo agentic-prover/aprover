@@ -1,18 +1,22 @@
 """
 LLM client wrapper for BMC-Agent.
 
-Wraps the Anthropic Python SDK with:
-- Retry (up to 3 attempts) with exponential backoff on rate-limit / server errors
-- Structured output: takes system + user prompts, returns a string
-- Token usage logging to the artifact logger
-- Clear error if ANTHROPIC_API_KEY is not set
+Dispatches between two providers, selected by ``config.resolved_provider()``:
 
-NOTE (Phase 0): No actual spec-generation calls are made yet.
-The class structure is ready for Phase 1.
+* ``"anthropic"`` -- native Anthropic Messages API via the ``anthropic`` SDK
+  (claude-* models on api.anthropic.com or via the OpenRouter proxy).
+* ``"openai"`` -- OpenAI-compatible ``/v1/chat/completions`` over plain HTTPS,
+  covering K2 Think (``api.k2think.ai``), OpenAI, and most self-hosted endpoints
+  that mimic that schema.
+
+Both paths share the same public surface (``complete(system, user) -> str``),
+the same retry policy (exponential backoff on rate-limit / server / transient
+errors), and the same token-usage logging.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Optional
@@ -24,6 +28,28 @@ logger = get_logger("llm")
 
 # Sentinel so we can detect a missing key at call time, not import time.
 _UNSET = object()
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Strip `<think>...</think>` reasoning traces emitted by reasoning models.
+
+    K2 Think and similar models on OpenAI-compatible endpoints fold their
+    chain-of-thought into the response ``content`` as a `<think>...</think>`
+    block followed by the actual answer. Downstream BMC-Agent stages expect
+    a clean spec/JSON answer, so we strip the reasoning region. Handles
+    three cases:
+
+    * `<think>...</think>FINAL` -- balanced opening + closing tag
+    * `RAW</think>FINAL` -- closing only (model started already inside the
+      think context; observed in practice on K2)
+    * no `</think>` tag at all -- return text unchanged
+    """
+    if not text:
+        return text
+    closing = text.rfind("</think>")
+    if closing != -1:
+        return text[closing + len("</think>"):].lstrip("\n")
+    return text
 
 
 class LLMError(Exception):
@@ -80,7 +106,7 @@ class LLMClient:
         LLMError
             On permanent failure or missing API key.
         """
-        client = self._get_client()
+        provider = self.config.resolved_provider()
         last_error: Optional[Exception] = None
 
         # Extended thinking requires temperature=1 and enough token headroom.
@@ -92,51 +118,28 @@ class LLMClient:
 
         for attempt in range(self.config.max_spec_retries):
             try:
-                # Per-request timeout: without it the SDK can block indefinitely
-                # on a stuck connection and stall the whole pipeline. The Anthropic
-                # SDK accepts an httpx-style timeout; we pass a simple float.
-                timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
-                response = client.with_options(timeout=timeout_s).messages.create(  # type: ignore[attr-defined]
-                    model=self.config.llm_model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=[{
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral"},
-                    }],
-                    messages=[{"role": "user", "content": user_prompt}],
-                    **api_kwargs,
+                if provider == "openai":
+                    # OpenAI-compatible endpoints (K2 Think etc.) ignore the
+                    # Anthropic-only "thinking" knob — many reasoning models
+                    # on this path already emit a <think>...</think> trace
+                    # that _strip_reasoning_blocks() handles transparently.
+                    return self._complete_openai(system_prompt, user_prompt, max_tokens, temperature)
+                return self._complete_anthropic(
+                    system_prompt,
+                    user_prompt,
+                    max_tokens,
+                    temperature,
+                    api_kwargs,
                 )
-                # Log token usage
-                usage = getattr(response, "usage", None)
-                if usage:
-                    logger.debug(
-                        "LLM usage: input_tokens=%d output_tokens=%d "
-                        "cache_creation=%d cache_read=%d",
-                        getattr(usage, "input_tokens", 0),
-                        getattr(usage, "output_tokens", 0),
-                        getattr(usage, "cache_creation_input_tokens", 0),
-                        getattr(usage, "cache_read_input_tokens", 0),
-                    )
-                # Extract text (skip thinking blocks)
-                text = ""
-                for block in response.content:
-                    if getattr(block, "type", None) == "thinking":
-                        continue
-                    if hasattr(block, "text"):
-                        text += block.text
-                return text
-
             except Exception as exc:
                 last_error = exc
-                # Detect rate-limit / server errors by class name (avoids hard
-                # dependency on specific anthropic exception hierarchy).
                 cls_name = type(exc).__name__
-                if any(
-                    tag in cls_name.lower()
-                    for tag in ("ratelimit", "overload", "server", "timeout", "connection")
-                ):
+                msg = str(exc).lower()
+                transient = any(
+                    tag in cls_name.lower() or tag in msg
+                    for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
+                )
+                if transient:
                     wait = 2 ** attempt  # 1, 2, 4 seconds
                     logger.warning(
                         "LLM transient error (%s); retrying in %ds (attempt %d/%d)",
@@ -147,17 +150,148 @@ class LLMClient:
                     )
                     time.sleep(wait)
                     continue
-                # Non-transient error — don't retry
                 break
 
         raise LLMError(f"LLM request failed after {self.config.max_spec_retries} attempts: {last_error}") from last_error
+
+    # ------------------------------------------------------------------
+    # Provider paths
+    # ------------------------------------------------------------------
+
+    def _complete_anthropic(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        temperature: float,
+        api_kwargs: dict | None = None,
+    ) -> str:
+        client = self._get_client()
+        # Per-request timeout: without it the SDK can block indefinitely on a
+        # stuck connection and stall a multi-hour sweep. The Anthropic SDK
+        # accepts an httpx-style timeout via with_options.
+        timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
+        extra = api_kwargs or {}
+        response = client.with_options(timeout=timeout_s).messages.create(  # type: ignore[attr-defined]
+            model=self.config.llm_model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": user_prompt}],
+            **extra,
+        )
+        usage = getattr(response, "usage", None)
+        if usage:
+            logger.debug(
+                "LLM usage (anthropic): input_tokens=%d output_tokens=%d "
+                "cache_creation=%d cache_read=%d",
+                getattr(usage, "input_tokens", 0),
+                getattr(usage, "output_tokens", 0),
+                getattr(usage, "cache_creation_input_tokens", 0),
+                getattr(usage, "cache_read_input_tokens", 0),
+            )
+        # Skip thinking blocks (only present when api_kwargs enabled extended thinking).
+        text = ""
+        for block in response.content:
+            if getattr(block, "type", None) == "thinking":
+                continue
+            if hasattr(block, "text"):
+                text += block.text
+        return text
+
+    def _complete_openai(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """OpenAI-compatible /v1/chat/completions request (used for K2 Think etc.)."""
+        api_key = self.config.resolved_api_key()
+        if not api_key:
+            raise LLMError(
+                "No API key for OpenAI-compatible provider. "
+                "Export K2THINK_API_KEY (or ANTHROPIC_API_KEY) or set llm_api_key in Config."
+            )
+
+        base = self.config.llm_base_url.rstrip("/") if self.config.llm_base_url else "https://api.k2think.ai/v1"
+        if not base.endswith("/v1") and not base.endswith("/v1/"):
+            if "/v1" not in base:
+                base = base + "/v1"
+        url = base.rstrip("/") + "/chat/completions"
+
+        payload = {
+            "model": self.config.llm_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        try:
+            import httpx  # type: ignore
+        except ImportError as exc:
+            raise LLMError(
+                "The 'httpx' package is required for the openai-compatible provider."
+            ) from exc
+
+        timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
+        timeout = httpx.Timeout(timeout_s, connect=10.0)
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, json=payload, headers=headers)
+        if resp.status_code >= 400:
+            raise LLMError(
+                f"OpenAI-compatible request failed: HTTP {resp.status_code} {resp.reason_phrase}: {resp.text[:500]}"
+            )
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"OpenAI-compatible response was not JSON: {resp.text[:500]}") from exc
+
+        usage = data.get("usage") or {}
+        if usage:
+            logger.debug(
+                "LLM usage (openai): prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens"),
+            )
+
+        choices = data.get("choices") or []
+        if not choices:
+            raise LLMError(f"OpenAI-compatible response contained no choices: {data}")
+        msg = choices[0].get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            text = "".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict)
+            )
+        elif isinstance(content, str):
+            text = content
+        else:
+            raise LLMError(f"OpenAI-compatible response had no message content: {choices[0]}")
+        return _strip_reasoning_blocks(text)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _get_client(self):
-        """Lazily initialise the Anthropic client."""
+        """Lazily initialise the Anthropic client (only used on the anthropic path)."""
         if self._client is not None:
             return self._client
 

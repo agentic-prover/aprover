@@ -16,10 +16,19 @@ class Config:
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
     llm_base_url: str = ""  # optional OpenRouter or proxy base URL
-    # Per-request timeout for the Anthropic SDK. Without an explicit timeout the
-    # SDK can hang indefinitely on a stuck request, stalling a multi-hour sweep
-    # (observed in a libxml2 run that froze for >35 minutes mid-pipeline).
+    # Per-request timeout for the LLM client. Without an explicit timeout the
+    # Anthropic SDK can hang indefinitely on a stuck request, stalling a
+    # multi-hour sweep (observed in a libxml2 run that froze for >35 minutes
+    # mid-pipeline). Also used as the httpx timeout on the openai-compatible
+    # path.
     llm_request_timeout_s: float = 180.0
+    # Provider dispatch:
+    #   "anthropic"        -- native Anthropic Messages API (claude-* via api.anthropic.com
+    #                          or OpenRouter proxy)
+    #   "openai"           -- OpenAI-compatible /v1/chat/completions (K2 Think, OpenAI,
+    #                          most self-hosted endpoints)
+    # Empty string => auto-detect from base_url (K2 Think domain, /v1 suffix, etc.).
+    llm_provider: str = ""
 
     # CBMC settings
     cbmc_path: str = "cbmc"
@@ -133,20 +142,42 @@ class Config:
     threat_model: str = "security"
 
     def resolved_api_key(self) -> str:
-        """Return the effective API key, reading from env if not set directly."""
+        """Return the effective API key, reading from env if not set directly.
+
+        Priority: ``llm_api_key`` field → ``K2THINK_API_KEY`` (when provider
+        resolves to openai) → ``ANTHROPIC_API_KEY``.
+        """
         if self.llm_api_key:
             return self.llm_api_key
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        return key
+        if self.resolved_provider() == "openai":
+            k2_key = os.environ.get("K2THINK_API_KEY", "")
+            if k2_key:
+                return k2_key
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+
+    def resolved_provider(self) -> str:
+        """Return the active provider ("anthropic" or "openai").
+
+        If ``llm_provider`` is set explicitly, honour it. Otherwise auto-detect:
+        K2 Think and other OpenAI-compatible base URLs route to "openai";
+        everything else (default, Anthropic, OpenRouter) routes to "anthropic".
+        """
+        if self.llm_provider:
+            return self.llm_provider
+        base = (self.llm_base_url or "").lower()
+        if "k2think.ai" in base or base.endswith("/v1") or base.endswith("/v1/"):
+            return "openai"
+        return "anthropic"
 
     @classmethod
     def from_env(cls) -> "Config":
         """Create a Config populated from environment variables where available."""
         return cls(
             llm_model=os.environ.get("BMC_AGENT_LLM_MODEL", "claude-sonnet-4-6"),
-            llm_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            llm_api_key=os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("K2THINK_API_KEY", ""),
             llm_base_url=os.environ.get("BMC_AGENT_LLM_BASE_URL", ""),
             llm_request_timeout_s=float(os.environ.get("BMC_AGENT_LLM_TIMEOUT_S", "180.0")),
+            llm_provider=os.environ.get("BMC_AGENT_LLM_PROVIDER", ""),
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
