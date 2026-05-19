@@ -397,6 +397,116 @@ def _load_full_source(func, parsed_file) -> "str | None":
     return None
 
 
+def _strip_crate_local_fn_items(
+    source: str,
+    keep_fn_name: str,
+    keep_callees: "set[str] | None" = None,
+) -> str:
+    """Strip every top-level ``fn`` from ``source`` EXCEPT
+    ``keep_fn_name`` and any names in ``keep_callees``.
+
+    Sibling fns in real-world Rust crates routinely reference
+    crate-local types in their signatures or bodies (e.g. CCC's
+    ``pub fn is_zero_expr(expr: &crate::frontend::parser::ast::Expr)``).
+    When the harness is compiled standalone these paths fail to
+    resolve (E0433 "unresolved module"). Even after stripping
+    ``use crate::*`` lines, the SAME types appear unprefixed in
+    sibling signatures (``op: &BinOp``) and now resolve to nothing
+    because the import that brought them into scope is gone.
+
+    The pragmatic fix: drop every fn item that isn't the target
+    or a recorded callee. The target's spec/harness only needs
+    its own body in scope — modules-level consts and ``use std::*``
+    preamble survive, the target fn survives, listed callees
+    survive, everything else is comment-stripped.
+
+    Uses tree-sitter Rust to find function_item boundaries — regex is
+    not reliable for brace-matching inside Rust (lifetimes, generics,
+    nested closures, raw strings).
+
+    Regression: CCC const_arith.rs 2026-05-19 — wrap_result harness
+    was polluted by 12 sibling fns whose signatures referenced
+    ``BinOp`` / ``IrConst`` (originally imported via the now-stripped
+    ``use crate::ir::reexports::IrConst;``). Removing all non-target
+    fns reduces the harness to just module preamble + target.
+    """
+    if keep_callees is None:
+        keep_callees = set()
+    try:
+        from bmc_agent.rust_parser import _load_language
+        from tree_sitter import Parser as _TSParser
+    except Exception:
+        return source
+
+    src_bytes = source.encode("utf-8", errors="replace")
+    parser = _TSParser(_load_language())
+    tree = parser.parse(src_bytes)
+
+    # Gather (start, end, name) for each top-level function_item.
+    ranges: list[tuple[int, int, str]] = []
+    for top in tree.root_node.children:
+        if top.type != "function_item":
+            continue
+        name_node = top.child_by_field_name("name")
+        name = (
+            src_bytes[name_node.start_byte:name_node.end_byte]
+            .decode("utf-8", errors="replace")
+            if name_node else ""
+        )
+        ranges.append((top.start_byte, top.end_byte, name))
+
+    if not ranges:
+        return source
+
+    # Walk back to front so byte offsets stay valid as we splice.
+    out = bytearray(src_bytes)
+    for start, end, name in reversed(ranges):
+        if name == keep_fn_name or name in keep_callees:
+            continue
+        replacement = (
+            f"// fn {name}(...) /* stripped: non-target sibling, kept "
+            f"out of standalone harness */"
+        ).encode("utf-8")
+        out[start:end] = replacement
+
+    return bytes(out).decode("utf-8", errors="replace")
+
+
+def _strip_crate_local_use_statements(source: str) -> str:
+    """Comment out ``use crate::*`` / ``use super::*`` / ``use self::*``
+    lines so the harness compiles standalone.
+
+    A Kani harness is a single .rs file compiled outside its host crate
+    — there is no ``crate::*`` rooted at the host crate, so any
+    ``use crate::frontend::parser::ast::BinOp;`` lands as
+    E0432 ("unresolved import") and the entire compile aborts before
+    Kani sees anything. ``std::``, ``alloc::``, ``core::``, and other
+    absolute paths still resolve fine, so we leave them alone.
+
+    Functions whose BODIES still reference the now-undefined types will
+    fail to compile separately (E0412 unresolved type), and the
+    pipeline will skip those with a parse error — that's the correct
+    behaviour. The fix unblocks the orthogonal class of primitive
+    functions whose bodies only touch i64/u64/bool/etc. but happen to
+    sit in a module whose file preamble pulls in crate-local types.
+
+    Regression: CCC const_arith.rs 2026-05-19 — 3 selected primitive
+    functions (wrap_result, unsigned_op, bool_to_i64) all failed Kani
+    parse because the file's two ``use crate::*;`` lines were copied
+    verbatim into the harness.
+    """
+    import re as _re
+    pattern = _re.compile(
+        r"^[ \t]*(?:pub\s+)?use\s+(?:crate|super|self)\s*::[^;]*;[ \t]*$",
+        _re.MULTILINE,
+    )
+    return pattern.sub(
+        lambda m: "// " + m.group(0).lstrip()
+                  + " /* stripped: unresolved in standalone harness */",
+        source,
+    )
+
+
 def _call_site_expr(rust_type: str, name: str) -> str:
     """Return the expression to pass *name* at the call site so the
     postcondition can still reference *name* afterwards.
@@ -596,7 +706,13 @@ class KaniBackend(BMCBackend):
             "",
         ]
         if file_source is not None:
-            parts.append(file_source.rstrip())
+            cleaned = _strip_crate_local_use_statements(file_source)
+            cleaned = _strip_crate_local_fn_items(
+                cleaned,
+                keep_fn_name=func.name,
+                keep_callees=set(getattr(func, "callees", set()) or set()),
+            )
+            parts.append(cleaned.rstrip())
         else:
             parts.append(fn_def)
             sibling_defs = _sibling_fn_definitions(func, parsed_file)

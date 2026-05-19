@@ -720,6 +720,127 @@ def test_generate_harness_respects_slice_bound_override():
     assert "<= 4)" not in h1, h1
 
 
+def test_strip_crate_local_fn_items_keeps_target_strips_unrelated_siblings():
+    """Every fn that is neither the target nor a recorded callee must
+    be stripped. After ``use crate::*`` lines are removed, the bare
+    types that USED to be in scope (BinOp, IrConst) are now undefined;
+    sibling fn signatures that reference them won't compile. Removing
+    those siblings entirely (not just the crate-prefixed ones) leaves
+    a self-contained harness.
+
+    Regression: CCC const_arith.rs 2026-05-19 — wrap_result was a
+    pure ``v as i32 as i64`` fn that should verify clean, but 12
+    polluted siblings made the file fail rustc parse."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_fn_items
+    src = """
+const SEED: u64 = 42;
+
+pub fn wrap_result(v: i64) -> i64 { v }
+
+pub fn is_zero_expr(expr: &crate::frontend::parser::ast::Expr) -> bool {
+    matches!(expr, _)
+}
+
+fn eval_const_binop_int(op: &BinOp) -> i64 { 0 }
+
+fn unsigned_op(l: u64) -> u64 { l }
+"""
+    out = _strip_crate_local_fn_items(src, keep_fn_name="wrap_result")
+    # Target survives.
+    assert "pub fn wrap_result(v: i64) -> i64 { v }" in out, out
+    # Unrelated siblings stripped — both the crate-polluted one AND
+    # the one that only used a now-undefined bare type (BinOp).
+    assert "is_zero_expr(expr: &crate" not in out, out
+    assert "fn eval_const_binop_int" not in out or "/* stripped" in out, out
+    assert "fn unsigned_op(l: u64) -> u64 { l }" not in out, out
+    # Module-level const stays.
+    assert "const SEED: u64 = 42;" in out, out
+
+
+def test_strip_crate_local_fn_items_keeps_listed_callees():
+    """When the target calls helper fns in the same module, those
+    helpers must be preserved (passed in via ``keep_callees``).
+    Targets calling clean helpers should still produce a compilable
+    harness."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_fn_items
+    src = """
+fn helper(x: u64) -> u64 { x + 1 }
+fn polluted_unrelated(e: &crate::A) -> bool { false }
+fn target_caller(x: u64) -> u64 { helper(x) }
+"""
+    out = _strip_crate_local_fn_items(
+        src, keep_fn_name="target_caller", keep_callees={"helper"},
+    )
+    assert "fn helper(x: u64) -> u64 { x + 1 }" in out, out
+    assert "fn target_caller(x: u64) -> u64 { helper(x) }" in out, out
+    assert "polluted_unrelated" not in out or "/* stripped" in out, out
+
+
+def test_strip_crate_local_fn_items_preserves_target_even_if_polluted():
+    """If the TARGET function itself references crate paths it stays
+    in the source — verification will then fail (parse error) for the
+    correct reason, rather than being silently dropped."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_fn_items
+    src = """
+pub fn my_target(x: &crate::A::B) -> i32 { 0 }
+"""
+    out = _strip_crate_local_fn_items(src, keep_fn_name="my_target")
+    assert "my_target" in out and "crate::A::B" in out, out
+
+
+def test_strip_crate_local_use_statements_comments_out_crate_paths():
+    """``use crate::*`` / ``use super::*`` / ``use self::*`` lines fail
+    to resolve when the harness is compiled standalone. Strip them
+    (preserve via comment so the artifact stays readable). Regression:
+    CCC const_arith.rs 2026-05-19 — all 3 primitive harnesses failed
+    Kani parse because the file's ``use crate::*;`` lines were copied
+    verbatim."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_use_statements
+    src = """
+use std::collections::HashMap;
+use crate::ir::reexports::IrConst;
+use crate::frontend::parser::ast::BinOp;
+use super::helpers::Foo;
+use self::inner::Bar;
+pub use crate::api::Public;
+
+fn wrap_result(v: i64) -> i64 { v }
+"""
+    out = _strip_crate_local_use_statements(src)
+    # std:: untouched
+    assert "use std::collections::HashMap;" in out, out
+    # crate-local lines stripped (commented)
+    assert "use crate::ir::reexports::IrConst;" not in out.splitlines()[2:][0] or \
+           any(l.startswith("// use crate::ir") for l in out.splitlines()), out
+    # No bare uncommented crate:: use survives
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("use ") or stripped.startswith("pub use "):
+            assert "crate::" not in stripped, line
+            assert "super::" not in stripped, line
+            assert "self::" not in stripped, line
+    # Function body intact
+    assert "fn wrap_result" in out, out
+
+
+def test_strip_crate_local_use_does_not_touch_absolute_paths():
+    """std::, core::, alloc::, and external crate imports (not
+    ``crate::``) must NOT be stripped — they resolve fine in standalone
+    compilation."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_use_statements
+    src = """
+use std::fmt;
+use core::mem::size_of;
+use alloc::vec::Vec;
+use serde::Deserialize;
+use std::collections::HashMap as Map;
+"""
+    out = _strip_crate_local_use_statements(src)
+    for original in src.splitlines():
+        if original.strip().startswith("use "):
+            assert original in out, original
+
+
 def test_check_respects_unwind_and_timeout_overrides(tmp_path):
     """``KaniBackend.check`` must let the engine override unwind and
     timeout without mutating config. Used by the timeout-retry path."""
