@@ -776,6 +776,33 @@ fn target_caller(x: u64) -> u64 { helper(x) }
     assert "polluted_unrelated" not in out or "/* stripped" in out, out
 
 
+def test_param_init_block_mut_ref_vec():
+    """&mut Vec<u8> output-param: allocate a backing Vec and pass
+    &mut backing. Regression: CCC copy_literal_bytes_raw was blocked
+    by ``&mut references in Kani harnesses are not yet supported``."""
+    out = _param_init_block("&mut Vec<u8>", "result")
+    text = "\n".join(out)
+    assert "let mut _owned_result: Vec<u8> = Vec::new();" in text, text
+    assert "let result: &mut Vec<u8> = &mut _owned_result;" in text, text
+
+
+def test_param_init_block_mut_ref_string():
+    """&mut String output-param: allocate a backing String, take &mut.
+    Regression: CCC copy_literal_bytes_to_string was blocked."""
+    out = _param_init_block("&mut String", "buf")
+    text = "\n".join(out)
+    assert "let mut _owned_buf: String = String::new();" in text, text
+    assert "let buf: &mut String = &mut _owned_buf;" in text, text
+
+
+def test_param_init_block_mut_ref_primitive():
+    """&mut <primitive>: bind a nondet mutable scalar, take &mut."""
+    out = _param_init_block("&mut u32", "counter")
+    text = "\n".join(out)
+    assert "let mut _owned_counter: u32 = kani::any::<u32>();" in text, text
+    assert "let counter: &mut u32 = &mut _owned_counter;" in text, text
+
+
 def test_strip_crate_local_fn_items_strips_impl_blocks():
     """``impl`` blocks remain in the source after fn-stripping and
     their bodies reference now-stripped sibling fns (E0425 cascade).

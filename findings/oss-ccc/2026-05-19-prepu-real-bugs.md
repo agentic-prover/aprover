@@ -1,4 +1,4 @@
-# claudes-c-compiler frontend/preprocessor/utils.rs — 2 real bugs
+# claudes-c-compiler frontend/preprocessor/utils.rs — 4 real bugs
 
 **Date**: 2026-05-19
 **Source**: anthropics/claudes-c-compiler `master` checkout 2026-05-19,
@@ -12,13 +12,20 @@ OpenRouter.
 
 ## Result
 
-**2 real Rust panics confirmed.** Both functions are `pub`, both
-have no documented preconditions, both crash on inputs that are
-syntactically reachable from any external caller. All in-tree call
-sites guard their arguments, so neither is currently exploited —
-but they are latent panic-condition footguns added by Claude
-during the AI-generated C-compiler build, exactly the bug class
-bmc-agent was pivoted toward this session.
+**4 real Rust panics confirmed across 8 `pub` byte-index helpers.**
+All four functions share the same AI-generated-code shape: a public
+`fn helper(bytes: &[u8], start: usize, ...)` that indexes
+`bytes[start]` and arithmetics on `start` with no bounds check
+and no precondition documented. Every in-tree caller maintains
+`start <= bytes.len()` through surrounding parser invariants, so
+none are currently exploited — but the functions are `pub` API
+surface and any future caller (a test, a fuzzer, a new pass) will
+trip them.
+
+The four findings landed only after this session's `&mut`-parameter
+support in the Kani harness generator went in; the v1 run with the
+older code surfaced only 2 of the 4 (the two functions whose
+signatures used `&[u8]` rather than `&mut Vec<u8>` / `&mut String`).
 
 ### Bug 1: `bytes_to_str` — slice-index panic on `start > end` or `end > len`
 
@@ -72,22 +79,71 @@ precondition `assert!(start < usize::MAX)` would fix it.
 CBMC property hit: `skip_literal_bytes.assertion.1` — Kani's
 overflow check. Description: "attempt to add with overflow".
 
-## bmc-agent limitations surfaced
+### Bug 3: `copy_literal_bytes_raw` — `bytes[start]` OOB
 
-This run hit a recorded limitation:
+```rust
+pub fn copy_literal_bytes_raw(bytes: &[u8], start: usize, quote: u8,
+                              result: &mut Vec<u8>) -> usize {
+    let len = bytes.len();
+    result.push(bytes[start]); // opening quote     <-- OOB if start >= len
+    let mut i = start + 1;                          <-- overflow on usize::MAX
+    while i < len { ... }
+}
+```
+
+CBMC property: `copy_literal_bytes_raw.assertion.1` —
+"index out of bounds: the length is less than or equal to the
+given index". Same `bytes[start]` panic pattern as `bytes_to_str`
+plus the same `start + 1` overflow as `skip_literal_bytes`. The
+function combines both v1-discovered bug classes in one body.
+
+### Bug 4: `copy_literal_bytes_to_string` — multiple
+
+```rust
+pub fn copy_literal_bytes_to_string(bytes: &[u8], start: usize,
+                                    quote: u8, result: &mut String) -> usize {
+    let len = bytes.len();
+    let mut i = start + 1; // skip opening quote     <-- overflow
+    while i < len {
+        if bytes[i] == b'\\' && i + 1 < len { i += 2; }   <-- i+1 overflow
+        else if bytes[i] == quote {
+            i += 1;
+            let slice = std::str::from_utf8(&bytes[start..i])   <-- slice OOB
+                .expect("literal copy produced non-UTF8");
+            ...
+        }
+        ...
+    }
+    let slice = std::str::from_utf8(&bytes[start..i])           <-- slice OOB
+        .expect(...);
+    ...
+}
+```
+
+CBMC fired three distinct property failures on this function:
+- `core::slice::index::slice_index_fail.assertion.1`
+- `core::slice::index::slice_index_fail.assertion.2`
+- `copy_literal_bytes_to_string.assertion.1` ("attempt to add with overflow")
+
+Multiple latent panics in one body. Same family.
+
+## bmc-agent improvement landed
+
+This run also delivered an &mut-parameter capability to the Kani
+harness generator. v1 (before the fix) found only 2 of these 4
+bugs because the two `&mut`-taking functions were skipped with:
 
 > `copy_literal_bytes_raw`: &mut references in Kani harnesses are not yet supported
 
-The other two functions in this file —
-`copy_literal_bytes_raw(bytes, start, quote, result: &mut Vec<u8>)`
-and `copy_literal_bytes_to_string(... result: &mut String)` — both
-take `&mut` accumulator parameters. The current Kani backend rejects
-`&mut` params with a clean error in `_param_init_block`.
+Added support for three concrete &mut shapes in
+`_param_init_block`:
 
-Adding `&mut` support means: (a) allocate a backing slot for the
-referent, (b) take a mutable borrow at the call site, (c) make sure
-the postcondition can still reference the borrow after the call.
-Tractable but non-trivial. Filed as next-up improvement.
+- `&mut Vec<T>` — backing `Vec::new()` + `&mut backing`
+- `&mut String` — backing `String::new()` + `&mut backing`
+- `&mut <primitive>` — nondet scalar + `&mut backing`
+
+Anything else (`&mut SomeUserStruct`) still falls through to the
+NotImplementedError path. 3 regression tests; 539 passing.
 
 ## What this tells us about claudes-c-compiler
 

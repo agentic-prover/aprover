@@ -235,6 +235,41 @@ def _param_init_block(
             f"    let {name}: Option<{inner}> = if {flag} "
             f"{{ Some({_initialiser_for(inner)}) }} else {{ None }};",
         ]
+    if t.startswith("&mut "):
+        inner = t[len("&mut "):].strip()
+        # &mut [T] slice path already handled above (_is_slice_type).
+        # Here we handle the remaining &mut shapes one at a time:
+        #
+        # &mut Vec<T> — accumulator output param. Allocate a backing
+        # Vec on the harness stack and take an &mut borrow to it. The
+        # callee can push to it; the harness doesn't need to inspect
+        # the post-call contents (Kani's panic/overflow checks are
+        # what we care about). Used by CCC's copy_literal_bytes_raw.
+        if _is_vec_type(inner):
+            elem = _vec_element_type(inner)
+            backing = f"_owned_{name}"
+            return [
+                f"    let mut {backing}: Vec<{elem}> = Vec::new();",
+                f"    let {name}: &mut Vec<{elem}> = &mut {backing};",
+            ]
+        # &mut String — same shape. Used by CCC's
+        # copy_literal_bytes_to_string.
+        if inner == "String":
+            backing = f"_owned_{name}"
+            return [
+                f"    let mut {backing}: String = String::new();",
+                f"    let {name}: &mut String = &mut {backing};",
+            ]
+        # &mut <primitive> — bind a mutable scalar, take &mut.
+        if inner in _PRIMITIVE_RUST_TYPES:
+            backing = f"_owned_{name}"
+            return [
+                f"    let mut {backing}: {inner} = kani::any::<{inner}>();",
+                f"    let {name}: &mut {inner} = &mut {backing};",
+            ]
+        # Anything else (&mut SomeStruct) — fall through to the existing
+        # NotImplementedError in _initialiser_for. We deliberately don't
+        # try to nondet-init arbitrary user structs.
     if _is_str_ref_type(t):
         # &str is a borrow into UTF-8 storage. We build a bounded u8
         # backing array, constrain every byte to ASCII (< 0x80) so
