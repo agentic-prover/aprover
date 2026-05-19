@@ -388,21 +388,12 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
         # leave it empty, or set it to "true" when no useful functional
         # property is derivable. Skip in all those cases.
         functional = (data.get("functional_spec") or "").strip()
-        # Reject functional specs that use ``old(...)`` syntax (pre-state
-        # references). Kani's plain ``kani::assert`` can't see the pre-call
-        # state, and the harness generator doesn't snapshot mutable inputs
-        # before the call, so the spec compiles with E0425. Better to drop
-        # the functional spec entirely than to produce an uncompilable
-        # harness that silently SKIPs the function from BMC. Future work:
-        # snapshot mutable inputs in the harness and substitute
-        # ``old(X)`` → ``_pre_X`` before passing to Kani.
-        if functional and re.search(r"\bold\s*\(", functional):
-            logger.info(
-                "Dropping functional_spec for '%s' (uses old() pre-state syntax, "
-                "not yet supported in harness gen)",
-                func_name,
-            )
-            functional = ""
+        # Earlier we blanket-dropped any spec containing ``old(...)``
+        # because the Kani harness couldn't see pre-call state. The
+        # backend now snapshots ``old(EXPR)`` into ``_pre_N`` bindings
+        # before the function call, so these specs compile and verify
+        # correctly. Keep the drop ONLY for pathological cases the
+        # snapshot logic can't handle (currently: none we've hit).
         if functional and functional.lower() not in ("true", "1", "n/a", "none"):
             # AND the functional spec into the postcondition. Existing
             # postcondition stays in place (defensive bug-class clauses);

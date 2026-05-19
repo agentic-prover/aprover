@@ -467,6 +467,120 @@ def _load_full_source(func, parsed_file) -> "str | None":
     return None
 
 
+def _extract_old_snapshots(postcondition: str) -> "tuple[str, list[str]]":
+    """Rewrite ``old(EXPR)`` references in *postcondition* into snapshot
+    variables and return the rewritten post + the list of snapshot
+    declarations needed before the function call.
+
+    Background: the spec generator's functional spec emits ``old(EXPR)``
+    to reference the value of EXPR at function entry — standard
+    verification-logic syntax (CBMC's __CPROVER_old, JML's \\old, Eiffel's
+    old, Why3's old, etc.). Kani's plain ``kani::assert`` has no
+    pre-state mechanism, so we have to materialise the snapshot in the
+    harness: capture the value before calling the function, name it,
+    and substitute the name into the post.
+
+    Implementation:
+    - Bracket-match each ``old(...)`` (paren-balanced, supports nesting).
+    - For each occurrence, generate ``let _pre_N = (STRIPPED_EXPR);``
+      where N is a counter and STRIPPED_EXPR is the inner expression
+      with any nested ``old(...)`` wrappers removed (everything at the
+      snapshot point is already pre-state).
+    - Replace each ``old(EXPR)`` in the post with ``_pre_N``.
+    - For expressions that look like slice indexing (contain ``[``)
+      append ``.to_vec()`` so the snapshot owns the data and survives
+      mutations to the original buffer.
+
+    The output ``snapshot_lines`` are intended to be inlined into the
+    harness *before* the function-under-test call, so the post can
+    reference them after the call returns.
+
+    Returns ``(rewritten_post, snapshot_lines)``. If the input
+    contains no ``old(`` token, returns ``(postcondition, [])``
+    unchanged.
+    """
+    import re as _re
+    if "old(" not in postcondition:
+        return postcondition, []
+
+    # Find top-level old(...) calls with paren-balanced extraction.
+    # A simple regex like ``old\(.*?\)`` would mis-match nested parens,
+    # which the LLM frequently produces (e.g. ``old(buf[..old(buf.len())])``).
+    snapshots: list[str] = []
+    rewritten_chars: list[str] = []
+    i = 0
+    n = len(postcondition)
+    counter = [0]
+
+    def strip_inner_old(expr: str) -> str:
+        # Recursively remove ``old(`` and matching ``)`` from the inner
+        # expression. At snapshot time, everything is already pre-state,
+        # so nested old() is the identity function.
+        out: list[str] = []
+        j = 0
+        while j < len(expr):
+            if expr[j:j+4] == "old(":
+                depth = 1
+                j += 4
+                inner_start = j
+                while j < len(expr) and depth > 0:
+                    if expr[j] == "(":
+                        depth += 1
+                    elif expr[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                # j is at the matching ')'. Recursively strip.
+                inner = strip_inner_old(expr[inner_start:j])
+                out.append(inner)
+                j += 1  # skip ')'
+            else:
+                out.append(expr[j])
+                j += 1
+        return "".join(out)
+
+    while i < n:
+        if postcondition[i:i+4] == "old(" and (i == 0 or not postcondition[i-1].isalnum() and postcondition[i-1] != "_"):
+            # Found a top-level old() call (the lookbehind avoids matching
+            # identifiers like ``cold(`` or ``_old(`` that happen to end in
+            # "old"). Bracket-match the closing paren.
+            depth = 1
+            j = i + 4
+            inner_start = j
+            while j < n and depth > 0:
+                if postcondition[j] == "(":
+                    depth += 1
+                elif postcondition[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if depth != 0:
+                # Unmatched — give up on this old(), pass through verbatim.
+                rewritten_chars.append(postcondition[i])
+                i += 1
+                continue
+            inner_expr = strip_inner_old(postcondition[inner_start:j])
+            var = f"_pre_{counter[0]}"
+            counter[0] += 1
+            # Slice-index expressions need to_vec() so the snapshot owns
+            # the bytes and doesn't borrow from the about-to-be-mutated
+            # buffer. Detect by ``[`` presence; scalar exprs like
+            # ``buf.len()`` stay as-is (assume Copy).
+            if "[" in inner_expr:
+                snapshots.append(f"    let {var} = ({inner_expr}).to_vec();")
+            else:
+                snapshots.append(f"    let {var} = ({inner_expr});")
+            rewritten_chars.append(var)
+            i = j + 1
+        else:
+            rewritten_chars.append(postcondition[i])
+            i += 1
+
+    return "".join(rewritten_chars), snapshots
+
+
 def _transitive_callees(direct_callees, parsed_file) -> "set[str]":
     """Expand *direct_callees* into its transitive closure under
     ``parsed_file.call_graph``.
@@ -831,8 +945,15 @@ class KaniBackend(BMCBackend):
             call_line = f"    let result: {return_type} = {func.name}({call_args});"
             result_binding = "result"
 
-        # 4. Postcondition → kani::assert.
-        post_expr = _translate_dsl(spec.postcondition or "true", result_var=result_binding or "result")
+        # 4. Postcondition → kani::assert.  Functional specs may reference
+        #    pre-call state via ``old(EXPR)``; extract those into snapshot
+        #    bindings emitted before the function call. This lets the
+        #    LLM-generated post for state-mutating fns (pad_to,
+        #    write_elf64_phdr*, etc.) actually compile under Kani, which
+        #    has no native pre-state operator.
+        raw_post = spec.postcondition or "true"
+        rewritten_post, old_snapshots = _extract_old_snapshots(raw_post)
+        post_expr = _translate_dsl(rewritten_post, result_var=result_binding or "result")
         post_line = (
             f"    kani::assert({post_expr}, \"postcondition violated\");"
             if post_expr != "true"
@@ -884,6 +1005,12 @@ class KaniBackend(BMCBackend):
         ])
         if precondition_line:
             parts.append(precondition_line)
+        # Snapshot pre-call state for any ``old(EXPR)`` in the post. Must
+        # come AFTER the precondition assumption (so we snapshot in-spec
+        # states only) and BEFORE the call (otherwise we'd capture
+        # post-call state, defeating the point).
+        if old_snapshots:
+            parts.extend(old_snapshots)
         parts.append(call_line)
         if post_line:
             parts.append(post_line)

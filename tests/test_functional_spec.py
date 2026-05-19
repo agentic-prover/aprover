@@ -89,14 +89,12 @@ def test_parser_promotes_functional_spec_when_post_is_trivial():
     assert post == "result == val + (align - 1) & !(align - 1)", post
 
 
-def test_parser_drops_functional_spec_with_old_syntax():
-    """``old(buf.len())`` references the pre-call state of a mutable
-    parameter. Kani's plain ``kani::assert`` can't see pre-state, and
-    the harness generator doesn't snapshot mutable inputs, so emitting
-    ``old(...)`` as-is would produce ``E0425: cannot find function 'old'``
-    and SKIP the function from BMC. Drop the functional spec when it
-    uses old() so the harness still compiles and the function gets a
-    real verdict (just without the rich post)."""
+def test_parser_keeps_functional_spec_with_old_syntax():
+    """``old(buf.len())`` is preserved by the parser; the Kani backend's
+    ``_extract_old_snapshots`` rewrites ``old(EXPR)`` into pre-call
+    snapshot bindings before passing to ``kani::assert``. Previously
+    the parser dropped specs containing old() as a workaround for the
+    snapshotting gap; the backend now handles them natively."""
     out = _parse_llm_spec_response(
         _wrap(
             "true",
@@ -105,12 +103,17 @@ def test_parser_drops_functional_spec_with_old_syntax():
         ),
         "pad_to",
     )
-    # Functional spec was dropped → post remains "true"
-    assert out == ("true", "true"), out
+    assert out is not None
+    pre, post = out
+    assert pre == "true"
+    # Post is the functional spec itself (defensive post was trivial).
+    assert post == "buf.len() == old(buf.len()) + target", post
 
 
-def test_parser_drops_functional_spec_with_nested_old():
-    """Same fallback for nested old() expressions."""
+def test_parser_keeps_functional_spec_with_nested_old():
+    """Nested old() (e.g. ``old(buf[..old(buf.len())])``) is preserved;
+    backend's snapshot extractor strips the inner old() since the whole
+    thing is captured at pre-state."""
     out = _parse_llm_spec_response(
         _wrap(
             "true",
@@ -119,19 +122,19 @@ def test_parser_drops_functional_spec_with_nested_old():
         ),
         "pad_to",
     )
-    assert out == ("true", "true"), out
+    assert out is not None
+    pre, post = out
+    # Spec preserved verbatim; the harness layer rewrites it.
+    assert "old(" in post
 
 
-def test_parser_keeps_specs_without_old():
-    """Sanity: specs that don't use old() still merge. Guards against
-    over-broad rejection — we want to reject ``old(...)`` but not
-    function names that happen to start with 'old', e.g.
-    ``old_threshold`` shouldn't trigger the drop."""
+def test_parser_keeps_old_lookalike_identifiers():
+    """Sanity: variable names like ``old_threshold`` should always
+    merge into the post — they don't match the ``old(`` call form."""
     out = _parse_llm_spec_response(
         _wrap("true", "true", functional="result == old_threshold + 1"),
         "f",
     )
-    # 'old_threshold' is a variable, not the old() pre-state call
     assert out is not None
     pre, post = out
     assert "result == old_threshold + 1" in post, post

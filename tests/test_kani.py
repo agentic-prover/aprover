@@ -1090,3 +1090,67 @@ def test_check_respects_unwind_and_timeout_overrides(tmp_path):
     with patch("bmc_agent.backends.kani_backend.run_kani", side_effect=fake_run_kani):
         backend.check(str(harness))
     assert captured == {"unwind": 4, "timeout": 120}
+
+
+# ---------------------------------------------------------------------------
+# old() snapshot substitution (Phase 1 follow-up)
+# ---------------------------------------------------------------------------
+
+def test_extract_old_snapshots_no_old_passthrough():
+    """Postcondition without old() returns unchanged with no snapshots."""
+    from bmc_agent.backends.kani_backend import _extract_old_snapshots
+    post = "result == val + 1"
+    rewritten, snaps = _extract_old_snapshots(post)
+    assert rewritten == post
+    assert snaps == []
+
+
+def test_extract_old_snapshots_scalar():
+    """``old(buf.len())`` snapshots to ``_pre_0`` with a let binding."""
+    from bmc_agent.backends.kani_backend import _extract_old_snapshots
+    post = "buf.len() == old(buf.len()) + target"
+    rewritten, snaps = _extract_old_snapshots(post)
+    assert rewritten == "buf.len() == _pre_0 + target", rewritten
+    assert snaps == ["    let _pre_0 = (buf.len());"]
+
+
+def test_extract_old_snapshots_slice_uses_to_vec():
+    """``old(buf[..])`` needs ``.to_vec()`` because slice borrows can't
+    outlive a subsequent mutation. The helper detects ``[`` in the
+    expression and appends to_vec()."""
+    from bmc_agent.backends.kani_backend import _extract_old_snapshots
+    post = "buf[..old(buf.len())] == old(buf[..])"
+    rewritten, snaps = _extract_old_snapshots(post)
+    # Two old() calls, both rewritten
+    assert "_pre_0" in rewritten
+    assert "_pre_1" in rewritten
+    # The slice expression got to_vec()
+    snap_text = "\n".join(snaps)
+    assert ".to_vec()" in snap_text, snap_text
+    # The scalar one did not (buf.len() is Copy)
+    assert "_pre_0 = (buf.len())" in snap_text, snap_text
+
+
+def test_extract_old_snapshots_nested_old():
+    """``old(buf[..old(buf.len())])`` — inner old strips because the
+    outer snapshot already captures pre-state, so the inner reference
+    is just ``buf.len()`` evaluated at snapshot time."""
+    from bmc_agent.backends.kani_backend import _extract_old_snapshots
+    post = "x == old(buf[..old(buf.len())])"
+    rewritten, snaps = _extract_old_snapshots(post)
+    # One snapshot, since the outer old() is what we capture
+    assert "_pre_0" in rewritten
+    # The snapshot expression has the inner old() stripped
+    snap_text = "\n".join(snaps)
+    assert "old(" not in snap_text, snap_text
+    assert "buf.len()" in snap_text, snap_text
+
+
+def test_extract_old_snapshots_does_not_match_identifiers():
+    """Identifiers like ``cold_path`` or ``_old_var`` must not match —
+    only the ``old(`` call form."""
+    from bmc_agent.backends.kani_backend import _extract_old_snapshots
+    post = "result == cold_path + _old_var"
+    rewritten, snaps = _extract_old_snapshots(post)
+    assert rewritten == post
+    assert snaps == []
