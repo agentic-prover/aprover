@@ -161,11 +161,17 @@ class BMCEngine:
                 and "timed out" in cbmc_result.error
                 and getattr(self.backend, "generate_harness", None) is not None
             ):
+                # Use a shorter wall-clock for retries: the whole point of
+                # shrinking the bound is to reduce state-space, so if
+                # bound=1 doesn't land in 60s it almost certainly won't
+                # land in 120s. Keeps total per-function budget bounded
+                # (worst case: 120 + 60 + 60 ≈ 4 min, vs 6 min before).
+                retry_timeout = min(60, self.config.kani_timeout)
                 for retry_bound, retry_unwind in [(2, 4), (1, 2)]:
                     logger.info(
                         "Kani timed out for '%s' — retrying with "
-                        "slice_bound=%d, unwind=%d",
-                        fn_name, retry_bound, retry_unwind,
+                        "slice_bound=%d, unwind=%d, timeout=%ds",
+                        fn_name, retry_bound, retry_unwind, retry_timeout,
                     )
                     try:
                         retry_src = self.backend.generate_harness(
@@ -181,7 +187,9 @@ class BMCEngine:
                         break
                     retry_path = self._save_harness(driver_name, fn_name, retry_src)
                     cbmc_result = self.backend.check(
-                        retry_path, unwind_override=retry_unwind,
+                        retry_path,
+                        unwind_override=retry_unwind,
+                        timeout_override=retry_timeout,
                     )
                     harness_path = retry_path
                     if not cbmc_result.error or "timed out" not in cbmc_result.error:
