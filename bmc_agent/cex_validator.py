@@ -505,25 +505,30 @@ class CExValidator:
                 parsed_file=parsed_file,
             )
             # Entry function (no in-scope callers) + public API + structural
-            # panic = LATENT, not REAL_BUG. The CEx panic is reachable via
-            # cargo-fuzz / a future caller through the public API, but no
-            # in-tree call site produces the state — so it's future-caller
-            # / fuzz risk rather than an active crash path. This distinction
-            # was previously collapsed into REAL_BUG with confirmed_system_entry
-            # confidence, which over-reported. (User feedback 2026-05-19.)
+            # panic = LATENT or REAL_BUG depending on threat model.
             #
-            # Note: non-public entry points (C `static` fns called from out-of-
+            # Under threat_model='security': attacker-controlled inputs
+            # cross the public API boundary. Any pub fn that panics on some
+            # input is REAL_BUG — the attacker IS a current caller. This
+            # matches the cargo-fuzz standard the user set originally.
+            #
+            # Under threat_model='safety' or 'functional': we only care
+            # about in-tree-reachable crashes. Pub-API-reachable-only panics
+            # are LATENT — hardening task, not active crash.
+            #
+            # Non-public entry points (C `static` fns called from out-of-
             # scope code, or genuine system entries like kernel handlers
-            # whose callers are below the analysed boundary) still go to
+            # whose callers are below the analysed boundary) always go to
             # REAL_BUG — we can't tell those apart from `pub` API surface
-            # without additional ground truth, and conservatively flagging
-            # them as reachable bugs is the right call.
+            # without additional ground truth.
+            threat_model = getattr(self.config, "threat_model", "security").lower()
             if (
                 _is_publicly_callable(func)
                 and _is_structural_panic(
                     counterexample.failing_property,
                     getattr(counterexample, "trace", None),
                 )
+                and threat_model != "security"
             ):
                 latent_reason = (
                     f"'{func_name}' is a public-API entry function (no callers "
@@ -531,8 +536,10 @@ class CExValidator:
                     f"'{counterexample.failing_property}' is a structural Rust/C "
                     f"panic reachable via cargo-fuzz / future-caller through the "
                     f"public API, but no in-tree call site produces the state. "
-                    f"Classified as LATENT — separate from REAL_BUG (which "
-                    f"requires an in-tree-reachable call chain)."
+                    f"Threat model is '{threat_model}' (not security), so "
+                    f"classified as LATENT — separate from REAL_BUG (which "
+                    f"requires an in-tree-reachable call chain under non-security "
+                    f"threat models)."
                 )
                 result = ValidationResult(
                     function_name=func_name,
@@ -1241,21 +1248,33 @@ class CExValidator:
             # No in-tree caller produces the state, BUT the function is
             # on the public API surface and the CEx is a structural panic
             # (slice OOB, integer overflow, alloc-capacity, divide-by-zero).
-            # cargo-fuzz / a future caller can trigger it via the pub API.
-            # Classify as LATENT — separate triage bucket from REAL_BUG
-            # (which requires an in-tree reachable path) and from SPURIOUS
-            # (which would be a Kani modelling artifact).
-            final_outcome = CExOutcome.LATENT
-            reasoning = (
-                f"Latent panic on the public API of '{func_name}': no in-tree "
-                f"caller produces the CEx state {counterexample.variable_assignments}, "
-                f"but the function is publicly callable and the failing property "
-                f"'{counterexample.failing_property}' is a structural Rust/C panic. "
-                f"Refinement stabilised after {len(refinement_history)} iteration(s). "
-                f"cargo-fuzz or a future caller can trigger this via the public API; "
-                f"in-tree callers implicitly satisfy the missing precondition through "
-                f"surrounding invariants."
-            )
+            # Under threat_model='security', attacker-controlled inputs are
+            # current callers — classify as REAL_BUG. Under other threat
+            # models, route to LATENT (hardening task; no in-tree path).
+            threat_model = getattr(self.config, "threat_model", "security").lower()
+            if threat_model == "security":
+                final_outcome = CExOutcome.REAL_BUG
+                reasoning = (
+                    f"Security-threat-model real bug in '{func_name}': no in-tree "
+                    f"caller produces the CEx state {counterexample.variable_assignments}, "
+                    f"but the function is publicly callable and the failing property "
+                    f"'{counterexample.failing_property}' is a structural Rust/C panic. "
+                    f"Under threat_model='security', the public API IS the attacker's "
+                    f"interface — adversarial inputs can trigger this panic. "
+                    f"Refinement stabilised after {len(refinement_history)} iteration(s)."
+                )
+            else:
+                final_outcome = CExOutcome.LATENT
+                reasoning = (
+                    f"Latent panic on the public API of '{func_name}': no in-tree "
+                    f"caller produces the CEx state {counterexample.variable_assignments}, "
+                    f"but the function is publicly callable and the failing property "
+                    f"'{counterexample.failing_property}' is a structural Rust/C panic. "
+                    f"Threat model '{threat_model}' (not security): cargo-fuzz / future "
+                    f"caller can trigger via the public API; in-tree callers implicitly "
+                    f"satisfy the missing precondition through surrounding invariants. "
+                    f"Refinement stabilised after {len(refinement_history)} iteration(s)."
+                )
         else:
             final_outcome = CExOutcome.SPURIOUS
             reasoning = (
