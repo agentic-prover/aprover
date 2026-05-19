@@ -20,8 +20,9 @@ class Config:
     # Anthropic SDK can hang indefinitely on a stuck request, stalling a
     # multi-hour sweep (observed in a libxml2 run that froze for >35 minutes
     # mid-pipeline). Also used as the httpx timeout on the openai-compatible
-    # path.
-    llm_request_timeout_s: float = 180.0
+    # path. Default sized to accommodate reasoning models on the openai path
+    # (K2 Think regularly takes 60-180s on a complex spec-gen prompt).
+    llm_request_timeout_s: float = 300.0
     # Provider dispatch:
     #   "anthropic"        -- native Anthropic Messages API (claude-* via api.anthropic.com
     #                          or OpenRouter proxy)
