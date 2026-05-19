@@ -44,6 +44,224 @@ _PRIMITIVE_RUST_TYPES = {
 }
 
 
+# Type names we treat as resolvable in a standalone harness without needing a
+# matching definition in the source file. Primitives are covered above; this
+# set lists the std and core types we routinely encounter plus a few generics
+# whose name (not body) is matched against unresolved-type reports.
+_STDLIB_RESOLVABLE_TYPES = {
+    # alloc / std collections
+    "Vec", "String", "Box", "Cow", "Rc", "Arc",
+    "HashMap", "HashSet", "BTreeMap", "BTreeSet",
+    "VecDeque", "LinkedList", "BinaryHeap",
+    # core / std enums
+    "Option", "Result",
+    # numeric
+    "Wrapping", "NonZeroU8", "NonZeroU16", "NonZeroU32", "NonZeroU64",
+    "NonZeroI8", "NonZeroI16", "NonZeroI32", "NonZeroI64",
+    # range / ord
+    "Range", "RangeInclusive", "RangeFrom", "RangeTo",
+    "Ordering", "Reverse",
+    # cells & locks
+    "RefCell", "Cell", "Mutex", "RwLock",
+    # phantom / unit
+    "PhantomData", "Unit",
+    # string-related
+    "str", "OsStr", "OsString", "Path", "PathBuf",
+    # tuple constructors used in type-name extraction
+    "Self",  # impl methods only; if the body uses Self::foo we drop separately
+}
+
+
+# External crate types we fully alias to a stdlib equivalent in the harness
+# preamble so Kani can compile signatures that mention them. Each entry maps
+# the foreign name to a (stdlib-resolved) alias declaration the preamble
+# emits when the name appears in source.
+_EXTERNAL_TYPE_ALIASES = {
+    "FxHashMap": "type FxHashMap<K, V> = std::collections::HashMap<K, V>;",
+    "FxHashSet": "type FxHashSet<T> = std::collections::HashSet<T>;",
+    "IndexMap": "type IndexMap<K, V> = std::collections::HashMap<K, V>;",
+    "IndexSet": "type IndexSet<T> = std::collections::HashSet<T>;",
+    "AHashMap": "type AHashMap<K, V> = std::collections::HashMap<K, V>;",
+    "AHashSet": "type AHashSet<T> = std::collections::HashSet<T>;",
+}
+
+
+class HarnessUnresolvableTypes(Exception):
+    """Raised by ``generate_harness`` when *func* references types neither
+    defined in its source file nor in our resolvable allow-list.
+
+    The engine should catch this, mark the function as
+    ``harness-skipped-unresolvable-types``, and move on — emitting a doomed
+    Kani compile invocation would just produce 100s of noise E0412 errors
+    per file (CCC's encoder/codegen impl-method files are the canonical
+    case).
+    """
+    def __init__(self, function_name: str, unresolved_types: list[str]):
+        self.function_name = function_name
+        self.unresolved_types = unresolved_types
+        super().__init__(
+            f"function '{function_name}' references types not resolvable in a "
+            f"standalone harness: {', '.join(unresolved_types)}"
+        )
+
+
+def _extract_type_names(rust_type: str) -> set[str]:
+    """Pull the set of named types out of a Rust type expression.
+
+    Looks for tokens that match CamelCase or simple identifiers in type
+    position. Skips references/pointers/lifetimes/generics syntax. Returns
+    the bare type names (no path, no generic args).
+    """
+    import re as _re
+    if not rust_type:
+        return set()
+    # Strip refs, lifetimes, pointers, brackets, parens, generic args.
+    stripped = _re.sub(r"&(?:'\w+\s+)?(?:mut\s+)?", "", rust_type)
+    stripped = _re.sub(r"\*(?:mut|const)\s+", "", stripped)
+    # Capture identifiers in type position (path-qualified or bare).
+    names = set()
+    for tok in _re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", stripped):
+        # Skip Rust keywords / control flow that may appear in types.
+        if tok in {"dyn", "impl", "mut", "where", "fn", "Self"}:
+            continue
+        names.add(tok)
+    return names
+
+
+def _types_defined_in_source(source: str) -> set[str]:
+    """Scan source text for type definitions.
+
+    Recognises:
+      * ``struct T``, ``enum T``, ``union T``, ``type T = ...``, ``trait T``
+        (each optionally prefixed by ``pub``/``pub(...)``)
+      * tuple-struct constructors of those types (e.g. enum variants) are
+        NOT added separately -- the variant ``EncodeResult::Word`` resolves
+        through the type ``EncodeResult`` itself.
+
+    Matches anywhere in the file (not just at line start) so that
+    multi-item single-line source still resolves correctly.
+    """
+    import re as _re
+    if not source:
+        return set()
+    out: set[str] = set()
+    for m in _re.finditer(
+        r"\b(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|union|type|trait)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        source,
+    ):
+        out.add(m.group(1))
+    return out
+
+
+def _function_references_unresolvable_types(
+    func, parsed_file, file_source: str | None
+) -> set[str]:
+    """Return the set of types referenced by *func*'s signature or body that
+    cannot be resolved in a standalone harness compilation.
+
+    A type counts as resolvable if it is:
+    * a Rust primitive (`i32`, `bool`, `char`, etc.),
+    * an std/core/alloc type listed in :data:`_STDLIB_RESOLVABLE_TYPES`,
+    * an external-crate type with a known alias in
+      :data:`_EXTERNAL_TYPE_ALIASES` (the alias is injected in the harness),
+    * the function under test itself,
+    * defined in the source file (`struct Foo`, `enum Foo`, `type Foo = ...`).
+
+    Returns an empty set when every referenced type resolves.
+    """
+    referenced: set[str] = set()
+    # Signature types
+    for ty, _ in (func.signature.parameters or []):
+        referenced |= _extract_type_names(ty)
+    referenced |= _extract_type_names(func.signature.return_type or "")
+    # Body types: scan for CamelCase identifiers used in type position.
+    # This is coarse — a CamelCase token in a string literal would falsely
+    # register — but the downstream "is it defined in source?" check handles
+    # benign cases, and the cost of being slightly conservative (skip more)
+    # is exactly the trade we want when CCC's encoder files import dozens of
+    # types from sibling parser/state modules.
+    body = getattr(func, "body", "") or ""
+    import re as _re
+    for tok in _re.findall(r"\b([A-Z][A-Za-z0-9_]*)\b", body):
+        if len(tok) >= 2:  # skip single-letter generics
+            referenced.add(tok)
+
+    # What's locally defined?
+    defined_locally: set[str] = set()
+    if file_source:
+        defined_locally = _types_defined_in_source(file_source)
+    # parsed_file may know about other fns; those names aren't types.
+
+    unresolved: set[str] = set()
+    for name in referenced:
+        if name in _PRIMITIVE_RUST_TYPES:
+            continue
+        if name in _STDLIB_RESOLVABLE_TYPES:
+            continue
+        if name in _EXTERNAL_TYPE_ALIASES:
+            continue
+        if name in defined_locally:
+            continue
+        if name == func.name:
+            continue
+        # CamelCase identifiers from body might be enum variants, constants,
+        # or struct constructors (`Some::Variant`, `Result::Ok`). Skip the
+        # ones that look like values rather than types — i.e. that appear
+        # used as `::Variant(...)` or `::CONST` rather than as types.
+        if body:
+            # If the identifier never appears in a type-position context,
+            # treat it as a value reference.
+            type_position = _re.search(
+                rf"\b{name}\b(?:\s*<|::|\s*\{{|\s*\(|\s*,|\s*\)|$)",
+                body,
+            )
+            if not type_position:
+                continue
+            # If every appearance is part of `Other::name(...)` (a path-
+            # qualified variant / function call, where `name` is a value, not
+            # a type), skip. We approximate "appears as a type" by looking
+            # for one of:
+            #   ` : name`  (binding / field type)
+            #   `-> name`  (return type)
+            #   `< name`   (generic arg head — open bracket then optional ws)
+            #   `, name`   (next generic arg or tuple field)
+            #   `( name`   (start of tuple-struct ctor signature)
+            # We explicitly exclude `:: name` (preceding `::` means the
+            # name is a path component, not a type itself).
+            preceded_by_double_colon = _re.search(
+                rf"::\s*{name}\b", body
+            )
+            type_anchor = _re.search(
+                rf"(?:^|[^:])(?::\s+|->\s*|<\s*|,\s*|\(\s*){name}\b",
+                body,
+            )
+            if not type_anchor:
+                continue
+            # If the only "type-like" occurrence is actually a `::name` path
+            # reference (preceded_by_double_colon) AND no bare-type pattern
+            # exists, also skip.
+            if preceded_by_double_colon and not _re.search(
+                rf"(?:^|[ \t\(,])(?::\s+|->\s*|<\s*)?{name}\b",
+                body,
+            ):
+                continue
+        unresolved.add(name)
+    return unresolved
+
+
+def _harness_preamble_for_external_types(referenced_types: set[str]) -> list[str]:
+    """Return type-alias declarations for any external-crate types referenced
+    by the function. Emitted at the top of the harness so Kani can resolve
+    them without us shipping the upstream crate.
+    """
+    out: list[str] = []
+    for ty in sorted(referenced_types):
+        alias = _EXTERNAL_TYPE_ALIASES.get(ty)
+        if alias:
+            out.append(alias)
+    return out
+
+
 # Default fixed-size bound for nondeterministic slice and array
 # initialisation in harnesses.  BMC verification is bounded by
 # construction, so we explore all slice contents and lengths up to this
@@ -902,6 +1120,29 @@ class KaniBackend(BMCBackend):
         params: list[tuple[str, str]] = list(func.signature.parameters)
         return_type = (func.signature.return_type or "").strip()
 
+        # Pre-emit type-resolvability gate. Functions whose signature or body
+        # references types not defined in this source file (and not stdlib /
+        # known external alias) can't compile standalone — the historical
+        # pattern is CCC's impl-block methods that reference Operand /
+        # EncodeResult / RelocType from sibling parser.rs / state.rs files.
+        # Emitting a harness for those produces ~500 noise E0412 reports per
+        # sweep; gate them out cleanly and let the pipeline mark them as
+        # "harness-skipped-unresolvable-types".
+        file_source_for_gate = _load_full_source(func, parsed_file)
+        unresolved = _function_references_unresolvable_types(
+            func, parsed_file, file_source_for_gate
+        )
+        if unresolved:
+            # Drop external aliases we WILL inject; if everything left is
+            # genuinely unresolvable, raise a marker so the engine records
+            # the skip without trying to compile.
+            real_unresolved = unresolved - set(_EXTERNAL_TYPE_ALIASES.keys())
+            if real_unresolved:
+                raise HarnessUnresolvableTypes(
+                    function_name=func.name,
+                    unresolved_types=sorted(real_unresolved),
+                )
+
         # 1. Nondeterministic parameter initialisation.  For each parameter
         #    we also record the call-site expression — typically just the
         #    name, but ``.clone()`` for owned non-Copy types so the
@@ -973,6 +1214,26 @@ class KaniBackend(BMCBackend):
             "#![allow(unused_imports, dead_code, non_snake_case)]",
             "",
         ]
+        # External-crate alias preamble (FxHashMap = std::HashMap, etc.).
+        # Emitted ahead of the cleaned source so the aliases are in scope for
+        # every subsequent reference. Only injected when the function actually
+        # references one of these types — otherwise it's dead boilerplate.
+        referenced_for_preamble: set[str] = set()
+        for ty, _ in (func.signature.parameters or []):
+            referenced_for_preamble |= _extract_type_names(ty)
+        referenced_for_preamble |= _extract_type_names(func.signature.return_type or "")
+        body_for_preamble = getattr(func, "body", "") or ""
+        if body_for_preamble:
+            import re as _re2
+            for tok in _re2.findall(r"\b([A-Z][A-Za-z0-9_]*)\b", body_for_preamble):
+                if tok in _EXTERNAL_TYPE_ALIASES:
+                    referenced_for_preamble.add(tok)
+        external_aliases = _harness_preamble_for_external_types(referenced_for_preamble)
+        if external_aliases:
+            parts.append("// External-crate type aliases (injected by harness generator):")
+            parts.extend(external_aliases)
+            parts.append("")
+
         if file_source is not None:
             cleaned = _strip_crate_local_use_statements(file_source)
             cleaned = _strip_pub_in_path_visibility(cleaned)

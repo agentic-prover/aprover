@@ -88,6 +88,24 @@ class BMCEngine:
         try:
             harness_src = self.backend.generate_harness(func, spec, {}, parsed_file, all_funcs=all_funcs)
         except Exception as exc:
+            # Distinguish unresolvable-type skips from genuine generator failures.
+            # Unresolvable-type cases (impl-method functions referencing types
+            # imported from sibling files Kani can't see) are an expected skip,
+            # not an error -- they're noise if logged at ERROR level. Log them
+            # at INFO and use a typed error marker so downstream filters can
+            # exclude them from the harness-compile-failure tally.
+            from bmc_agent.backends.kani_backend import HarnessUnresolvableTypes
+            if isinstance(exc, HarnessUnresolvableTypes):
+                logger.info(
+                    "Skipping harness for '%s' — unresolvable types: %s",
+                    fn_name,
+                    ", ".join(exc.unresolved_types),
+                )
+                return BMCVerdict(
+                    function_name=fn_name,
+                    verified=False,
+                    error=f"harness-skipped-unresolvable-types: {', '.join(exc.unresolved_types)}",
+                )
             logger.error("Harness generation failed for '%s': %s", fn_name, exc)
             return BMCVerdict(
                 function_name=fn_name,

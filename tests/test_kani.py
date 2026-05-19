@@ -1154,3 +1154,108 @@ def test_extract_old_snapshots_does_not_match_identifiers():
     rewritten, snaps = _extract_old_snapshots(post)
     assert rewritten == post
     assert snaps == []
+
+
+# ---------------------------------------------------------------------------
+# Unresolvable-types harness gate
+# ---------------------------------------------------------------------------
+
+
+def test_harness_gate_primitives_only_resolves():
+    """Functions touching only Rust primitives never trigger the gate."""
+    from bmc_agent.backends.kani_backend import _function_references_unresolvable_types
+
+    class _Sig:
+        parameters = [("u32", "x"), ("&[u8]", "data")]
+        return_type = "Option<u32>"
+    class _F:
+        name = "f"
+        signature = _Sig()
+        body = "fn f(x: u32, data: &[u8]) -> Option<u32> { Some(x) }"
+
+    assert _function_references_unresolvable_types(_F(), None, "") == set()
+
+
+def test_harness_gate_picks_up_undefined_signature_types():
+    from bmc_agent.backends.kani_backend import _function_references_unresolvable_types
+
+    class _Sig:
+        parameters = [("Operand", "op")]
+        return_type = "Result<EncodeResult, String>"
+    class _F:
+        name = "encode"
+        signature = _Sig()
+        body = "fn encode(op: Operand) -> Result<EncodeResult, String> { unimplemented!() }"
+
+    unresolved = _function_references_unresolvable_types(_F(), None, "")
+    assert "Operand" in unresolved
+    assert "EncodeResult" in unresolved
+
+
+def test_harness_gate_resolves_types_defined_in_source():
+    from bmc_agent.backends.kani_backend import _function_references_unresolvable_types
+
+    class _Sig:
+        parameters = [("Operand", "op")]
+        return_type = "EncodeResult"
+    class _F:
+        name = "encode"
+        signature = _Sig()
+        body = "fn encode(op: Operand) -> EncodeResult { EncodeResult::Word(0) }"
+
+    src = """
+pub enum Operand { Reg(u8) }
+pub enum EncodeResult { Word(u32) }
+"""
+    assert _function_references_unresolvable_types(_F(), None, src) == set()
+
+
+def test_harness_gate_ignores_path_qualified_variant_calls():
+    """``EncodeResult::Word`` in a body must not register ``Word`` as a type."""
+    from bmc_agent.backends.kani_backend import _function_references_unresolvable_types
+
+    class _Sig:
+        parameters = []
+        return_type = "EncodeResult"
+    class _F:
+        name = "make"
+        signature = _Sig()
+        body = "fn make() -> EncodeResult { EncodeResult::Word(0) }"
+
+    src = "pub enum EncodeResult { Word(u32) }"
+    assert _function_references_unresolvable_types(_F(), None, src) == set()
+
+
+def test_harness_gate_treats_external_aliases_as_resolvable():
+    """FxHashMap / FxHashSet alias to std collections, so they don't trigger
+    the gate even when not defined in source."""
+    from bmc_agent.backends.kani_backend import _function_references_unresolvable_types
+
+    class _Sig:
+        parameters = [("FxHashMap<u32, u32>", "m")]
+        return_type = "FxHashSet<u32>"
+    class _F:
+        name = "h"
+        signature = _Sig()
+        body = "fn h(m: FxHashMap<u32, u32>) -> FxHashSet<u32> { FxHashSet::new() }"
+
+    unresolved = _function_references_unresolvable_types(_F(), None, "")
+    # FxHashMap/FxHashSet are external_aliases — gate filters them through the
+    # `real_unresolved = unresolved - alias_keys` step at the call site, but
+    # the helper itself reports anything not stdlib-or-locally-defined.
+    # So we expect the alias names *can* appear in the raw return; the call
+    # site is responsible for filtering them out before raising. Verify by
+    # checking that the difference against the alias set is empty.
+    from bmc_agent.backends.kani_backend import _EXTERNAL_TYPE_ALIASES
+    real_unresolved = unresolved - set(_EXTERNAL_TYPE_ALIASES.keys())
+    assert real_unresolved == set(), f"unresolved minus aliases: {real_unresolved}"
+
+
+def test_harness_unresolvable_exception_carries_names():
+    from bmc_agent.backends.kani_backend import HarnessUnresolvableTypes
+
+    exc = HarnessUnresolvableTypes("encode", ["Operand", "EncodeResult"])
+    assert exc.function_name == "encode"
+    assert exc.unresolved_types == ["Operand", "EncodeResult"]
+    msg = str(exc)
+    assert "Operand" in msg and "EncodeResult" in msg
