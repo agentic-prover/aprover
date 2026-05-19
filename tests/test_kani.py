@@ -871,10 +871,9 @@ fn wrap_result(v: i64) -> i64 { v }
     out = _strip_crate_local_use_statements(src)
     # std:: untouched
     assert "use std::collections::HashMap;" in out, out
-    # crate-local lines stripped (commented)
-    assert "use crate::ir::reexports::IrConst;" not in out.splitlines()[2:][0] or \
-           any(l.startswith("// use crate::ir") for l in out.splitlines()), out
-    # No bare uncommented crate:: use survives
+    # No bare (uncommented) crate-local use survives at line start
+    # — stripped lines are now wrapped in /* ... */ block comments
+    # (single- or multi-line). The lambda emits ``/* use ... */``.
     for line in out.splitlines():
         stripped = line.strip()
         if stripped.startswith("use ") or stripped.startswith("pub use "):
@@ -883,6 +882,54 @@ fn wrap_result(v: i64) -> i64 { v }
             assert "self::" not in stripped, line
     # Function body intact
     assert "fn wrap_result" in out, out
+
+
+def test_strip_crate_local_use_handles_multiline_import():
+    """``use super::utils::{ a, b, c, };`` wraps over multiple lines
+    in the source. The stripper must match the whole statement up to
+    the terminating ``;``; the original single-line regex only
+    caught the first line and orphaned the closing ``};``, producing
+    rustc "unexpected closing delimiter" on every harness.
+    Regression: CCC macro_defs.rs 2026-05-19."""
+    from bmc_agent.backends.kani_backend import _strip_crate_local_use_statements
+    src = """
+use std::cell::Cell;
+use crate::common::fx_hash::{FxHashMap, FxHashSet};
+use super::utils::{
+    is_ident_start_byte, is_ident_cont_byte, bytes_to_str,
+    skip_literal_bytes, copy_literal_bytes_to_string,
+};
+
+fn target() {}
+"""
+    out = _strip_crate_local_use_statements(src)
+    # std:: untouched
+    assert "use std::cell::Cell;" in out, out
+    # Multi-line use is wrapped in a /* ... */ block comment that
+    # includes the closing }; — no orphan }; outside the comment.
+    # Find every }; and confirm each is inside a comment.
+    cursor = 0
+    while True:
+        idx = out.find("};", cursor)
+        if idx == -1:
+            break
+        # Walk back to find the most recent /* or */
+        prefix = out[:idx]
+        last_open = prefix.rfind("/*")
+        last_close = prefix.rfind("*/")
+        assert last_open > last_close, (
+            f"orphan }}; at offset {idx} outside any /* ... */ block:\n{out}"
+        )
+        cursor = idx + 2
+    # Identifier names from the import list don't appear as bare lines
+    # — they're inside the /* ... */ comment.
+    for ident in ["is_ident_start_byte", "is_ident_cont_byte",
+                  "bytes_to_str", "skip_literal_bytes",
+                  "copy_literal_bytes_to_string"]:
+        for line in out.splitlines():
+            stripped = line.strip()
+            if stripped == ident or stripped == ident + ",":
+                assert False, f"orphan ident {ident} on bare line: {out!r}"
 
 
 def test_strip_crate_local_use_does_not_touch_absolute_paths():

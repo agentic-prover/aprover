@@ -541,15 +541,25 @@ def _strip_crate_local_use_statements(source: str) -> str:
     functions (wrap_result, unsigned_op, bool_to_i64) all failed Kani
     parse because the file's two ``use crate::*;`` lines were copied
     verbatim into the harness.
+
+    Multi-line follow-up: CCC macro_defs.rs 2026-05-19 — the file's
+    ``use super::utils::{is_ident_start_byte, ...};`` spans 4 lines
+    with the import list wrapped in braces. The original
+    single-line regex caught only the first line and orphaned the
+    closing ``};``, producing "unexpected closing delimiter" rustc
+    errors on every harness. The DOTALL pattern below matches the
+    whole statement up to the terminating ``;``.
     """
     import re as _re
     pattern = _re.compile(
-        r"^[ \t]*(?:pub\s+)?use\s+(?:crate|super|self)\s*::[^;]*;[ \t]*$",
-        _re.MULTILINE,
+        r"^[ \t]*(?:pub\s+)?use\s+(?:crate|super|self)\s*::"
+        r"[^;]*;[ \t]*$",
+        _re.MULTILINE | _re.DOTALL,
     )
     return pattern.sub(
-        lambda m: "// " + m.group(0).lstrip()
-                  + " /* stripped: unresolved in standalone harness */",
+        lambda m: "/* "
+                  + m.group(0).strip().replace("*/", "* /")
+                  + " — stripped: unresolved in standalone harness */",
         source,
     )
 
