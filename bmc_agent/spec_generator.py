@@ -486,6 +486,109 @@ class SpecGenerator:
         # still get a well-formed system prompt.
         self._spec_system_prompt: str = SPEC_SYSTEM_PROMPT
 
+    def _complete_with_vacuous_critique(
+        self,
+        user_prompt: str,
+        func: "FunctionInfo",
+    ) -> Optional[tuple[str, str]]:
+        """Run a spec-gen prompt, then re-prompt once if the first response is
+        a vacuous ``true`` / ``true`` spec on a non-trivial function body.
+
+        Reasoning-model providers (K2 Think on the openai-compatible path)
+        emit ``pre=true, post=true`` on ~85% of CCC functions in a default
+        generation pass: the model burns the bulk of its completion budget
+        on a ``<think>...`` trace and then defaults to the safest answer.
+        For functions whose body has any real arithmetic, indexing, or
+        control flow, this drops a substantial chunk of potential functional
+        bugs because Kani verifies trivially against ``true``.
+
+        The critique pass shows the model its own vacuous output and asks it
+        to identify at least one algebraic invariant of the return value.
+        Costs a 2x LLM call for the fraction of functions where the first
+        response was vacuous; on the Anthropic provider this codepath is a
+        near no-op (Claude rarely returns vacuous defaults).
+
+        Returns the parsed ``(pre, post)`` pair from whichever attempt
+        produced a richer spec, or ``None`` if neither parsed.
+        """
+        response = self.llm.complete(self._spec_system_prompt, user_prompt)
+        first = _parse_llm_spec_response(response, func.name)
+        if first is None:
+            return None
+        pre, post = first
+
+        body = getattr(func, "body", "") or ""
+        # "Trivial" = a one-liner with no inner block: short AND no control flow.
+        # Anything with an `if`, `match`, loop, or even a let-then-return has a
+        # second brace and warrants the critique pass.
+        trivial_body = len(body) < 40 and body.count("{") <= 1
+        is_vacuous = pre.strip() in ("true", "") and post.strip() in ("true", "")
+        if not is_vacuous or trivial_body:
+            return first
+
+        # Only run the critique on the K2/openai path -- on Anthropic, vacuous
+        # output is already rare and the extra call would just double cost.
+        provider = self.config.resolved_provider() if hasattr(self.config, "resolved_provider") else "anthropic"
+        if provider != "openai":
+            return first
+
+        critique_prompt = (
+            "The spec you just produced was:\n"
+            f'  precondition:  "{pre}"\n'
+            f'  postcondition: "{post}"\n'
+            "Both clauses are `true`, which trivially holds for ANY execution.\n"
+            "That is not a useful spec for a function with a non-trivial body.\n\n"
+            "Look at the function body again and identify AT LEAST ONE meaningful invariant:\n"
+            "  * an algebraic identity on the return value (e.g. `result % align == 0`,\n"
+            "    `result >= input.iter().min().unwrap_or(&0)`, `result.len() <= input.len()`)\n"
+            "  * a reference-equivalence to an obvious specification expression\n"
+            "    (e.g. `result == u16::from_le_bytes([data[offset], data[offset+1]])`,\n"
+            "    `result == name.iter().fold(SEED, |acc, b| ...)`)\n"
+            "  * a structural property (e.g. `result.is_some() == !haystack.is_empty()`,\n"
+            "    `(result, advance).1 == 1 || (result, advance).1 == 3`)\n"
+            "  * a precondition that the body assumes (e.g. `pos < buf.len()`,\n"
+            "    `align.is_power_of_two()`, `n <= slice.len()`)\n\n"
+            "Re-emit a JSON object with `precondition` and `postcondition` keys, possibly\n"
+            "with an additional `functional_spec` field. Output ONLY the JSON object.\n\n"
+            "The original request was:\n\n"
+            + user_prompt
+        )
+
+        try:
+            critique_response = self.llm.complete(
+                self._spec_system_prompt,
+                critique_prompt,
+            )
+        except LLMError as exc:
+            logger.debug(
+                "Vacuous-spec critique call failed for '%s': %s -- using first response",
+                func.name, exc,
+            )
+            return first
+
+        second = _parse_llm_spec_response(critique_response, func.name)
+        if second is None:
+            logger.debug(
+                "Vacuous-spec critique produced unparseable response for '%s' -- keeping first",
+                func.name,
+            )
+            return first
+        pre2, post2 = second
+        # Accept the critique result only if it's strictly richer (at least one
+        # clause is non-trivial). If the model insists on true/true, take that
+        # as evidence that the function genuinely has no useful invariant
+        # the LLM can articulate and don't churn further.
+        if pre2.strip() not in ("true", "") or post2.strip() not in ("true", ""):
+            logger.info(
+                "Vacuous-spec critique upgraded '%s': pre=%r post=%r",
+                func.name, pre2[:60], post2[:60],
+            )
+            return second
+        logger.debug(
+            "Vacuous-spec critique confirmed true/true for '%s'", func.name,
+        )
+        return first
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -809,8 +912,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(self._spec_system_prompt, user_prompt)
-            result = _parse_llm_spec_response(response, func.name)
+            result = self._complete_with_vacuous_critique(user_prompt, func)
             if result is not None:
                 pre, post = result
                 post = _relax_postcondition_for_error_paths(post, func.body, func.name)
@@ -867,8 +969,7 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(self._spec_system_prompt, user_prompt)
-            result = _parse_llm_spec_response(response, func.name)
+            result = self._complete_with_vacuous_critique(user_prompt, func)
             if result is not None:
                 pre, post = result
                 post = _relax_postcondition_for_error_paths(post, func.body, func.name)
@@ -989,8 +1090,31 @@ class SpecGenerator:
         if result_a is None and result_b is None:
             return self._generate_entry_spec(func, domain_knowledge)
 
-        # Use whichever succeeded; prefer caller-heavy
-        pre, post = result_a or result_b
+        # Pick the richer of the two results.
+        # Default order (preferred): caller-heavy (a). Only if caller-heavy is
+        # vacuous `true`/`true` AND implementation-heavy is non-vacuous do we
+        # swap, so a substantive impl-heavy spec doesn't get discarded just
+        # because the caller-side prompt returned a default. This is the
+        # cheapest spec-ensemble win: dual-spec already issues two LLM calls,
+        # we just stop preferring the first one unconditionally.
+        def _is_vacuous(r: tuple[str, str] | None) -> bool:
+            if r is None:
+                return True
+            pre_s = (r[0] or "").strip()
+            post_s = (r[1] or "").strip()
+            return pre_s in ("true", "") and post_s in ("true", "")
+
+        if result_a is None:
+            chosen = result_b
+        elif _is_vacuous(result_a) and not _is_vacuous(result_b):
+            logger.debug(
+                "Dual-spec: caller-heavy vacuous, using impl-heavy for '%s'",
+                func.name,
+            )
+            chosen = result_b
+        else:
+            chosen = result_a
+        pre, post = chosen
         post = _relax_postcondition_for_error_paths(post, func.body, func.name)
 
         # Check disagreement if both succeeded

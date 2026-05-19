@@ -808,3 +808,110 @@ def test_spec_prompts_no_dsl_grammar_placeholder():
         assert "{dsl_grammar}" not in prompt, (
             f"{name} still contains {{dsl_grammar}} — should be in system prompt"
         )
+
+
+# ---------------------------------------------------------------------------
+# Vacuous-spec critique pass (K2/openai provider)
+# ---------------------------------------------------------------------------
+
+def _make_generator_with_mock(tmp_path, responses, provider="openai"):
+    """Build a SpecGenerator whose LLMClient yields *responses* in order."""
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.spec_generator import SpecGenerator
+    config = Config(
+        llm_model="mock",
+        llm_api_key="mock",
+        llm_provider=provider,
+        artifact_dir=str(tmp_path / "art"),
+        max_spec_retries=1,
+        batch_size=1,
+    )
+    store = ArtifactStore(config.artifact_dir)
+    mock_llm = MagicMock()
+    mock_llm.complete = MagicMock(side_effect=list(responses))
+    gen = SpecGenerator(config, mock_llm, store)
+    return gen, mock_llm
+
+
+def _func_stub(name="f", body=None):
+    """A FunctionInfo-shaped stub with a non-trivial body."""
+    if body is None:
+        body = "{\n    let r = a + b;\n    if r > 100 { return 0; }\n    r\n}"
+    class _Sig:
+        is_pub = True
+        is_static = False
+        parameters = [("u32", "a"), ("u32", "b")]
+        return_type = "u32"
+        modifiers = []
+        type_parameters = ""
+        where_clause = ""
+    class _F:
+        def __init__(self):
+            self.name = name
+            self.body = body
+            self.signature = _Sig()
+            self.callees = set()
+    return _F()
+
+
+def test_vacuous_critique_skips_anthropic_provider(tmp_path):
+    """Anthropic path: never run the second critique call."""
+    initial = json.dumps({"precondition": "true", "postcondition": "true"})
+    gen, mock = _make_generator_with_mock(tmp_path, [initial], provider="anthropic")
+    result = gen._complete_with_vacuous_critique("prompt", _func_stub())
+    assert result == ("true", "true")
+    # Critique pass would have requested a second call -- prove it didn't.
+    assert mock.complete.call_count == 1
+
+
+def test_vacuous_critique_runs_on_openai_provider(tmp_path):
+    """openai/K2 path: second call fires when first is vacuous on non-trivial body."""
+    initial = json.dumps({"precondition": "true", "postcondition": "true"})
+    upgraded = json.dumps({
+        "precondition": "true",
+        "postcondition": "result <= a.wrapping_add(b)",
+    })
+    gen, mock = _make_generator_with_mock(tmp_path, [initial, upgraded], provider="openai")
+    result = gen._complete_with_vacuous_critique("prompt", _func_stub())
+    assert mock.complete.call_count == 2
+    assert result == ("true", "result <= a.wrapping_add(b)")
+
+
+def test_vacuous_critique_keeps_first_when_second_is_also_vacuous(tmp_path):
+    """If K2 insists on true/true twice, take that as a signal not to churn further."""
+    initial = json.dumps({"precondition": "true", "postcondition": "true"})
+    again = json.dumps({"precondition": "true", "postcondition": "true"})
+    gen, mock = _make_generator_with_mock(tmp_path, [initial, again], provider="openai")
+    result = gen._complete_with_vacuous_critique("prompt", _func_stub())
+    assert mock.complete.call_count == 2
+    assert result == ("true", "true")
+
+
+def test_vacuous_critique_skips_trivial_body(tmp_path):
+    """A genuinely trivial wrapper (1 line) is allowed to be true/true."""
+    initial = json.dumps({"precondition": "true", "postcondition": "true"})
+    gen, mock = _make_generator_with_mock(tmp_path, [initial], provider="openai")
+    triv = _func_stub(name="wrap", body="{ a }")
+    result = gen._complete_with_vacuous_critique("prompt", triv)
+    assert mock.complete.call_count == 1
+    assert result == ("true", "true")
+
+
+def test_vacuous_critique_skips_when_first_is_already_rich(tmp_path):
+    """No second call when the first spec is already non-vacuous."""
+    rich = json.dumps({"precondition": "a > 0", "postcondition": "result == a + b"})
+    gen, mock = _make_generator_with_mock(tmp_path, [rich], provider="openai")
+    result = gen._complete_with_vacuous_critique("prompt", _func_stub())
+    assert mock.complete.call_count == 1
+    assert result == ("a > 0", "result == a + b")
+
+
+def test_vacuous_critique_handles_unparseable_critique(tmp_path):
+    """If the critique response is gibberish, fall back to the first spec."""
+    initial = json.dumps({"precondition": "true", "postcondition": "true"})
+    junk = "lalala not json at all"
+    gen, mock = _make_generator_with_mock(tmp_path, [initial, junk], provider="openai")
+    result = gen._complete_with_vacuous_critique("prompt", _func_stub())
+    assert mock.complete.call_count == 2
+    assert result == ("true", "true")
