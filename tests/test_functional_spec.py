@@ -89,6 +89,54 @@ def test_parser_promotes_functional_spec_when_post_is_trivial():
     assert post == "result == val + (align - 1) & !(align - 1)", post
 
 
+def test_parser_drops_functional_spec_with_old_syntax():
+    """``old(buf.len())`` references the pre-call state of a mutable
+    parameter. Kani's plain ``kani::assert`` can't see pre-state, and
+    the harness generator doesn't snapshot mutable inputs, so emitting
+    ``old(...)`` as-is would produce ``E0425: cannot find function 'old'``
+    and SKIP the function from BMC. Drop the functional spec when it
+    uses old() so the harness still compiles and the function gets a
+    real verdict (just without the rich post)."""
+    out = _parse_llm_spec_response(
+        _wrap(
+            "true",
+            "true",
+            functional="buf.len() == old(buf.len()) + target",
+        ),
+        "pad_to",
+    )
+    # Functional spec was dropped → post remains "true"
+    assert out == ("true", "true"), out
+
+
+def test_parser_drops_functional_spec_with_nested_old():
+    """Same fallback for nested old() expressions."""
+    out = _parse_llm_spec_response(
+        _wrap(
+            "true",
+            "true",
+            functional="buf[..old(buf.len())] == old(buf[..])",
+        ),
+        "pad_to",
+    )
+    assert out == ("true", "true"), out
+
+
+def test_parser_keeps_specs_without_old():
+    """Sanity: specs that don't use old() still merge. Guards against
+    over-broad rejection — we want to reject ``old(...)`` but not
+    function names that happen to start with 'old', e.g.
+    ``old_threshold`` shouldn't trigger the drop."""
+    out = _parse_llm_spec_response(
+        _wrap("true", "true", functional="result == old_threshold + 1"),
+        "f",
+    )
+    # 'old_threshold' is a variable, not the old() pre-state call
+    assert out is not None
+    pre, post = out
+    assert "result == old_threshold + 1" in post, post
+
+
 def test_parser_promotes_functional_spec_when_post_is_empty():
     out = _parse_llm_spec_response(
         _wrap("true", "", functional="result == bytes.len()"),
