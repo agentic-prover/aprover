@@ -776,6 +776,50 @@ fn target_caller(x: u64) -> u64 { helper(x) }
     assert "polluted_unrelated" not in out or "/* stripped" in out, out
 
 
+def test_transitive_callees_walks_call_graph():
+    """``func.callees`` records only direct calls, but the strip helper
+    needs every transitively reachable sibling — otherwise indirectly
+    called helpers (eval_add -> eval_mul -> eval_unary) get stripped
+    and the harness fails to compile.
+
+    Regression: CCC asm_expr.rs 2026-05-19 — eval_add verified 1/12
+    because eval_unary kept getting stripped despite being reachable
+    through eval_mul."""
+    from bmc_agent.backends.kani_backend import _transitive_callees
+    class _PF:
+        def __init__(self, g):
+            self.call_graph = g
+    pf = _PF({
+        "eval_add": {"eval_mul"},
+        "eval_mul": {"eval_unary"},
+        "eval_unary": {"eval_tokens"},
+        "eval_tokens": set(),
+        "stranger": {"unrelated_helper"},
+    })
+    closure = _transitive_callees({"eval_mul"}, pf)
+    assert closure == {"eval_mul", "eval_unary", "eval_tokens"}, closure
+    # Unreached fns must NOT enter the keep set.
+    assert "stranger" not in closure
+    assert "unrelated_helper" not in closure
+
+
+def test_transitive_callees_handles_cycles():
+    """A cyclic call graph (mutual recursion) must terminate."""
+    from bmc_agent.backends.kani_backend import _transitive_callees
+    class _PF:
+        def __init__(self, g):
+            self.call_graph = g
+    pf = _PF({"a": {"b"}, "b": {"a", "c"}, "c": set()})
+    assert _transitive_callees({"a"}, pf) == {"a", "b", "c"}
+
+
+def test_transitive_callees_no_parsed_file():
+    """When parsed_file is None (test fixtures), return the direct set."""
+    from bmc_agent.backends.kani_backend import _transitive_callees
+    assert _transitive_callees({"x", "y"}, None) == {"x", "y"}
+    assert _transitive_callees(set(), None) == set()
+
+
 def test_param_init_block_mut_ref_vec():
     """&mut Vec<u8> output-param: allocate a backing Vec and pass
     &mut backing. Regression: CCC copy_literal_bytes_raw was blocked

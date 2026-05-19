@@ -432,6 +432,39 @@ def _load_full_source(func, parsed_file) -> "str | None":
     return None
 
 
+def _transitive_callees(direct_callees, parsed_file) -> "set[str]":
+    """Expand *direct_callees* into its transitive closure under
+    ``parsed_file.call_graph``.
+
+    Background: ``func.callees`` only records direct call targets,
+    but the strip helper keeps sibling fns ONLY if they appear in
+    the keep set. When a kept sibling itself calls another sibling
+    (``eval_add -> eval_mul -> eval_unary``), the indirectly-reached
+    helper gets stripped and the harness fails to compile with
+    ``E0425 cannot find function in this scope``. Walking the
+    call graph closes this gap.
+
+    Edge cases:
+    - parsed_file is None (test fixtures): return the direct set verbatim.
+    - call_graph absent: same fallback.
+    - cycles: handled by the visited set.
+    """
+    closure = set(direct_callees or set())
+    if parsed_file is None:
+        return closure
+    call_graph = getattr(parsed_file, "call_graph", None)
+    if not call_graph:
+        return closure
+    worklist = list(closure)
+    while worklist:
+        name = worklist.pop()
+        for callee in call_graph.get(name, set()) or set():
+            if callee not in closure:
+                closure.add(callee)
+                worklist.append(callee)
+    return closure
+
+
 def _strip_crate_local_fn_items(
     source: str,
     keep_fn_name: str,
@@ -787,10 +820,18 @@ class KaniBackend(BMCBackend):
         if file_source is not None:
             cleaned = _strip_crate_local_use_statements(file_source)
             cleaned = _strip_pub_in_path_visibility(cleaned)
+            # Compute the transitive closure of callees from
+            # parsed_file.call_graph so helper fns reachable indirectly
+            # (e.g. eval_add -> eval_mul -> eval_unary) survive the
+            # sibling-strip step. Without this, the stripper drops
+            # `eval_unary` because it isn't in `eval_add.callees`
+            # directly, even though eval_mul (which IS kept) calls it.
+            direct_callees = set(getattr(func, "callees", set()) or set())
+            keep_callees = _transitive_callees(direct_callees, parsed_file)
             cleaned = _strip_crate_local_fn_items(
                 cleaned,
                 keep_fn_name=func.name,
-                keep_callees=set(getattr(func, "callees", set()) or set()),
+                keep_callees=keep_callees,
             )
             parts.append(cleaned.rstrip())
         else:
