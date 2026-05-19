@@ -482,6 +482,21 @@ Generate a specification for this function, emphasizing what CALLERS REQUIRE fro
 Focus on: what preconditions must hold for callers' intended usage, what postconditions
 callers depend on. Do not over-specify implementation details.
 
+ALSO emit a ``functional_spec`` field — a Rust/C boolean expression specifying what
+a CORRECT implementation would compute. This is orthogonal to the defensive pre/post:
+the verifier uses it to check the implementation matches the intended computation.
+Examples:
+  - For ``read_u16(data, off) -> u16``:
+      result == u16::from_le_bytes([data[off], data[off+1]])
+  - For ``gnu_hash(name) -> u32`` (djb2-style):
+      result == name.iter().fold(5381u32, |h, &b| h.wrapping_mul(33).wrapping_add(b as u32))
+  - For ``align_up_64(val, align) -> u64``:
+      (result >= val) && (result - val < align) && (result % align == 0)
+Tautological-looking specs (reference literally mirrors the body) are CORRECT and
+should be emitted — they catch interference / off-by-one bugs in the body. Only
+leave empty when the function returns a structured value (AST, hashmap) where
+boolean-over-scalars can't express equality.
+
 Function signature (use THESE parameter names in your spec):
 {signature}
 
@@ -495,6 +510,7 @@ Respond with ONLY valid JSON:
 {{
   "precondition": "<precondition emphasizing caller requirements>",
   "postcondition": "<postcondition emphasizing what callers depend on>",
+  "functional_spec": "<Rust/C boolean expression specifying the intended computation; empty if structured-value return>",
   "reasoning": "<brief explanation>"
 }}
 """
@@ -502,6 +518,19 @@ Respond with ONLY valid JSON:
 IMPL_HEAVY_SPEC_PROMPT = """\
 Generate a specification for this function, emphasizing what the IMPLEMENTATION ACTUALLY DOES.
 Focus on: what the implementation guarantees based on its code, regardless of caller expectations.
+
+ALSO emit a ``functional_spec`` field — a Rust/C boolean expression specifying what
+a correct implementation should compute. Since this prompt emphasises implementation
+faithfulness, the functional spec is the *reference computation* against which the
+verifier checks the body. Templates:
+  - Byte reader: ``result == u16::from_le_bytes([data[off], data[off+1]])``
+  - Hash fold:   ``result == name.iter().fold(SEED, |h, &b| h.op(K).op(b as T))``
+  - Alignment:   ``(result >= val) && (result - val < align) && (result % align == 0)``
+  - Wrapper:     ``result == reference_call(args)``
+Tautological reference computations (reference mirrors body) are CORRECT and should
+be emitted — they prove the body executes the formula faithfully. Leave empty only
+when the function returns a structured value (AST, hashmap) that boolean-over-scalars
+can't express.
 
 Function signature (use THESE parameter names in your spec):
 {signature}
@@ -513,6 +542,7 @@ Respond with ONLY valid JSON:
 {{
   "precondition": "<precondition based on what the implementation requires>",
   "postcondition": "<postcondition based on what the implementation guarantees>",
+  "functional_spec": "<Rust/C boolean expression specifying the reference computation; empty if not expressible>",
   "reasoning": "<brief explanation>"
 }}
 """
