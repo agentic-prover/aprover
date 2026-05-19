@@ -38,7 +38,7 @@ def test_spec_overflow_add_filtered():
         trace=["property check_align_up.assertion.5: attempt to add with overflow"],
     )
     assert _witness_obvious_artifact(cex) is not None
-    assert "spec-evaluation overflow" in _witness_obvious_artifact(cex)
+    assert "spec-evaluation" in _witness_obvious_artifact(cex)
 
 
 def test_spec_overflow_sub_filtered():
@@ -96,3 +96,62 @@ def test_body_overflow_with_check_prefix_NOT_filtered():
     violations on check_*-named fns are still real."""
     cex = _cex("check_csum.assertion.2", trace=["postcondition violated"])
     assert _witness_obvious_artifact(cex) is None
+
+
+def test_spec_slice_oob_filtered():
+    """Slice OOB inside a ``check_<fn>.assertion`` is also a spec-evaluation
+    artifact (the functional spec indexes into a slice with an unguarded
+    nondet pos). Regression: CCC encoding.rs decode_pua_byte 2026-05-19 —
+    K2's functional spec did ``input[pos]`` without a bounds clause and
+    Kani picked ``pos > input.len()``. The function itself was fine.
+    """
+    cex = _cex(
+        "check_decode_pua_byte.assertion.5",
+        trace=["property check_decode_pua_byte.assertion.5: index out of bounds: the length is less than or equal to the given index"],
+    )
+    assert _witness_obvious_artifact(cex) is not None
+    assert "spec-evaluation" in _witness_obvious_artifact(cex)
+
+
+def test_spec_divide_by_zero_filtered():
+    cex = _cex(
+        "check_calc.assertion.2",
+        trace=["attempt to divide by zero"],
+    )
+    assert _witness_obvious_artifact(cex) is not None
+
+
+def test_body_slice_oob_NOT_filtered():
+    """Slice OOB in the body (no ``check_`` prefix) is the canonical
+    structural panic and MUST remain a real bug under security.
+    """
+    cex = _cex(
+        "read_u32.assertion.7",
+        trace=["index out of bounds: the length is less than or equal to the given index"],
+    )
+    assert _witness_obvious_artifact(cex) is None
+
+
+def test_kani_unsupported_construct_filtered():
+    """``unsupported_construct.N`` is Kani's marker for FFI / syscall calls
+    it can't symbolically execute (getpid, getenv, file I/O). These are
+    verifier limitations, not function bugs. Regression: CCC temp_files
+    2026-05-19 — make_temp_path and temp_dir got REAL_BUG verdicts that
+    were really 'Kani can't model the syscall'.
+    """
+    cex = _cex(
+        "std::sys::pal::unix::os::getpid.unsupported_construct.1",
+        trace=["property std::sys::pal::unix::os::getpid.unsupported_construct.1: call to foreign function"],
+    )
+    assert _witness_obvious_artifact(cex) is not None
+    assert "kani modelling artifact" in _witness_obvious_artifact(cex)
+
+
+def test_kani_unsupported_construct_in_trace_filtered():
+    """The marker may appear in the trace text instead of the property
+    name on some Kani versions. Match either."""
+    cex = _cex(
+        "some.weird.property",
+        trace=["unsupported_construct: external symbol call"],
+    )
+    assert _witness_obvious_artifact(cex) is not None

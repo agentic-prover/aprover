@@ -1738,31 +1738,40 @@ def _witness_obvious_artifact(counterexample) -> Optional[str]:
     classifier can skip expensive LLM reachability calls on findings
     that the realism stage would reject anyway.
     """
-    # Spec-evaluation overflow: when the failing property is
+    # Spec-evaluation panic: when the failing property is
     # ``check_<fn>.assertion.N`` (note the ``check_`` prefix — the
-    # generated harness wrapper) AND the trace says "attempt to add/
-    # subtract/multiply with overflow", the arithmetic is in the SPEC
-    # itself being evaluated on Kani's nondeterministic inputs (often
-    # ``usize::MAX`` / ``i64::MIN``), not in the function body. This
-    # is a Phase 1 functional-spec false positive — the spec author
-    # forgot to use wrapping_/checked_ ops, and the spec overflows
-    # during verification.
+    # generated harness wrapper) AND the trace is a structural panic
+    # (overflow, slice OOB, divide-by-zero), the panic is inside the
+    # SPEC expression Kani evaluates on its nondeterministic inputs,
+    # not inside the function body. This is a Phase 1 functional-spec
+    # false positive — the spec author wrote an unguarded slice index
+    # (``input[pos]``) or non-wrapping arithmetic and the spec itself
+    # panics during verification.
     fp = (getattr(counterexample, "failing_property", "") or "")
     trace_text = " ".join(getattr(counterexample, "trace", None) or [])
-    if (
-        fp.startswith("check_")
-        and any(
-            marker in trace_text
-            for marker in (
-                "attempt to add with overflow",
-                "attempt to subtract with overflow",
-                "attempt to multiply with overflow",
-                "attempt to shift left with overflow",
-                "attempt to shift right with overflow",
-            )
+    if fp.startswith("check_") and any(
+        marker in trace_text
+        for marker in (
+            "attempt to add with overflow",
+            "attempt to subtract with overflow",
+            "attempt to multiply with overflow",
+            "attempt to shift left with overflow",
+            "attempt to shift right with overflow",
+            "attempt to divide by zero",
+            "index out of bounds",
+            "slice_index_fail",
         )
     ):
-        return "spec-evaluation overflow (functional spec uses non-wrapping arithmetic on extreme inputs)"
+        return "spec-evaluation panic (functional spec performs unguarded arithmetic/indexing on Kani's nondet inputs)"
+
+    # Kani modelling artifact: ``unsupported_construct.N`` properties
+    # fire when Kani sees a call to a foreign function (libc, syscall,
+    # FFI) that it can't symbolically execute. These are limitations of
+    # the verifier, not bugs in the function — the function would behave
+    # correctly at runtime; Kani just can't prove it. Common triggers in
+    # CCC: getpid, getenv, gettimeofday, file I/O on tempfiles.
+    if "unsupported_construct" in fp or "unsupported_construct" in trace_text:
+        return "kani modelling artifact (call to foreign / unsupported construct — outside BMC's reach)"
 
     try:
         from bmc_agent.realism_checker import (
