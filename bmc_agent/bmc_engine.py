@@ -146,6 +146,51 @@ class BMCEngine:
             # invocation and returns a CBMCResult-shaped object.
             cbmc_result = self.backend.check(harness_path)
 
+            # Timeout retry: complex Rust functions (UTF-8 validation,
+            # allocator-driven Vec/String code) can blow past Kani's
+            # 120-s timeout at the default slice_bound=4. Regenerate
+            # the harness with progressively smaller buffer bounds
+            # (4 → 2 → 1) and a tighter loop unwind, then re-check.
+            # Each retry overwrites the saved harness so the artifact
+            # reflects the configuration that actually produced the
+            # verdict. Regression: CCC encoding.rs run 2026-05-19 —
+            # bytes_to_string and encode_non_utf8 timed out at default
+            # bound=4; encode_non_utf8 verifies clean at bound=1 in ~40s.
+            if (
+                cbmc_result.error
+                and "timed out" in cbmc_result.error
+                and getattr(self.backend, "generate_harness", None) is not None
+            ):
+                for retry_bound, retry_unwind in [(2, 4), (1, 2)]:
+                    logger.info(
+                        "Kani timed out for '%s' — retrying with "
+                        "slice_bound=%d, unwind=%d",
+                        fn_name, retry_bound, retry_unwind,
+                    )
+                    try:
+                        retry_src = self.backend.generate_harness(
+                            func, spec, {}, parsed_file,
+                            all_funcs=all_funcs,
+                            slice_bound_override=retry_bound,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Retry harness gen failed for '%s' at bound=%d: %s",
+                            fn_name, retry_bound, exc,
+                        )
+                        break
+                    retry_path = self._save_harness(driver_name, fn_name, retry_src)
+                    cbmc_result = self.backend.check(
+                        retry_path, unwind_override=retry_unwind,
+                    )
+                    harness_path = retry_path
+                    if not cbmc_result.error or "timed out" not in cbmc_result.error:
+                        logger.info(
+                            "Kani retry succeeded for '%s' at slice_bound=%d",
+                            fn_name, retry_bound,
+                        )
+                        break
+
         # ---- Step 4: build verdict ----
         if cbmc_result.error:
             logger.warning(

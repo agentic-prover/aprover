@@ -511,6 +511,7 @@ class KaniBackend(BMCBackend):
         callee_specs: dict | None = None,
         parsed_file=None,
         all_funcs: dict | None = None,
+        slice_bound_override: int | None = None,
     ) -> str:
         """Emit a self-contained Rust harness verifying *func* against *spec*.
 
@@ -519,6 +520,13 @@ class KaniBackend(BMCBackend):
         ``signature.parameters`` are ``(rust_type, name)`` tuples and whose
         ``signature.return_type`` is a Rust type string.  The function
         body is included verbatim so the harness is compilable standalone.
+
+        ``slice_bound_override`` lets the caller force a smaller buffer
+        size than ``config.kani_slice_bound``. Used by the engine's
+        timeout-retry path: when Kani times out at the default bound
+        on a function with internal loops (UTF-8 validation,
+        allocator-driven Vec/String code), regenerating with a smaller
+        bound often turns a 120-s timeout into a sub-minute clean verdict.
         """
         params: list[tuple[str, str]] = list(func.signature.parameters)
         return_type = (func.signature.return_type or "").strip()
@@ -527,7 +535,10 @@ class KaniBackend(BMCBackend):
         #    we also record the call-site expression — typically just the
         #    name, but ``.clone()`` for owned non-Copy types so the
         #    postcondition can still reference the original value.
-        slice_bound = getattr(self._config, "kani_slice_bound", _DEFAULT_SLICE_BOUND)
+        if slice_bound_override is not None:
+            slice_bound = slice_bound_override
+        else:
+            slice_bound = getattr(self._config, "kani_slice_bound", _DEFAULT_SLICE_BOUND)
         init_lines: list[str] = []
         arg_names: list[str] = []  # names visible to postcondition
         call_args_list: list[str] = []  # expressions passed at call site
@@ -612,12 +623,25 @@ class KaniBackend(BMCBackend):
     # Checking
     # ------------------------------------------------------------------
 
-    def check(self, harness_path: str | Path, harness_name: str | None = None):
-        """Run Kani on *harness_path* and return a ``CBMCResult``."""
+    def check(
+        self,
+        harness_path: str | Path,
+        harness_name: str | None = None,
+        unwind_override: int | None = None,
+        timeout_override: int | None = None,
+    ):
+        """Run Kani on *harness_path* and return a ``CBMCResult``.
+
+        ``unwind_override`` / ``timeout_override`` let the engine's
+        retry path tighten loop bounds or extend the wall-clock when
+        a previous run timed out.
+        """
+        unwind = unwind_override if unwind_override is not None else self._config.kani_unwind
+        timeout = timeout_override if timeout_override is not None else self._config.kani_timeout
         return run_kani(
             harness_path=str(harness_path),
             harness_name=harness_name,
-            unwind=self._config.kani_unwind,
-            timeout=self._config.kani_timeout,
+            unwind=unwind,
+            timeout=timeout,
             kani_path=self._config.kani_path,
         )

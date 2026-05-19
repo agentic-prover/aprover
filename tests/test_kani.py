@@ -60,6 +60,7 @@ class _Config:
     kani_path: str = "kani"
     kani_unwind: int = 4
     kani_timeout: int = 120
+    kani_slice_bound: int = 4
 
 
 # ---------------------------------------------------------------------------
@@ -674,3 +675,70 @@ def test_parser_old_format_reachability_not_treated_as_failure():
     assert result.verified is True
     # No genuine failure row — only the reachability_check pseudo-row.
     assert result.counterexamples == []
+
+
+def test_generate_harness_respects_slice_bound_override():
+    """The engine's retry path passes a smaller ``slice_bound_override``
+    to regenerate a harness with tighter buffer bounds after a Kani
+    timeout. Regression: CCC encoding.rs 2026-05-19 — bytes_to_string
+    timed out at default bound=4; bound=1 verifies clean. Harness must
+    reflect the override, not the config default."""
+    from dataclasses import dataclass, field
+    @dataclass
+    class _SigFull:
+        name: str
+        return_type: str
+        parameters: list
+        modifiers: list = field(default_factory=list)
+        type_parameters: str = ""
+        where_clause: str = ""
+    @dataclass
+    class _FuncFull:
+        name: str
+        signature: _SigFull
+        body: str
+        callees: set = field(default_factory=set)
+        source_file: str = "synthetic.rs"
+    config = _Config(kani_slice_bound=4)
+    backend = KaniBackend(config)
+    func = _FuncFull(
+        name="f",
+        signature=_SigFull(name="f", return_type="usize",
+                           parameters=[("&[u8]", "buf")]),
+        body="{ buf.len() }",
+    )
+    spec = _Spec(function_name="f")
+    # Default: bound=4 → backing array [u8; 4]
+    h4 = backend.generate_harness(func, spec, {})
+    assert "[u8; 4]" in h4, h4
+    # Override to 1 → backing array [u8; 1]
+    h1 = backend.generate_harness(func, spec, {}, slice_bound_override=1)
+    assert "[u8; 1]" in h1, h1
+    assert "[u8; 4]" not in h1, h1
+    # Length-bound clauses also rewritten in sync.
+    assert "<= 1)" in h1, h1
+    assert "<= 4)" not in h1, h1
+
+
+def test_check_respects_unwind_and_timeout_overrides(tmp_path):
+    """``KaniBackend.check`` must let the engine override unwind and
+    timeout without mutating config. Used by the timeout-retry path."""
+    config = _Config(kani_unwind=4, kani_timeout=120)
+    backend = KaniBackend(config)
+    harness = tmp_path / "h.rs"
+    harness.write_text("fn main() {}")
+    captured: dict = {}
+
+    def fake_run_kani(*, harness_path, harness_name, unwind, timeout, kani_path):
+        captured["unwind"] = unwind
+        captured["timeout"] = timeout
+        return CBMCResult(verified=True, raw_output="VERIFICATION:- SUCCESSFUL")
+
+    with patch("bmc_agent.backends.kani_backend.run_kani", side_effect=fake_run_kani):
+        backend.check(str(harness), unwind_override=2, timeout_override=60)
+    assert captured == {"unwind": 2, "timeout": 60}
+    # No override → config defaults
+    captured.clear()
+    with patch("bmc_agent.backends.kani_backend.run_kani", side_effect=fake_run_kani):
+        backend.check(str(harness))
+    assert captured == {"unwind": 4, "timeout": 120}
