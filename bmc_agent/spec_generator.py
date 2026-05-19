@@ -356,6 +356,12 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
     """
     Parse LLM JSON response into (precondition, postcondition).
 
+    If the response contains an optional ``functional_spec`` field (Phase 1
+    behavioral spec — Rust/C boolean expression specifying what the function
+    SHOULD compute, not just what makes it safe), AND it into the
+    postcondition so existing harness gen, classification, and refinement
+    paths consume it without any further changes.
+
     Returns None if parsing fails.
     """
     text = response.strip()
@@ -378,6 +384,19 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
         data = json.loads(text)
         pre = data.get("precondition", "").strip()
         post = data.get("postcondition", "").strip()
+        # Optional functional spec (Phase 1). LLM may either omit the field,
+        # leave it empty, or set it to "true" when no useful functional
+        # property is derivable. Skip in all those cases.
+        functional = (data.get("functional_spec") or "").strip()
+        if functional and functional.lower() not in ("true", "1", "n/a", "none"):
+            # AND the functional spec into the postcondition. Existing
+            # postcondition stays in place (defensive bug-class clauses);
+            # the functional clause adds the "behaves correctly" part. If
+            # post was "true", the AND collapses to just the functional spec.
+            if post in ("", "true"):
+                post = functional
+            else:
+                post = f"({post}) && ({functional})"
         if pre and post:
             return pre, post
     except (json.JSONDecodeError, AttributeError):

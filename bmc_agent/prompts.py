@@ -220,6 +220,36 @@ postconditions cause VERIFIED-CLEAN runs to flip to spurious failures. Encode on
 the bug-class invariants the code is actually trying to enforce; if no such
 guard exists in the body, the function may genuinely have the bug.
 
+FUNCTIONAL CORRECTNESS (optional ``functional_spec`` field):
+The defensive postcondition above rules out *bug classes*; the functional spec
+captures *what the function actually computes*. Use it to specify behaviour
+beyond safety — equivalence to a reference computation, algebraic laws,
+round-trip identities, structural invariants.
+
+  * **Reference equivalence**: ``result == n * sizeof(T)`` for an allocation
+    helper, or ``result == u16::from_le_bytes([data[off], data[off+1]])``
+    for a byte reader. Compare to the simpler computation the function
+    is replicating.
+  * **Algebraic identities**: ``align_up_64(val, align) >= val &&
+    align_up_64(val, align) - val < align && align_up_64(val, align) % align == 0``
+    — captures the *meaning* of alignment, not just absence of crashes.
+  * **Round-trip identities**: when the function is a wrapper like
+    ``bytes_to_str``, the spec should compare to the obvious reference
+    (e.g. ``std::str::from_utf8(bytes).unwrap() == result`` when the
+    precondition guarantees valid UTF-8).
+  * **Structural invariants**: "list result is acyclic", "tree result is
+    balanced", "no duplicate keys in the returned hashmap".
+
+ONLY emit a functional spec when you can express it as a Rust/C boolean
+expression that the verifier can check — not prose. If the function's
+behaviour is too complex to capture this way (e.g. parser pass returning
+a structured AST), set ``functional_spec`` to the empty string or "true"
+and the field is ignored.
+
+Don't fabricate functional specs either. A wrong functional spec triggers
+false-positive bug reports. If you can't be confident the spec is what a
+correct implementation would compute, leave it empty.
+
 {threat_model_context}
 
 Domain knowledge:
@@ -239,8 +269,9 @@ Function body:
 Respond with ONLY valid JSON in this exact format:
 {{
   "precondition": "<precondition in DSL or natural language>",
-  "postcondition": "<postcondition in DSL or natural language>",
-  "reasoning": "<brief explanation of why these conditions are correct, with one sentence on which bug-class invariants you encoded>"
+  "postcondition": "<postcondition in DSL or natural language — defensive bug-class clauses>",
+  "functional_spec": "<optional Rust/C boolean expression specifying what a correct implementation would compute — empty string if not expressible>",
+  "reasoning": "<brief explanation of why these conditions are correct, with one sentence on which bug-class invariants you encoded, and one sentence justifying the functional spec or why none was given>"
 }}
 """
 
@@ -281,11 +312,22 @@ Merging rule for caller specs:
 - postcondition = conjunction (AND) of callers' expected postconditions
   (function must satisfy ALL callers' requirements)
 
+FUNCTIONAL CORRECTNESS (optional ``functional_spec`` field):
+As with entry-spec generation, you may optionally provide a behavioural
+spec — a Rust/C boolean expression specifying *what the function should
+compute*, not just what makes it safe. Use it to capture reference
+equivalence, algebraic identities, round-trip properties, or structural
+invariants. If the function's behaviour is too complex to express as a
+single boolean expression (e.g. it returns a structured AST), leave
+``functional_spec`` empty or ``"true"``. A wrong functional spec
+produces false positives, so only emit when confident.
+
 Respond with ONLY valid JSON in this exact format:
 {{
   "precondition": "<precondition in DSL or natural language — use the callee's parameter names>",
   "postcondition": "<postcondition in DSL or natural language — use the callee's parameter names>",
-  "reasoning": "<brief explanation of why these conditions are correct>"
+  "functional_spec": "<optional behavioural spec as Rust/C boolean expression; empty string if not expressible>",
+  "reasoning": "<brief explanation of why these conditions are correct, plus one sentence justifying the functional spec or why none was given>"
 }}
 """
 
