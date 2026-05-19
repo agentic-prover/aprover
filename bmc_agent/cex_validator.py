@@ -253,6 +253,42 @@ class CExValidator:
         func_name = func.name
         logger.info("Validating counterexample for '%s'", func_name)
 
+        # Vacuous-spec postcondition-violation filter. When the user spec is
+        # pre=true && post=true, the harness emits NO `kani::assert` line --
+        # any "postcondition violated" assertion the verifier reports is an
+        # intrinsic safety check (slice bounds inside the harness wrapper,
+        # `from_utf8(...).unwrap()`, an auto-injected match-exhaustiveness
+        # assertion, etc.) that has nothing to do with the function's
+        # correctness. Promoting it to REAL_BUG is meaningless; auto-skip
+        # to SPURIOUS. Catches the `is_mmx` / `invert_condition` shape of
+        # K2-vacuous-spec false positives observed in the CCC sweep.
+        spec_pre_trivial = (spec.precondition or "").strip() in ("", "true", "True")
+        spec_post_trivial = (spec.postcondition or "").strip() in ("", "true", "True")
+        fp = counterexample.failing_property or ""
+        trace_text = " ".join(getattr(counterexample, "trace", None) or [])
+        if (
+            spec_pre_trivial and spec_post_trivial
+            and fp.startswith("check_")
+            and "postcondition violated" in trace_text
+        ):
+            cause = "vacuous-spec postcondition-violation (no user postcondition; assertion is intrinsic harness wrapper)"
+            logger.info(
+                "Pre-classifier artifact filter: '%s' -- %s",
+                func_name, cause,
+            )
+            return ValidationResult(
+                outcome=CExOutcome.SPURIOUS,
+                function_name=func_name,
+                counterexample=counterexample,
+                caller_path=[],
+                system_entry_input="",
+                refinement_history=[],
+                final_precondition=spec.precondition,
+                reasoning=f"Pre-classifier artifact filter: {cause}.",
+                over_refinement_rejected=False,
+                system_entry_reached=False,
+            )
+
         # Pre-classifier witness-pattern check (proactive perf + cost cut).
         # If the witness obviously matches a known model-artifact pattern
         # (library-init globals NULL, path-divergent unwind), skip the

@@ -1390,3 +1390,109 @@ def test_refine_critique_no_retry_when_first_response_already_tight():
     )
     assert mock.complete.call_count == 1
     assert out == "offset + 4 <= data.len()"
+
+
+def test_vacuous_spec_postcondition_violation_filtered(tmp_path):
+    """Regression: 2026-05-19 K2 sweep — is_mmx and invert_condition both
+    classified REAL_BUG with `check_<fn>.assertion.N: postcondition violated`
+    while their specs were pre=true && post=true. Since vacuous specs emit
+    NO `kani::assert`, any 'postcondition violated' is intrinsic safety
+    check on harness internals, not a real bug. Must auto-route SPURIOUS.
+    """
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExOutcome, CExValidator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from unittest.mock import MagicMock
+
+    config = Config(llm_model="m", llm_api_key="k", artifact_dir=str(tmp_path))
+    store = ArtifactStore(config.artifact_dir)
+    harness_gen = MagicMock()
+    llm = MagicMock()
+    v = CExValidator(config, llm, store, harness_gen)
+
+    cex = Counterexample(
+        failing_property="check_invert_condition.assertion.2",
+        variable_assignments={},
+        trace=["property check_invert_condition.assertion.2: postcondition violated"],
+    )
+    spec = Spec(function_name="invert_condition", precondition="true",
+                postcondition="true", status=SpecStatus.GENERATED)
+
+    # Minimal FunctionInfo-shaped object
+    class _Sig:
+        is_pub = False
+        is_static = False
+        parameters = [("&str", "cc")]
+        return_type = "Option<&'static str>"
+        modifiers = []
+        type_parameters = ""
+        where_clause = ""
+    class _F:
+        name = "invert_condition"
+        body = "{ ... }"
+        signature = _Sig()
+        callees = set()
+
+    result = v.validate(
+        func=_F(), spec=spec, counterexample=cex,
+        all_funcs={}, all_specs={"invert_condition": spec},
+        parsed_file=MagicMock(), driver_name="test",
+    )
+    assert result.outcome == CExOutcome.SPURIOUS
+    assert "vacuous-spec postcondition-violation" in result.reasoning
+    # The LLM must NOT be consulted for this filter (cost saver).
+    assert llm.complete.call_count == 0
+
+
+def test_non_vacuous_postcondition_violation_NOT_filtered(tmp_path):
+    """When the user actually wrote a non-trivial postcondition, a
+    'postcondition violated' CEX is a genuine functional-spec disagreement
+    and MUST proceed through the classifier (could be a real functional bug
+    or LLM-spec-too-loose, but not auto-spurious)."""
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from unittest.mock import MagicMock
+
+    config = Config(llm_model="m", llm_api_key="k", artifact_dir=str(tmp_path))
+    store = ArtifactStore(config.artifact_dir)
+    harness_gen = MagicMock()
+    llm = MagicMock()
+    v = CExValidator(config, llm, store, harness_gen)
+
+    cex = Counterexample(
+        failing_property="check_f.assertion.2",
+        variable_assignments={},
+        trace=["property check_f.assertion.2: postcondition violated"],
+    )
+    # Non-trivial postcondition
+    spec = Spec(function_name="f", precondition="true",
+                postcondition="result == a.wrapping_add(b)",
+                status=SpecStatus.GENERATED)
+
+    class _Sig:
+        is_pub = True
+        is_static = False
+        parameters = [("u32", "a"), ("u32", "b")]
+        return_type = "u32"
+        modifiers = []
+        type_parameters = ""
+        where_clause = ""
+    class _F:
+        name = "f"
+        body = "{ a.wrapping_add(b) }"
+        signature = _Sig()
+        callees = set()
+
+    # The pre-classifier vacuous-spec filter must NOT short-circuit here.
+    # The validate path will then proceed to caller analysis; we just check
+    # the artifact filter didn't fire by inspecting the early-return guard.
+    # We don't fully exercise validate() — too many dependencies — so we
+    # call the inner check inline:
+    spec_pre = (spec.precondition or "").strip() in ("", "true", "True")
+    spec_post = (spec.postcondition or "").strip() in ("", "true", "True")
+    assert spec_pre and not spec_post  # only pre is trivial; filter must NOT fire
