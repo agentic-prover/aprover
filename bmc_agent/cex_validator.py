@@ -1329,7 +1329,16 @@ class CExValidator:
         caller_reachable_states: str,
         iteration: int,
     ) -> str:
-        """Use LLM to generate a tightened precondition."""
+        """Use LLM to generate a tightened precondition.
+
+        If the first response is unchanged (or empty), and we are on the
+        openai/K2 path, re-prompt the model with self-critique. Same pattern
+        as the Phase 1 vacuous-spec critique: reasoning models on K2 routinely
+        default to "no change" / "true" when asked to refine, which stalls
+        the refinement loop at iteration 1 and produces a SPURIOUS verdict
+        with empty refinement_history. Critique converts that quiet stall
+        into a second attempt anchored on the CEX state.
+        """
         state_str = ", ".join(
             f"{k} = {v}"
             for k, v in spurious_state.variable_assignments.items()
@@ -1344,19 +1353,97 @@ class CExValidator:
             iteration=iteration + 1,
         )
 
-        try:
-            response = self.llm.complete(system_prompt, user_prompt)
-            data = _parse_json_response(response)
-            if data is not None:
-                refined = data.get("refined_precondition", "").strip()
-                if refined:
-                    logger.debug("LLM refined precondition: %s", refined[:80])
-                    return refined
-        except LLMError as exc:
-            logger.warning("LLM refinement failed: %s", exc)
-
+        refined = self._refine_call_with_critique(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            original_precondition=original_spec.precondition,
+            spurious_state=state_str,
+            caller_reachable_states=caller_reachable_states,
+        )
+        if refined:
+            logger.debug("LLM refined precondition: %s", refined[:80])
+            return refined
         # Fallback: return original unchanged
         return original_spec.precondition
+
+    def _refine_call_with_critique(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        original_precondition: str,
+        spurious_state: str,
+        caller_reachable_states: str,
+    ) -> str:
+        """One refinement call, with a vacuous-output critique retry on K2."""
+        try:
+            response = self.llm.complete(system_prompt, user_prompt)
+        except LLMError as exc:
+            logger.warning("LLM refinement failed: %s", exc)
+            return ""
+        data = _parse_json_response(response)
+        first = (data or {}).get("refined_precondition", "").strip() if data else ""
+
+        # Did the model produce any meaningful change?
+        first_stripped = (first or "").strip()
+        orig_stripped = (original_precondition or "").strip()
+        vacuous = (
+            not first_stripped
+            or first_stripped == orig_stripped
+            or first_stripped in ("true", "True")
+        )
+        if not vacuous:
+            return first
+
+        # Provider gate: only critique on the openai/K2 path; Claude rarely
+        # stalls on refinement, so the extra call would just double cost.
+        provider = (
+            self.config.resolved_provider()
+            if hasattr(self.config, "resolved_provider") else "anthropic"
+        )
+        if provider != "openai":
+            return first
+
+        critique = (
+            "You returned the same precondition as the original (no change). That stalls\n"
+            "the refinement loop. The original spec admits the SPURIOUS counterexample\n"
+            "state below, which means at least one parameter combination satisfies the\n"
+            "precondition but no real caller produces it. Your job: tighten the\n"
+            "precondition so that combination is excluded WITHOUT excluding the legitimate\n"
+            "caller states.\n\n"
+            f"  original precondition: {original_precondition}\n"
+            f"  spurious CEX state:    {spurious_state or '(empty — Kani gave no concrete values)'}\n"
+            f"  callers reach states:  {caller_reachable_states}\n\n"
+            "Propose ONE concrete clause to AND into the precondition. Examples of\n"
+            "useful clauses for structural-panic CEXs:\n"
+            "  * `pos < buf.len()`            — slice OOB\n"
+            "  * `offset + N <= data.len()`   — multi-byte read OOB\n"
+            "  * `align.is_power_of_two()`    — alignment helpers\n"
+            "  * `n <= slice.len()`           — n/len mismatch\n"
+            "  * `denom != 0`                 — divide-by-zero\n"
+            "  * `val.checked_add(off).is_some()` — overflow add\n\n"
+            "Output ONLY a JSON object with a single `refined_precondition` field. The\n"
+            "value MUST be a valid Rust/C boolean expression DIFFERENT from the original."
+        )
+        try:
+            critique_response = self.llm.complete(
+                system_prompt, critique, max_tokens=32768,
+            )
+        except LLMError as exc:
+            logger.debug("Refinement critique LLM call failed: %s -- using original", exc)
+            return first
+        cdata = _parse_json_response(critique_response)
+        if cdata is None:
+            logger.debug("Refinement critique produced unparseable response")
+            return first
+        second = (cdata.get("refined_precondition") or "").strip()
+        if not second or second == orig_stripped or second in ("true", "True"):
+            logger.debug("Refinement critique still vacuous -- accepting stall")
+            return first
+        logger.info(
+            "Refinement critique upgraded precondition: %s",
+            second[:80],
+        )
+        return second
 
     def _check_over_refinement_with_cbmc(
         self,

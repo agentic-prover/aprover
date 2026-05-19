@@ -1293,3 +1293,100 @@ def test_non_unwind_not_suppressed(tmp_path: Path):
             )
 
     assert "loop-bound artifact suppressed" not in result.reasoning
+
+
+# ---------------------------------------------------------------------------
+# Refinement-loop vacuous-critique pass (K2 / openai provider)
+# ---------------------------------------------------------------------------
+
+def _make_validator_for_refinement(provider="openai", responses=None):
+    """Build a CExValidator with a mocked LLMClient returning *responses* in order."""
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
+    from bmc_agent.cex_validator import CExValidator
+    from unittest.mock import MagicMock
+    import tempfile
+
+    config = Config(
+        llm_model="mock",
+        llm_api_key="mock",
+        llm_provider=provider,
+        artifact_dir=tempfile.mkdtemp(),
+    )
+    store = ArtifactStore(config.artifact_dir)
+    mock_llm = MagicMock()
+    if responses:
+        mock_llm.complete = MagicMock(side_effect=list(responses))
+    else:
+        mock_llm.complete = MagicMock(return_value="")
+    # harness_gen only matters for the over-refinement CBMC guard, which the
+    # critique-pass tests don't exercise; a mock satisfies the constructor.
+    harness_gen = MagicMock()
+    return CExValidator(config, mock_llm, store, harness_gen), mock_llm
+
+
+def test_refine_critique_skips_anthropic():
+    """Anthropic path: never run the second critique call even on stalled refinement."""
+    import json as _json
+    same = _json.dumps({"refined_precondition": "true"})
+    v, mock = _make_validator_for_refinement(provider="anthropic", responses=[same])
+    out = v._refine_call_with_critique(
+        system_prompt="s",
+        user_prompt="u",
+        original_precondition="true",
+        spurious_state="",
+        caller_reachable_states="(none)",
+    )
+    # First call returned 'true' (same as original); since anthropic, no retry.
+    assert mock.complete.call_count == 1
+    assert out == "true"
+
+
+def test_refine_critique_fires_on_openai_stall():
+    """openai path: second call fires when refinement returns same precondition."""
+    import json as _json
+    same = _json.dumps({"refined_precondition": "true"})
+    better = _json.dumps({"refined_precondition": "pos < buf.len()"})
+    v, mock = _make_validator_for_refinement(provider="openai", responses=[same, better])
+    out = v._refine_call_with_critique(
+        system_prompt="s",
+        user_prompt="u",
+        original_precondition="true",
+        spurious_state="pos = 10, buf.len() = 4",
+        caller_reachable_states="caller: pos < buf.len()",
+    )
+    assert mock.complete.call_count == 2
+    assert out == "pos < buf.len()"
+
+
+def test_refine_critique_accepts_stall_when_second_also_vacuous(tmp_path):
+    """If K2 returns the same precondition twice, accept the stall."""
+    import json as _json
+    same1 = _json.dumps({"refined_precondition": "true"})
+    same2 = _json.dumps({"refined_precondition": "true"})
+    v, mock = _make_validator_for_refinement(provider="openai", responses=[same1, same2])
+    out = v._refine_call_with_critique(
+        system_prompt="s",
+        user_prompt="u",
+        original_precondition="true",
+        spurious_state="",
+        caller_reachable_states="(none)",
+    )
+    assert mock.complete.call_count == 2
+    assert out == "true"
+
+
+def test_refine_critique_no_retry_when_first_response_already_tight():
+    """When the first refinement IS substantive, no critique call fires."""
+    import json as _json
+    rich = _json.dumps({"refined_precondition": "offset + 4 <= data.len()"})
+    v, mock = _make_validator_for_refinement(provider="openai", responses=[rich])
+    out = v._refine_call_with_critique(
+        system_prompt="s",
+        user_prompt="u",
+        original_precondition="true",
+        spurious_state="offset = usize::MAX, data.len() = 8",
+        caller_reachable_states="(none)",
+    )
+    assert mock.complete.call_count == 1
+    assert out == "offset + 4 <= data.len()"
