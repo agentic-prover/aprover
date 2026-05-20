@@ -55,3 +55,6 @@ amc.log
 # Env
 .env
 examples/vibeos/repo/
+
+# Probed candidate crates (cloned to project root by exploration scripts)
+/iddqd
