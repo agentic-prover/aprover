@@ -397,6 +397,16 @@ def _parse_kani_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
     """
     has_success = bool(_VERDICT_SUCCESS_RE.search(raw))
     has_failure = bool(_VERDICT_FAILED_RE.search(raw))
+    # cargo-mode "no harnesses matched" diagnostic: cargo kani built the
+    # crate but the --harness filter didn't find the proof (could be the
+    # harness function has a type error and was skipped, or the cfg(kani)
+    # didn't expose it). Surface as a distinguishable error so callers
+    # don't misclassify as compile-fail or transient.
+    if "no harnesses matched" in raw or "No proof harnesses" in raw:
+        return CBMCResult(
+            verified=False, raw_output=raw,
+            error="cargo-kani: harness not discovered (check harness body for type errors or cfg gating)",
+        )
 
     if not has_success and not has_failure:
         # No verdict at all → treat as error and surface stderr.
