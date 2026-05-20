@@ -1345,3 +1345,28 @@ def test_param_init_block_str_ref_still_dedicated():
     lines = _param_init_block("&str", "s", slice_bound=2)
     src = "\n".join(lines)
     assert "std::str::from_utf8" in src
+
+
+def test_rewrite_implications_top_level_no_parens():
+    """`A ==> B` at top level (no enclosing parens) should still rewrite,
+    not leak the raw ==> into Rust source. Concrete arrayvec
+    raw_ptr_add case had this shape."""
+    from bmc_agent.backends.kani_backend import _rewrite_implications
+    out = _rewrite_implications("a > 0 ==> b < 10")
+    assert "==>" not in out
+    assert "!(a > 0)" in out
+    assert "(b < 10)" in out
+
+
+def test_rewrite_implications_chained_top_level():
+    """Two top-level implications joined by &&."""
+    from bmc_agent.backends.kani_backend import _rewrite_implications
+    out = _rewrite_implications("a == 0 ==> b > 5 && c != 0 ==> d < 10")
+    assert "==>" not in out
+
+
+def test_rewrite_implications_already_wrapped():
+    """An expression that already has the (A ==> B) shape is unchanged."""
+    from bmc_agent.backends.kani_backend import _rewrite_implications
+    out = _rewrite_implications("(a > 0 ==> b < 10)")
+    assert out == "(!(a > 0) || (b < 10))"

@@ -685,11 +685,41 @@ def _rewrite_implications(expr: str) -> str:
     the matching outer parens with explicit depth tracking, rather than
     relying on a regex (which cannot recognise paren-balanced grammars).
 
-    Each occurrence of ``==>`` must lie inside a paren-balanced
-    enclosing group; otherwise the original expression is returned
-    unchanged so the user sees the LLM-emitted form in the Kani error
-    rather than silent corruption.
+    If a top-level ``==>`` has no enclosing parens (e.g. the LLM emits
+    ``A ==> B && C ==> D`` at the outermost expression scope), we wrap
+    the whole expression in parens once so the algorithm can proceed.
+    Concrete example we observed: arrayvec's raw_ptr_add spec emitted
+    ``mem::size_of::<T>() == 0 ==> (...) && mem::size_of::<T>() != 0
+    ==> (...)`` at top level. Previously the rewriter bailed out and the
+    raw ``==>`` token leaked into Kani.
+
+    Each ``==>`` is then rewritten in place; nested implications are
+    handled by iteration.
     """
+    if "==>" not in expr:
+        return expr
+
+    # Auto-wrap the expression in parens if any top-level ==> is not
+    # already inside an enclosing pair (only need to wrap once: nested
+    # implications get their own enclosing group from the rewriter as
+    # it processes outer ones).
+    def _has_unbracketed_implication(s: str) -> bool:
+        depth = 0
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif depth == 0 and s[i:i+3] == "==>":
+                return True
+            i += 1
+        return False
+
+    if _has_unbracketed_implication(expr):
+        expr = f"({expr})"
+
     while True:
         idx = expr.find("==>")
         if idx == -1:
