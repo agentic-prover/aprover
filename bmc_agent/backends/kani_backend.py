@@ -1444,11 +1444,21 @@ class KaniBackend(BMCBackend):
         # harness body we need to substitute the impl type.
         if impl_type and "Self" in return_type:
             return_type = return_type.replace("Self", impl_type)
+        # `unsafe fn` requires the call site to be in an `unsafe` block.
+        # Examples we observed: llm.rs declares `pub unsafe fn
+        # attention_forward(...)`; without wrapping, rustc emits E0133.
+        is_unsafe_fn = "unsafe" in (getattr(func.signature, "modifiers", []) or [])
         if return_type in ("", "()"):
-            call_line = f"    {call_target}({call_args});"
+            if is_unsafe_fn:
+                call_line = f"    unsafe {{ {call_target}({call_args}); }}"
+            else:
+                call_line = f"    {call_target}({call_args});"
             result_binding = ""
         else:
-            call_line = f"    let result: {return_type} = {call_target}({call_args});"
+            if is_unsafe_fn:
+                call_line = f"    let result: {return_type} = unsafe {{ {call_target}({call_args}) }};"
+            else:
+                call_line = f"    let result: {return_type} = {call_target}({call_args});"
             result_binding = "result"
 
         # 4. Postcondition → kani::assert.  Functional specs may reference
