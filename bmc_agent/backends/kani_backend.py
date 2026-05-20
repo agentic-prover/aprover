@@ -973,8 +973,12 @@ def _strip_crate_local_use_statements(source: str) -> str:
     whole statement up to the terminating ``;``.
     """
     import re as _re
+    # Match `use crate::...;`, `pub use crate::...;`, `pub(crate) use crate::...;`,
+    # `pub(super) use ...;`, etc. The visibility modifier is optional and may
+    # include a parenthesised qualifier. ``[^;]*`` with DOTALL handles the
+    # multi-line ``{...}`` import-list form.
     pattern = _re.compile(
-        r"^[ \t]*(?:pub\s+)?use\s+(?:crate|super|self)\s*::"
+        r"^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+(?:crate|super|self)\s*::"
         r"[^;]*;[ \t]*$",
         _re.MULTILINE | _re.DOTALL,
     )
