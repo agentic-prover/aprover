@@ -234,7 +234,16 @@ def run_kani_cargo(
             return CBMCResult(verified=False, error=f"cargo kani OS error: {exc}")
         raw = proc.stdout or ""
         stderr = proc.stderr or ""
-        return _parse_kani_output(raw, stderr, proc.returncode)
+        result = _parse_kani_output(raw, stderr, proc.returncode)
+        # When cargo-mode fails to even compile the crate, _parse_kani_output
+        # only sees "could not compile due to N errors" on stdout. The real
+        # rustc E0XXX errors are on stderr. Surface them in the error field
+        # so downstream debug knows it's a crate-incompatible-with-kani
+        # situation, not a harness-generation bug.
+        if not result.verified and not result.counterexamples:
+            err_combined = (result.error or "") + "\n--- stderr ---\n" + stderr[-3000:]
+            result.error = err_combined.strip()[:5000]
+        return result
     finally:
         # Always restore -- atomic write to avoid partial-restore on
         # crash during recovery itself.
