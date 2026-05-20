@@ -1224,10 +1224,54 @@ class CExValidator:
 
             if not is_safe:
                 logger.warning(
-                    "Over-refinement detected at iteration %d — rejecting refinement "
-                    "and marking as real bug",
+                    "Over-refinement detected at iteration %d — rejecting refinement",
                     iteration,
                 )
+                # Choose the safe fallback outcome by what kind of CEX this is:
+                # * STRUCTURAL panic (slice OOB, overflow, unwrap_failed, …):
+                #   the function genuinely can panic on the spurious input -- the
+                #   over-refinement guard rejecting our tightening means the body
+                #   has a real exploit shape we just can't tightly constrain. Keep
+                #   the existing REAL_BUG verdict (under security; LATENT under
+                #   safety) so the finding isn't lost.
+                # * POSTCONDITION violation (`check_<fn>.assertion`, trace =
+                #   "postcondition violated"): the LLM's functional spec is the
+                #   thing being violated, not the function's own safety check.
+                #   When the over-refinement guard rejects our tightening, the
+                #   most likely explanation is that the SPEC is over-strict --
+                #   the function is correct but the LLM-generated postcondition
+                #   misses a legitimate edge case. Downgrade to SPURIOUS. Live
+                #   hybrid CCC sweep produced three such false positives in the
+                #   first 80 files (peephole::xreg_name with contradictory
+                #   clauses, asm_expr::char_escape_value with over-narrow result
+                #   range, asm_preprocess::split_field_on_whitespace missing the
+                #   all-whitespace case) -- all genuinely correct functions.
+                is_panic = _is_structural_panic(
+                    counterexample.failing_property,
+                    getattr(counterexample, "trace", None),
+                )
+                is_post_violation = (
+                    counterexample.failing_property or ""
+                ).startswith("check_") and "postcondition violated" in " ".join(
+                    getattr(counterexample, "trace", None) or []
+                )
+
+                if is_post_violation and not is_panic:
+                    fallback_outcome = CExOutcome.SPURIOUS
+                    reasoning = (
+                        f"Over-refinement guard rejected at iteration {iteration + 1}: "
+                        "would exclude legitimate caller states. Failing property is a "
+                        "postcondition violation (not a structural panic), so the most "
+                        "likely cause is an over-strict LLM-generated functional spec "
+                        "rather than a real function bug. Classifying SPURIOUS."
+                    )
+                else:
+                    fallback_outcome = CExOutcome.REAL_BUG
+                    reasoning = (
+                        f"Refinement was over-restrictive at iteration {iteration + 1} "
+                        "— would exclude states that callers can actually produce. "
+                        "Failing property is a structural panic; treating as real bug to be safe."
+                    )
                 over_result = ValidationResult(
                     function_name=func_name,
                     counterexample=counterexample,
@@ -1235,12 +1279,8 @@ class CExValidator:
                     system_entry_input=None,
                     refinement_history=refinement_history,
                     final_precondition=None,
-                    reasoning=(
-                        f"Refinement was over-restrictive at iteration {iteration + 1} "
-                        "— would exclude states that callers can actually produce. "
-                        "Treating as real bug to be safe."
-                    ),
-                    outcome=CExOutcome.REAL_BUG,
+                    reasoning=reasoning,
+                    outcome=fallback_outcome,
                     over_refinement_rejected=True,
                 )
                 # Note: over-refinement case doesn't have access to all_funcs/all_specs

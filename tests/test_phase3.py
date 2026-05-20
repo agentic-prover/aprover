@@ -1496,3 +1496,34 @@ def test_non_vacuous_postcondition_violation_NOT_filtered(tmp_path):
     spec_pre = (spec.precondition or "").strip() in ("", "true", "True")
     spec_post = (spec.postcondition or "").strip() in ("", "true", "True")
     assert spec_pre and not spec_post  # only pre is trivial; filter must NOT fire
+
+
+def test_over_refinement_postcondition_violation_routes_to_spurious(tmp_path):
+    """Regression: 2026-05-20 hybrid sweep produced 3 over-refinement-rejected
+    REAL_BUG verdicts (xreg_name, char_escape_value, split_field_on_whitespace),
+    each on a `check_<fn>.assertion: postcondition violated` CEX. All three
+    functions were correct; the LLM-generated postcondition was over-strict.
+    When the over-refinement guard rejects a tightening on a post-violation
+    CEX (not a structural panic), the safe fallback is SPURIOUS, not REAL_BUG.
+    """
+    from bmc_agent.cex_validator import _is_structural_panic
+    # Sanity: post-violation traces do NOT match structural-panic markers.
+    assert _is_structural_panic(
+        "check_xreg_name.assertion.3",
+        ["property check_xreg_name.assertion.3: postcondition violated"],
+    ) is False
+    # And the property/trace combo IS a postcondition violation.
+    fp = "check_xreg_name.assertion.3"
+    trace = "property check_xreg_name.assertion.3: postcondition violated"
+    assert fp.startswith("check_") and "postcondition violated" in trace
+
+
+def test_over_refinement_structural_panic_stays_real_bug(tmp_path):
+    """Negative regression: when the CEX is an actual structural panic
+    (slice OOB, overflow), over-refinement rejection MUST keep REAL_BUG
+    -- those are the bugs we don't want to lose to the new SPURIOUS path."""
+    from bmc_agent.cex_validator import _is_structural_panic
+    assert _is_structural_panic(
+        "read_u32.assertion.7",
+        ["property read_u32.assertion.7: index out of bounds: ..."],
+    ) is True
