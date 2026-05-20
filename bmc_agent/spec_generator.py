@@ -352,7 +352,11 @@ def _relax_postcondition_for_error_paths(post: str, body: str, func_name: str) -
     return softened
 
 
-def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[str, str]]:
+def _parse_llm_spec_response(
+    response: str,
+    func_name: str,
+    simple_specs: bool = False,
+) -> Optional[tuple[str, str]]:
     """
     Parse LLM JSON response into (precondition, postcondition).
 
@@ -361,6 +365,17 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
     SHOULD compute, not just what makes it safe), AND it into the
     postcondition so existing harness gen, classification, and refinement
     paths consume it without any further changes.
+
+    When ``simple_specs`` is True (cargo-mode default), the ``functional_spec``
+    field is dropped entirely. Rationale: Claude routinely emits functional
+    specs as nested ``iter().fold(...).wrapping_mul(...)`` reference-
+    equivalence expressions that compile fine but cause Kani's SMT solver
+    to hang for minutes on trivial functions. Verified manually on
+    adler::adler32_slice: full spec → cargo kani hangs >60s; simplified
+    spec → 1.3s verify of 482 properties. The remaining defensive checks
+    (pre constrains inputs, post bounds the result range) still catch the
+    important bug classes (slice OOB, overflow), they just don't try to
+    prove algorithmic equivalence.
 
     Returns None if parsing fails.
     """
@@ -408,7 +423,9 @@ def _parse_llm_spec_response(response: str, func_name: str) -> Optional[tuple[st
         # Optional functional spec (Phase 1). LLM may either omit the field,
         # leave it empty, or set it to "true" when no useful functional
         # property is derivable. Skip in all those cases.
-        functional = (data.get("functional_spec") or "").strip()
+        # In simple_specs mode (cargo-mode), drop functional specs entirely
+        # to avoid Kani SMT-solver hangs on iter().fold-style expressions.
+        functional = "" if simple_specs else (data.get("functional_spec") or "").strip()
         # Earlier we blanket-dropped any spec containing ``old(...)``
         # because the Kani harness couldn't see pre-call state. The
         # backend now snapshots ``old(EXPR)`` into ``_pre_N`` bindings
@@ -638,7 +655,7 @@ class SpecGenerator:
         response = self.llm.complete(
             self._spec_system_prompt, user_prompt, role="spec_gen",
         )
-        first = _parse_llm_spec_response(response, func.name)
+        first = _parse_llm_spec_response(response, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         if first is None:
             return None
         pre, post = first
@@ -699,7 +716,7 @@ class SpecGenerator:
             )
             return first
 
-        second = _parse_llm_spec_response(critique_response, func.name)
+        second = _parse_llm_spec_response(critique_response, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         if second is None:
             logger.debug(
                 "Vacuous-spec critique produced unparseable response for '%s' -- keeping first",
@@ -1146,7 +1163,7 @@ class SpecGenerator:
             response = self.llm.complete(
                 self._spec_system_prompt, user_prompt, role="spec_gen",
             )
-            result = _parse_llm_spec_response(response, callee_name)
+            result = _parse_llm_spec_response(response, callee_name, simple_specs=getattr(self.config, 'simple_specs', False))
             if result is not None:
                 pre, post = result
                 return Spec(
@@ -1208,7 +1225,7 @@ class SpecGenerator:
             response_a = self.llm.complete(
                 self._spec_system_prompt, user_prompt_a, role="spec_gen",
             )
-            result_a = _parse_llm_spec_response(response_a, func.name)
+            result_a = _parse_llm_spec_response(response_a, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         except Exception:
             result_a = None
 
@@ -1221,7 +1238,7 @@ class SpecGenerator:
             response_b = self.llm.complete(
                 self._spec_system_prompt, user_prompt_b, role="spec_gen",
             )
-            result_b = _parse_llm_spec_response(response_b, func.name)
+            result_b = _parse_llm_spec_response(response_b, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         except Exception:
             result_b = None
 

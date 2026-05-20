@@ -146,6 +146,40 @@ def _extract_harness_proof_block(harness_src: str) -> str:
     return block.rstrip() + "\n"
 
 
+def _acquire_crate_lock(crate_root: "Path"):
+    """fcntl flock on `<crate_root>/.bmc_agent.lock` so only one cargo-kani
+    runs against a crate at a time, regardless of how many bmc-agent
+    processes are active. Returns the open file handle (which the caller
+    keeps until done) or None on platforms without fcntl.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return None  # Windows
+    lock_path = crate_root / ".bmc_agent.lock"
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def _release_crate_lock(fh) -> None:
+    if fh is None:
+        return
+    try:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        fh.close()
+    except Exception:
+        pass
+
+
 def run_kani_cargo(
     crate_root: str | Path,
     source_path: str | Path,
@@ -214,6 +248,7 @@ def run_kani_cargo(
     sentinel_start = f"\n// === bmc_agent cargo-kani harness {harness_name} -- DO NOT EDIT ===\n"
     sentinel_end = f"\n// === end bmc_agent harness {harness_name} ===\n"
     appended = original_bytes + sentinel_start.encode() + proof_block.encode() + sentinel_end.encode()
+    crate_lock = _acquire_crate_lock(crate_root)
     try:
         source_path.write_bytes(appended)
         try:
@@ -247,6 +282,7 @@ def run_kani_cargo(
         # Restore. Prefer `git checkout -- .` (handles the whole repo,
         # including any files our cleanup-on-startup touched). Fall back
         # to byte-level rewrite if not a git repo.
+        _release_crate_lock(crate_lock)
         if use_git:
             try:
                 _sub2.run(

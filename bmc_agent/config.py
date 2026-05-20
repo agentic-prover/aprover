@@ -164,6 +164,16 @@ class Config:
     # cargo kani is invoked from the crate root, and the file is removed
     # after verification.
     kani_real_crate: bool = False
+    # Simplify Phase 1 specs to maximise Kani solver tractability.
+    # When True, the spec parser drops `functional_spec` (which Claude often
+    # emits as nested iter().fold(...) reference-equivalence expressions that
+    # cause Kani's SMT solver to hang at trivial-looking functions). Defensive
+    # panic-class checks (slice OOB, overflow add) remain. This is the right
+    # default in cargo-mode because the harness has to compile + verify
+    # against the whole crate; complex specs blow up the proof obligation
+    # size. Verified manually on adler::adler32_slice: full spec → cargo kani
+    # hangs at 60s; simplified spec → 1.3s verify of 482 properties.
+    simple_specs: bool = False
     # Bound on nondeterministic slice/array length in Kani harnesses. BMC
     # is bounded by construction; this controls how far the verifier
     # explores slice contents and indices. Default 4 keeps runtime small
@@ -291,6 +301,7 @@ class Config:
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),
             kani_slice_bound=int(os.environ.get("BMC_AGENT_KANI_SLICE_BOUND", "4")),
             kani_real_crate=os.environ.get("BMC_AGENT_KANI_REAL_CRATE", "false").lower() == "true",
+            simple_specs=os.environ.get("BMC_AGENT_SIMPLE_SPECS", "false").lower() == "true",
             artifact_dir=os.environ.get("BMC_AGENT_ARTIFACT_DIR", "artifacts"),
             max_spec_retries=int(os.environ.get("BMC_AGENT_MAX_SPEC_RETRIES", "3")),
             max_refinement_iters=int(os.environ.get("BMC_AGENT_MAX_REFINEMENT_ITERS", "5")),
