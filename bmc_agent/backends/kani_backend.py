@@ -1331,6 +1331,14 @@ class KaniBackend(BMCBackend):
         if getattr(self._config, "kani_real_crate", False) and source_path:
             crate_root = find_crate_root(source_path)
             if crate_root is not None and harness_name:
+                # Cargo-mode minimum timeout: cargo kani's compile+Kani-MIR
+                # pass routinely takes 30-90s alone before the SMT phase even
+                # starts. The default 120s often kills the run mid-MIR-compile
+                # on first invocation. Bump to at least 600s for cargo-mode
+                # (the cargo target/ cache makes subsequent runs faster, but
+                # the first one needs the headroom).
+                if timeout_override is None:
+                    timeout = max(timeout, 600)
                 # Append the harness to its function-under-test's source
                 # file so it can access private items, then run cargo kani.
                 # The host crate's compilation context resolves all
