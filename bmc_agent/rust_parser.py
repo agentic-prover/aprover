@@ -62,6 +62,12 @@ class RustFunctionSignature:
     # FunctionSignature so duck-typed consumers don't need to branch on
     # language.
     is_static: bool = False
+    # When the function was extracted from `impl FOO { fn name() {...} }`,
+    # this is the verbatim impl type text ("FOO" or "FOO<T>"). For free
+    # functions and inline-mod functions, empty. Used by the cargo-mode
+    # harness generator to emit `FOO::name(args)` call-site syntax so the
+    # function resolves in the parent module's namespace.
+    impl_type: str = ""
 
 
 @dataclass
@@ -160,7 +166,7 @@ def parse_rust_file(
     call_graph: dict[str, set[str]] = {}
     function_bodies: dict[str, str] = {}
 
-    def _ingest_function(fn_node) -> None:
+    def _ingest_function(fn_node, impl_type: str = "") -> None:
         sig = _extract_signature(fn_node, src_bytes)
         if sig is None:
             return
@@ -178,6 +184,10 @@ def parse_rust_file(
         body_text = _slice(src_bytes, body_node)
         callees: set[str] = set()
         _collect_callees(body_node, callees, src_bytes)
+        # Track the impl type so the cargo-mode harness gen can emit
+        # `<impl_type>::<method>(args)` instead of bare `method(args)`.
+        # For free fns and inline-mod fns this stays empty.
+        sig.impl_type = impl_type
         # If we picked this up from inside an impl block, namespace it so
         # name collisions across impls (e.g. multiple `pub fn new` definitions)
         # don't clobber each other.
@@ -188,6 +198,22 @@ def parse_rust_file(
         function_bodies[name] = body_text
         call_graph[name] = callees
 
+    def _impl_type_text(impl_node) -> str:
+        """Extract the verbatim type text for an `impl FOO {...}` node.
+
+        Tree-sitter exposes the type as the `type` field of impl_item.
+        For ``impl Foo<T> { ... }`` returns ``"Foo<T>"``; for ``impl Trait
+        for Foo`` returns ``"Foo"`` (we want the implementing type, not
+        the trait).
+        """
+        # impl_item structure: `impl [generics] [TRAIT for] TYPE { body }`.
+        # tree-sitter-rust exposes `type` (the implementing type) and
+        # optionally `trait` (the trait being implemented).
+        type_node = impl_node.child_by_field_name("type")
+        if type_node is None:
+            return ""
+        return _slice(src_bytes, type_node).strip()
+
     for top in tree.root_node.children:
         if top.type == "function_item":
             _ingest_function(top)
@@ -196,9 +222,10 @@ def parse_rust_file(
             body = top.child_by_field_name("body")
             if body is None:
                 continue
+            impl_ty = _impl_type_text(top)
             for member in body.named_children:
                 if member.type == "function_item":
-                    _ingest_function(member)
+                    _ingest_function(member, impl_type=impl_ty)
         elif top.type == "mod_item":
             # Inline modules: `mod foo { fn bar() {} }`. Walk one level
             # deeper. Nested modules will be reached on subsequent iterations
@@ -214,9 +241,10 @@ def parse_rust_file(
                     impl_body = member.child_by_field_name("body")
                     if impl_body is None:
                         continue
+                    impl_ty = _impl_type_text(member)
                     for impl_member in impl_body.named_children:
                         if impl_member.type == "function_item":
-                            _ingest_function(impl_member)
+                            _ingest_function(impl_member, impl_type=impl_ty)
 
     return ParsedRustFile(
         path=str(path),

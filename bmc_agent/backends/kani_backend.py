@@ -1183,11 +1183,25 @@ class KaniBackend(BMCBackend):
         #    for non-Copy owned parameters; the postcondition still uses
         #    ``arg_names`` to access the originals.
         call_args = ", ".join(call_args_list)
+        # Cargo-mode: if the function was extracted from `impl Foo { fn name() {...} }`,
+        # qualify the call as `Foo::name(args)` so it resolves in the host
+        # crate's namespace. In standalone mode, the function is inlined as a
+        # free fn so the bare name works. Also rewrite `Self` in the return
+        # type for the same reason.
+        impl_type = getattr(getattr(func, "signature", None), "impl_type", "") or ""
+        if impl_type:
+            call_target = f"{impl_type}::{func.name}"
+        else:
+            call_target = func.name
+        # `Self` in return type only resolves inside an impl. In a free-fn
+        # harness body we need to substitute the impl type.
+        if impl_type and "Self" in return_type:
+            return_type = return_type.replace("Self", impl_type)
         if return_type in ("", "()"):
-            call_line = f"    {func.name}({call_args});"
+            call_line = f"    {call_target}({call_args});"
             result_binding = ""
         else:
-            call_line = f"    let result: {return_type} = {func.name}({call_args});"
+            call_line = f"    let result: {return_type} = {call_target}({call_args});"
             result_binding = "result"
 
         # 4. Postcondition → kani::assert.  Functional specs may reference
