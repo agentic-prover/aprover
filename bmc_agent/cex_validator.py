@@ -591,6 +591,56 @@ class CExValidator:
                 self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
                 return result
 
+            # Entry-fn + Kani harness-wrapper postcondition violation (not a
+            # structural panic) is almost always a bad LLM spec rather than
+            # a real bug. The function doesn't panic on its own (no body
+            # OOB/overflow/null); the only way to "fail" is to violate the
+            # LLM's invented postcondition. If we mark this REAL_BUG we're
+            # claiming the *function* is broken when actually the SPEC is.
+            # Concrete v17 evidence: itoa::u128_ext::mulhi computes
+            # `mulhi(x,y) = upper 128 bits of x*y` correctly, but the LLM
+            # spec said `result == ((x as u128) * (y as u128)) >> 64` --
+            # which truncates u128*u128 to u128 and can't represent the
+            # answer at all. Same with ryu::log10_pow2.
+            #
+            # Detect this specifically as Kani's `check_<fn>.assertion.N`
+            # pattern (with optional `<module>::` prefix), which is exactly
+            # what our harness wrapper generates. Body assertions like
+            # `assertion.<fn>.N` (CBMC-style) stay REAL_BUG -- a body
+            # assertion firing IS a real bug, only the LLM-injected
+            # postcondition is suspect.
+            import re as _re_pp
+            fp = counterexample.failing_property or ""
+            is_kani_harness_postcondition = bool(
+                _re_pp.search(rf"(^|::)check_{_re_pp.escape(func_name)}\.assertion\.\d+$", fp)
+            )
+            is_postcondition_only = (
+                is_kani_harness_postcondition
+                and not _is_structural_panic(
+                    counterexample.failing_property,
+                    getattr(counterexample, "trace", None),
+                )
+            )
+            if is_postcondition_only:
+                return ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[func_name],
+                    system_entry_input=reproducer,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"'{func_name}' is an entry function. The failing "
+                        f"property '{counterexample.failing_property}' is the "
+                        f"harness-injected postcondition, not a structural "
+                        f"Rust panic. With no in-scope callers AND no body "
+                        f"panic, the most likely explanation is an over-/"
+                        f"mis-specified LLM postcondition rather than a real "
+                        f"function bug. Classifying SPURIOUS."
+                    ),
+                    outcome=CExOutcome.SPURIOUS,
+                    system_entry_reached=True,
+                )
             result = ValidationResult(
                 function_name=func_name,
                 counterexample=counterexample,

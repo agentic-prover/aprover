@@ -1535,3 +1535,91 @@ def test_over_refinement_structural_panic_stays_real_bug(tmp_path):
         "read_u32.assertion.7",
         ["property read_u32.assertion.7: index out of bounds: ..."],
     ) is True
+
+
+def test_entry_fn_kani_harness_postcondition_downgrades_to_spurious(tmp_path: Path):
+    """Entry function + Kani check_<fn>.assertion.N CEx that ISN'T a
+    structural panic should classify SPURIOUS, not REAL_BUG.
+
+    Regression: v17 sweep on itoa::mulhi and ryu::log10_pow2 marked them
+    REAL_BUG because the LLM-generated postconditions were wrong but the
+    classifier promoted them on 'entry fn, no callers' alone.
+    """
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator, CExOutcome
+    from bmc_agent.harness_generator import HarnessGenerator
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    from bmc_agent.parser import parse_c_file
+    parsed = parse_c_file(EXAMPLE_C)
+
+    func = _make_func_info("mulhi", callees=set())
+    spec = _make_spec("mulhi")
+    cex = Counterexample(
+        failing_property="u128_ext::check_mulhi.assertion.3",
+        variable_assignments={},
+        trace=["property u128_ext::check_mulhi.assertion.3: postcondition violated"],
+    )
+    mock_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_verified), \
+         patch("shutil.which", return_value="/usr/bin/cbmc"):
+        result = validator.validate(
+            func=func,
+            spec=spec,
+            counterexample=cex,
+            all_funcs={"mulhi": func},
+            all_specs={"mulhi": spec},
+            parsed_file=parsed,
+            driver_name="test_driver",
+        )
+
+    assert result.outcome == CExOutcome.SPURIOUS, \
+        f"expected SPURIOUS, got {result.outcome} -- {result.reasoning[:200]}"
+    assert "postcondition" in result.reasoning.lower() or "spec" in result.reasoning.lower()
+
+
+def test_entry_fn_structural_panic_still_real_bug(tmp_path: Path):
+    """Counterpart sanity: entry fn + a body-level structural panic (e.g.
+    'attempt to add with overflow') is STILL REAL_BUG even with no callers
+    -- only the harness-wrapper postcondition pattern downgrades."""
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator, CExOutcome
+    from bmc_agent.harness_generator import HarnessGenerator
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    from bmc_agent.parser import parse_c_file
+    parsed = parse_c_file(EXAMPLE_C)
+
+    func = _make_func_info("bad_add", callees=set())
+    spec = _make_spec("bad_add")
+    # Body-level overflow assertion, NOT the harness wrapper
+    cex = Counterexample(
+        failing_property="bad_add.overflow.1",
+        variable_assignments={"x": "INT_MAX", "y": "1"},
+        trace=["[bad_add.overflow.1] attempt to add with overflow: FAILURE"],
+    )
+    mock_verified = CBMCResult(verified=True, counterexamples=[], raw_output="")
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_verified), \
+         patch("shutil.which", return_value="/usr/bin/cbmc"):
+        result = validator.validate(
+            func=func,
+            spec=spec,
+            counterexample=cex,
+            all_funcs={"bad_add": func},
+            all_specs={"bad_add": spec},
+            parsed_file=parsed,
+            driver_name="test_driver",
+        )
+
+    assert result.outcome == CExOutcome.REAL_BUG, \
+        f"structural-panic entry fn must stay REAL_BUG, got {result.outcome}"
