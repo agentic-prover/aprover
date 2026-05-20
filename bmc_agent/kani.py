@@ -183,33 +183,32 @@ def run_kani_cargo(
     if not source_path.is_file():
         return CBMCResult(verified=False, error=f"source file not found: {source_path}")
 
-    # Snapshot the original source. The append+restore pattern is atomic
-    # against unexpected exits because we always restore in the finally
-    # block; concurrent appends on the same file (different harnesses on
-    # different functions in the same .rs) are NOT safe — the caller must
-    # serialise per-file in that case.
-    #
-    # Cleanup on startup: strip any leftover bmc_agent sentinel blocks
-    # before snapshotting. Interrupted runs (SIGKILL, OOM, lost ssh) can
-    # leave stale harnesses in the source -- those poison subsequent
-    # cargo compiles for unrelated functions. We strip them so each run
-    # starts from a known-clean source state. Sentinels look like:
-    #   // === bmc_agent cargo-kani harness <NAME> -- DO NOT EDIT ===
-    #   ... proof block ...
-    #   // === end bmc_agent harness <NAME> ===
-    import re as _re
-    raw_bytes = source_path.read_bytes()
-    cleaned_bytes = _re.sub(
-        rb"\n?// === bmc_agent cargo-kani harness [^\n]+ -- DO NOT EDIT ===.*?// === end bmc_agent harness [^\n]+ ===\n?",
-        b"",
-        raw_bytes,
-        flags=_re.DOTALL,
-    )
-    if cleaned_bytes != raw_bytes:
-        # Salvage: write the cleaned bytes to disk so even if THIS run is
-        # interrupted, the next one starts from the cleaned state.
-        source_path.write_bytes(cleaned_bytes)
-    original_bytes = cleaned_bytes
+    # Snapshot + restore strategy: prefer `git checkout` when the crate is
+    # in a git repo (which is the case for everything we clone), because it
+    # handles the FULL repo state — not just the one source file. Stale
+    # appended harnesses in OTHER files (from prior crashed runs) also get
+    # restored. Falls back to byte-level snapshot when the crate is not a
+    # git repo.
+    import shutil as _shutil2
+    import subprocess as _sub2
+    use_git = False
+    if (crate_root / ".git").exists() and _shutil2.which("git"):
+        # Verify git status works (catches submodule weirdness, etc.)
+        st = _sub2.run(
+            ["git", "status", "--porcelain"], cwd=str(crate_root),
+            capture_output=True, text=True, timeout=10,
+        )
+        if st.returncode == 0:
+            use_git = True
+            # Restore any pre-existing modifications before we snapshot --
+            # interrupted prior runs may have left things dirty.
+            _sub2.run(
+                ["git", "checkout", "--", "."], cwd=str(crate_root),
+                capture_output=True, timeout=30,
+            )
+
+    # Re-read after potential git checkout.
+    original_bytes = source_path.read_bytes()
 
     proof_block = _extract_harness_proof_block(harness_src)
     sentinel_start = f"\n// === bmc_agent cargo-kani harness {harness_name} -- DO NOT EDIT ===\n"
@@ -245,17 +244,29 @@ def run_kani_cargo(
             result.error = err_combined.strip()[:5000]
         return result
     finally:
-        # Always restore -- atomic write to avoid partial-restore on
-        # crash during recovery itself.
-        try:
-            source_path.write_bytes(original_bytes)
-        except OSError:
-            # Last-resort warning so the user knows a manual rollback may
-            # be needed; can't raise here (we're in finally).
-            import logging as _logging
-            _logging.getLogger("bmc_agent.kani").error(
-                "Failed to restore %s after cargo-kani run", source_path,
-            )
+        # Restore. Prefer `git checkout -- .` (handles the whole repo,
+        # including any files our cleanup-on-startup touched). Fall back
+        # to byte-level rewrite if not a git repo.
+        if use_git:
+            try:
+                _sub2.run(
+                    ["git", "checkout", "--", "."], cwd=str(crate_root),
+                    capture_output=True, timeout=30,
+                )
+            except Exception:
+                # Last-resort: rewrite the one file we modified.
+                try:
+                    source_path.write_bytes(original_bytes)
+                except OSError:
+                    pass
+        else:
+            try:
+                source_path.write_bytes(original_bytes)
+            except OSError:
+                import logging as _logging
+                _logging.getLogger("bmc_agent.kani").error(
+                    "Failed to restore %s after cargo-kani run", source_path,
+                )
 
 
 # ---------------------------------------------------------------------------
