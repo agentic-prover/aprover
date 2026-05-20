@@ -206,4 +206,4 @@ BMC-Agent is an active research prototype. The pipeline and all confidence tiers
 
 ## License
 
-TBD. Intended to be Apache 2.0 or MIT at release.
+4-clause BSD. See [LICENSE](LICENSE).
