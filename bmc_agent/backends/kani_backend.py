@@ -437,10 +437,60 @@ def _initialiser_for(rust_type: str) -> str:
     )
 
 
+def _scan_pointer_newtypes(crate_root: "Path | str | None") -> dict[str, dict]:
+    """Walk a Rust crate's src tree looking for pointer-newtype wrappers:
+    structs with a single field of pointer type.
+
+    Returns a dict mapping the bare type name (e.g. ``"SendPtr"``) to:
+        {"field": "ptr" | None, "kind": "named" | "tuple", "mut": True|False}
+
+    Used by ``_param_init_block`` to construct nondeterministic instances
+    of crate-local pointer wrappers. Concrete v22 case: llm.rs defines
+    ``pub struct SendPtr<T> { pub ptr: *mut T }`` -- harnesses for fns
+    taking ``SendPtr<f32>`` need to emit
+    ``SendPtr { ptr: kani::any::<usize>() as *mut f32 }``.
+    """
+    import re as _re_n
+    from pathlib import Path as _Path
+    if not crate_root:
+        return {}
+    root = _Path(str(crate_root))
+    if not root.is_dir():
+        return {}
+    out: dict[str, dict] = {}
+    # Named-field form:  struct NAME<T> { pub field: *mut T }
+    rx_named = _re_n.compile(
+        r"\bpub\s+struct\s+([A-Z][A-Za-z0-9_]*)\s*<[^>]+>\s*\{\s*pub\s+(\w+)\s*:\s*\*(mut|const)\s+\w+\s*[,}]",
+        _re_n.MULTILINE,
+    )
+    # Tuple form:  struct NAME<T>(pub *mut T)
+    rx_tuple = _re_n.compile(
+        r"\bpub\s+struct\s+([A-Z][A-Za-z0-9_]*)\s*<[^>]+>\s*\(\s*pub\s+\*(mut|const)\s+\w+",
+        _re_n.MULTILINE,
+    )
+    for f in root.rglob("*.rs"):
+        try:
+            txt = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        for m in rx_named.finditer(txt):
+            name, field, mut = m.group(1), m.group(2), m.group(3)
+            if name in out:
+                continue
+            out[name] = {"field": field, "kind": "named", "mut": mut == "mut"}
+        for m in rx_tuple.finditer(txt):
+            name, mut = m.group(1), m.group(2)
+            if name in out:
+                continue
+            out[name] = {"field": None, "kind": "tuple", "mut": mut == "mut"}
+    return out
+
+
 def _param_init_block(
     rust_type: str,
     name: str,
     slice_bound: int = _DEFAULT_SLICE_BOUND,
+    pointer_newtypes: dict | None = None,
 ) -> list[str]:
     """Return the Kani init statements needed to bind *name* to a
     nondeterministic value of *rust_type*.
@@ -457,6 +507,23 @@ def _param_init_block(
     collide.
     """
     t = rust_type.strip()
+    # Pointer-newtype check FIRST: when t looks like `Foo<X>` and Foo is a
+    # known pointer-newtype in this crate (e.g. SendPtr<f32>), emit the
+    # struct constructor instead of trying to call kani::any::<Foo<X>>()
+    # which would fail unless Foo derives Arbitrary.
+    if pointer_newtypes:
+        import re as _re_pn
+        m = _re_pn.match(r"([A-Z][A-Za-z0-9_]*)\s*<\s*([A-Za-z0-9_:<>, *&]+)\s*>\s*$", t)
+        if m and m.group(1) in pointer_newtypes:
+            tname, inner = m.group(1), m.group(2).strip()
+            info = pointer_newtypes[tname]
+            mut_kw = "mut" if info["mut"] else "const"
+            ptr_expr = f"kani::any::<usize>() as *{mut_kw} {inner}"
+            if info["kind"] == "named":
+                ctor = f"{tname} {{ {info['field']}: {ptr_expr} }}"
+            else:
+                ctor = f"{tname}({ptr_expr})"
+            return [f"    let {name}: {t} = {ctor};"]
     if _is_slice_type(t):
         elem = _slice_element_type(t)
         backing = f"_backing_{name}"
@@ -1314,8 +1381,21 @@ class KaniBackend(BMCBackend):
         init_lines: list[str] = []
         arg_names: list[str] = []  # names visible to postcondition
         call_args_list: list[str] = []  # expressions passed at call site
+        # Discover crate-local pointer-newtype wrappers (e.g. SendPtr<T>
+        # in llm.rs) so we can emit constructors instead of failing on
+        # `kani::any::<SendPtr<f32>>()`.
+        from bmc_agent.kani import find_crate_root as _find_crate_root_pn
+        _crate_root_pn = None
+        if getattr(self._config, "kani_real_crate", False):
+            _src_for_pn = getattr(func, "source_file", "") or ""
+            if _src_for_pn:
+                _crate_root_pn = _find_crate_root_pn(_src_for_pn)
+        _ptr_newtypes = _scan_pointer_newtypes(_crate_root_pn) if _crate_root_pn else {}
         for ty, name in params:
-            init_lines.extend(_param_init_block(ty, name, slice_bound=slice_bound))
+            init_lines.extend(_param_init_block(
+                ty, name, slice_bound=slice_bound,
+                pointer_newtypes=_ptr_newtypes,
+            ))
             arg_names.append(name)
             call_args_list.append(_call_site_expr(ty, name))
 

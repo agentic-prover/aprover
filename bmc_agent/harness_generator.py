@@ -3355,14 +3355,38 @@ class HarnessGenerator:
                 + "\n"
             )
 
+        # Detect if the included source defines its own `main()` (e.g.
+        # karpathy/llm.c's train_gpt2.c is a training PROGRAM, not just a
+        # library — it has a `int main(int argc, char **argv)`). If we
+        # call our harness `main` too, CBMC errors with
+        # "function body 'main' defined twice".
+        # Fix: use a unique harness name and pass --function to CBMC.
+        # When the source has no main (libraries, kernel TUs), keep the
+        # historical `main` name for backwards compatibility with the
+        # VibeOS-era pipeline.
+        try:
+            src_text = Path(func.source_file).read_text(errors="ignore")
+            import re as _re_main
+            has_main = bool(_re_main.search(
+                r"^\s*(?:static\s+|inline\s+)*int\s+main\s*\([^)]*\)\s*\{",
+                src_text, _re_main.MULTILINE,
+            ))
+        except Exception:
+            has_main = False
+        if has_main:
+            harness_entry = f"check_{fn_name}"
+        else:
+            harness_entry = "main"
+
         sections = [
             f"/* Auto-generated CBMC harness (real-libc mode) for: {fn_name} */",
             f"/* Source: {func.source_file} */",
+            f"/* Harness entry: {harness_entry} */",
             "",
             f'#include "{include_target}"',
             "",
             stub_decl_section,
-            "int main(void) {",
+            f"int {harness_entry}(void) {{",
             "\n".join(body_lines),
             "    return 0;",
             "}",

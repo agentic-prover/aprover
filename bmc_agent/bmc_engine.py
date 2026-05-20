@@ -140,6 +140,24 @@ class BMCEngine:
                     ", ".join(flag_selection.enabled_flags()),
                     getattr(flag_selection, "reasoning", ""),
                 )
+            # Extract the harness entry function name from the harness
+            # file header (real-libc mode tags it with `/* Harness entry:
+            # NAME */`). When the source already defines `main`, the
+            # harness uses a different function name and CBMC needs
+            # --function to pick it.
+            harness_entry = None
+            try:
+                with open(harness_path, "r") as _hf:
+                    for _line in _hf:
+                        if "Harness entry:" in _line:
+                            _name = _line.split("Harness entry:", 1)[1].strip().rstrip("*/").strip()
+                            if _name and _name != "main":
+                                harness_entry = _name
+                            break
+                        if not _line.startswith("/*") and "include" in _line:
+                            break  # past the header
+            except Exception:
+                pass
             cbmc_result = run_cbmc(
                 harness_path=harness_path,
                 unwind=self.config.cbmc_unwind,
@@ -158,6 +176,7 @@ class BMCEngine:
                 auto_scale_object_bits=getattr(
                     self.config, "cbmc_auto_scale_object_bits", True
                 ),
+                function=harness_entry,
             )
         else:
             # Rust / Kani path: the backend wraps its own verifier

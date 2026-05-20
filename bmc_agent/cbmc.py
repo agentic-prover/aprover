@@ -70,6 +70,7 @@ def run_cbmc(
     div_by_zero_check: bool = False,
     object_bits: int | None = None,
     auto_scale_object_bits: bool = True,
+    function: str | None = None,
 ) -> CBMCResult:
     """
     Run CBMC on *harness_path* and return a structured result.
@@ -109,6 +110,12 @@ def run_cbmc(
         str(unwind),
         "--unwinding-assertions",
     ]
+    # If the harness function isn't `main`, tell CBMC which one to verify.
+    # Used by real-libc mode when the included source already defines its
+    # own `main()` (e.g. llm.c's train_gpt2.c is a training program, not
+    # a library).
+    if function and function != "main":
+        cmd += ["--function", function]
     if unsigned_overflow_check:
         cmd.append("--unsigned-overflow-check")
     if signed_overflow_check:
