@@ -139,7 +139,7 @@ Return values use `\result`. Arithmetic operators and C comparisons are translat
 
 ## Evaluation — VibeOS
 
-BMC-Agent was evaluated on [VibeOS](https://github.com/notgull/vibeos), a bare-metal ARM64 hobby OS of ~15,000 lines written with substantial LLM assistance. Running `verify-dir` over all 37 kernel modules (675 functions) with all validation tiers enabled confirmed **13 realistic bugs** after the realism filter eliminated 48 unrealistic counterexamples.
+BMC-Agent was evaluated on [VibeOS](https://github.com/kaansenol5/VibeOS/tree/main), a bare-metal ARM64 hobby OS of ~15,000 lines written with substantial LLM assistance. Running `verify-dir` over all 37 kernel modules (675 functions) with all validation tiers enabled confirmed **13 realistic bugs** after the realism filter eliminated 48 unrealistic counterexamples.
 
 | Function | Module | Tier | Signal | Root cause |
 |---|---|---|---|---|
@@ -157,7 +157,7 @@ BMC-Agent was evaluated on [VibeOS](https://github.com/notgull/vibeos), a bare-m
 | `stbtt_GetPackedQuad` | ttf.c | `confirmed_system_entry` | — | Font atlas bounds (realism: uncertain) |
 | `stbtt__csctx_rmove_to` | ttf.c | `confirmed_bmc` | — | CFF charstring NaN→int UB (CFF/OTF fonts only) |
 
-The `calloc` integer overflow (CWE-190, `nmemb * size` wraps to zero) was confirmed in an earlier run and independently cross-validates [VibeOS issue #26](https://github.com/notgull/vibeos/issues/26).
+The `calloc` integer overflow (CWE-190, `nmemb * size` wraps to zero) was confirmed in an earlier run and independently cross-validates [VibeOS issue #26](https://github.com/kaansenol5/VibeOS/issues/26).
 
 ## Examples
 
