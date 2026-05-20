@@ -298,15 +298,38 @@ def _is_slice_type(rust_type: str) -> bool:
 
     Mutable slices (``&mut [T]``) are recognised by the same prefix
     check after stripping ``mut ``.
+
+    Fixed-size array references ``&[T; N]`` are NOT slices -- those
+    contain a size expression after a semicolon inside the brackets.
+    Strip the leading reference + lifetime first to handle the
+    ``&'static [T]`` shape too.
     """
     t = rust_type.strip()
     if t.startswith("&mut "):
         t = t[len("&mut "):].strip()
     elif t.startswith("&"):
         t = t[1:].strip()
+        # Drop a leading lifetime token (e.g. "'static ", "'a ").
+        if t.startswith("'"):
+            sp = t.find(" ")
+            if sp != -1:
+                t = t[sp + 1:].strip()
     else:
         return False
-    return t.startswith("[") and t.endswith("]")
+    if not (t.startswith("[") and t.endswith("]")):
+        return False
+    # Distinguish `[T]` (slice) from `[T; N]` (fixed-size array).
+    # The slice form has NO top-level semicolon between the brackets.
+    inner = t[1:-1]
+    depth = 0
+    for ch in inner:
+        if ch == "<" or ch == "[":
+            depth += 1
+        elif ch == ">" or ch == "]":
+            depth -= 1
+        elif ch == ";" and depth == 0:
+            return False  # fixed-size array, not a slice
+    return True
 
 
 def _slice_element_type(rust_type: str) -> str:
@@ -1238,7 +1261,18 @@ class KaniBackend(BMCBackend):
         # type for the same reason.
         impl_type = getattr(getattr(func, "signature", None), "impl_type", "") or ""
         if impl_type:
-            call_target = f"{impl_type}::{func.name}"
+            # Generic impl types need turbofish syntax for method calls:
+            #   Crc<u8, Table<L>>::new  →  Crc::<u8, Table<L>>::new
+            # without the `::`, rustc parses `<` as a comparison operator
+            # and the harness fails to compile. Detect the generic case
+            # by the presence of `<` in impl_type.
+            if "<" in impl_type:
+                generic_start = impl_type.index("<")
+                base = impl_type[:generic_start]
+                generics = impl_type[generic_start:]
+                call_target = f"{base}::{generics}::{func.name}"
+            else:
+                call_target = f"{impl_type}::{func.name}"
         else:
             call_target = func.name
         # `Self` in return type only resolves inside an impl. In a free-fn
