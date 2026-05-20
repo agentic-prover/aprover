@@ -173,6 +173,13 @@ def parse_rust_file(
         body_node = fn_node.child_by_field_name("body")
         if body_node is None:
             return  # trait fn declaration without body
+        # Skip test functions. `#[test]` and `#[tokio::test]` are wrappers
+        # that only compile under `#[cfg(test)]`. Under `--cfg kani` the
+        # function may not exist (or, when wrapped in `#[cfg(test)] mod`,
+        # is completely absent from the kani build). Generating a harness
+        # for a test function always produces 'harness not discovered'.
+        if _function_is_test(fn_node, src_bytes):
+            return
         # Skip methods that take a self receiver: their bodies reference
         # `self.foo` which we can't harness without constructing an instance
         # of the impl type, and the existing kani harness generator only
@@ -231,6 +238,28 @@ def parse_rust_file(
             # deeper. Nested modules will be reached on subsequent iterations
             # via recursion in the same loop if we recursed -- but to keep
             # behaviour close to the previous parser, stop at one level.
+            #
+            # Skip `#[cfg(test)] mod tests { ... }` and similar test-only
+            # modules: their functions only exist under `--cfg test`, not
+            # under `--cfg kani`. Generating a harness for any function
+            # inside such a module always produces 'harness not discovered'.
+            # tree-sitter attaches `#[..]` attribute_items as PRECEDING
+            # SIBLINGS, not children — walk prev_sibling to find them.
+            _is_test_mod = False
+            _cursor = top.prev_sibling
+            while _cursor is not None:
+                if _cursor.type == "attribute_item":
+                    _txt = _slice(src_bytes, _cursor)
+                    if "cfg(test)" in _txt or "cfg(any(test" in _txt or "cfg(all(test" in _txt:
+                        _is_test_mod = True
+                        break
+                    _cursor = _cursor.prev_sibling
+                elif _cursor.type in ("line_comment", "block_comment", "inner_attribute_item"):
+                    _cursor = _cursor.prev_sibling
+                else:
+                    break
+            if _is_test_mod:
+                continue
             body = top.child_by_field_name("body")
             if body is None:
                 continue
@@ -320,6 +349,36 @@ def _extract_signature(node, src: bytes) -> Optional[RustFunctionSignature]:
         type_parameters=type_parameters,
         where_clause=where_clause,
     )
+
+
+def _function_is_test(fn_node, src: bytes) -> bool:
+    """Return True if the function carries a `#[test]`, `#[tokio::test]`,
+    `#[cfg(test)]`, etc. attribute. Test functions live in the test
+    compilation only and aren't reachable under `--cfg kani`, so
+    generating a harness for them always produces 'harness not
+    discovered'.
+
+    Tree-sitter exposes attributes as `attribute_item` SIBLINGS that
+    precede the `function_item` (not children). Walk back through
+    prev_sibling to collect all directly-preceding attribute_items.
+    Stop at the first non-attribute / line_comment node.
+    """
+    cursor = fn_node.prev_sibling
+    while cursor is not None:
+        if cursor.type == "attribute_item":
+            text = _slice(src, cursor)
+            if "#[test]" in text or "#[tokio::test]" in text or "test_case" in text:
+                return True
+            if "cfg(test)" in text or "cfg(any(test" in text or "cfg(all(test" in text:
+                return True
+            cursor = cursor.prev_sibling
+        elif cursor.type in ("line_comment", "block_comment", "inner_attribute_item"):
+            cursor = cursor.prev_sibling
+        else:
+            # Some other node (a previous fn, struct, etc.) -- no more
+            # attributes on THIS fn. Stop.
+            break
+    return False
 
 
 def _function_has_self_param(fn_node) -> bool:
