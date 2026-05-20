@@ -635,7 +635,9 @@ class SpecGenerator:
         Returns the parsed ``(pre, post)`` pair from whichever attempt
         produced a richer spec, or ``None`` if neither parsed.
         """
-        response = self.llm.complete(self._spec_system_prompt, user_prompt)
+        response = self.llm.complete(
+            self._spec_system_prompt, user_prompt, role="spec_gen",
+        )
         first = _parse_llm_spec_response(response, func.name)
         if first is None:
             return None
@@ -688,6 +690,7 @@ class SpecGenerator:
                 self._spec_system_prompt,
                 critique_prompt,
                 max_tokens=32768,
+                role="spec_gen",
             )
         except LLMError as exc:
             logger.debug(
@@ -1140,7 +1143,9 @@ class SpecGenerator:
         )
 
         try:
-            response = self.llm.complete(self._spec_system_prompt, user_prompt)
+            response = self.llm.complete(
+                self._spec_system_prompt, user_prompt, role="spec_gen",
+            )
             result = _parse_llm_spec_response(response, callee_name)
             if result is not None:
                 pre, post = result
@@ -1200,7 +1205,9 @@ class SpecGenerator:
                 caller_context=caller_context or "No caller context available.",
                 body=func.body,
             )
-            response_a = self.llm.complete(self._spec_system_prompt, user_prompt_a)
+            response_a = self.llm.complete(
+                self._spec_system_prompt, user_prompt_a, role="spec_gen",
+            )
             result_a = _parse_llm_spec_response(response_a, func.name)
         except Exception:
             result_a = None
@@ -1211,7 +1218,9 @@ class SpecGenerator:
                 signature=sig,
                 body=func.body,
             )
-            response_b = self.llm.complete(self._spec_system_prompt, user_prompt_b)
+            response_b = self.llm.complete(
+                self._spec_system_prompt, user_prompt_b, role="spec_gen",
+            )
             result_b = _parse_llm_spec_response(response_b, func.name)
         except Exception:
             result_b = None
@@ -1255,7 +1264,9 @@ class SpecGenerator:
                     pre_a=result_a[0], post_a=result_a[1],
                     pre_b=result_b[0], post_b=result_b[1],
                 )
-                disagree_response = self.llm.complete(self._spec_system_prompt, disagree_prompt)
+                disagree_response = self.llm.complete(
+                    self._spec_system_prompt, disagree_prompt, role="spec_gen",
+                )
                 import json as _json
                 parsed = _json.loads(disagree_response.strip())
                 disagree = bool(parsed.get("disagree", False))

@@ -249,8 +249,14 @@ def learn_from_rejection(
         raw = llm.complete(
             SPEC_SYSTEM_PROMPT,
             prompt,
-            max_tokens=2048,
+            # K2 Think exhausts a 2048 budget on its <think> trace before
+            # emitting the JSON remediation -- live sweep showed 16 of these
+            # calls failing with finish_reason=length. The role="feedback_distill"
+            # tag routes the call to Claude in hybrid mode; bumping max_tokens
+            # also gives K2 enough headroom when hybrid isn't configured.
+            max_tokens=16384,
             thinking=False,
+            role="feedback_distill",
         )
     except LLMError as exc:
         logger.warning(

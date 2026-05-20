@@ -84,6 +84,7 @@ class LLMClient:
         temperature: float = 0.2,
         thinking: bool = False,
         thinking_budget: int = 8000,
+        role: str | None = None,
     ) -> str:
         """
         Send a request to the LLM and return the response text.
@@ -100,12 +101,46 @@ class LLMClient:
             auto-expanded to at least thinking_budget + 1024.
         thinking_budget:
             Token budget for the thinking phase.  Ignored when thinking=False.
+        role:
+            Optional role identifier (e.g. "spec_gen", "feedback_distill") used to
+            select a per-role LLM backend via ``config.llm_role_overrides``. When
+            ``None`` (or the role isn't overridden), the global config is used.
+            Enables hybrid setups: e.g. Claude for spec gen, K2 for refinement.
 
         Raises
         ------
         LLMError
             On permanent failure or missing API key.
         """
+        # Per-role routing. Resolve effective settings for this call -- when the
+        # caller passes a role with an override, we use that backend (model,
+        # base_url, api_key, provider) for THIS one call. Implementation-wise,
+        # we briefly swap the config fields on self.config so the existing
+        # _complete_openai / _complete_anthropic paths see the right settings,
+        # then restore them. This avoids threading per-call settings through
+        # every internal helper.
+        role_settings = self.config.role_settings(role) if role else None
+        saved_settings = None
+        if role_settings and (
+            role_settings.get("model") != self.config.llm_model
+            or role_settings.get("base_url") != self.config.llm_base_url
+            or role_settings.get("api_key") != (self.config.llm_api_key or "")
+            or role_settings.get("provider") != self.config.llm_provider
+        ):
+            saved_settings = {
+                "model": self.config.llm_model,
+                "base_url": self.config.llm_base_url,
+                "api_key": self.config.llm_api_key,
+                "provider": self.config.llm_provider,
+                "client": self._client,
+            }
+            self.config.llm_model = role_settings["model"]
+            self.config.llm_base_url = role_settings["base_url"]
+            self.config.llm_api_key = role_settings["api_key"]
+            self.config.llm_provider = role_settings["provider"]
+            # Force-rebuild the SDK client lazily for the swapped settings.
+            self._client = None
+
         provider = self.config.resolved_provider()
         last_error: Optional[Exception] = None
 
@@ -116,43 +151,52 @@ class LLMClient:
             temperature = 1.0
             max_tokens = max(max_tokens, thinking_budget + 1024)
 
-        for attempt in range(self.config.max_spec_retries):
-            try:
-                if provider == "openai":
-                    # OpenAI-compatible endpoints (K2 Think etc.) ignore the
-                    # Anthropic-only "thinking" knob — many reasoning models
-                    # on this path already emit a <think>...</think> trace
-                    # that _strip_reasoning_blocks() handles transparently.
-                    return self._complete_openai(system_prompt, user_prompt, max_tokens, temperature)
-                return self._complete_anthropic(
-                    system_prompt,
-                    user_prompt,
-                    max_tokens,
-                    temperature,
-                    api_kwargs,
-                )
-            except Exception as exc:
-                last_error = exc
-                cls_name = type(exc).__name__
-                msg = str(exc).lower()
-                transient = any(
-                    tag in cls_name.lower() or tag in msg
-                    for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
-                )
-                if transient:
-                    wait = 2 ** attempt  # 1, 2, 4 seconds
-                    logger.warning(
-                        "LLM transient error (%s); retrying in %ds (attempt %d/%d)",
-                        cls_name,
-                        wait,
-                        attempt + 1,
-                        self.config.max_spec_retries,
+        try:
+            for attempt in range(self.config.max_spec_retries):
+                try:
+                    if provider == "openai":
+                        # OpenAI-compatible endpoints (K2 Think etc.) ignore the
+                        # Anthropic-only "thinking" knob — many reasoning models
+                        # on this path already emit a <think>...</think> trace
+                        # that _strip_reasoning_blocks() handles transparently.
+                        return self._complete_openai(system_prompt, user_prompt, max_tokens, temperature)
+                    return self._complete_anthropic(
+                        system_prompt,
+                        user_prompt,
+                        max_tokens,
+                        temperature,
+                        api_kwargs,
                     )
-                    time.sleep(wait)
-                    continue
-                break
+                except Exception as exc:
+                    last_error = exc
+                    cls_name = type(exc).__name__
+                    msg = str(exc).lower()
+                    transient = any(
+                        tag in cls_name.lower() or tag in msg
+                        for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
+                    )
+                    if transient:
+                        wait = 2 ** attempt  # 1, 2, 4 seconds
+                        logger.warning(
+                            "LLM transient error (%s); retrying in %ds (attempt %d/%d)",
+                            cls_name,
+                            wait,
+                            attempt + 1,
+                            self.config.max_spec_retries,
+                        )
+                        time.sleep(wait)
+                        continue
+                    break
 
-        raise LLMError(f"LLM request failed after {self.config.max_spec_retries} attempts: {last_error}") from last_error
+            raise LLMError(f"LLM request failed after {self.config.max_spec_retries} attempts: {last_error}") from last_error
+        finally:
+            # Restore the original config + client even on exception/return.
+            if saved_settings is not None:
+                self.config.llm_model = saved_settings["model"]
+                self.config.llm_base_url = saved_settings["base_url"]
+                self.config.llm_api_key = saved_settings["api_key"]
+                self.config.llm_provider = saved_settings["provider"]
+                self._client = saved_settings["client"]
 
     # ------------------------------------------------------------------
     # Provider paths

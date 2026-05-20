@@ -8,6 +8,67 @@ import os
 from dataclasses import dataclass, field
 
 
+def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
+    """Build the per-role override map from environment variables.
+
+    Two opt-in shapes:
+
+    1. **Hybrid quick-start.** Set ``BMC_AGENT_HYBRID_SPEC_GEN_KEY`` (typically
+       an OpenRouter key) and bmc-agent will route spec_gen + feedback_distill
+       to ``anthropic/claude-sonnet-4.5`` via OpenRouter, leaving every other
+       call on the global default (K2 etc.). Optional overrides for the model
+       and base URL: ``BMC_AGENT_HYBRID_SPEC_GEN_MODEL``,
+       ``BMC_AGENT_HYBRID_SPEC_GEN_BASE_URL``.
+
+    2. **Explicit per-role.** For each role X in {spec_gen, feedback_distill,
+       refinement, realism, classifier}, the env vars
+       ``BMC_AGENT_LLM_{X}_MODEL`` / ``_BASE_URL`` / ``_API_KEY`` / ``_PROVIDER``
+       are picked up directly. Useful for non-hybrid custom routing.
+
+    Empty result (no env vars set) leaves ``llm_role_overrides`` empty so the
+    pipeline keeps its existing single-backend behaviour.
+    """
+    overrides: dict[str, dict[str, str]] = {}
+
+    # Hybrid quick-start: spec_gen + feedback_distill → Claude on OpenRouter.
+    hybrid_key = os.environ.get("BMC_AGENT_HYBRID_SPEC_GEN_KEY", "")
+    if hybrid_key:
+        hybrid_model = os.environ.get(
+            "BMC_AGENT_HYBRID_SPEC_GEN_MODEL", "anthropic/claude-sonnet-4.5"
+        )
+        hybrid_base = os.environ.get(
+            "BMC_AGENT_HYBRID_SPEC_GEN_BASE_URL", "https://openrouter.ai/api/v1"
+        )
+        # OpenRouter exposes an OpenAI-compatible /v1/chat/completions endpoint,
+        # so route through the openai provider regardless of the model name.
+        for role in ("spec_gen", "feedback_distill"):
+            overrides[role] = {
+                "model": hybrid_model,
+                "base_url": hybrid_base,
+                "api_key": hybrid_key,
+                "provider": "openai",
+            }
+
+    # Explicit per-role overrides via BMC_AGENT_LLM_<ROLE>_* env vars.
+    for role in ("spec_gen", "feedback_distill", "refinement", "realism", "classifier"):
+        ru = role.upper()
+        model = os.environ.get(f"BMC_AGENT_LLM_{ru}_MODEL", "")
+        base = os.environ.get(f"BMC_AGENT_LLM_{ru}_BASE_URL", "")
+        key = os.environ.get(f"BMC_AGENT_LLM_{ru}_API_KEY", "")
+        provider = os.environ.get(f"BMC_AGENT_LLM_{ru}_PROVIDER", "")
+        if any((model, base, key, provider)):
+            # Explicit role override merges with (and overrides) the hybrid
+            # quick-start for this role.
+            existing = overrides.get(role, {})
+            overrides[role] = {
+                "model": model or existing.get("model", ""),
+                "base_url": base or existing.get("base_url", ""),
+                "api_key": key or existing.get("api_key", ""),
+                "provider": provider or existing.get("provider", ""),
+            }
+    return overrides
+
+
 @dataclass
 class Config:
     """Global configuration for a BMC-Agent verification run."""
@@ -30,6 +91,19 @@ class Config:
     #                          most self-hosted endpoints)
     # Empty string => auto-detect from base_url (K2 Think domain, /v1 suffix, etc.).
     llm_provider: str = ""
+
+    # Per-role LLM overrides for hybrid backends. Maps a role name (e.g.
+    # "spec_gen", "feedback_distill") to a partial settings dict with
+    # any subset of {"model", "base_url", "api_key", "provider"}. When
+    # ``complete(..., role=X)`` is called and X is in this dict, the call
+    # uses the override settings (falling back to the global defaults for
+    # any unset field). Roles not in the dict use the global config.
+    #
+    # Canonical hybrid setup: route spec_gen + feedback_distill through
+    # Claude (higher spec quality) while keeping the workhorse refinement,
+    # realism, and classifier calls on K2 (token volume). Empty by default,
+    # so existing single-backend behaviour is unchanged.
+    llm_role_overrides: "dict[str, dict[str, str]]" = field(default_factory=dict)
 
     # CBMC settings
     cbmc_path: str = "cbmc"
@@ -156,6 +230,22 @@ class Config:
                 return k2_key
         return os.environ.get("ANTHROPIC_API_KEY", "")
 
+    def role_settings(self, role: str | None) -> dict:
+        """Return the effective LLM settings for a given role.
+
+        Returns a dict with keys ``model``, ``base_url``, ``api_key``, ``provider``,
+        each falling back to the global config when the role-specific override
+        doesn't set them. ``role=None`` (or a role not in ``llm_role_overrides``)
+        returns the global defaults.
+        """
+        override = self.llm_role_overrides.get(role or "", {}) if role else {}
+        return {
+            "model": override.get("model") or self.llm_model,
+            "base_url": override.get("base_url") or self.llm_base_url,
+            "api_key": override.get("api_key") or self.resolved_api_key(),
+            "provider": override.get("provider") or self.llm_provider,
+        }
+
     def resolved_provider(self) -> str:
         """Return the active provider ("anthropic" or "openai").
 
@@ -210,4 +300,5 @@ class Config:
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "false").lower() == "true",
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
+            llm_role_overrides=_parse_role_overrides_env(),
         )

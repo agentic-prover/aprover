@@ -382,3 +382,215 @@ def test_openai_http_error_propagates():
             client.complete("s", "u")
 
     assert "401" in str(exc_info.value) or "Unauthorized" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Hybrid per-role LLM routing
+# ---------------------------------------------------------------------------
+
+
+def test_role_settings_returns_global_defaults_when_no_override():
+    from bmc_agent.config import Config
+
+    c = Config(
+        llm_model="default-model",
+        llm_api_key="default-key",
+        llm_base_url="https://default.example/v1",
+        llm_provider="openai",
+    )
+    s = c.role_settings("spec_gen")
+    assert s["model"] == "default-model"
+    assert s["api_key"] == "default-key"
+    assert s["base_url"] == "https://default.example/v1"
+    assert s["provider"] == "openai"
+
+
+def test_role_settings_uses_override_when_present():
+    from bmc_agent.config import Config
+
+    c = Config(
+        llm_model="default-model",
+        llm_api_key="default-key",
+        llm_base_url="https://default.example/v1",
+        llm_provider="openai",
+        llm_role_overrides={
+            "spec_gen": {
+                "model": "anthropic/claude-sonnet-4.5",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "or-key",
+                "provider": "openai",
+            },
+        },
+    )
+    s_spec = c.role_settings("spec_gen")
+    assert s_spec["model"] == "anthropic/claude-sonnet-4.5"
+    assert s_spec["api_key"] == "or-key"
+    assert s_spec["base_url"] == "https://openrouter.ai/api/v1"
+    # Other roles still see defaults.
+    s_other = c.role_settings("refinement")
+    assert s_other["model"] == "default-model"
+
+
+def test_role_settings_partial_override_falls_back_to_defaults():
+    """An override that sets only `model` keeps the default base_url/api_key."""
+    from bmc_agent.config import Config
+
+    c = Config(
+        llm_model="default-model",
+        llm_api_key="default-key",
+        llm_base_url="https://default.example/v1",
+        llm_role_overrides={"spec_gen": {"model": "override-model"}},
+    )
+    s = c.role_settings("spec_gen")
+    assert s["model"] == "override-model"
+    assert s["api_key"] == "default-key"
+    assert s["base_url"] == "https://default.example/v1"
+
+
+def test_hybrid_env_var_sets_up_spec_gen_and_feedback_routes(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("K2THINK_API_KEY", raising=False)
+    monkeypatch.setenv("BMC_AGENT_HYBRID_SPEC_GEN_KEY", "or-test-key")
+    from bmc_agent.config import Config
+
+    c = Config.from_env()
+    assert "spec_gen" in c.llm_role_overrides
+    assert "feedback_distill" in c.llm_role_overrides
+    sg = c.llm_role_overrides["spec_gen"]
+    assert sg["model"] == "anthropic/claude-sonnet-4.5"
+    assert sg["base_url"] == "https://openrouter.ai/api/v1"
+    assert sg["api_key"] == "or-test-key"
+    assert sg["provider"] == "openai"
+
+
+def test_explicit_role_env_overrides_pick_up_one_role(monkeypatch):
+    """Setting only BMC_AGENT_LLM_REFINEMENT_* picks up just refinement."""
+    monkeypatch.delenv("BMC_AGENT_HYBRID_SPEC_GEN_KEY", raising=False)
+    monkeypatch.setenv("BMC_AGENT_LLM_REFINEMENT_MODEL", "ref-model")
+    monkeypatch.setenv("BMC_AGENT_LLM_REFINEMENT_API_KEY", "ref-key")
+    from bmc_agent.config import Config
+
+    c = Config.from_env()
+    assert "refinement" in c.llm_role_overrides
+    assert c.llm_role_overrides["refinement"]["model"] == "ref-model"
+    assert c.llm_role_overrides["refinement"]["api_key"] == "ref-key"
+    assert "spec_gen" not in c.llm_role_overrides
+
+
+def test_llm_client_routes_spec_gen_through_override(monkeypatch):
+    """End-to-end: complete(..., role='spec_gen') hits the override settings."""
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient
+
+    captured_urls = []
+
+    class _Resp:
+        status_code = 200
+        reason_phrase = "OK"
+        text = ""
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"x":1}'}, "finish_reason": "stop"}],
+                "usage": {},
+            }
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, url, json=None, headers=None):
+            captured_urls.append((url, headers.get("Authorization", "")))
+            return _Resp()
+
+    class _FakeHttpx:
+        Client = _FakeClient
+        @staticmethod
+        def Timeout(*a, **k):  # noqa: N802
+            return None
+
+    config = Config(
+        llm_model="default-k2",
+        llm_api_key="k2-key",
+        llm_base_url="https://api.k2think.ai/v1",
+        llm_provider="openai",
+        llm_role_overrides={
+            "spec_gen": {
+                "model": "anthropic/claude-sonnet-4.5",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "or-key",
+                "provider": "openai",
+            },
+        },
+    )
+    client = LLMClient(config)
+
+    from unittest.mock import patch
+    with patch.dict("sys.modules", {"httpx": _FakeHttpx}):
+        client.complete("s", "u", role="spec_gen")
+        client.complete("s", "u", role=None)  # default
+        client.complete("s", "u", role="refinement")  # no override -> default
+
+    assert len(captured_urls) == 3
+    # spec_gen routed through OpenRouter with or-key
+    assert "openrouter.ai" in captured_urls[0][0]
+    assert "or-key" in captured_urls[0][1]
+    # default + refinement routed through K2 with k2-key
+    assert "k2think.ai" in captured_urls[1][0]
+    assert "k2-key" in captured_urls[1][1]
+    assert "k2think.ai" in captured_urls[2][0]
+    assert "k2-key" in captured_urls[2][1]
+
+
+def test_llm_client_restores_settings_after_role_call(monkeypatch):
+    """Config state must be unchanged after a role-overridden call returns."""
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient
+
+    class _Resp:
+        status_code = 200
+        reason_phrase = "OK"
+        text = ""
+        def json(self):
+            return {"choices": [{"message": {"content": "x"}, "finish_reason": "stop"}], "usage": {}}
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, *a, **k):
+            return _Resp()
+
+    class _FakeHttpx:
+        Client = _FakeClient
+        @staticmethod
+        def Timeout(*a, **k):  # noqa: N802
+            return None
+
+    config = Config(
+        llm_model="k2",
+        llm_api_key="k2-key",
+        llm_base_url="https://api.k2think.ai/v1",
+        llm_provider="openai",
+        llm_role_overrides={
+            "spec_gen": {"model": "claude", "api_key": "or-key",
+                         "base_url": "https://openrouter.ai/api/v1",
+                         "provider": "openai"},
+        },
+    )
+    client = LLMClient(config)
+
+    from unittest.mock import patch
+    with patch.dict("sys.modules", {"httpx": _FakeHttpx}):
+        client.complete("s", "u", role="spec_gen")
+
+    # Original config must be restored.
+    assert config.llm_model == "k2"
+    assert config.llm_api_key == "k2-key"
+    assert config.llm_base_url == "https://api.k2think.ai/v1"
+    assert config.llm_provider == "openai"
