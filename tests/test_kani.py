@@ -1308,3 +1308,40 @@ VERIFICATION:- SUCCESSFUL
     res = _parse_kani_output(raw, "", 0)
     assert res.verified is True
     assert not res.error
+
+
+def test_param_init_block_ref_to_struct():
+    """`&Algorithm<u8>` — generic &T struct ref, mirror &mut T pattern."""
+    from bmc_agent.backends.kani_backend import _param_init_block
+    lines = _param_init_block("&Algorithm<u8>", "algo")
+    src = "\n".join(lines)
+    assert "let _owned_algo: Algorithm<u8> = kani::any::<Algorithm<u8>>();" in src
+    assert "let algo: &Algorithm<u8> = &_owned_algo;" in src
+
+
+def test_param_init_block_ref_to_primitive():
+    """`&u32` — primitive reference."""
+    from bmc_agent.backends.kani_backend import _param_init_block
+    lines = _param_init_block("&u32", "x")
+    src = "\n".join(lines)
+    assert "let _owned_x: u32 = kani::any::<u32>();" in src
+    assert "let x: &u32 = &_owned_x;" in src
+
+
+def test_param_init_block_static_lifetime_ref():
+    """`&'static Algorithm<u8>` — Box::leak so the borrow outlives the harness."""
+    from bmc_agent.backends.kani_backend import _param_init_block
+    lines = _param_init_block("&'static Algorithm<u8>", "algo")
+    src = "\n".join(lines)
+    assert "Box::leak" in src
+    assert "kani::any::<Algorithm<u8>>" in src
+    assert "let algo: &'static Algorithm<u8>" in src
+
+
+def test_param_init_block_str_ref_still_dedicated():
+    """`&str` must continue to route to the ASCII-bounded backing path,
+    not the generic &T fallback."""
+    from bmc_agent.backends.kani_backend import _param_init_block
+    lines = _param_init_block("&str", "s", slice_bound=2)
+    src = "\n".join(lines)
+    assert "std::str::from_utf8" in src

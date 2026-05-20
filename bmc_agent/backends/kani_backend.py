@@ -488,6 +488,54 @@ def _param_init_block(
             f"    let {name}: Option<{inner}> = if {flag} "
             f"{{ Some({_initialiser_for(inner)}) }} else {{ None }};",
         ]
+    if (
+        t.startswith("&")
+        and not t.startswith("&mut ")
+        and not _is_str_ref_type(t)  # &str handled separately below
+        and not _is_slice_type(t)    # &[T] handled above
+    ):
+        # Immutable `&T` mirrors the `&mut T` logic below but without
+        # the `mut` qualifier. Handles &Vec<T>, &String, &<primitive>,
+        # &'static T (via Box::leak), and &SomeStruct (when the struct
+        # impls kani::Arbitrary -- otherwise the resulting harness will
+        # fail to compile with E0277).
+        # Strips any lifetime annotation ('static, 'a, etc.) for the
+        # inner-type lookup, but preserves it in the local binding type
+        # because the called function may require a specific lifetime.
+        inner_raw = t[1:].strip()
+        lifetime = ""
+        if inner_raw.startswith("'"):
+            sp = inner_raw.find(" ")
+            if sp != -1:
+                lifetime = inner_raw[:sp].strip()
+                inner = inner_raw[sp + 1:].strip()
+            else:
+                inner = inner_raw
+        else:
+            inner = inner_raw
+        backing = f"_owned_{name}"
+        if _is_vec_type(inner):
+            elem = _vec_element_type(inner)
+            ctor = f"Vec::<{elem}>::new()"
+        elif inner == "String":
+            ctor = "String::new()"
+        else:
+            # Both primitives and generic structs go through kani::any.
+            # For non-Arbitrary structs the harness will fail to compile
+            # with a clear E0277; that's still better than the previous
+            # blanket NotImplementedError (which never even tried).
+            ctor = f"kani::any::<{inner}>()"
+        if lifetime == "'static":
+            # 'static lifetimes require leaking the backing so it lives
+            # forever. Used by crc-rs's algorithm tables.
+            return [
+                f"    let {name}: &'static {inner} = Box::leak(Box::new({ctor}));",
+            ]
+        # No lifetime, or non-static lifetime (Rust will infer at call site).
+        return [
+            f"    let {backing}: {inner} = {ctor};",
+            f"    let {name}: &{inner} = &{backing};",
+        ]
     if t.startswith("&mut "):
         inner = t[len("&mut "):].strip()
         # &mut [T] slice path already handled above (_is_slice_type).
