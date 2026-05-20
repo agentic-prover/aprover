@@ -1266,11 +1266,26 @@ class CExValidator:
                         "rather than a real function bug. Classifying SPURIOUS."
                     )
                 else:
-                    fallback_outcome = CExOutcome.REAL_BUG
+                    # Structural panic + over-refinement rejected: previously
+                    # this branch promoted to REAL_BUG "to be safe", which
+                    # produced false positives whenever the LLM-generated
+                    # harness omitted a constraint that real callers maintain.
+                    # Concrete example: base64::add_padding panics when
+                    # output.len() < rem_len, but every base64 caller sizes
+                    # the buffer correctly. The harness's omission of that
+                    # constraint isn't a function bug.
+                    # Mark UNRESOLVED instead: surface the finding for human
+                    # review without claiming it's a confirmed real bug.
+                    fallback_outcome = CExOutcome.UNRESOLVED
                     reasoning = (
-                        f"Refinement was over-restrictive at iteration {iteration + 1} "
-                        "— would exclude states that callers can actually produce. "
-                        "Failing property is a structural panic; treating as real bug to be safe."
+                        f"Over-refinement guard rejected at iteration {iteration + 1}: "
+                        "could not tighten the precondition without excluding states "
+                        "callers can produce. Failing property is a structural panic. "
+                        "We can't determine whether real callers maintain the "
+                        "implicit invariant that would prevent the panic, so "
+                        "classifying UNRESOLVED (not REAL_BUG) -- the spec generator "
+                        "didn't capture the constraint, but that doesn't mean callers "
+                        "violate it."
                     )
                 over_result = ValidationResult(
                     function_name=func_name,
