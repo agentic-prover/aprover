@@ -1225,6 +1225,61 @@ class KaniBackend(BMCBackend):
         params: list[tuple[str, str]] = list(func.signature.parameters)
         return_type = (func.signature.return_type or "").strip()
 
+        # Generic-function gate. If the function carries a `<T, U, ...>`
+        # type-parameter list AND any of those parameters appears in a
+        # parameter type or the return type, the harness can't be
+        # monomorphised (we'd emit `let x: T = kani::any::<T>()` which
+        # rustc rejects with E0412 because T isn't in scope at harness
+        # body). Examples we observed: bitflags::iter::new<B>(flags: B),
+        # twox-hash's xxhash<F: Trait>(...). Raise so the engine records
+        # the skip cleanly.
+        type_params = getattr(func.signature, "type_parameters", "") or ""
+        if type_params:
+            import re as _re_gen
+            # Extract bare identifier names from "<T, U: Bound, V: Trait + 'a>".
+            # Track depth on (), [], {}, AND <> — but skip `>` when preceded by
+            # `-` (the `->` arrow inside trait bounds like `F: Fn(...) -> u32`).
+            inner = type_params.strip().lstrip("<").rstrip(">")
+            type_param_names: list[str] = []
+            depth = 0
+            current = ""
+            for i, ch in enumerate(inner + ","):
+                if ch in ("(", "[", "{", "<"):
+                    depth += 1
+                    current += ch
+                elif ch in (")", "]", "}"):
+                    depth -= 1
+                    current += ch
+                elif ch == ">":
+                    # Arrow `->` -- not a closing angle bracket.
+                    if i > 0 and (inner + ",")[i - 1] == "-":
+                        current += ch
+                    else:
+                        depth -= 1
+                        current += ch
+                elif ch == "," and depth == 0:
+                    name = current.strip().split(":")[0].strip()
+                    # Skip lifetimes ('a, 'static) and const generics
+                    if name and not name.startswith("'") and not name.startswith("const"):
+                        type_param_names.append(name)
+                    current = ""
+                else:
+                    current += ch
+            # Check if any T-name appears as a bare identifier in any param
+            # type or the return type.
+            sig_types = [pt for pt, _ in params] + [return_type]
+            sig_blob = " ".join(sig_types)
+            used_generics = [
+                t for t in type_param_names
+                if _re_gen.search(rf"\b{_re_gen.escape(t)}\b", sig_blob)
+            ]
+            if used_generics:
+                raise NotImplementedError(
+                    f"function {func.name!r} uses unmonomorphised type "
+                    f"parameter(s) {used_generics} in its signature -- Kani "
+                    f"requires concrete types in proof harnesses"
+                )
+
         # Pre-emit type-resolvability gate. Functions whose signature or body
         # references types not defined in this source file (and not stdlib /
         # known external alias) can't compile standalone — the historical

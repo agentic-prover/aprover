@@ -1370,3 +1370,86 @@ def test_rewrite_implications_already_wrapped():
     from bmc_agent.backends.kani_backend import _rewrite_implications
     out = _rewrite_implications("(a > 0 ==> b < 10)")
     assert out == "(!(a > 0) || (b < 10))"
+
+
+def test_generate_harness_rejects_generic_fn():
+    """A function with unmonomorphised generic params used in its signature
+    should be rejected with a clear NotImplementedError. Concrete v13
+    case: bitflags::iter::new<B>(flags: B). Previously the harness
+    emitted `let _owned_flags: B = kani::any::<B>()` which failed at
+    rustc with E0412 'cannot find type B' -- four times per harness."""
+    from bmc_agent.backends.kani_backend import KaniBackend
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _GSig:
+        return_type: str
+        parameters: list
+        type_parameters: str = ""
+        where_clause: str = ""
+        modifiers: list = field(default_factory=list)
+        impl_type: str = ""
+        is_pub: bool = True
+
+    @dataclass
+    class _GFunc:
+        name: str
+        signature: object
+        body: str = "{ todo!() }"
+        callees: set = field(default_factory=set)
+        source_file: str = "synthetic.rs"
+
+    @dataclass
+    class _GSpec:
+        function_name: str
+        precondition: str = "true"
+        postcondition: str = "true"
+
+    sig = _GSig(return_type="Self", parameters=[("B", "flags")], type_parameters="<B>")
+    func = _GFunc(name="new", signature=sig)
+    spec = _GSpec(function_name="new")
+
+    backend = KaniBackend(_Config())
+    with pytest.raises(NotImplementedError) as excinfo:
+        backend.generate_harness(func, spec)
+    assert "type parameter" in str(excinfo.value).lower()
+    assert "B" in str(excinfo.value)
+
+
+def test_generic_fn_gate_lifetime_and_const_not_flagged():
+    """A `<'a>` or `<const N: usize>` type_parameters string MUST NOT
+    trigger the generic-function rejection. Test the parser logic
+    directly rather than building a full FunctionInfo: the gate's
+    correctness lives in how it parses the type_parameters string."""
+    # The gate's logic (copied from generate_harness, kept in sync).
+    def _extract_type_params(type_params: str) -> list:
+        inner = type_params.strip().lstrip("<").rstrip(">")
+        names = []
+        depth = 0
+        cur = ""
+        s = inner + ","
+        for i, ch in enumerate(s):
+            if ch in ("(", "[", "{", "<"):
+                depth += 1; cur += ch
+            elif ch in (")", "]", "}"):
+                depth -= 1; cur += ch
+            elif ch == ">":
+                if i > 0 and s[i - 1] == "-":
+                    cur += ch
+                else:
+                    depth -= 1; cur += ch
+            elif ch == "," and depth == 0:
+                n = cur.strip().split(":")[0].strip()
+                if n and not n.startswith("'") and not n.startswith("const"):
+                    names.append(n)
+                cur = ""
+            else:
+                cur += ch
+        return names
+
+    assert _extract_type_params("<'a>") == [], "lifetime-only must produce no type names"
+    assert _extract_type_params("<const N: usize>") == [], "const-generic must produce no type names"
+    assert _extract_type_params("<T>") == ["T"]
+    assert _extract_type_params("<T, U: Bound>") == ["T", "U"]
+    assert _extract_type_params("<'a, T>") == ["T"], "mixed lifetime + type"
+    assert _extract_type_params("<F: Fn(u32) -> u32>") == ["F"], "trait-bound with nested parens"
