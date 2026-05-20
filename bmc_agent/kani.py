@@ -188,10 +188,30 @@ def run_kani_cargo(
     # block; concurrent appends on the same file (different harnesses on
     # different functions in the same .rs) are NOT safe — the caller must
     # serialise per-file in that case.
-    original_bytes = source_path.read_bytes()
+    #
+    # Cleanup on startup: strip any leftover bmc_agent sentinel blocks
+    # before snapshotting. Interrupted runs (SIGKILL, OOM, lost ssh) can
+    # leave stale harnesses in the source -- those poison subsequent
+    # cargo compiles for unrelated functions. We strip them so each run
+    # starts from a known-clean source state. Sentinels look like:
+    #   // === bmc_agent cargo-kani harness <NAME> -- DO NOT EDIT ===
+    #   ... proof block ...
+    #   // === end bmc_agent harness <NAME> ===
+    import re as _re
+    raw_bytes = source_path.read_bytes()
+    cleaned_bytes = _re.sub(
+        rb"\n?// === bmc_agent cargo-kani harness [^\n]+ -- DO NOT EDIT ===.*?// === end bmc_agent harness [^\n]+ ===\n?",
+        b"",
+        raw_bytes,
+        flags=_re.DOTALL,
+    )
+    if cleaned_bytes != raw_bytes:
+        # Salvage: write the cleaned bytes to disk so even if THIS run is
+        # interrupted, the next one starts from the cleaned state.
+        source_path.write_bytes(cleaned_bytes)
+    original_bytes = cleaned_bytes
+
     proof_block = _extract_harness_proof_block(harness_src)
-    # Sentinel comment so we can recognise the appended region if cleanup
-    # is interrupted; lets a manual recovery script grep+truncate.
     sentinel_start = f"\n// === bmc_agent cargo-kani harness {harness_name} -- DO NOT EDIT ===\n"
     sentinel_end = f"\n// === end bmc_agent harness {harness_name} ===\n"
     appended = original_bytes + sentinel_start.encode() + proof_block.encode() + sentinel_end.encode()
