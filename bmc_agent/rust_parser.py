@@ -221,6 +221,29 @@ def parse_rust_file(
             return ""
         return _slice(src_bytes, type_node).strip()
 
+    def _node_has_cfg_gate(node) -> bool:
+        """Return True if *node* is preceded by `#[cfg(...)]` attribute
+        siblings that aren't part of the default build (i.e. anything but
+        the unconditional default). Conservative: ANY cfg gate counts,
+        because we can't reliably know which features are enabled when
+        cargo-kani builds the crate. False positives (skipping cfg-gated
+        items that ARE in the default build) are fine -- a missed harness
+        is better than one that fails to compile and pollutes the bug
+        report with 'cannot find type X' noise.
+        """
+        cursor = node.prev_sibling
+        while cursor is not None:
+            if cursor.type == "attribute_item":
+                txt = _slice(src_bytes, cursor)
+                if "cfg(" in txt or "cfg_attr(" in txt:
+                    return True
+                cursor = cursor.prev_sibling
+            elif cursor.type in ("line_comment", "block_comment", "inner_attribute_item"):
+                cursor = cursor.prev_sibling
+            else:
+                break
+        return False
+
     for top in tree.root_node.children:
         if top.type == "function_item":
             _ingest_function(top)
@@ -228,6 +251,14 @@ def parse_rust_file(
             # Walk the impl's declaration_list (or `body`) for method items.
             body = top.child_by_field_name("body")
             if body is None:
+                continue
+            # Skip cfg-gated impl blocks: their types may not exist in the
+            # default cargo-kani build. Example: lz4_flex's `PtrSink` is
+            # behind `#[cfg(not(all(feature = "safe-encode", feature =
+            # "safe-decode")))]` and the default features enable both,
+            # so the impl's methods would generate harnesses that fail
+            # at rustc with E0412 "cannot find type PtrSink".
+            if _node_has_cfg_gate(top):
                 continue
             impl_ty = _impl_type_text(top)
             for member in body.named_children:
