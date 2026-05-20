@@ -261,6 +261,15 @@ def run_kani_cargo(
                 timeout=timeout,
             )
         except _sub.TimeoutExpired:
+            # Capture debug snapshot to disk so we can inspect the harness
+            # file state in case of timeout.
+            import os as _os
+            if _os.environ.get("BMC_AGENT_DEBUG_CARGO"):
+                try:
+                    snap = Path(f"/tmp/bmc_debug_{harness_name}_timeout.rs")
+                    snap.write_bytes(appended)
+                except Exception:
+                    pass
             return CBMCResult(verified=False, error=f"cargo kani timed out after {timeout}s")
         except FileNotFoundError:
             return CBMCResult(verified=False, error="cargo or kani not found")
@@ -268,6 +277,17 @@ def run_kani_cargo(
             return CBMCResult(verified=False, error=f"cargo kani OS error: {exc}")
         raw = proc.stdout or ""
         stderr = proc.stderr or ""
+        # Debug dump: snapshot the appended source + raw outputs when the env
+        # flag is set. Helps diagnose 'harness not discovered' regressions.
+        import os as _os
+        if _os.environ.get("BMC_AGENT_DEBUG_CARGO"):
+            try:
+                base = Path(f"/tmp/bmc_debug_{harness_name}")
+                base.with_suffix(".src.rs").write_bytes(appended)
+                base.with_suffix(".stdout").write_text(raw)
+                base.with_suffix(".stderr").write_text(stderr)
+            except Exception:
+                pass
         result = _parse_kani_output(raw, stderr, proc.returncode)
         # When cargo-mode fails to even compile the crate, _parse_kani_output
         # only sees "could not compile due to N errors" on stdout. The real
@@ -275,14 +295,24 @@ def run_kani_cargo(
         # so downstream debug knows it's a crate-incompatible-with-kani
         # situation, not a harness-generation bug.
         if not result.verified and not result.counterexamples:
-            err_combined = (result.error or "") + "\n--- stderr ---\n" + stderr[-3000:]
-            result.error = err_combined.strip()[:5000]
+            # Include stdout tail too -- cargo kani's actual error messages
+            # like 'no harnesses matched harness filter' live on stdout, not
+            # stderr. Without this we can't tell whether the failure was
+            # rustc-compile or harness-discovery.
+            err_combined = (
+                (result.error or "")
+                + "\n--- stdout (tail) ---\n" + raw[-2000:]
+                + "\n--- stderr (tail) ---\n" + stderr[-2000:]
+            )
+            result.error = err_combined.strip()[:8000]
         return result
     finally:
-        # Restore. Prefer `git checkout -- .` (handles the whole repo,
-        # including any files our cleanup-on-startup touched). Fall back
-        # to byte-level rewrite if not a git repo.
-        _release_crate_lock(crate_lock)
+        # Restore the source file BEFORE releasing the crate lock, otherwise
+        # another worker thread can acquire the lock and read polluted bytes
+        # (with this thread's appended harness still in place). Concretely
+        # we observed cargo kani saying 'no harnesses matched' on
+        # check_from_checksum while the file already had check_adler32_slice
+        # from a parallel thread -- multiple appends accumulating.
         if use_git:
             try:
                 _sub2.run(
@@ -303,6 +333,7 @@ def run_kani_cargo(
                 _logging.getLogger("bmc_agent.kani").error(
                     "Failed to restore %s after cargo-kani run", source_path,
                 )
+        _release_crate_lock(crate_lock)
 
 
 # ---------------------------------------------------------------------------
