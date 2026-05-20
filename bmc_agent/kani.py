@@ -146,38 +146,69 @@ def _extract_harness_proof_block(harness_src: str) -> str:
     return block.rstrip() + "\n"
 
 
+import threading as _threading
+
+# Per-crate-root threading locks. fcntl.flock serializes between *processes*,
+# but Linux BSD-flock semantics between two fds in the same process are
+# advisory-and-ambiguous: two threads each open()ing the lockfile and calling
+# flock(LOCK_EX) on independent fds can both succeed and end up writing the
+# source file concurrently, accumulating multiple #[kani::proof] blocks.
+# A per-crate threading.Lock guarantees in-process serialization regardless.
+_CRATE_THREAD_LOCKS: dict[str, "_threading.Lock"] = {}
+_CRATE_THREAD_LOCKS_GUARD = _threading.Lock()
+
+
 def _acquire_crate_lock(crate_root: "Path"):
-    """fcntl flock on `<crate_root>/.bmc_agent.lock` so only one cargo-kani
-    runs against a crate at a time, regardless of how many bmc-agent
-    processes are active. Returns the open file handle (which the caller
-    keeps until done) or None on platforms without fcntl.
+    """Acquire BOTH a process-local threading.Lock AND an fcntl flock on
+    ``<crate_root>/.bmc_agent.lock`` so only one cargo-kani runs against
+    a crate at a time, regardless of (a) how many threads are in this
+    bmc-agent process and (b) how many bmc-agent processes are active.
+
+    Returns a (thread_lock, fh) tuple; the caller passes the whole tuple
+    back to _release_crate_lock. Returns (None, None) on platforms
+    without fcntl -- threading.Lock alone still serializes the
+    in-process side.
     """
+    key = str(crate_root.resolve())
+    with _CRATE_THREAD_LOCKS_GUARD:
+        tlock = _CRATE_THREAD_LOCKS.get(key)
+        if tlock is None:
+            tlock = _threading.Lock()
+            _CRATE_THREAD_LOCKS[key] = tlock
+    tlock.acquire()  # blocks until this thread owns the crate
     try:
         import fcntl
     except ImportError:
-        return None  # Windows
+        return (tlock, None)  # Windows: threading lock alone
     lock_path = crate_root / ".bmc_agent.lock"
     fh = open(lock_path, "w")
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     except OSError:
         fh.close()
-        return None
-    return fh
+        return (tlock, None)
+    return (tlock, fh)
 
 
-def _release_crate_lock(fh) -> None:
-    if fh is None:
+def _release_crate_lock(handle) -> None:
+    if handle is None:
         return
-    try:
-        import fcntl
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-    except Exception:
-        pass
-    try:
-        fh.close()
-    except Exception:
-        pass
+    tlock, fh = handle
+    if fh is not None:
+        try:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            fh.close()
+        except Exception:
+            pass
+    if tlock is not None:
+        try:
+            tlock.release()
+        except Exception:
+            pass
 
 
 def run_kani_cargo(

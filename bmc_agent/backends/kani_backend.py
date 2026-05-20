@@ -1216,13 +1216,14 @@ class KaniBackend(BMCBackend):
         # before translating the DSL. Examples we observed:
         #   `result == Self::default()`  → `result == Adler32::default()`
         #   `result.len() == Self::CAP`  → `result.len() == Foo::CAP`
+        import re as _re_self
         if impl_type and "Self" in raw_post:
-            raw_post = _re.sub(r"\bSelf\b", impl_type, raw_post)
+            raw_post = _re_self.sub(r"\bSelf\b", impl_type, raw_post)
         rewritten_post, old_snapshots = _extract_old_snapshots(raw_post)
         # Same substitution for the precondition.
         raw_pre = spec.precondition or ""
         if impl_type and raw_pre and "Self" in raw_pre:
-            raw_pre = _re.sub(r"\bSelf\b", impl_type, raw_pre)
+            raw_pre = _re_self.sub(r"\bSelf\b", impl_type, raw_pre)
         post_expr = _translate_dsl(rewritten_post, result_var=result_binding or "result")
         post_line = (
             f"    kani::assert({post_expr}, \"postcondition violated\");"
