@@ -295,7 +295,7 @@ class CExValidator:
         # expensive classifier LLM reachability calls and emit a spurious
         # validation directly. The realism check downstream will record
         # the same artifact reason; this just avoids the extra LLM hop.
-        artifact_cause = _witness_obvious_artifact(counterexample)
+        artifact_cause = _witness_obvious_artifact(counterexample, func)
         if artifact_cause:
             logger.info(
                 "Pre-classifier artifact filter: '%s' counterexample is a "
@@ -1894,12 +1894,60 @@ def _is_address_taken(func_name: str, parsed_file) -> bool:
     return False
 
 
-def _witness_obvious_artifact(counterexample) -> Optional[str]:
+def _body_has_same_panic_shape(body: str, trace_text: str) -> bool:
+    """Heuristic: does *body* contain the kind of arithmetic / indexing
+    pattern that would produce the same panic class as *trace_text*?
+
+    Used to keep the spec-evaluation filter from masking real bugs where
+    both the spec and the function body have unguarded arithmetic on the
+    same inputs. We're conservative: any plausible pattern returns True,
+    because false-positive on the BODY side just means the finding goes
+    through the normal classifier (which might still mark SPURIOUS), but
+    false-negative loses real bugs (the elf/io.rs class).
+    """
+    import re as _re
+    # Slice / index OOB on the function side: ``arr[expr]`` with non-trivial expr,
+    # or use of patterns like ``data[off + N]``, ``buf[idx]``, ``windows(k)``.
+    if "index out of bounds" in trace_text or "slice_index_fail" in trace_text:
+        if _re.search(r"\w+\s*\[\s*\w+\s*[+\-*]", body):  # `data[off+1]` shape
+            return True
+        if _re.search(r"\.\s*windows\s*\(", body):
+            return True
+        if _re.search(r"\.\s*get\s*\(\s*\w+\s*[+\-]", body):
+            return True
+    # Arithmetic overflow on the function side.
+    if any(m in trace_text for m in (
+        "attempt to add with overflow",
+        "attempt to subtract with overflow",
+        "attempt to multiply with overflow",
+    )):
+        # Look for non-checked arithmetic on integer params: `x + N`, `x * N`, etc.
+        # Skip the body if it ONLY uses `wrapping_*` / `checked_*` / `saturating_*`.
+        if _re.search(r"\b\w+\s*[+\-*]\s*\w", body):
+            # Heuristic: at least one non-wrapped arithmetic site exists.
+            # We don't try to prove the body is fully-wrapped -- false positives
+            # on safe code just route through the normal classifier.
+            return True
+    if "attempt to shift" in trace_text and _re.search(r"<<|>>", body):
+        return True
+    if "attempt to divide by zero" in trace_text and _re.search(r"/\s*\w|\.\s*rem_", body):
+        return True
+    return False
+
+
+def _witness_obvious_artifact(counterexample, func=None) -> Optional[str]:
     """Cheap, deterministic check: does the witness state match a known
     model-artifact pattern? Returns a one-line cause when it does, None
     otherwise. Mirrors the realism-checker's pre-LLM detectors so the
     classifier can skip expensive LLM reachability calls on findings
     that the realism stage would reject anyway.
+
+    When *func* is supplied, the spec-evaluation panic filter is
+    narrowed: if the function body itself contains the same arithmetic/
+    indexing pattern as the spec, the filter does NOT fire (caller will
+    then classify as LATENT/REAL — the function has the exploit shape
+    too). Without *func*, the filter behaves as before (always fires
+    on ``check_<fn>.assertion`` + structural panic combos).
     """
     # Spec-evaluation panic: when the failing property is
     # ``check_<fn>.assertion.N`` (note the ``check_`` prefix — the
@@ -1910,21 +1958,38 @@ def _witness_obvious_artifact(counterexample) -> Optional[str]:
     # false positive — the spec author wrote an unguarded slice index
     # (``input[pos]``) or non-wrapping arithmetic and the spec itself
     # panics during verification.
+    #
+    # Exception: when the function body has the SAME unguarded
+    # arithmetic / indexing shape, the overflow is genuinely reachable
+    # via the function too — the spec just happens to evaluate it. In
+    # that case we should NOT short-circuit to SPURIOUS; let the
+    # downstream classifier promote to LATENT/REAL. CCC's elf/io.rs
+    # byte-reader family is the canonical case: spec evaluates
+    # ``off + 4 <= data.len()`` and overflows on usize::MAX, but the
+    # function body itself has ``data[offset+1]`` etc. that overflows
+    # the same way. Losing those to SPURIOUS hides 9+ known-real bugs.
     fp = (getattr(counterexample, "failing_property", "") or "")
     trace_text = " ".join(getattr(counterexample, "trace", None) or [])
-    if fp.startswith("check_") and any(
-        marker in trace_text
-        for marker in (
-            "attempt to add with overflow",
-            "attempt to subtract with overflow",
-            "attempt to multiply with overflow",
-            "attempt to shift left with overflow",
-            "attempt to shift right with overflow",
-            "attempt to divide by zero",
-            "index out of bounds",
-            "slice_index_fail",
-        )
-    ):
+    arith_markers = (
+        "attempt to add with overflow",
+        "attempt to subtract with overflow",
+        "attempt to multiply with overflow",
+        "attempt to shift left with overflow",
+        "attempt to shift right with overflow",
+        "attempt to divide by zero",
+    )
+    index_markers = (
+        "index out of bounds",
+        "slice_index_fail",
+    )
+    if fp.startswith("check_") and any(m in trace_text for m in arith_markers + index_markers):
+        # Decide whether the FUNCTION BODY has the same overflow shape.
+        # If so, the spec is just amplifying a real exposure -- don't
+        # mark SPURIOUS. If the body is clean, the panic is genuinely
+        # spec-only.
+        body = (getattr(func, "body", "") or "") if func is not None else ""
+        if body and _body_has_same_panic_shape(body, trace_text):
+            return None  # let the downstream classifier handle it
         return "spec-evaluation panic (functional spec performs unguarded arithmetic/indexing on Kani's nondet inputs)"
 
     # Kani modelling artifact: ``unsupported_construct.N`` properties

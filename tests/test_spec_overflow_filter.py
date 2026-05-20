@@ -155,3 +155,70 @@ def test_kani_unsupported_construct_in_trace_filtered():
         trace=["unsupported_construct: external symbol call"],
     )
     assert _witness_obvious_artifact(cex) is not None
+
+
+def test_spec_eval_filter_skipped_when_body_has_same_shape():
+    """Regression: 2026-05-20 — 9 elf/io.rs byte-reader bugs and
+    write::write_elf64_phdr_at were classified SPURIOUS by the
+    spec-eval filter even though their function bodies have the same
+    unguarded ``offset + N`` arithmetic that triggers the panic. The
+    spec is a symptom; the function is genuinely buggy. When the body
+    shows the same overflow shape, the filter must NOT fire and let
+    downstream classification take over."""
+
+    class _F:
+        body = "fn read_u32(data: &[u8], offset: usize) -> u32 { u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) }"
+
+    cex = _cex(
+        "check_read_u32.assertion.1",
+        trace=["property check_read_u32.assertion.1: attempt to add with overflow"],
+    )
+    # With func context (body has the same overflow shape): filter must NOT fire.
+    assert _witness_obvious_artifact(cex, _F()) is None
+    # Without func context: filter fires as before (backward compatibility).
+    assert _witness_obvious_artifact(cex) is not None
+
+
+def test_spec_eval_filter_still_fires_when_body_has_no_pattern():
+    """Negative regression: filter must still fire when the body
+    genuinely has no arithmetic / indexing shape -- e.g. a one-line
+    wrapper or trivial getter. Otherwise we re-introduce false positives
+    on functions where the spec is the only source of the panic."""
+
+    class _F:
+        body = "fn id_u32(x: u32) -> u32 { x }"  # no arithmetic, no indexing
+
+    cex = _cex(
+        "check_id_u32.assertion.1",
+        trace=["property check_id_u32.assertion.1: attempt to add with overflow"],
+    )
+    # Body has no `+` `-` `*` `[` patterns; filter SHOULD fire (spec is the only source).
+    assert _witness_obvious_artifact(cex, _F()) is not None
+
+
+def test_body_shape_detects_slice_indexing():
+    from bmc_agent.cex_validator import _body_has_same_panic_shape
+    # Body indexes with arithmetic
+    assert _body_has_same_panic_shape(
+        "data[offset + 1]", "index out of bounds: ..."
+    ) is True
+    # Body uses .windows() (also panics on 0)
+    assert _body_has_same_panic_shape(
+        "bytes.windows(word_len)", "slice_index_fail"
+    ) is True
+    # Trivial body
+    assert _body_has_same_panic_shape(
+        "x", "index out of bounds: ..."
+    ) is False
+
+
+def test_body_shape_detects_unguarded_arithmetic():
+    from bmc_agent.cex_validator import _body_has_same_panic_shape
+    assert _body_has_same_panic_shape(
+        "let r = a + b;", "attempt to add with overflow"
+    ) is True
+    # Wrapping ops only (no bare `+`/`-`/`*`): filter sees no unsafe pattern,
+    # so the spec-eval filter SHOULD fire on a body using only safe ops.
+    assert _body_has_same_panic_shape(
+        "let r = a.wrapping_add(b);", "attempt to add with overflow"
+    ) is False
