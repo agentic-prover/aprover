@@ -739,6 +739,62 @@ class CExValidator:
                 all_funcs=all_funcs,
                 parsed_file=parsed_file,
             )
+            # Implicit-NULL-precondition downgrade. CBMC's
+            # `<fn>.precondition_instance.<N>` property fires when a stdlib
+            # call inside <fn>'s body (e.g. memset(model->grads, ...)) has
+            # an implicit non-null precondition that the harness witnesses
+            # violated. With no variable assignments AND no explicit
+            # in-source NULL check, the violation requires the immediate
+            # caller to pass NULL -- which the chain shows the immediate
+            # caller does NOT do (it derefs the pointer first), and
+            # propagating up to system entry would need transitive
+            # precondition analysis we don't yet do. Concrete v23 victims:
+            #   gpt2_zero_grad.precondition_instance.1 (caller chain
+            #     [gpt2_backward, gpt2_zero_grad] -- gpt2_backward also
+            #     derefs `model`, so it never passes NULL in practice)
+            #   fill_in_parameter_sizes.pointer_dereference.11 (same shape)
+            # Mark UNRESOLVED rather than REAL_BUG so reviewers can audit
+            # without a confirmed-bug claim sitting on a likely-FP.
+            _fp = (counterexample.failing_property or "")
+            _implicit_pc = (
+                ".precondition_instance." in _fp
+                or ".pointer_dereference." in _fp
+            )
+            _empty_vars = not (counterexample.variable_assignments or {})
+            # Note: we intentionally do NOT require is_system_reachable=False.
+            # Even when the chain "reaches system entry" by call-graph walk,
+            # that just means we hit the top of the analysed corpus; it
+            # doesn't mean an attacker can produce NULL/invalid pointer at
+            # the entry. The combination of implicit-precondition shape +
+            # empty witness is the dispositive signal.
+            if _implicit_pc and _empty_vars:
+                result = ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=full_chain,
+                    system_entry_input=reproducer,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"Implicit-precondition CEx on '{func_name}' "
+                        f"(property '{_fp}'): the function lacks an explicit "
+                        f"NULL/validity check on a pointer parameter, and "
+                        f"the immediate caller {reachable_from} doesn't itself "
+                        f"establish the precondition. Real callers along the "
+                        f"chain to system entry typically maintain the implicit "
+                        f"invariant (e.g. main constructs the struct via a "
+                        f"build/init routine). Without cross-function "
+                        f"precondition propagation we can't confirm this is "
+                        f"reachable in practice -- classifying UNRESOLVED "
+                        f"rather than REAL_BUG to avoid the v23-class "
+                        f"false-positive (gpt2_zero_grad / "
+                        f"fill_in_parameter_sizes pattern)."
+                    ),
+                    outcome=CExOutcome.UNRESOLVED,
+                    system_entry_reached=False,
+                )
+                self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+                return result
             result = ValidationResult(
                 function_name=func_name,
                 counterexample=counterexample,

@@ -1623,3 +1623,99 @@ def test_entry_fn_structural_panic_still_real_bug(tmp_path: Path):
 
     assert result.outcome == CExOutcome.REAL_BUG, \
         f"structural-panic entry fn must stay REAL_BUG, got {result.outcome}"
+
+
+def test_implicit_null_precondition_downgrades_to_unresolved(tmp_path: Path):
+    """Caller-reachable CEx on `<fn>.precondition_instance.N` with empty
+    variable_assignments and no chain to system entry should classify
+    UNRESOLVED, not REAL_BUG. Regression: v23 overnight on llm.c marked
+    gpt2_zero_grad and fill_in_parameter_sizes as REAL_BUG via the
+    'reachable from caller' path -- but the caller (gpt2_backward) also
+    derefs the pointer without NULL-checking, so it never actually
+    passes NULL. The implicit precondition is maintained transitively
+    up to main."""
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator, CExOutcome
+    from bmc_agent.harness_generator import HarnessGenerator
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    from bmc_agent.parser import parse_c_file
+    parsed = parse_c_file(EXAMPLE_C)
+
+    caller = _make_func_info("rb_write", callees={"rb_is_full"})
+    func   = _make_func_info("rb_is_full", callees=set())
+    all_funcs = {"rb_write": caller, "rb_is_full": func}
+    all_specs = {n: _make_spec(n) for n in all_funcs}
+    spec = _make_spec("rb_is_full")
+
+    # CBMC's `<fn>.precondition_instance.<N>` shape with no variable
+    # assignments -- classic implicit-NULL-precondition pattern.
+    cex = Counterexample(
+        failing_property="rb_is_full.precondition_instance.1",
+        variable_assignments={},
+        trace=["function-call at ?:?", "__CPROVER_dead_object = NULL"],
+    )
+
+    # Mock: caller CAN reach the state (reachability passes), but
+    # chain-to-system-entry isn't traced (no further callers analysed).
+    mock_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
+
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_reachable), \
+         patch("shutil.which", return_value="/usr/bin/cbmc"):
+        result = validator.validate(
+            func=func, spec=spec, counterexample=cex,
+            all_funcs=all_funcs, all_specs=all_specs,
+            parsed_file=parsed, driver_name="test_driver",
+        )
+
+    assert result.outcome == CExOutcome.UNRESOLVED, \
+        f"expected UNRESOLVED downgrade, got {result.outcome}"
+    assert "implicit" in result.reasoning.lower() or "precondition" in result.reasoning.lower()
+
+
+def test_explicit_overflow_in_caller_path_stays_real_bug(tmp_path: Path):
+    """Sanity counterpart: an EXPLICIT structural panic (overflow, OOB)
+    on the same caller-reachable path stays REAL_BUG. Only the
+    implicit-precondition-instance / pointer_dereference shapes get
+    downgraded."""
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator, CExOutcome
+    from bmc_agent.harness_generator import HarnessGenerator
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    from bmc_agent.parser import parse_c_file
+    parsed = parse_c_file(EXAMPLE_C)
+
+    caller = _make_func_info("rb_write", callees={"rb_is_full"})
+    func   = _make_func_info("rb_is_full", callees=set())
+    all_funcs = {"rb_write": caller, "rb_is_full": func}
+    all_specs = {n: _make_spec(n) for n in all_funcs}
+    spec = _make_spec("rb_is_full")
+
+    cex = Counterexample(
+        failing_property="rb_is_full.overflow.1",
+        variable_assignments={"x": "INT_MAX", "y": "1"},
+        trace=["[rb_is_full.overflow.1] attempt to add with overflow: FAILURE"],
+    )
+    mock_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
+
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_reachable), \
+         patch("shutil.which", return_value="/usr/bin/cbmc"):
+        result = validator.validate(
+            func=func, spec=spec, counterexample=cex,
+            all_funcs=all_funcs, all_specs=all_specs,
+            parsed_file=parsed, driver_name="test_driver",
+        )
+
+    assert result.outcome == CExOutcome.REAL_BUG, \
+        f"explicit overflow must stay REAL_BUG, got {result.outcome}"
