@@ -494,6 +494,36 @@ def _parse_kani_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
             error=f"loop unwind bound exhausted: {first}",
         )
 
+    # Vacuous-proof guard: if Kani says SUCCESSFUL but EVERY check is
+    # UNREACHABLE (no SUCCESS rows), the harness's preconditions pruned
+    # the entire state space (e.g. `kani::assume(false)` -- typical LLM
+    # giveup pattern). Such "verified" verdicts are meaningless, since
+    # nothing was actually checked. Mark as failed with a clear error so
+    # the spec generator / classifier can refine instead of recording a
+    # bogus clean.
+    #
+    # Detection: the summary line has the form
+    #   ** 0 of N failed (N unreachable)
+    # when the entire harness is vacuous. We also check individual Check
+    # rows: if there's at least one row and all are UNREACHABLE, treat as
+    # vacuous. Combine both signals.
+    if has_success:
+        # Quick scan for "(... unreachable)" in the summary
+        summary_match = re.search(r"\*\*\s*0\s+of\s+(\d+)\s+failed\s*\((\d+)\s+unreachable\)", raw)
+        if summary_match and summary_match.group(1) == summary_match.group(2) and int(summary_match.group(1)) > 0:
+            return CBMCResult(
+                verified=False, counterexamples=[], raw_output=raw,
+                error="vacuous proof: all properties unreachable (likely kani::assume(false) from a precondition that prunes every state)",
+            )
+        # Per-check scan: count SUCCESS vs UNREACHABLE
+        success_count = len(re.findall(r"-\s*Status:\s*SUCCESS\b", raw))
+        unreachable_count = len(re.findall(r"-\s*Status:\s*UNREACHABLE\b", raw))
+        if success_count == 0 and unreachable_count > 0:
+            return CBMCResult(
+                verified=False, counterexamples=[], raw_output=raw,
+                error="vacuous proof: all properties unreachable (likely kani::assume(false) from a precondition that prunes every state)",
+            )
+
     # No CEx, no unwind issue → verified iff Kani said SUCCESSFUL.
     return CBMCResult(verified=has_success, counterexamples=[], raw_output=raw)
 

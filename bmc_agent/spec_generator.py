@@ -665,7 +665,17 @@ class SpecGenerator:
         # Anything with an `if`, `match`, loop, or even a let-then-return has a
         # second brace and warrants the critique pass.
         trivial_body = len(body) < 40 and body.count("{") <= 1
-        is_vacuous = pre.strip() in ("true", "") and post.strip() in ("true", "")
+        # Vacuous patterns we've observed K2 emit:
+        #   - pre == "true" AND post == "true" (the giveup-trivial pattern)
+        #   - pre == "false" (assume(false) prunes all paths -> any postcondition holds)
+        #   - post == "false" with pre also "false" (already covered by pre=="false" but worth flagging)
+        # A pre of "false" makes the harness trivially verify regardless of the
+        # function under test, because Kani sees an unreachable assertion. We
+        # observed this on byteorder::default where K2 emitted both pre and
+        # post as "false".
+        is_trivially_true = pre.strip() in ("true", "") and post.strip() in ("true", "")
+        is_unreachable = pre.strip() == "false"
+        is_vacuous = is_trivially_true or is_unreachable
         if not is_vacuous or trivial_body:
             return first
 

@@ -1259,3 +1259,52 @@ def test_harness_unresolvable_exception_carries_names():
     assert exc.unresolved_types == ["Operand", "EncodeResult"]
     msg = str(exc)
     assert "Operand" in msg and "EncodeResult" in msg
+
+
+def test_parse_kani_vacuous_proof():
+    """Kani output with 'VERIFICATION: SUCCESSFUL' but every check
+    UNREACHABLE (typically from kani::assume(false)) is a vacuous proof
+    and must NOT be reported as verified=True."""
+    from bmc_agent.kani import _parse_kani_output
+    raw = """
+Check 1: check_dummy.assertion.1
+\t - Status: UNREACHABLE
+\t - Description: "should never reach"
+\t - Location: src/lib.rs:9:5 in function check_dummy
+Check 2: dummy.assertion.1
+\t - Status: UNREACHABLE
+\t - Description: "attempt to add with overflow"
+\t - Location: src/lib.rs:2:27 in function dummy
+
+
+SUMMARY:
+ ** 0 of 2 failed (2 unreachable)
+
+VERIFICATION:- SUCCESSFUL
+"""
+    res = _parse_kani_output(raw, "", 0)
+    assert res.verified is False, "vacuous proof must NOT be verified"
+    assert res.error and "vacuous" in res.error.lower()
+
+
+def test_parse_kani_real_proof_still_verified():
+    """A real proof with SUCCESS rows continues to be verified=True
+    (sanity check that the vacuous guard doesn't false-positive)."""
+    from bmc_agent.kani import _parse_kani_output
+    raw = """
+Check 1: check_real.assertion.1
+\t - Status: SUCCESS
+\t - Description: "postcondition violated"
+Check 2: check_real.assertion.2
+\t - Status: SUCCESS
+\t - Description: "attempt to add with overflow"
+
+
+SUMMARY:
+ ** 0 of 2 failed
+
+VERIFICATION:- SUCCESSFUL
+"""
+    res = _parse_kani_output(raw, "", 0)
+    assert res.verified is True
+    assert not res.error
