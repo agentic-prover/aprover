@@ -1211,7 +1211,18 @@ class KaniBackend(BMCBackend):
         #    write_elf64_phdr*, etc.) actually compile under Kani, which
         #    has no native pre-state operator.
         raw_post = spec.postcondition or "true"
+        # `Self` only resolves inside an impl block. The harness body is a
+        # free fn appended at top-level, so substitute the implementing type
+        # before translating the DSL. Examples we observed:
+        #   `result == Self::default()`  → `result == Adler32::default()`
+        #   `result.len() == Self::CAP`  → `result.len() == Foo::CAP`
+        if impl_type and "Self" in raw_post:
+            raw_post = _re.sub(r"\bSelf\b", impl_type, raw_post)
         rewritten_post, old_snapshots = _extract_old_snapshots(raw_post)
+        # Same substitution for the precondition.
+        raw_pre = spec.precondition or ""
+        if impl_type and raw_pre and "Self" in raw_pre:
+            raw_pre = _re.sub(r"\bSelf\b", impl_type, raw_pre)
         post_expr = _translate_dsl(rewritten_post, result_var=result_binding or "result")
         post_line = (
             f"    kani::assert({post_expr}, \"postcondition violated\");"
