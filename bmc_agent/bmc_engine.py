@@ -162,7 +162,11 @@ class BMCEngine:
         else:
             # Rust / Kani path: the backend wraps its own verifier
             # invocation and returns a CBMCResult-shaped object.
-            cbmc_result = self.backend.check(harness_path)
+            cbmc_result = self.backend.check(
+                harness_path,
+                harness_name=f"check_{fn_name}",
+                source_path=getattr(parsed_file, "path", None),
+            )
 
             # Timeout retry: complex Rust functions (UTF-8 validation,
             # allocator-driven Vec/String code) can blow past Kani's
@@ -191,7 +195,10 @@ class BMCEngine:
                     fn_name, bumped_unwind,
                 )
                 cbmc_result = self.backend.check(
-                    harness_path, unwind_override=bumped_unwind,
+                    harness_path,
+                    harness_name=f"check_{fn_name}",
+                    source_path=getattr(parsed_file, "path", None),
+                    unwind_override=bumped_unwind,
                 )
                 if not cbmc_result.error or "unwind bound" not in cbmc_result.error:
                     logger.info(
@@ -231,6 +238,8 @@ class BMCEngine:
                     retry_path = self._save_harness(driver_name, fn_name, retry_src)
                     cbmc_result = self.backend.check(
                         retry_path,
+                        harness_name=f"check_{fn_name}",
+                        source_path=getattr(parsed_file, "path", None),
                         unwind_override=retry_unwind,
                         timeout_override=retry_timeout,
                     )

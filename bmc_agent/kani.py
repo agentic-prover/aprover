@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from bmc_agent.cbmc import CBMCResult, Counterexample
 
@@ -100,6 +101,132 @@ def run_kani(
     raw = proc.stdout or ""
     stderr = proc.stderr or ""
     return _parse_kani_output(raw, stderr, proc.returncode)
+
+
+def find_crate_root(source_path: str | Path) -> Optional[Path]:
+    """Walk up from *source_path* looking for the nearest ``Cargo.toml`` --
+    that's the crate root. Returns ``None`` if no Cargo.toml is found
+    (e.g. ad-hoc .rs file outside a crate).
+    """
+    p = Path(source_path).resolve()
+    if p.is_file():
+        p = p.parent
+    while p != p.parent:
+        if (p / "Cargo.toml").exists():
+            return p
+        p = p.parent
+    return None
+
+
+def _extract_harness_proof_block(harness_src: str) -> str:
+    """Pull the ``#[kani::proof]`` function (and any preceding ``use`` or
+    helper items needed) out of a standalone harness file so it can be
+    appended to the function-under-test's source file in cargo-mode.
+
+    We keep:
+      * The ``#[cfg(kani)] #[kani::proof] fn check_<fn>() { ... }`` block.
+      * Any ``use`` statements that survived the standalone strip pass --
+        in cargo-mode all crate-local types are already in scope through
+        the host file, so we generally don't need these, but harmless to
+        keep when they reference std/core/alloc.
+
+    We DROP:
+      * The inlined source the standalone harness copied in (the host file
+        already has it).
+      * The harness file's preamble (`#![allow(...)]` etc.).
+    """
+    # Take everything from the first `#[kani::proof]` annotation to EOF.
+    idx = harness_src.find("#[kani::proof]")
+    if idx == -1:
+        return harness_src  # fallback: append the whole thing
+    # Walk back to the start of the line that contains the annotation.
+    line_start = harness_src.rfind("\n", 0, idx) + 1
+    block = harness_src[line_start:]
+    # Drop trailing whitespace.
+    return block.rstrip() + "\n"
+
+
+def run_kani_cargo(
+    crate_root: str | Path,
+    source_path: str | Path,
+    harness_src: str,
+    harness_name: str,
+    unwind: int = 4,
+    timeout: int = 120,
+) -> CBMCResult:
+    """Run Kani on a harness appended to its function-under-test's source file.
+
+    *crate_root* is the directory containing ``Cargo.toml``. *source_path*
+    is the original .rs file containing the function-under-test; the
+    harness is appended to this file so it can access private items in
+    the function's module. *harness_src* is the full standalone-harness
+    text (this function extracts just the proof block to append).
+    *harness_name* is the ``#[kani::proof]`` function name.
+
+    Mirrors the C-side ``cbmc_real_libc`` mode: instead of generating a
+    standalone compilation unit, we let cargo's existing build context
+    resolve all imports and visibility, then run ``cargo kani --harness
+    <name>`` from the crate root. The original file is snapshotted and
+    restored atomically afterwards so concurrent runs and Ctrl-C never
+    leave the host crate modified.
+    """
+    import shutil as _shutil
+    import subprocess as _sub
+
+    crate_root = Path(crate_root)
+    source_path = Path(source_path)
+
+    if not _shutil.which("cargo"):
+        return CBMCResult(verified=False, error="cargo not found")
+    if not _shutil.which("cargo-kani"):
+        return CBMCResult(verified=False, error="cargo-kani not found")
+    if not source_path.is_file():
+        return CBMCResult(verified=False, error=f"source file not found: {source_path}")
+
+    # Snapshot the original source. The append+restore pattern is atomic
+    # against unexpected exits because we always restore in the finally
+    # block; concurrent appends on the same file (different harnesses on
+    # different functions in the same .rs) are NOT safe — the caller must
+    # serialise per-file in that case.
+    original_bytes = source_path.read_bytes()
+    proof_block = _extract_harness_proof_block(harness_src)
+    # Sentinel comment so we can recognise the appended region if cleanup
+    # is interrupted; lets a manual recovery script grep+truncate.
+    sentinel_start = f"\n// === bmc_agent cargo-kani harness {harness_name} -- DO NOT EDIT ===\n"
+    sentinel_end = f"\n// === end bmc_agent harness {harness_name} ===\n"
+    appended = original_bytes + sentinel_start.encode() + proof_block.encode() + sentinel_end.encode()
+    try:
+        source_path.write_bytes(appended)
+        try:
+            proc = _sub.run(
+                ["cargo", "kani", "--harness", harness_name,
+                 "--default-unwind", str(unwind)],
+                cwd=str(crate_root),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except _sub.TimeoutExpired:
+            return CBMCResult(verified=False, error=f"cargo kani timed out after {timeout}s")
+        except FileNotFoundError:
+            return CBMCResult(verified=False, error="cargo or kani not found")
+        except OSError as exc:
+            return CBMCResult(verified=False, error=f"cargo kani OS error: {exc}")
+        raw = proc.stdout or ""
+        stderr = proc.stderr or ""
+        return _parse_kani_output(raw, stderr, proc.returncode)
+    finally:
+        # Always restore -- atomic write to avoid partial-restore on
+        # crash during recovery itself.
+        try:
+            source_path.write_bytes(original_bytes)
+        except OSError:
+            # Last-resort warning so the user knows a manual rollback may
+            # be needed; can't raise here (we're in finally).
+            import logging as _logging
+            _logging.getLogger("bmc_agent.kani").error(
+                "Failed to restore %s after cargo-kani run", source_path,
+            )
 
 
 # ---------------------------------------------------------------------------

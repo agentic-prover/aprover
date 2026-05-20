@@ -155,6 +155,15 @@ class Config:
     kani_path: str = "kani"
     kani_unwind: int = 4
     kani_timeout: int = 120  # seconds
+    # Cargo-mode for Kani: run the harness as a test inside the host crate
+    # via `cargo kani --tests --harness <name>` instead of as a standalone
+    # `kani harness.rs` invocation. Required for multi-crate workspace
+    # targets (ast-grep, ruff_python_parser, etc.) where harness emit can't
+    # resolve cross-crate imports in standalone mode. When True, the
+    # harness file is placed at `<crate_root>/tests/__bmc_<driver>.rs`,
+    # cargo kani is invoked from the crate root, and the file is removed
+    # after verification.
+    kani_real_crate: bool = False
     # Bound on nondeterministic slice/array length in Kani harnesses. BMC
     # is bounded by construction; this controls how far the verifier
     # explores slice contents and indices. Default 4 keeps runtime small

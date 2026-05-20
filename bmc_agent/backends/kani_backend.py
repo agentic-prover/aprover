@@ -1293,15 +1293,44 @@ class KaniBackend(BMCBackend):
         harness_name: str | None = None,
         unwind_override: int | None = None,
         timeout_override: int | None = None,
+        source_path: str | Path | None = None,
     ):
         """Run Kani on *harness_path* and return a ``CBMCResult``.
 
         ``unwind_override`` / ``timeout_override`` let the engine's
         retry path tighten loop bounds or extend the wall-clock when
         a previous run timed out.
+
+        When ``config.kani_real_crate`` is True AND ``source_path`` is
+        supplied AND that path lies in a Cargo crate, the harness is
+        verified via ``cargo kani --tests`` from the crate root instead
+        of as a standalone Kani invocation. This resolves cross-crate
+        imports naturally (ruff_python_ast, tree-sitter types, etc.) and
+        is the only way to verify functions in modern multi-crate Rust
+        workspaces.
         """
+        from bmc_agent.kani import find_crate_root, run_kani_cargo
+
         unwind = unwind_override if unwind_override is not None else self._config.kani_unwind
         timeout = timeout_override if timeout_override is not None else self._config.kani_timeout
+
+        if getattr(self._config, "kani_real_crate", False) and source_path:
+            crate_root = find_crate_root(source_path)
+            if crate_root is not None and harness_name:
+                # Append the harness to its function-under-test's source
+                # file so it can access private items, then run cargo kani.
+                # The host crate's compilation context resolves all
+                # cross-crate imports naturally.
+                harness_src = Path(harness_path).read_text()
+                return run_kani_cargo(
+                    crate_root=crate_root,
+                    source_path=source_path,
+                    harness_src=harness_src,
+                    harness_name=harness_name,
+                    unwind=unwind,
+                    timeout=timeout,
+                )
+
         return run_kani(
             harness_path=str(harness_path),
             harness_name=harness_name,
