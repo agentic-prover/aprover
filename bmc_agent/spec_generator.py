@@ -811,10 +811,14 @@ class SpecGenerator:
         # because prose mixing translates to vacuous verifications.
         language = detect_language(source_file)
         strict = bool(getattr(self.config, "strict_dsl", False))
-        self._spec_system_prompt = spec_system_prompt_for(language, strict=strict)
+        safety_only = bool(getattr(self.config, "safety_only", False))
+        self._spec_system_prompt = spec_system_prompt_for(
+            language, strict=strict, safety_only=safety_only,
+        )
         logger.info(
-            "Using %s%s spec system prompt",
+            "Using %s%s%s spec system prompt",
             "strict-" if (strict and language == "c") else "",
+            "safety-only " if safety_only else "",
             language,
         )
 

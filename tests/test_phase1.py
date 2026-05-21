@@ -735,6 +735,55 @@ def test_spec_system_prompt_contains_dsl_grammar():
     assert "{dsl_grammar}" not in prompts.SPEC_SYSTEM_PROMPT
 
 
+def test_safety_only_appends_postcondition_clause():
+    """``spec_system_prompt_for(language='c', safety_only=True)`` returns
+    the base prompt with the SAFETY_ONLY_POSTCOND_CLAUSE appended. The
+    clause must forbid functional/algebraic postconditions and permit
+    only safety/range/no-NaN claims."""
+    from bmc_agent.prompts import (
+        spec_system_prompt_for, SAFETY_ONLY_POSTCOND_CLAUSE,
+        SPEC_SYSTEM_PROMPT,
+    )
+
+    out_off = spec_system_prompt_for("c", safety_only=False)
+    out_on  = spec_system_prompt_for("c", safety_only=True)
+    assert out_off == SPEC_SYSTEM_PROMPT
+    assert out_on  == SPEC_SYSTEM_PROMPT + SAFETY_ONLY_POSTCOND_CLAUSE
+
+    # The clause itself must enumerate the allowed safety predicates
+    # and forbid functional/algebraic ones.
+    assert "!isnan(result)" in SAFETY_ONLY_POSTCOND_CLAUSE
+    assert "!isinf(result)" in SAFETY_ONLY_POSTCOND_CLAUSE
+    assert "FORBIDDEN" in SAFETY_ONLY_POSTCOND_CLAUSE
+    # Examples of disallowed shapes are explicitly called out.
+    assert "compute_reference_value" in SAFETY_ONLY_POSTCOND_CLAUSE
+
+
+def test_safety_only_combines_with_strict_dsl():
+    """When BOTH strict_dsl and safety_only are set, both grammars
+    apply: the strict-DSL base prompt plus the safety-only postcondition
+    clause."""
+    from bmc_agent.prompts import (
+        spec_system_prompt_for, SAFETY_ONLY_POSTCOND_CLAUSE,
+        STRICT_SPEC_SYSTEM_PROMPT,
+    )
+
+    out = spec_system_prompt_for("c", strict=True, safety_only=True)
+    assert out == STRICT_SPEC_SYSTEM_PROMPT + SAFETY_ONLY_POSTCOND_CLAUSE
+
+
+def test_safety_only_applies_to_rust_prompt_too():
+    """Rust spec prompt is already strict-formal; safety-only still
+    appends the postcondition clause on top."""
+    from bmc_agent.prompts import (
+        spec_system_prompt_for, SAFETY_ONLY_POSTCOND_CLAUSE,
+        RUST_SPEC_SYSTEM_PROMPT,
+    )
+
+    out = spec_system_prompt_for("rust", safety_only=True)
+    assert out == RUST_SPEC_SYSTEM_PROMPT + SAFETY_ONLY_POSTCOND_CLAUSE
+
+
 def test_relax_postcondition_permits_null_when_body_returns_null():
     """Soften `result != NULL` when body has explicit `return NULL;`.
 

@@ -168,7 +168,46 @@ RUST_SPEC_SYSTEM_PROMPT = (
 )
 
 
-def spec_system_prompt_for(language: str, strict: bool = False) -> str:
+# Safety-only postcondition clause (M3). Appended to the system prompt
+# when Config.safety_only is True. Constrains the LLM's postcondition
+# output to memory-safety / range-bound / NaN-Inf-freedom predicates.
+# Forbids functional-correctness postconditions whose SMT obligations
+# can't be bounded at scale (float associativity, exact algebraic
+# equivalence, etc.). The right default for ML / numerics kernels.
+SAFETY_ONLY_POSTCOND_CLAUSE = """\
+
+SAFETY-ONLY POSTCONDITION MODE — RESTRICTED GRAMMAR
+The postcondition must be a conjunction of clauses drawn ONLY from the
+following set. Functional / algebraic / mathematical-correctness clauses
+are FORBIDDEN in this mode — they translate to verification obligations
+that the SMT solver can't bound at scale for float arithmetic.
+
+Allowed postcondition clauses:
+  * !isnan(result), !isinf(result)         — no NaN/Inf propagation
+  * result >= L && result <= H            — explicit range bound on a scalar return
+  * !isnan(arr[i]), !isinf(arr[i])         — element-wise NaN/Inf-freedom
+                                              (for output buffers; i is a bound variable)
+  * arr[i] >= L && arr[i] <= H            — element-wise range bound on output buffers
+  * result == 0, result != 0              — coarse success/failure indicator
+  * result != NULL, result == NULL         — pointer-return validity claim
+  * Always-true: postcondition := "true"   — explicit no-claim
+
+EXAMPLES (matching this mode):
+  GOOD post: !isnan(result) && result >= 0.0f && result <= 1.0f
+  GOOD post: true
+  BAD  post: result == compute_reference_value(inp)
+  BAD  post: forall i. out[i] == sum_j(inp[i*n + j] * weight[j])
+  BAD  post: |out[i] - naive_out[i]| <= eps * |naive_out[i]| + ulp_tol
+
+The precondition is unchanged — strengthen it freely with valid_range,
+in_bounds, or arithmetic bounds; only the postcondition is restricted.
+Memory safety, OOB, NaN-propagation, and overflow are still checked
+mechanically by CBMC's built-in property set, so these restricted
+postconditions don't lose coverage of bug classes.
+"""
+
+
+def spec_system_prompt_for(language: str, strict: bool = False, safety_only: bool = False) -> str:
     """Return the system prompt appropriate for *language*.
 
     Recognised values: ``"c"`` and ``"rust"``. Unknown languages fall
@@ -183,10 +222,14 @@ def spec_system_prompt_for(language: str, strict: bool = False) -> str:
     default (M3c) so the flag has no effect for Rust.
     """
     if language == "rust":
-        return RUST_SPEC_SYSTEM_PROMPT
-    if strict:
-        return STRICT_SPEC_SYSTEM_PROMPT
-    return SPEC_SYSTEM_PROMPT
+        base = RUST_SPEC_SYSTEM_PROMPT
+    elif strict:
+        base = STRICT_SPEC_SYSTEM_PROMPT
+    else:
+        base = SPEC_SYSTEM_PROMPT
+    if safety_only:
+        base = base + SAFETY_ONLY_POSTCOND_CLAUSE
+    return base
 
 ENTRY_SPEC_PROMPT = """\
 Your task: Given a C function's implementation and domain knowledge, generate a precise

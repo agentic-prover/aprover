@@ -197,6 +197,18 @@ class Config:
     scale_down: bool = False
     scale_down_size: int = 4
 
+    # Safety-only spec mode (M3). When True, the spec-generation prompt
+    # instructs the LLM to restrict postconditions to memory safety,
+    # range bounds, and NaN/Inf-freedom — forbidding functional /
+    # algebraic correctness postconditions that the SMT solver can't
+    # bound at scale (associativity-dependent claims, exact float
+    # arithmetic equivalence, complex algebraic identities).
+    # The right default for ML / numerics kernels in scale-down mode:
+    # we want a clean "memory-safe + no-NaN" verdict, not a vacuous
+    # functional-spec attempt that times out. Off by default; pairs
+    # naturally with ``BMC_AGENT_SCALE_DOWN``.
+    safety_only: bool = False
+
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
     # absent (we still surface the field to give the pipeline a single knob).
@@ -349,6 +361,7 @@ class Config:
             infer_array_param_bounds_max=int(os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS_MAX", "64")),
             scale_down=os.environ.get("BMC_AGENT_SCALE_DOWN", "false").lower() == "true",
             scale_down_size=int(os.environ.get("BMC_AGENT_SCALE_DOWN_SIZE", "4")),
+            safety_only=os.environ.get("BMC_AGENT_SAFETY_ONLY", "false").lower() == "true",
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),
