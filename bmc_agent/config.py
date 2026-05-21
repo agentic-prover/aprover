@@ -149,6 +149,20 @@ class Config:
     # under-sizes the backing buffer when the function reads beyond strlen.
     raw_bytes: bool = False
 
+    # Struct-pointer field validity inference. When True, primitive-pointer
+    # fields (``float *``, ``int *``, ``double *``, etc.) of struct
+    # parameters get a disjunctive harness init: either NULL, or a fresh
+    # backing buffer of ``cbmc_unwind + 1`` elements. Without this, CBMC's
+    # nondet pointer model allows "non-NULL but invalid", which crashes any
+    # ``memset(field, ...)`` even when the source has a proper
+    # ``if (field != NULL)`` guard (the guard passes, the access on
+    # non-NULL-invalid then traps). Target audience: ML / numerics codebases
+    # (llm.c, ggml) whose struct pointer fields are typed ``float *`` and
+    # never NUL-terminated, so the existing char-string heuristic skips them.
+    # Safe default off; turn on for ML-kernel-style targets via
+    # ``BMC_AGENT_INFER_FIELD_VALIDITY=true``.
+    infer_field_validity: bool = False
+
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
     # absent (we still surface the field to give the pipeline a single knob).
@@ -296,6 +310,7 @@ class Config:
             inline_pure_callees_max_loc=int(os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES_MAX_LOC", "30")),
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",
+            infer_field_validity=os.environ.get("BMC_AGENT_INFER_FIELD_VALIDITY", "false").lower() == "true",
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),

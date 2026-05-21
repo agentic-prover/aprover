@@ -661,6 +661,156 @@ def test_generate_nd_decls_uint8_pointer_is_raw_bytes():
         assert "= '\\0'" not in src
 
 
+def test_struct_field_init_primitive_pointer_off_by_default():
+    """Without ``infer_field_validity``, a primitive-pointer field
+    (``float *``, ``int *``, ``double *``, …) stays nondet — no backing
+    buffer, no NULL constraint. Preserves backwards-compatible default.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+
+    out_float = _emit_struct_field_init(
+        "_model_obj", "float *", "grads_memory", cbmc_unwind=4,
+    )
+    out_int = _emit_struct_field_init(
+        "_model_obj", "int *", "inputs", cbmc_unwind=4,
+    )
+    assert out_float == [], "default must leave float* field nondet"
+    assert out_int   == [], "default must leave int* field nondet"
+
+
+def test_struct_field_init_primitive_pointer_disjunctive_when_on():
+    """With ``infer_field_validity=True``, a primitive-pointer field gets
+    a disjunctive NULL-or-backing-buffer init: emit a fresh array of
+    ``cbmc_unwind+1`` elements + a nondet selector + a ternary
+    assignment that picks NULL or the array.
+
+    This is the fix that prevents CBMC from choosing 'non-NULL but
+    invalid' for ``float *`` fields of struct-pointer params. Real-data
+    motivation: llm.c's gpt2_zero_grad does
+    ``if (model->grads_memory != NULL) { memset(model->grads_memory, 0, ...); }``;
+    without disjunctive init the harness explores 'non-NULL invalid'
+    grads_memory, passes the guard, and traps inside memset. The
+    disjunctive init confines exploration to NULL (guard rejects) or
+    valid backing (memset succeeds).
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+
+    out = _emit_struct_field_init(
+        "_model_obj", "float *", "grads_memory", cbmc_unwind=4,
+        infer_field_validity=True,
+    )
+    src = "\n".join(out)
+    # Backing is a malloc'd (dynamic) object, not a stack array -- required
+    # so free(field) patterns ALSO verify (CBMC's free() requires a
+    # dynamic object).
+    assert "malloc(sizeof(float) * 5)" in src
+    assert "__model_obj_grads_memory_buf_p" in src
+    assert "__CPROVER_assume(__model_obj_grads_memory_buf_p != NULL);" in src
+    # Selector boolean.
+    assert "unsigned char __model_obj_grads_memory_is_null;" in src
+    # Disjunctive assignment.
+    assert "_model_obj.grads_memory = __model_obj_grads_memory_is_null ?" in src
+    assert "(float *)0" in src
+
+
+def test_struct_field_init_void_pointer_still_nondet_when_on():
+    """``void *`` fields stay nondet even with ``infer_field_validity=True``
+    — we don't know ``sizeof(*p)`` for void, so we can't safely allocate a
+    backing buffer. Same for unrecognised opaque struct pointers.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+
+    out_void = _emit_struct_field_init(
+        "_obj", "void *", "ctx", cbmc_unwind=4,
+        infer_field_validity=True,
+    )
+    out_opaque = _emit_struct_field_init(
+        "_obj", "struct OpaqueThing *", "thing", cbmc_unwind=4,
+        infer_field_validity=True,
+    )
+    assert out_void   == [], "void* must stay nondet under infer_field_validity"
+    assert out_opaque == [], "opaque struct* must stay nondet under infer_field_validity"
+
+
+def test_generate_nd_decls_threads_infer_field_validity():
+    """The disjunctive-init flag must propagate from
+    ``_generate_nd_decls`` to ``_emit_struct_field_init`` so callers
+    don't have to plumb it twice.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="zero_grad", return_type="void",
+        parameters=[("struct Tiny *", "m")],
+    )
+    func = FunctionInfo(
+        name="zero_grad", signature=sig, body="",
+        callees=set(), source_file="x.c",
+    )
+    # Tiny has one float pointer field 'g'.
+    struct_defs = {"Tiny": [("float *", "g")]}
+
+    off = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4, struct_definitions=struct_defs,
+        infer_field_validity=False,
+    ))
+    on = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4, struct_definitions=struct_defs,
+        infer_field_validity=True,
+    ))
+
+    # Off: no backing, no selector. The struct itself is still emitted.
+    assert "struct Tiny _m_obj;" in off
+    assert "_m_obj.g =" not in off
+    assert "is_null" not in off
+
+    # On: malloc-backed + selector + disjunctive assignment.
+    assert "malloc(sizeof(float) * 5)" in on
+    assert "__m_obj_g_buf_p" in on
+    assert "unsigned char __m_obj_g_is_null;" in on
+    assert "_m_obj.g = __m_obj_g_is_null ?" in on
+
+
+def test_generate_nd_decls_llmc_gpt2_shape_under_flag():
+    """End-to-end shape check against a stripped-down GPT2 struct
+    mirroring the v23 llm.c failure case. With the flag on, every
+    ``float *`` field gets disjunctive init; the implicit-NULL
+    precondition false-positive class on the saved v23 artifacts is
+    eliminated at harness-emit time.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="gpt2_zero_grad", return_type="void",
+        parameters=[("GPT2 *", "model")],
+    )
+    func = FunctionInfo(
+        name="gpt2_zero_grad", signature=sig, body="",
+        callees=set(), source_file="train_gpt2.c",
+    )
+    # Stripped-down GPT2 with the fields gpt2_zero_grad actually derefs.
+    struct_defs = {
+        "GPT2": [
+            ("float *", "grads_memory"),
+            ("float *", "grads_acts_memory"),
+            ("size_t", "num_parameters"),
+            ("size_t", "num_activations"),
+        ],
+    }
+    out = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4, struct_definitions=struct_defs,
+        infer_field_validity=True,
+    ))
+    # Both float-pointer fields get disjunctive init.
+    assert "_model_obj.grads_memory = __model_obj_grads_memory_is_null ?" in out
+    assert "_model_obj.grads_acts_memory = __model_obj_grads_acts_memory_is_null ?" in out
+    # Size fields still hit the length-field heuristic.
+    assert "_model_obj.num_parameters >= 0" in out
+    assert "_model_obj.num_activations >= 0" in out
+
+
 def test_generate_nd_decls_double_pointer_cursor():
     """`T**` params (in-out cursors) get a backing buffer + cursor + addr-of.
 

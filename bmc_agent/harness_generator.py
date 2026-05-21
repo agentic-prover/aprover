@@ -1639,10 +1639,32 @@ _MMIO_FIELD_NAMES = {
 }
 _MMIO_BAR_REGION_BYTES = 4096
 
+# Primitive pointee types whose ``sizeof(*p)`` is known to CBMC and to us,
+# so we can safely allocate a backing array of ``cbmc_unwind+1`` elements
+# for a struct's ``T *`` field under ``infer_field_validity``. Excludes
+# ``char``, ``unsigned char``, ``uint8_t``, ``int8_t`` (already handled
+# upstream as NUL-string / raw-byte buffers) and ``void`` (unknown size).
+# Includes the common ML / numerics-codebase pointee shapes (float, double,
+# the standard int widths).
+_PRIMITIVE_POINTEE_TYPES = {
+    "float", "double",
+    "int", "unsigned int", "signed int",
+    "long", "unsigned long", "signed long",
+    "long long", "unsigned long long", "signed long long",
+    "short", "unsigned short", "signed short",
+    "int16_t", "uint16_t",
+    "int32_t", "uint32_t",
+    "int64_t", "uint64_t",
+    "size_t", "ssize_t",
+    "intptr_t", "uintptr_t",
+    "ptrdiff_t",
+}
+
 
 def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
     enclosing_struct_tag: Optional[str] = None,
+    infer_field_validity: bool = False,
 ) -> list[str]:
     """Emit harness statements that initialise a single struct field.
 
@@ -1756,6 +1778,43 @@ def _emit_struct_field_init(
             btype = "unsigned char" if base != "int8_t" else "signed char"
             out.append(f"    {btype} {backing}[{buf_size}];")
             out.append(f"    {obj_name}.{fname} = ({t}){backing};")
+        elif infer_field_validity and base in _PRIMITIVE_POINTEE_TYPES:
+            # Disjunctive NULL-or-backing init for primitive-pointer
+            # fields. Without this, CBMC's nondet model picks "non-NULL
+            # but invalid" for ``float *``, ``int *``, ``double *`` etc.,
+            # which causes any deref inside an ``if (field != NULL)`` guard
+            # to fail despite the source having a correct guard. The
+            # disjunctive init explores both: NULL (function skips) AND
+            # valid backing (function's deref succeeds). Size is
+            # ``cbmc_unwind + 1`` elements -- matches the bound used
+            # elsewhere for nondet length fields, so kernels iterating
+            # ``for (i=0; i<num_parameters; i++) f(field[i])`` stay in
+            # bounds when ``num_parameters`` was also bounded by the
+            # length-field heuristic above.
+            #
+            # Backing is allocated via ``malloc`` (not a stack array) so
+            # ``free(field)`` patterns ALSO verify -- CBMC requires the
+            # argument to ``free`` be a dynamic object. A stack-array
+            # backing would correctly verify memset/memcpy patterns but
+            # would fail ``free`` with "free argument must be dynamic
+            # object". Real motivation: llm.c ships ``gpt2_zero_grad``
+            # (memset pattern) AND ``gpt2_free`` (free pattern) side by
+            # side; both must verify cleanly under the same field-init.
+            # The malloc cost is symbolic-only (no real allocation
+            # happens in CBMC's symbolic execution), so size impact is
+            # nil.
+            sel_var = f"_{obj_name}_{fname}_is_null"
+            backing_ptr = f"{backing}_p"
+            out.append(
+                f"    {t}{backing_ptr} = "
+                f"({t})malloc(sizeof({base}) * {buf_size});"
+            )
+            out.append(f"    __CPROVER_assume({backing_ptr} != NULL);")
+            out.append(f"    unsigned char {sel_var};")
+            out.append(
+                f"    {obj_name}.{fname} = {sel_var} ? "
+                f"({t})0 : {backing_ptr};"
+            )
         # Other pointer types (void *, struct pointers, function pointers,
         # arrays of pointers) stay nondet — modelling them would risk
         # over-constraining or compile errors on incomplete types.
@@ -1819,6 +1878,7 @@ def _generate_nd_decls(
     precondition: Optional[str] = None,
     raw_bytes: bool = False,
     struct_definitions: Optional[dict] = None,
+    infer_field_validity: bool = False,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -2062,6 +2122,7 @@ def _generate_nd_decls(
                         _emit_struct_field_init(
                             obj_name, ftype, fname, cbmc_unwind,
                             enclosing_struct_tag=struct_tag,
+                            infer_field_validity=infer_field_validity,
                         )
                     )
                 if pname in nonnull_params:
@@ -2177,6 +2238,7 @@ class HarnessGenerator:
             caller,
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
+            infer_field_validity=getattr(self.config, "infer_field_validity", False),
         )
 
         # --- 6. Precondition assumptions ---
@@ -2980,6 +3042,7 @@ class HarnessGenerator:
             precondition=spec.precondition,
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
+            infer_field_validity=getattr(self.config, "infer_field_validity", False),
         )
 
         # --- 6. Precondition assumptions ---
@@ -3234,6 +3297,7 @@ class HarnessGenerator:
             precondition=spec.precondition,
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
+            infer_field_validity=getattr(self.config, "infer_field_validity", False),
         )
 
         # Precondition assume + postcondition assert via existing DSL.
