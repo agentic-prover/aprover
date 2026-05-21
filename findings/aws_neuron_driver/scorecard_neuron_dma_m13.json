@@ -1,0 +1,302 @@
+[
+  {
+    "fn": "__check_zerocopy_trn1_override",
+    "status": "VERIFIED",
+    "elapsed": 1.0978436470031738
+  },
+  {
+    "fn": "_ndma_memcpy_wait_for_completion",
+    "status": "FAIL (_ndma_memcpy_wait_for_completion.pointer_dereference.13)",
+    "elapsed": 7.91377067565918
+  },
+  {
+    "fn": "_ndma_prefetch_user_pages",
+    "status": "VERIFIED",
+    "elapsed": 1.0820612907409668
+  },
+  {
+    "fn": "_ndma_zc_descs_available",
+    "status": "VERIFIED",
+    "elapsed": 1.2181575298309326
+  },
+  {
+    "fn": "ndma_ack_completed_desc",
+    "status": "VERIFIED",
+    "elapsed": 1.1908326148986816
+  },
+  {
+    "fn": "ndma_bar0_blocked_one_engine",
+    "status": "FAIL (ndma_bar0_blocked_one_engine.pointer_dereference.1)",
+    "elapsed": 1.4225561618804932
+  },
+  {
+    "fn": "ndma_build_n_issue_zc_descs",
+    "status": "FAIL (ndma_build_n_issue_zc_descs.pointer_dereference.91)",
+    "elapsed": 2.8296382427215576
+  },
+  {
+    "fn": "ndma_calc_zc_pin_size",
+    "status": "VERIFIED",
+    "elapsed": 1.117584466934204
+  },
+  {
+    "fn": "ndma_ctx_queue_advance_to_valid",
+    "status": "FAIL (ndma_ctx_queue_advance_to_valid.pointer_dereference.19)",
+    "elapsed": 1.1745021343231201
+  },
+  {
+    "fn": "ndma_ctx_queue_drain",
+    "status": "FAIL (ndma_ctx_queue_drain.pointer_dereference.1)",
+    "elapsed": 54.24920201301575
+  },
+  {
+    "fn": "ndma_ctx_queue_drain_sequence",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ndma_ctx_queue_free",
+    "status": "VERIFIED",
+    "elapsed": 1.248276710510254
+  },
+  {
+    "fn": "ndma_ctx_queue_inc_first_pinned_unsubmitted",
+    "status": "VERIFIED",
+    "elapsed": 1.122178316116333
+  },
+  {
+    "fn": "ndma_ctx_queue_inc_first_unpinned",
+    "status": "VERIFIED",
+    "elapsed": 1.1345562934875488
+  },
+  {
+    "fn": "ndma_ctx_queue_inc_tail",
+    "status": "FAIL (ndma_ctx_queue_inc_tail.pointer_dereference.19)",
+    "elapsed": 1.1867339611053467
+  },
+  {
+    "fn": "ndma_ctx_queue_init",
+    "status": "FAIL (ndma_ctx_queue_init.pointer_dereference.73)",
+    "elapsed": 3.040874481201172
+  },
+  {
+    "fn": "ndma_ctx_queue_is_empty",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.55902099609375
+  },
+  {
+    "fn": "ndma_ctx_queue_is_full",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5749731063842773
+  },
+  {
+    "fn": "ndma_ctx_queue_peek_first_unpinned",
+    "status": "VERIFIED",
+    "elapsed": 1.1100614070892334
+  },
+  {
+    "fn": "ndma_ctx_queue_peek_pinned_unsubmitted",
+    "status": "VERIFIED",
+    "elapsed": 1.1354560852050781
+  },
+  {
+    "fn": "ndma_ctx_queue_peek_tail",
+    "status": "VERIFIED",
+    "elapsed": 1.137087345123291
+  },
+  {
+    "fn": "ndma_ctx_queue_pinned_unsubmitted_empty",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5569448471069336
+  },
+  {
+    "fn": "ndma_ctx_queue_pop_head",
+    "status": "VERIFIED",
+    "elapsed": 1.1381332874298096
+  },
+  {
+    "fn": "ndma_ctx_queue_pop_submitted",
+    "status": "VERIFIED",
+    "elapsed": 1.1149966716766357
+  },
+  {
+    "fn": "ndma_ctx_queue_submitted_empty",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5920965671539307
+  },
+  {
+    "fn": "ndma_ctx_queue_unpinned_empty",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5699903964996338
+  },
+  {
+    "fn": "ndma_dma_ctx_get_next_handle",
+    "status": "VERIFIED",
+    "elapsed": 1.1223790645599365
+  },
+  {
+    "fn": "ndma_get_dma_ctx",
+    "status": "VERIFIED",
+    "elapsed": 1.2465572357177734
+  },
+  {
+    "fn": "ndma_h2d_compl_queue_destroy",
+    "status": "VERIFIED",
+    "elapsed": 1.1030609607696533
+  },
+  {
+    "fn": "ndma_h2d_compl_queue_init",
+    "status": "FAIL (ndma_h2d_compl_queue_init.pointer_dereference.1)",
+    "elapsed": 6.871379137039185
+  },
+  {
+    "fn": "ndma_h2d_compl_queue_put",
+    "status": "FAIL (ndma_h2d_compl_queue_put.pointer_dereference.7)",
+    "elapsed": 1.1296873092651367
+  },
+  {
+    "fn": "ndma_is_valid_host_mem",
+    "status": "VERIFIED",
+    "elapsed": 1.6812140941619873
+  },
+  {
+    "fn": "ndma_is_valid_host_mem_from_nd",
+    "status": "VERIFIED",
+    "elapsed": 1.0661945343017578
+  },
+  {
+    "fn": "ndma_mc_pair_to_nc",
+    "status": "VERIFIED",
+    "elapsed": 1.1027450561523438
+  },
+  {
+    "fn": "ndma_mc_to_pa",
+    "status": "FAIL (ndma_mc_to_pa.pointer_dereference.13)",
+    "elapsed": 1.1122832298278809
+  },
+  {
+    "fn": "ndma_memcpy",
+    "status": "VERIFIED",
+    "elapsed": 1.1548442840576172
+  },
+  {
+    "fn": "ndma_memcpy64k",
+    "status": "VERIFIED",
+    "elapsed": 1.1846590042114258
+  },
+  {
+    "fn": "ndma_memcpy_add_completion_desc",
+    "status": "FAIL (ndma_memcpy_add_completion_desc.pointer_dereference.13)",
+    "elapsed": 1.948108434677124
+  },
+  {
+    "fn": "ndma_memcpy_buf_from_mc",
+    "status": "FAIL (ndma_memcpy_buf_from_mc.pointer_dereference.1)",
+    "elapsed": 7.224474906921387
+  },
+  {
+    "fn": "ndma_memcpy_buf_to_mc",
+    "status": "FAIL (ndma_memcpy_buf_to_mc.pointer_dereference.1)",
+    "elapsed": 6.967627763748169
+  },
+  {
+    "fn": "ndma_memcpy_chunks",
+    "status": "FAIL (ndma_memcpy_chunks.pointer_dereference.37)",
+    "elapsed": 1.7078349590301514
+  },
+  {
+    "fn": "ndma_memcpy_dma_copy_descriptors",
+    "status": "FAIL (ndma_memcpy_dma_copy_descriptors.pointer_dereference.13)",
+    "elapsed": 8.002155780792236
+  },
+  {
+    "fn": "ndma_memcpy_get_completion_buf",
+    "status": "VERIFIED",
+    "elapsed": 1.1893916130065918
+  },
+  {
+    "fn": "ndma_memcpy_mc",
+    "status": "FAIL (ndma_memcpy_mc.pointer_dereference.13)",
+    "elapsed": 7.248543739318848
+  },
+  {
+    "fn": "ndma_memcpy_mc_async",
+    "status": "VERIFIED",
+    "elapsed": 1.1897308826446533
+  },
+  {
+    "fn": "ndma_memcpy_mc_wait",
+    "status": "FAIL (ndma_memcpy_mc_wait.pointer_dereference.1)",
+    "elapsed": 7.024521112442017
+  },
+  {
+    "fn": "ndma_memcpy_offset_move",
+    "status": "FAIL (ndma_memcpy_offset_move.pointer_dereference.1)",
+    "elapsed": 6.918407917022705
+  },
+  {
+    "fn": "ndma_memcpy_wait_for_completion",
+    "status": "FAIL (ndma_memcpy_wait_for_completion.pointer_dereference.1)",
+    "elapsed": 1.7660348415374756
+  },
+  {
+    "fn": "ndma_memset",
+    "status": "FAIL (ndma_memset.pointer_dereference.7)",
+    "elapsed": 6.99445915222168
+  },
+  {
+    "fn": "ndma_prefetch_user_pages",
+    "status": "FAIL (ndma_prefetch_user_pages.pointer_dereference.1)",
+    "elapsed": 2.7430644035339355
+  },
+  {
+    "fn": "ndma_release_dma_ctx",
+    "status": "VERIFIED",
+    "elapsed": 1.174201488494873
+  },
+  {
+    "fn": "ndma_zc_descs_available",
+    "status": "VERIFIED",
+    "elapsed": 1.1482791900634766
+  },
+  {
+    "fn": "ndma_zc_release_ctx",
+    "status": "VERIFIED",
+    "elapsed": 1.0915470123291016
+  },
+  {
+    "fn": "ndma_zc_should_wait",
+    "status": "VERIFIED",
+    "elapsed": 1.1656310558319092
+  },
+  {
+    "fn": "ndma_zerocopy_complete",
+    "status": "FAIL (ndma_zc_release_ctx.pointer_dereference.1)",
+    "elapsed": 8.831027746200562
+  },
+  {
+    "fn": "ndma_zerocopy_pin_pages",
+    "status": "VERIFIED",
+    "elapsed": 1.1025431156158447
+  },
+  {
+    "fn": "ndma_zerocopy_submit",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5647270679473877
+  },
+  {
+    "fn": "ndma_zerocopy_supported",
+    "status": "FAIL (ndma_zerocopy_supported.pointer_dereference.1)",
+    "elapsed": 1.0761759281158447
+  },
+  {
+    "fn": "ndmar_queue_get_state",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ndmar_queue_read_state",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5667312145233154
+  }
+]
