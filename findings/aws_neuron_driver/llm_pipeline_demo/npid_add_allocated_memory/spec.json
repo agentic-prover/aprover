@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:05:52.825621+00:00",
+  "spec": {
+    "function_name": "npid_add_allocated_memory",
+    "precondition": "requires valid(nd) && valid_range(nd->attached_processes, 0, nd->num_attached_processes) && (int)location >= 1 && (int)location - 1 < /* size of memory_used array */ && amount >= 0 && /* nd has a valid process slot findable by npid_find_process_slot */ && nd->attached_processes[slot].memory_used[(int)location - 1] + amount does not overflow size_t",
+    "postcondition": "(ensures result == 0 || result == -1 && (result == -1 implies no valid process slot was found for nd) && (result == 0 implies nd->attached_processes[slot].memory_used[(int)location - 1] == old(nd->attached_processes[slot].memory_used[(int)location - 1]) + amount for the slot returned by npid_find_process_slot)) && ((slot == -1) ? (result == -1) : (result == 0 && nd->attached_processes[slot].memory_used[(int)location - 1] == /* old value */ + amount))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": true
+  }
+}

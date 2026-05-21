@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:05:52.824606+00:00",
+  "spec": {
+    "function_name": "npid_is_attached",
+    "precondition": "valid(nd) && valid_range(nd->attached_processes, 0, nd->max_attached_processes) && nd->max_attached_processes >= 0",
+    "postcondition": "(result >= 0 && (result == 0 || result > 0) && (result == 0 implies the calling process is not attached to nd or has no open references) && (result > 0 implies the calling process is attached to nd with result open references)) && ((npid_find_process_slot(nd) == -1) ? (result == 0) : (result == nd->attached_processes[npid_find_process_slot(nd)].open_count))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "saved_at": "2026-05-21T12:07:53.526229+00:00",
+  "spec": {
+    "function_name": "npid_print_usage",
+    "precondition": "requires valid(nd) && valid(nd->attached_processes) && valid_range(nd->attached_processes, 0, 16)",
+    "postcondition": "ensures true (function produces kernel log output as a side effect; no return value or state mutation that callers depend on)",
+    "callee_specs": {
+      "_printk": {
+        "function_name": "_printk",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "get_current": {
+        "function_name": "get_current",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "task_tgid_nr": {
+        "function_name": "task_tgid_nr",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:05:52.825480+00:00",
+  "spec": {
+    "function_name": "npid_dec_allocated_memory",
+    "precondition": "valid(nd) && (int)location >= 1 && (int)location - 1 < /* size of memory_used array */ && valid_range(nd->attached_processes, 0, /* max slots */) && amount >= 0",
+    "postcondition": "(result == 0 || result == -1; if result == 0 then exists slot such that npid_find_process_slot(nd) == slot && slot != -1 && nd->attached_processes[slot].memory_used[(int)location - 1] == (old(nd->attached_processes[slot].memory_used[(int)location - 1]) > amount ? old(nd->attached_processes[slot].memory_used[(int)location - 1]) - amount : 0); if result == -1 then npid_find_process_slot(nd) == -1 and nd is unchanged) && ((npid_find_process_slot(nd) == -1) ? (result == -1) : (result == 0 && nd->attached_processes[npid_find_process_slot(nd)].memory_used[(int)location - 1] == (old_memory_used > amount ? old_memory_used - amount : 0)))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

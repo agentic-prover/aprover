@@ -1,0 +1,31 @@
+{
+  "saved_at": "2026-05-21T12:07:53.377532+00:00",
+  "spec": {
+    "function_name": "npid_find_process_slot",
+    "precondition": "requires valid(nd) && valid_range(nd->attached_processes, 0, 16)",
+    "postcondition": "(result < 0) || ((ensures (result == -1) || (result >= 0 && result < 16 && in_bounds(nd->attached_processes, result) && nd->attached_processes[result].pid == task_tgid_nr(get_current()) && nd->attached_processes[result].open_count > 0 && valid_range(nd->attached_processes[result].memory_used, 0, 2))) && (result == -1 ? (forall i in [0,16): nd->attached_processes[i].pid != task_tgid_nr(get_current())) : (result >= 0 && result < 16 && nd->attached_processes[result].pid == task_tgid_nr(get_current()) && (forall j in [0, result): nd->attached_processes[j].pid != task_tgid_nr(get_current())))))",
+    "callee_specs": {
+      "task_tgid_nr": {
+        "function_name": "task_tgid_nr",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "get_current": {
+        "function_name": "get_current",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

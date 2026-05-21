@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:05:52.825908+00:00",
+  "spec": {
+    "function_name": "npid_detach",
+    "precondition": "requires valid(nd) && valid_range(nd->attached_processes, 0, MAX_ATTACHED_PROCESSES) && (forall i, 0 <= i < MAX_ATTACHED_PROCESSES ==> valid(nd->attached_processes[i])) && (the current process must have a matching slot in nd->attached_processes with open_count > 0 if the caller expects a successful detach)",
+    "postcondition": "(result < 0) || ((ensures (result == -1) || (result >= 0 && result == nd->attached_processes[slot]->open_count after decrement) && (if result == 0, nd->attached_processes[slot].pid == 0 && nd->attached_processes[slot].task == NULL) && (if result > 0, nd->attached_processes[slot].pid and task are unchanged)) && (let slot = npid_find_process_slot(nd); if slot == -1 { result == -1 } else { let new_count = old(nd->attached_processes[slot].open_count) - 1; result == new_count && (new_count == 0 ==> nd->attached_processes[slot].pid == 0 && nd->attached_processes[slot].task == NULL) && (new_count > 0 ==> nd->attached_processes[slot].pid == old(nd->attached_processes[slot].pid)) }))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": true
+  }
+}

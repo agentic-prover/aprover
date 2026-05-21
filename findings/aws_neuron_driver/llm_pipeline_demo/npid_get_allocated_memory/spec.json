@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:05:52.825761+00:00",
+  "spec": {
+    "function_name": "npid_get_allocated_memory",
+    "precondition": "valid(nd) && valid(nd->attached_processes) && valid(host_memory) && valid(device_memory) && (MEM_LOC_HOST >= 1) && (MEM_LOC_DEVICE >= 1) && valid_range(nd->attached_processes[0].memory_used, 0, max(MEM_LOC_HOST, MEM_LOC_DEVICE))",
+    "postcondition": "(((result == 0) && (*host_memory == nd->attached_processes[npid_find_process_slot(nd)].memory_used[MEM_LOC_HOST - 1]) && (*device_memory == nd->attached_processes[npid_find_process_slot(nd)].memory_used[MEM_LOC_DEVICE - 1])) || ((result == -1) && (*host_memory == 0) && (*device_memory == 0))) && ((npid_find_process_slot(nd) == -1) ? (result == -1 && *host_memory == 0 && *device_memory == 0) : (result == 0 && *host_memory == nd->attached_processes[npid_find_process_slot(nd)].memory_used[MEM_LOC_HOST - 1] && *device_memory == nd->attached_processes[npid_find_process_slot(nd)].memory_used[MEM_LOC_DEVICE - 1]))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": true
+  }
+}
