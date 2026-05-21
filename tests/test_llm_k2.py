@@ -87,6 +87,39 @@ def test_k2_api_key_env(monkeypatch):
     assert c.resolved_api_key() == "k2-test-key"
 
 
+def test_bmc_agent_llm_api_key_env(monkeypatch):
+    """BMC_AGENT_LLM_API_KEY is the canonical hybrid env name, alongside
+    BMC_AGENT_LLM_BASE_URL / _MODEL / _PROVIDER. Must be honoured by both
+    resolved_api_key() (used by realism/classifier role-routing) and
+    from_env() (used by the CLI verify path)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("K2THINK_API_KEY", raising=False)
+    monkeypatch.setenv("BMC_AGENT_LLM_API_KEY", "bmc-agent-test-key")
+    from bmc_agent.config import Config
+
+    # resolved_api_key honours it regardless of provider
+    c = Config(llm_provider="openai")
+    assert c.resolved_api_key() == "bmc-agent-test-key"
+    c_anth = Config()
+    assert c_anth.resolved_api_key() == "bmc-agent-test-key"
+
+    # from_env picks it up too
+    c_env = Config.from_env()
+    assert c_env.llm_api_key == "bmc-agent-test-key"
+
+
+def test_bmc_agent_llm_api_key_beats_k2think(monkeypatch):
+    """When both BMC_AGENT_LLM_API_KEY and K2THINK_API_KEY are set,
+    BMC_AGENT_LLM_API_KEY wins (it is the explicit-intent variable)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("K2THINK_API_KEY", "k2-key")
+    monkeypatch.setenv("BMC_AGENT_LLM_API_KEY", "bmc-key")
+    from bmc_agent.config import Config
+
+    c = Config(llm_provider="openai")
+    assert c.resolved_api_key() == "bmc-key"
+
+
 def test_anthropic_key_preferred_when_provider_anthropic(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.setenv("K2THINK_API_KEY", "k2-key")

@@ -318,11 +318,15 @@ class Config:
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly.
 
-        Priority: ``llm_api_key`` field → ``K2THINK_API_KEY`` (when provider
-        resolves to openai) → ``ANTHROPIC_API_KEY``.
+        Priority: ``llm_api_key`` field → ``BMC_AGENT_LLM_API_KEY`` →
+        ``K2THINK_API_KEY`` (when provider resolves to openai) →
+        ``ANTHROPIC_API_KEY``.
         """
         if self.llm_api_key:
             return self.llm_api_key
+        bmc_key = os.environ.get("BMC_AGENT_LLM_API_KEY", "")
+        if bmc_key:
+            return bmc_key
         if self.resolved_provider() == "openai":
             k2_key = os.environ.get("K2THINK_API_KEY", "")
             if k2_key:
@@ -364,7 +368,11 @@ class Config:
         """Create a Config populated from environment variables where available."""
         return cls(
             llm_model=os.environ.get("BMC_AGENT_LLM_MODEL", "claude-sonnet-4-6"),
-            llm_api_key=os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("K2THINK_API_KEY", ""),
+            llm_api_key=(
+                os.environ.get("BMC_AGENT_LLM_API_KEY", "")
+                or os.environ.get("ANTHROPIC_API_KEY", "")
+                or os.environ.get("K2THINK_API_KEY", "")
+            ),
             llm_base_url=os.environ.get("BMC_AGENT_LLM_BASE_URL", ""),
             llm_request_timeout_s=float(os.environ.get("BMC_AGENT_LLM_TIMEOUT_S", "180.0")),
             llm_provider=os.environ.get("BMC_AGENT_LLM_PROVIDER", ""),
