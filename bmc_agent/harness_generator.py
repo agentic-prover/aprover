@@ -322,7 +322,15 @@ def _c_default_value(ret_type: str) -> str:
 
 
 def _params_str(params: list[tuple[str, str]]) -> str:
-    """Build a C parameter list string, handling variadic '...' correctly."""
+    """Build a C parameter list string, handling variadic '...' correctly.
+
+    Also handles 2D-array parameter types. The tree-sitter parser
+    renders ``pod_neighbor_io_t pnio[][2]`` as type=``pod_neighbor_io_t*[2]``,
+    name=``pnio``. Naive emit ``pod_neighbor_io_t*[2] pnio`` is
+    invalid C syntax. The right C declaration for "pointer to array of
+    N elements" is ``T (*pname)[N]``. Detect the ``*[N]`` tail and emit
+    the parenthesised form.
+    """
     if not params:
         return "void"
     parts = []
@@ -330,7 +338,16 @@ def _params_str(params: list[tuple[str, str]]) -> str:
         if ptype == "...":
             parts.append("...")
         elif pname:
-            parts.append(f"{ptype} {pname}")
+            # Handle ``T*[N]`` tail (parser quirk for 2D array params).
+            m = re.search(r"\*\s*\[(\d+|\s*)\]\s*$", ptype)
+            if m and "*" in ptype:
+                # Strip the *[N] tail to get the element type, then emit
+                # T (*pname)[N].
+                base = ptype[:m.start()].rstrip("*").strip()
+                n = m.group(1).strip()
+                parts.append(f"{base} (*{pname})[{n}]")
+            else:
+                parts.append(f"{ptype} {pname}")
         else:
             parts.append(ptype)
     return ", ".join(parts)
