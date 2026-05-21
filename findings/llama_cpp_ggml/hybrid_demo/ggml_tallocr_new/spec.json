@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:17:35.906138+00:00",
+  "spec": {
+    "function_name": "ggml_tallocr_new",
+    "precondition": "requires valid(buffer) && buffer != NULL && ggml_backend_buffer_get_base(buffer) is valid && ggml_backend_buffer_get_alignment(buffer) is a power of 2 && ggml_backend_buffer_get_alignment(buffer) > 0",
+    "postcondition": "(ensures valid(result) && result.buffer == buffer && result.base == ggml_backend_buffer_get_base(buffer) && result.alignment == ggml_backend_buffer_get_alignment(buffer) && result.alignment > 0 && (result.alignment & (result.alignment - 1)) == 0 && result.offset >= 0 && result can be used with ggml_tallocr_alloc) && (result.buffer == buffer && result.base == ggml_backend_buffer_get_base(buffer) && result.alignment == ggml_backend_buffer_get_alignment(buffer) && result.offset == aligned_offset(result.base, 0, result.alignment))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

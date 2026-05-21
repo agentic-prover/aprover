@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:28.468813+00:00",
+  "spec": {
+    "function_name": "ggml_op_can_inplace",
+    "precondition": "op is a valid ggml_op enum value",
+    "postcondition": "(result == 0 || result == 1) && (result == (op == GGML_OP_FILL || op == GGML_OP_SCALE || op == GGML_OP_DIAG_MASK_ZERO || op == GGML_OP_DIAG_MASK_INF || op == GGML_OP_ADD || op == GGML_OP_ADD_ID || op == GGML_OP_ADD1 || op == GGML_OP_SUB || op == GGML_OP_MUL || op == GGML_OP_DIV || op == GGML_OP_SQR || op == GGML_OP_SQRT || op == GGML_OP_LOG || op == GGML_OP_UNARY || op == GGML_OP_ROPE || op == GGML_OP_ROPE_BACK || op == GGML_OP_SILU_BACK || op == GGML_OP_RMS_NORM || op == GGML_OP_RMS_NORM_BACK || op == GGML_OP_SOFT_MAX || op == GGML_OP_SOFT_MAX_BACK))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

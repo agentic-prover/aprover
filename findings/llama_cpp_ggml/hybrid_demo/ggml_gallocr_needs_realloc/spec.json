@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:16:17.838009+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_needs_realloc",
+    "precondition": "requires valid(galloc) && valid(graph) && galloc->n_nodes >= 0 && galloc->n_leafs >= 0 && graph->n_nodes >= 0 && graph->n_leafs >= 0 && (galloc->n_nodes == graph->n_nodes implies valid_range(galloc->node_allocs, 0, galloc->n_nodes)) && (galloc->n_nodes == graph->n_nodes implies valid_range(graph->nodes, 0, graph->n_nodes)) && forall i in 0..graph->n_nodes: valid(graph->nodes[i]) && valid_range(graph->nodes[i]->src, 0, GGML_MAX_SRC)",
+    "postcondition": "ensures (result == true || result == false) && (result == false implies (galloc->n_nodes == graph->n_nodes && galloc->n_leafs == graph->n_leafs && forall i in 0..graph->n_nodes: ggml_gallocr_node_needs_realloc(galloc, graph->nodes[i], &galloc->node_allocs[i]->dst) == true && forall j in 0..GGML_MAX_SRC: (graph->nodes[i]->src[j] == NULL || ggml_gallocr_node_needs_realloc(galloc, graph->nodes[i]->src[j], &galloc->node_allocs[i]->src[j]) == true))) && (result == true implies (galloc->n_nodes != graph->n_nodes || galloc->n_leafs != graph->n_leafs || exists i in 0..graph->n_nodes: (ggml_gallocr_node_needs_realloc(galloc, graph->nodes[i], &galloc->node_allocs[i]->dst) == false || exists j in 0..GGML_MAX_SRC: (graph->nodes[i]->src[j] != NULL && ggml_gallocr_node_needs_realloc(galloc, graph->nodes[i]->src[j], &galloc->node_allocs[i]->src[j]) == false))))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

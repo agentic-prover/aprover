@@ -1,0 +1,68 @@
+{
+  "saved_at": "2026-05-21T12:20:01.437260+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_init_tensor",
+    "precondition": "requires valid(galloc) && valid(tensor) && valid(tensor_alloc) && galloc->n_buffers > 0 && tensor_alloc->buffer_id >= 0 && tensor_alloc->buffer_id < galloc->n_buffers && valid(galloc->bufts) && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid(galloc->buffers) && valid_range(galloc->buffers, 0, galloc->n_buffers) && (galloc->buffers[tensor_alloc->buffer_id] != NULL implies valid(galloc->buffers[tensor_alloc->buffer_id])) && (tensor->view_src != NULL implies valid(tensor->view_src)) && (tensor_alloc->addr.offset != SIZE_MAX implies tensor_alloc->size_max >= ggml_backend_buft_get_alloc_size(galloc->bufts[tensor_alloc->buffer_id], tensor)) && (tensor->data == NULL && tensor->view_src == NULL implies tensor_alloc->addr.offset != SIZE_MAX) && (tensor->view_src != NULL && tensor->data == NULL && tensor->buffer == NULL implies tensor_alloc->addr.offset == SIZE_MAX)",
+    "postcondition": "ensures (tensor->view_src != NULL implies (tensor->buffer != NULL || (tensor->view_src->buffer == NULL))) && (tensor->view_src == NULL && tensor->data == NULL implies (tensor->buffer != NULL && tensor->data != NULL)) && (result == void implies (tensor->buffer != NULL || tensor->data != NULL || (tensor->view_src != NULL && tensor->view_src->buffer == NULL)))",
+    "callee_specs": {
+      "ggml_vbuffer_tensor_alloc": {
+        "function_name": "ggml_vbuffer_tensor_alloc",
+        "precondition": "requires valid(buf) && valid(tensor) && null(tensor->data) && null(tensor->view_src) && in_bounds(buf->chunks, buf_addr.chunk) && valid(buf->chunks[buf_addr.chunk]) && buf_addr.offset != SIZE_MAX && buf_addr.offset + ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(buf->chunks[buf_addr.chunk]), tensor) <= ggml_backend_buffer_get_size(buf->chunks[buf_addr.chunk])",
+        "postcondition": "ensures valid(tensor->buffer) && valid(tensor->data) && tensor->data points to allocated memory at buf_addr.offset within buf->chunks[buf_addr.chunk] && tensor->buffer == buf->chunks[buf_addr.chunk]",
+        "callee_specs": {
+          "ggml_backend_buffer_get_base": {
+            "function_name": "ggml_backend_buffer_get_base",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          },
+          "ggml_backend_tensor_alloc": {
+            "function_name": "ggml_backend_tensor_alloc",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "assert": {
+        "function_name": "assert",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "ggml_backend_buft_get_alloc_size": {
+        "function_name": "ggml_backend_buft_get_alloc_size",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "ggml_backend_view_init": {
+        "function_name": "ggml_backend_view_init",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

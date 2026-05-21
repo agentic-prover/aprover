@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:55.551490+00:00",
+  "spec": {
+    "function_name": "ggml_buffer_address_less",
+    "precondition": "true",
+    "postcondition": "(result == (a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset)) && (result == (a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-05-21T12:20:03.040683+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_insert_block",
+    "precondition": "requires valid(chunk) && valid_range(chunk->free_blocks, 0, MAX_FREE_BLOCKS) && chunk->n_free_blocks < MAX_FREE_BLOCKS && chunk->n_free_blocks >= 0 && size > 0 && offset >= 0 && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset < offset implies chunk->free_blocks[i].offset + chunk->free_blocks[i].size <= offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset > offset implies offset + size <= chunk->free_blocks[i].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && offset + size does not overflow",
+    "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == offset && chunk->free_blocks[j].size == size) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..old(chunk->n_free_blocks)-1: exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == old(chunk->free_blocks[i].offset) && chunk->free_blocks[j].size == old(chunk->free_blocks[i].size))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && (exists insert_pos in 0..chunk->n_free_blocks-1: chunk->free_blocks[insert_pos].offset == offset && chunk->free_blocks[insert_pos].size == size && (forall i in 0..insert_pos-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i]) && (forall i in insert_pos..old(chunk->n_free_blocks)-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i+1])))",
+    "callee_specs": {
+      "GGML_ASSERT": {
+        "function_name": "GGML_ASSERT",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

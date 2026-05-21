@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:55.551711+00:00",
+  "spec": {
+    "function_name": "add_allocated_tensor",
+    "precondition": "requires valid(alloc) && valid(tensor) && addr.chunk >= 0 && addr.chunk < alloc->n_chunks && valid(alloc->chunks[addr.chunk]) && addr.offset >= 0 && addr.offset < alloc->chunks[addr.chunk]->max_size && alloc->n_chunks <= MAX_CHUNKS && exists i in 0..1024: alloc->allocated_tensors[i].tensor == null(alloc->allocated_tensors[i].tensor)",
+    "postcondition": "ensures exists i in 0..1024: alloc->allocated_tensors[i].tensor == tensor && alloc->allocated_tensors[i].addr.chunk == addr.chunk && alloc->allocated_tensors[i].addr.offset == addr.offset && forall j in 0..1024: (alloc->allocated_tensors[j].tensor != null(alloc->allocated_tensors[j].tensor)) ==> valid(alloc->allocated_tensors[j].tensor) && alloc->allocated_tensors[j].addr.chunk >= 0 && alloc->allocated_tensors[j].addr.chunk < alloc->n_chunks",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

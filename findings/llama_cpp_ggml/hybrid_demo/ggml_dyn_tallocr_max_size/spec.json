@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:20:02.489106+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_max_size",
+    "precondition": "requires valid(alloc) && valid(alloc->chunks) && alloc->n_chunks >= 0 && chunk >= 0",
+    "postcondition": "(ensures result >= 0 && (chunk < alloc->n_chunks ==> (valid(alloc->chunks[chunk]) && result == alloc->chunks[chunk]->max_size)) && (chunk >= alloc->n_chunks ==> result == 0)) && (chunk < alloc->n_chunks ? alloc->chunks[chunk]->max_size : 0)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

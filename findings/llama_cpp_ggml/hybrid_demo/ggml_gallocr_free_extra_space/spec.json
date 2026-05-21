@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:28.469273+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_free_extra_space",
+    "precondition": "requires valid(galloc) && valid(node) && valid(parent) && !null(galloc->bufts) && !null(galloc->buf_tallocs) && valid(ggml_gallocr_hash_get(galloc, node)) && valid(ggml_gallocr_hash_get(galloc, parent)) && (let hn = ggml_gallocr_hash_get(galloc, node) in let p_hn = ggml_gallocr_hash_get(galloc, parent) in hn->buffer_id == p_hn->buffer_id && hn->buffer_id >= 0 && hn->buffer_id < galloc->n_buffers && valid(galloc->bufts[hn->buffer_id]) && valid(galloc->buf_tallocs[hn->buffer_id]) && hn->addr.chunk == p_hn->addr.chunk && hn->addr.offset == p_hn->addr.offset && p_hn->allocated == false && (parent_size >= node_size where parent_size = ggml_backend_buft_get_alloc_size(galloc->bufts[p_hn->buffer_id], parent) && node_size = ggml_backend_buft_get_alloc_size(galloc->bufts[hn->buffer_id], node)) && no overflow in (p_hn->addr.offset + aligned_offset(NULL, parent_size, galloc->buf_tallocs[p_hn->buffer_id]->alignment)))",
+    "postcondition": "ensures (let hn = ggml_gallocr_hash_get(galloc, node) in let p_hn = ggml_gallocr_hash_get(galloc, parent) in let parent_size_aligned = aligned_offset(NULL, ggml_backend_buft_get_alloc_size(galloc->bufts[p_hn->buffer_id], parent), galloc->buf_tallocs[p_hn->buffer_id]->alignment) in let node_size_aligned = aligned_offset(NULL, ggml_backend_buft_get_alloc_size(galloc->bufts[hn->buffer_id], node), galloc->buf_tallocs[hn->buffer_id]->alignment) in (parent_size_aligned > node_size_aligned ==> (extra space of size (parent_size_aligned - node_size_aligned) starting at offset (p_hn->addr.offset + node_size_aligned) in buffer p_hn->buffer_id is freed and available for reallocation)) && (parent_size_aligned <= node_size_aligned ==> no change to allocator state))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

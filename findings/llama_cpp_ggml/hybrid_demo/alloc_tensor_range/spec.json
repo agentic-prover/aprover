@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:17:07.352748+00:00",
+  "spec": {
+    "function_name": "alloc_tensor_range",
+    "precondition": "requires valid(ctx) && valid(buft) && valid(buffers) && valid(*buffers) && valid(n_buffers) && size > 0 && (first == NULL || valid(first)) && (last == NULL || valid(last)) && (first == NULL || first is a tensor from ctx) && (last == NULL || last is a tensor from ctx) && (first == NULL || last == NULL || last is reachable from first via ggml_get_next_tensor) && no integer overflow in size && no integer overflow in (*n_buffers + 1) && no integer overflow in sizeof(ggml_backend_buffer_t) * (*n_buffers + 1)",
+    "postcondition": "ensures (result == true ==> (*buffers is updated with new buffer && *n_buffers == old(*n_buffers) + 1 && all tensors in range [first, last) have data allocated or view initialized)) && (result == false ==> allocation or initialization failed && *buffers and *n_buffers may be modified (freed))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

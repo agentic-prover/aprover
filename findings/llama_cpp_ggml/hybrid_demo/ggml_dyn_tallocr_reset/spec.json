@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-05-21T12:20:01.089165+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_reset",
+    "precondition": "requires valid(alloc) && valid(alloc->chunks) && alloc->n_chunks >= 0 && alloc->n_chunks <= GGML_VBUFFER_MAX_CHUNKS && forall i in 0..GGML_VBUFFER_MAX_CHUNKS: (alloc->chunks[i] == NULL || valid(alloc->chunks[i]))",
+    "postcondition": "(ensures valid(alloc) && alloc->n_chunks == 0 && forall i in 0..GGML_VBUFFER_MAX_CHUNKS: alloc->chunks[i] == NULL && (alloc is reset to initial state, ready for fresh allocation tracking with all previous allocation records cleared)) && (alloc->n_chunks == 0 && forall i in 0..GGML_VBUFFER_MAX_CHUNKS: alloc->chunks[i] == NULL)",
+    "callee_specs": {
+      "free": {
+        "function_name": "free",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

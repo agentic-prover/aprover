@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:17:35.906621+00:00",
+  "spec": {
+    "function_name": "ggml_vbuffer_alloc",
+    "precondition": "requires valid(buft) && valid(talloc) && talloc->n_chunks >= 0 && talloc->n_chunks <= MAX_CHUNKS && (forall i in 0..talloc->n_chunks: valid(talloc->chunks[i]) && talloc->chunks[i]->max_size <= SIZE_MAX) && usage is a valid enum ggml_backend_buffer_usage value",
+    "postcondition": "ensures (result == NULL) || (valid(result) && result->chunks != NULL && (forall i in 0..talloc->n_chunks: valid(result->chunks[i])))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

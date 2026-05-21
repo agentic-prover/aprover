@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:05.992237+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_free_node",
+    "precondition": "requires valid(galloc) && valid(node) && valid(galloc->bufts) && valid(galloc->buf_tallocs) && valid(galloc->buffers) && galloc->n_buffers > 0 && (let hn = ggml_gallocr_hash_get(galloc, node) in valid(hn) && hn->buffer_id >= 0 && hn->buffer_id < galloc->n_buffers && valid(galloc->buf_tallocs[hn->buffer_id]) && valid(galloc->bufts[hn->buffer_id]) && (hn->allocated == true || (node->flags & GGML_TENSOR_FLAG_OUTPUT)) && (hn->allocated == false || (hn->n_views == 0 && hn->n_children == 0)))",
+    "postcondition": "ensures (node->flags & GGML_TENSOR_FLAG_OUTPUT) ==> (old(ggml_gallocr_hash_get(galloc, node)->allocated) == ggml_gallocr_hash_get(galloc, node)->allocated) && !(node->flags & GGML_TENSOR_FLAG_OUTPUT) ==> (ggml_gallocr_hash_get(galloc, node)->allocated == false && the tensor's memory has been freed from the allocator and can be reused for subsequent allocations && the allocator's internal state is updated to reflect the freed tensor)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

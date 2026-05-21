@@ -1,0 +1,78 @@
+{
+  "saved_at": "2026-05-21T12:20:03.032710+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_free",
+    "precondition": "galloc == NULL || (valid(galloc) && owns(galloc) && (galloc->buffers == NULL || valid_range(galloc->buffers, 0, galloc->n_buffers)) && (galloc->buf_tallocs == NULL || valid_range(galloc->buf_tallocs, 0, galloc->n_buffers)) && galloc->n_buffers >= 0)",
+    "postcondition": "galloc == NULL || (!valid(galloc) && all resources owned by galloc are freed)",
+    "callee_specs": {
+      "ggml_hash_set_free": {
+        "function_name": "ggml_hash_set_free",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "ggml_dyn_tallocr_free": {
+        "function_name": "ggml_dyn_tallocr_free",
+        "precondition": "requires valid(alloc) && alloc->n_chunks >= 0 && alloc->n_chunks <= 128 && (forall i in 0..alloc->n_chunks: valid(alloc->chunks[i]) || null(alloc->chunks[i])) && (forall i in 0..alloc->n_chunks, j in 0..alloc->n_chunks: i != j ==> alloc->chunks[i] != alloc->chunks[j] || null(alloc->chunks[i]))",
+        "postcondition": "ensures (forall i in 0..old(alloc->n_chunks): old(alloc->chunks[i]) is freed) && old(alloc) is freed && the memory/resources associated with alloc are released and alloc becomes invalid for future use",
+        "callee_specs": {
+          "free": {
+            "function_name": "free",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "ggml_vbuffer_free": {
+        "function_name": "ggml_vbuffer_free",
+        "precondition": "buf == NULL || (valid(buf) && buf was allocated via calloc && forall i in [0..GGML_VBUFFER_MAX_CHUNKS): (buf->chunks[i] == NULL || valid(buf->chunks[i])))",
+        "postcondition": "ensures if buf was not NULL: all resources associated with buf are freed, including all non-NULL buf->chunks[i] for i in [0..GGML_VBUFFER_MAX_CHUNKS), and buf itself is freed and no longer valid; if buf was NULL: no operation performed and no side effects",
+        "callee_specs": {
+          "free": {
+            "function_name": "free",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          },
+          "ggml_backend_buffer_free": {
+            "function_name": "ggml_backend_buffer_free",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "free": {
+        "function_name": "free",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

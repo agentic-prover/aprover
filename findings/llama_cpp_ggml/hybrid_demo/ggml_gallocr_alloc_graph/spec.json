@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:15:55.810217+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_alloc_graph",
+    "precondition": "requires valid(galloc) && valid(graph) && valid_range(graph->leafs, 0, graph->n_leafs) && valid_range(graph->nodes, 0, graph->n_nodes) && valid_range(galloc->buffers, 0, galloc->n_buffers) && valid_range(galloc->leaf_allocs, 0, graph->n_leafs) && valid_range(galloc->node_allocs, 0, graph->n_nodes) && (forall i in 0..graph->n_leafs: valid(graph->leafs[i])) && (forall i in 0..graph->n_nodes: valid(graph->nodes[i]) && valid_range(graph->nodes[i]->src, 0, GGML_MAX_SRC)) && galloc->n_buffers >= 1",
+    "postcondition": "(ensures (result == true) ==> (forall i in 0..galloc->n_buffers: galloc->buffers[i] == null(galloc->buffers[i]) || (valid(galloc->buffers[i]) && \"buffer is reset and tensors allocated\")) && (result == false) ==> (galloc->n_buffers > 1 && ggml_gallocr_needs_realloc(galloc, graph))) && (result == (!ggml_gallocr_needs_realloc(galloc, graph) || (galloc->n_buffers == 1 && ggml_gallocr_reserve(galloc, graph))))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:20:02.299524+00:00",
+  "spec": {
+    "function_name": "get_node_buffer_id",
+    "precondition": "requires (node_buffer_ids == NULL) || valid_range(node_buffer_ids, 0, i+1)",
+    "postcondition": "(ensures (node_buffer_ids == NULL ==> result == 0) && (node_buffer_ids != NULL ==> result == node_buffer_ids[i])) && (node_buffer_ids ? node_buffer_ids[i] : 0)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:55.551874+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_new_chunk",
+    "precondition": "requires valid(alloc) && min_size > 0 && alloc->n_chunks < GGML_VBUFFER_MAX_CHUNKS && valid_range(alloc->chunks, 0, alloc->n_chunks) && alloc->max_chunk_size <= SIZE_MAX/2 && min_size <= SIZE_MAX/2",
+    "postcondition": "(result < 0) || ((ensures (result >= 0 && result < alloc->n_chunks && result == old(alloc->n_chunks) && alloc->n_chunks == old(alloc->n_chunks) + 1 && valid(alloc->chunks[result]) && alloc->chunks[result]->n_free_blocks == 1 && alloc->chunks[result]->free_blocks[0].offset == 0 && alloc->chunks[result]->free_blocks[0].size >= min_size && (alloc->chunks[result]->free_blocks[0].size == max(min_size, alloc->max_chunk_size) || (old(alloc->n_chunks) == GGML_VBUFFER_MAX_CHUNKS - 1 && alloc->chunks[result]->free_blocks[0].size == SIZE_MAX/2))) || (result == -1 && alloc->n_chunks == old(alloc->n_chunks))) && (result == -1 ? alloc->n_chunks >= GGML_VBUFFER_MAX_CHUNKS : (result == old(alloc->n_chunks) && alloc->chunks[result]->free_blocks[0].size >= min_size)))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

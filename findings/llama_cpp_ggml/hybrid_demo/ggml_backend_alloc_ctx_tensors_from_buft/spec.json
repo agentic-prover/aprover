@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:16:17.837549+00:00",
+  "spec": {
+    "function_name": "ggml_backend_alloc_ctx_tensors_from_buft",
+    "precondition": "requires valid(ctx) && valid(buft)",
+    "postcondition": "ensures (result == null(result)) || valid(result)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

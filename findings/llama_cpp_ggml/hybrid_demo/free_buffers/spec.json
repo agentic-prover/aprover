@@ -1,0 +1,31 @@
+{
+  "saved_at": "2026-05-21T12:19:59.188402+00:00",
+  "spec": {
+    "function_name": "free_buffers",
+    "precondition": "requires valid(buffers) && valid(n_buffers) && (*n_buffers >= 0) && (null(*buffers) || valid_range(*buffers, 0, *n_buffers))",
+    "postcondition": "ensures *buffers is freed and all backend buffers in the array (*buffers)[0..*n_buffers] are properly released via ggml_backend_buffer_free, and no memory leaks occur",
+    "callee_specs": {
+      "free": {
+        "function_name": "free",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "ggml_backend_buffer_free": {
+        "function_name": "ggml_backend_buffer_free",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

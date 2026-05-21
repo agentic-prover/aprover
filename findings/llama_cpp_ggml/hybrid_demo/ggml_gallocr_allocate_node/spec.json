@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:18:05.992394+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_allocate_node",
+    "precondition": "requires valid(galloc) && valid(node) && buffer_id >= 0 && buffer_id < galloc->n_buffers && valid(galloc->hash_set) && valid(galloc->hash_values) && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && galloc->buf_tallocs[buffer_id] != NULL && galloc->bufts[buffer_id] != NULL && valid(node->src) && (forall i in 0..GGML_MAX_SRC: node->src[i] == NULL || valid(node->src[i])) && (node->view_src == NULL || valid(node->view_src))",
+    "postcondition": "ensures (ggml_gallocr_is_allocated(galloc, node) || ggml_impl_is_view(node) || ggml_gallocr_hash_get(galloc, node)->allocated == true) && (ggml_gallocr_is_allocated(galloc, node) || ggml_impl_is_view(node) || ggml_gallocr_hash_get(galloc, node)->buffer_id == buffer_id || ggml_gallocr_hash_get(galloc, node)->buffer_id >= 0) && galloc state is updated to track node allocation in buffer_id or reused parent buffer",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

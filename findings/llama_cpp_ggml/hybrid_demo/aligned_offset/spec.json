@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:19:44.201577+00:00",
+  "spec": {
+    "function_name": "aligned_offset",
+    "precondition": "requires alignment > 0 && (alignment & (alignment - 1)) == 0 && offset >= 0 && offset <= SIZE_MAX - alignment && (uintptr_t)buffer + offset does not overflow",
+    "postcondition": "(ensures result >= offset && result % alignment == 0 && result is the smallest multiple of alignment that is >= offset when considering the buffer's base address && result <= offset + alignment - 1 && result - offset < alignment) && (result == offset + ((alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment) && result % alignment == ((uintptr_t)buffer + result) % alignment && ((uintptr_t)buffer + result) % alignment == 0)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

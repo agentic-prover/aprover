@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:16:17.837310+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_new_n",
+    "precondition": "requires valid_range(bufts, 0, n_bufs) && n_bufs > 0 && n_bufs <= INT_MAX / sizeof(ggml_backend_buffer_type_t) && n_bufs <= INT_MAX / sizeof(struct vbuffer *) && n_bufs <= INT_MAX / sizeof(struct ggml_dyn_tallocr *) && forall i in 0..n_bufs: valid(bufts[i])",
+    "postcondition": "ensures valid(result) && result->n_buffers == n_bufs && valid_range(result->bufts, 0, n_bufs) && valid_range(result->buffers, 0, n_bufs) && valid_range(result->buf_tallocs, 0, n_bufs) && forall i in 0..n_bufs: result->bufts[i] == bufts[i] && valid(result->buf_tallocs[i])",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

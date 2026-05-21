@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:17:07.353007+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_reserve_n_impl",
+    "precondition": "requires valid(galloc) && valid(graph) && (node_buffer_ids == NULL || valid(node_buffer_ids)) && (leaf_buffer_ids == NULL || valid(leaf_buffer_ids)) && galloc->n_buffers >= 0 && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && forall i in [0, galloc->n_buffers): valid(galloc->buf_tallocs[i]) && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid_range(galloc->buffers, 0, galloc->n_buffers) && graph->n_nodes >= 0 && graph->n_leafs >= 0 && valid_range(graph->nodes, 0, graph->n_nodes) && valid_range(graph->leafs, 0, graph->n_leafs) && forall i in [0, graph->n_nodes): valid(graph->nodes[i]) && forall i in [0, graph->n_leafs): valid(graph->leafs[i]) && (graph->n_nodes + graph->n_leafs) * 5 / 4 does not overflow size_t",
+    "postcondition": "ensures (result == true ==> (forall i in [0, galloc->n_buffers): (valid(galloc->buf_tallocs[i]) && galloc->buf_tallocs[i]->n_chunks >= 0 && valid_range(galloc->buf_tallocs[i]->chunks, 0, galloc->buf_tallocs[i]->n_chunks) && forall c in [0, galloc->buf_tallocs[i]->n_chunks): valid(galloc->buf_tallocs[i]->chunks[c])) && galloc->n_nodes == graph->n_nodes && galloc->n_leafs == graph->n_leafs && valid_range(galloc->node_allocs, 0, galloc->n_nodes) && valid_range(galloc->leaf_allocs, 0, galloc->n_leafs))) && (result == false ==> exists i in [0, galloc->n_buffers): galloc->buffers[i] == NULL && no_alloc == false)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

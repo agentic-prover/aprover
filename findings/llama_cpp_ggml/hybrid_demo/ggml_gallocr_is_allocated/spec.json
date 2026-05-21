@@ -1,0 +1,42 @@
+{
+  "saved_at": "2026-05-21T12:20:01.150531+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_is_allocated",
+    "precondition": "requires valid(galloc) && valid(t) && valid(galloc->bufts) && valid(galloc->buffers) && valid(galloc->buf_tallocs) && galloc->n_buffers > 0",
+    "postcondition": "(ensures (result == true) ==> (t->data != NULL || t->buffer != NULL || ggml_gallocr_is_own(galloc, t)) && (result == false) ==> (t->data == NULL && t->buffer == NULL && !ggml_gallocr_is_own(galloc, t))) && (result == (t->data != NULL || t->buffer != NULL || ggml_gallocr_is_own(galloc, t)))",
+    "callee_specs": {
+      "ggml_gallocr_is_own": {
+        "function_name": "ggml_gallocr_is_own",
+        "precondition": "requires valid(galloc) && valid(t) && t != NULL && galloc != NULL",
+        "postcondition": "(ensures (result == true) iff (t is owned/managed by galloc and will be allocated by galloc) && (result == false) implies (t->data is external to galloc's management or t is not managed by galloc)) && (result == ggml_gallocr_hash_get(galloc, t)->allocated)",
+        "callee_specs": {
+          "ggml_gallocr_hash_get": {
+            "function_name": "ggml_gallocr_hash_get",
+            "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+            "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+            "callee_specs": {
+              "ggml_hash_find_or_insert": {
+                "function_name": "ggml_hash_find_or_insert",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              }
+            },
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

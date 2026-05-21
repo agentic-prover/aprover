@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:16:38.949976+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_new",
+    "precondition": "alignment > 0 && max_buffer_size > 0 && max_buffer_size <= SIZE_MAX",
+    "postcondition": "(result != null(result) && valid(result) && result->alignment == alignment && result->max_chunk_size == (max_buffer_size < SIZE_MAX/2 ? max_buffer_size : SIZE_MAX/2) && result->n_chunks == 0) && (result != NULL && result->alignment == alignment && result->max_chunk_size == (max_buffer_size < SIZE_MAX/2 ? max_buffer_size : SIZE_MAX/2) && result->n_chunks == 0)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

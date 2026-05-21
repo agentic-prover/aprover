@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:15:55.810084+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_reserve_n_size",
+    "precondition": "requires valid(galloc) && valid(graph) && valid(node_buffer_ids) && valid(leaf_buffer_ids) && valid_range(sizes, 0, galloc->n_buffers) && galloc->n_buffers > 0 && ggml_gallocr_reserve_n_impl(galloc, graph, node_buffer_ids, leaf_buffer_ids, true) == true",
+    "postcondition": "(ensures forall i in 0..galloc->n_buffers: sizes[i] == sum of max_size of all chunks in galloc->buf_tallocs[i]) && (forall i in 0..galloc->n_buffers: sizes[i] == sum(galloc->buf_tallocs[i]->chunks[0..galloc->buf_tallocs[i]->n_chunks].map(|c| c->max_size)))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

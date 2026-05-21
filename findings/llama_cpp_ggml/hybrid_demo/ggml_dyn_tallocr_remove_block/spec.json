@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:20:03.036489+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_remove_block",
+    "precondition": "requires valid(chunk) && chunk->n_free_blocks > 0 && idx >= 0 && idx < chunk->n_free_blocks && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks + 1)",
+    "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (forall j: 0 <= j < idx ==> chunk->free_blocks[j] == old(chunk->free_blocks[j])) && (forall j: idx <= j < chunk->n_free_blocks ==> chunk->free_blocks[j] == old(chunk->free_blocks[j+1]))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && memcmp(chunk->free_blocks, old(chunk->free_blocks), idx * sizeof(chunk->free_blocks[0])) == 0 && memcmp(&chunk->free_blocks[idx], &old(chunk->free_blocks[idx+1]), (chunk->n_free_blocks - idx) * sizeof(chunk->free_blocks[0])) == 0)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

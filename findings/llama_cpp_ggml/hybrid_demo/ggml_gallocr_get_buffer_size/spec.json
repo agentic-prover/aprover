@@ -1,0 +1,41 @@
+{
+  "saved_at": "2026-05-21T12:19:59.029101+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_get_buffer_size",
+    "precondition": "requires valid(galloc) && buffer_id >= 0 && buffer_id < galloc->n_buffers && valid_range(galloc->buffers, 0, galloc->n_buffers)",
+    "postcondition": "(ensures result == 0 || result > 0) && (result == (galloc->buffers[buffer_id] == NULL ? 0 : (exists i in 0..buffer_id such that galloc->buffers[i] == galloc->buffers[buffer_id] ? 0 : ggml_vbuffer_size(galloc->buffers[buffer_id]))))",
+    "callee_specs": {
+      "ggml_vbuffer_size": {
+        "function_name": "ggml_vbuffer_size",
+        "precondition": "requires valid(buf) && valid(buf->chunks) && forall i in [0..GGML_VBUFFER_MAX_CHUNKS): (buf->chunks[i] == NULL || valid(buf->chunks[i])) && (buf->chunks[i] != NULL implies ggml_backend_buffer_get_size(buf->chunks[i]) >= 0 && ggml_backend_buffer_get_size(buf->chunks[i]) <= SIZE_MAX) && (no integer overflow when summing all chunk sizes)",
+        "postcondition": "ensures result >= 0 && result == sum of ggml_backend_buffer_get_size(buf->chunks[i]) for all i where buf->chunks[i] != NULL && result <= SIZE_MAX && (no overflow occurred in computing result)",
+        "callee_specs": {
+          "ggml_backend_buffer_get_size": {
+            "function_name": "ggml_backend_buffer_get_size",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "GGML_ASSERT": {
+        "function_name": "GGML_ASSERT",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

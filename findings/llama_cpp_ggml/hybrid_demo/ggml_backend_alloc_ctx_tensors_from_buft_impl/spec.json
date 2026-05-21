@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:16:38.950413+00:00",
+  "spec": {
+    "function_name": "ggml_backend_alloc_ctx_tensors_from_buft_impl",
+    "precondition": "requires valid(ctx) && valid(buft) && valid(nbytes_total) && ggml_get_no_alloc(ctx) == true",
+    "postcondition": "ensures (result == null(result) || valid(result)) && *nbytes_total >= 0 && (no_alloc implies result == null(result)) && (!no_alloc && result != null(result) implies result represents a backend buffer allocated for tensors in ctx from buffer type buft)",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

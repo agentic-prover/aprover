@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:16:38.950270+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_node_needs_realloc",
+    "precondition": "requires valid(galloc) && valid(node) && valid(talloc) && valid_range(galloc->bufts, 0, galloc->n_bufs) && (talloc->buffer_id < 0 || (talloc->buffer_id >= 0 && talloc->buffer_id < galloc->n_bufs)) && talloc->size_max >= 0",
+    "postcondition": "(ensures (result == true) implies (talloc->size_max >= node_size_for(node, galloc, talloc)) && (result == false) implies (talloc->buffer_id < 0 && node->data == null && node->view_src == null)) && (result == (talloc->buffer_id < 0 && node->data == NULL && node->view_src == NULL ? false : talloc->size_max >= (node->data == NULL && node->view_src == NULL ? ggml_backend_buft_get_alloc_size(galloc->bufts[talloc->buffer_id], node) : 0)))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

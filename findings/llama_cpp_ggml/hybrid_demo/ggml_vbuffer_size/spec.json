@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-05-21T12:20:02.113864+00:00",
+  "spec": {
+    "function_name": "ggml_vbuffer_size",
+    "precondition": "requires valid(buf) && valid(buf->chunks) && forall i in [0..GGML_VBUFFER_MAX_CHUNKS): (buf->chunks[i] == NULL || valid(buf->chunks[i])) && (buf->chunks[i] != NULL implies ggml_backend_buffer_get_size(buf->chunks[i]) >= 0 && ggml_backend_buffer_get_size(buf->chunks[i]) <= SIZE_MAX) && (no integer overflow when summing all chunk sizes)",
+    "postcondition": "ensures result >= 0 && result == sum of ggml_backend_buffer_get_size(buf->chunks[i]) for all i where buf->chunks[i] != NULL && result <= SIZE_MAX && (no overflow occurred in computing result)",
+    "callee_specs": {
+      "ggml_backend_buffer_get_size": {
+        "function_name": "ggml_backend_buffer_get_size",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

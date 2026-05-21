@@ -1,0 +1,956 @@
+{
+  "saved_at": "2026-05-21T12:20:02.662175+00:00",
+  "spec": {
+    "function_name": "ggml_gallocr_reserve",
+    "precondition": "requires valid(galloc) && valid(graph) && galloc->n_buffers >= 1 && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid_range(galloc->buffers, 0, galloc->n_buffers) && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && (forall i in 0..galloc->n_buffers: valid(galloc->bufts[i]))",
+    "postcondition": "ensures (result == true implies (galloc is properly reserved for graph && galloc->buffers are allocated && subsequent ggml_gallocr_alloc operations will succeed without reallocation)) && (result == false implies (allocation failed && galloc state is unchanged or safely rolled back))",
+    "callee_specs": {
+      "ggml_gallocr_reserve_n": {
+        "function_name": "ggml_gallocr_reserve_n",
+        "precondition": "valid(galloc) && valid(graph) && (null(node_buffer_ids) || valid(node_buffer_ids)) && (null(leaf_buffer_ids) || valid(leaf_buffer_ids)) && galloc->n_buffers > 0 && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid_range(galloc->buffers, 0, galloc->n_buffers) && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && (node_buffer_ids == NULL || (graph->n_nodes > 0 && valid_range(node_buffer_ids, 0, graph->n_nodes) && forall i in 0..graph->n_nodes: node_buffer_ids[i] >= 0 && node_buffer_ids[i] < galloc->n_buffers)) && (leaf_buffer_ids == NULL || (graph->n_leafs > 0 && valid_range(leaf_buffer_ids, 0, graph->n_leafs) && forall i in 0..graph->n_leafs: leaf_buffer_ids[i] >= 0 && leaf_buffer_ids[i] < galloc->n_buffers))",
+        "postcondition": "result == true || result == false",
+        "callee_specs": {
+          "ggml_gallocr_reserve_n_impl": {
+            "function_name": "ggml_gallocr_reserve_n_impl",
+            "precondition": "requires valid(galloc) && valid(graph) && (node_buffer_ids == NULL || valid(node_buffer_ids)) && (leaf_buffer_ids == NULL || valid(leaf_buffer_ids)) && galloc->n_buffers >= 0 && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && forall i in [0, galloc->n_buffers): valid(galloc->buf_tallocs[i]) && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid_range(galloc->buffers, 0, galloc->n_buffers) && graph->n_nodes >= 0 && graph->n_leafs >= 0 && valid_range(graph->nodes, 0, graph->n_nodes) && valid_range(graph->leafs, 0, graph->n_leafs) && forall i in [0, graph->n_nodes): valid(graph->nodes[i]) && forall i in [0, graph->n_leafs): valid(graph->leafs[i]) && (graph->n_nodes + graph->n_leafs) * 5 / 4 does not overflow size_t",
+            "postcondition": "ensures (result == true ==> (forall i in [0, galloc->n_buffers): (valid(galloc->buf_tallocs[i]) && galloc->buf_tallocs[i]->n_chunks >= 0 && valid_range(galloc->buf_tallocs[i]->chunks, 0, galloc->buf_tallocs[i]->n_chunks) && forall c in [0, galloc->buf_tallocs[i]->n_chunks): valid(galloc->buf_tallocs[i]->chunks[c])) && galloc->n_nodes == graph->n_nodes && galloc->n_leafs == graph->n_leafs && valid_range(galloc->node_allocs, 0, galloc->n_nodes) && valid_range(galloc->leaf_allocs, 0, galloc->n_leafs))) && (result == false ==> exists i in [0, galloc->n_buffers): galloc->buffers[i] == NULL && no_alloc == false)",
+            "callee_specs": {
+              "malloc": {
+                "function_name": "malloc",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_gallocr_alloc_graph_impl": {
+                "function_name": "ggml_gallocr_alloc_graph_impl",
+                "precondition": "requires valid(galloc) && valid(graph) && valid(node_buffer_ids) && valid(leaf_buffer_ids) && galloc->hash_set.size >= 1 && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && valid_range(galloc->hash_values, 0, galloc->hash_set.size) && galloc->n_buffers > 0 && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && (forall i: 0 <= i < galloc->n_buffers ==> valid(galloc->buf_tallocs[i])) && graph->n_nodes >= 0 && graph->n_leafs >= 0 && valid_range(graph->nodes, 0, graph->n_nodes) && valid_range(graph->leafs, 0, graph->n_leafs) && valid_range(galloc->bufts, 0, galloc->n_buffers) && (forall i: 0 <= i < graph->n_nodes ==> valid(graph->nodes[i]) && valid_range(graph->nodes[i]->src, 0, GGML_MAX_SRC)) && (forall i: 0 <= i < graph->n_leafs ==> valid(graph->leafs[i])) && (forall i: 0 <= i < graph->n_nodes ==> get_node_buffer_id(node_buffer_ids, i) >= 0 && get_node_buffer_id(node_buffer_ids, i) < galloc->n_buffers) && (forall i: 0 <= i < graph->n_leafs ==> get_node_buffer_id(leaf_buffer_ids, i) >= 0 && get_node_buffer_id(leaf_buffer_ids, i) < galloc->n_buffers) && (forall i: 0 <= i < graph->n_nodes, forall j: 0 <= j < GGML_MAX_SRC ==> (graph->nodes[i]->src[j] != NULL ==> valid(graph->nodes[i]->src[j]) && (ggml_impl_is_view(graph->nodes[i]->src[j]) ==> valid(graph->nodes[i]->src[j]->view_src)))) && (forall i: 0 <= i < graph->n_nodes ==> (ggml_impl_is_view(graph->nodes[i]) && graph->nodes[i]->op != GGML_OP_NONE ==> valid(graph->nodes[i]->view_src)))",
+                "postcondition": "ensures (forall i: 0 <= i < graph->n_nodes ==> (graph->nodes[i]->view_src != NULL || graph->nodes[i]->data != NULL || (ggml_gallocr_hash_get(galloc, graph->nodes[i]) != NULL && ggml_gallocr_hash_get(galloc, graph->nodes[i])->buffer_id >= 0 && ggml_gallocr_hash_get(galloc, graph->nodes[i])->buffer_id < galloc->n_buffers && valid(ggml_gallocr_hash_get(galloc, graph->nodes[i])->addr)))) && (forall i: 0 <= i < graph->n_leafs ==> (graph->leafs[i]->view_src != NULL || graph->leafs[i]->data != NULL || (ggml_gallocr_hash_get(galloc, graph->leafs[i]) != NULL && ggml_gallocr_hash_get(galloc, graph->leafs[i])->buffer_id >= 0 && ggml_gallocr_hash_get(galloc, graph->leafs[i])->buffer_id < galloc->n_buffers && valid(ggml_gallocr_hash_get(galloc, graph->leafs[i])->addr)))) && (forall tensor in graph: if tensor requires allocation then ggml_gallocr_hash_get(galloc, tensor) != NULL && ggml_gallocr_hash_get(galloc, tensor)->buffer_id >= 0 && ggml_gallocr_hash_get(galloc, tensor)->buffer_id < galloc->n_buffers && valid(ggml_gallocr_hash_get(galloc, tensor)->addr))",
+                "callee_specs": {
+                  "get_node_buffer_id": {
+                    "function_name": "get_node_buffer_id",
+                    "precondition": "requires (node_buffer_ids == NULL) || valid_range(node_buffer_ids, 0, i+1)",
+                    "postcondition": "(ensures (node_buffer_ids == NULL ==> result == 0) && (node_buffer_ids != NULL ==> result == node_buffer_ids[i])) && (node_buffer_ids ? node_buffer_ids[i] : 0)",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_impl_is_view": {
+                    "function_name": "ggml_impl_is_view",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_gallocr_allocate_node": {
+                    "function_name": "ggml_gallocr_allocate_node",
+                    "precondition": "requires valid(galloc) && valid(node) && buffer_id >= 0 && buffer_id < galloc->n_buffers && valid(galloc->hash_set) && valid(galloc->hash_values) && valid_range(galloc->bufts, 0, galloc->n_buffers) && valid_range(galloc->buf_tallocs, 0, galloc->n_buffers) && galloc->buf_tallocs[buffer_id] != NULL && galloc->bufts[buffer_id] != NULL && valid(node->src) && (forall i in 0..GGML_MAX_SRC: node->src[i] == NULL || valid(node->src[i])) && (node->view_src == NULL || valid(node->view_src))",
+                    "postcondition": "ensures (ggml_gallocr_is_allocated(galloc, node) || ggml_impl_is_view(node) || ggml_gallocr_hash_get(galloc, node)->allocated == true) && (ggml_gallocr_is_allocated(galloc, node) || ggml_impl_is_view(node) || ggml_gallocr_hash_get(galloc, node)->buffer_id == buffer_id || ggml_gallocr_hash_get(galloc, node)->buffer_id >= 0) && galloc state is updated to track node allocation in buffer_id or reused parent buffer",
+                    "callee_specs": {
+                      "ggml_impl_is_view": {
+                        "function_name": "ggml_impl_is_view",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_are_same_layout": {
+                        "function_name": "ggml_are_same_layout",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "assert": {
+                        "function_name": "assert",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_gallocr_is_own": {
+                        "function_name": "ggml_gallocr_is_own",
+                        "precondition": "requires valid(galloc) && valid(t) && t != NULL && galloc != NULL",
+                        "postcondition": "(ensures (result == true) iff (t is owned/managed by galloc and will be allocated by galloc) && (result == false) implies (t->data is external to galloc's management or t is not managed by galloc)) && (result == ggml_gallocr_hash_get(galloc, t)->allocated)",
+                        "callee_specs": {
+                          "ggml_gallocr_hash_get": {
+                            "function_name": "ggml_gallocr_hash_get",
+                            "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                            "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                            "callee_specs": {
+                              "ggml_hash_find_or_insert": {
+                                "function_name": "ggml_hash_find_or_insert",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_gallocr_is_allocated": {
+                        "function_name": "ggml_gallocr_is_allocated",
+                        "precondition": "requires valid(galloc) && valid(t) && valid(galloc->bufts) && valid(galloc->buffers) && valid(galloc->buf_tallocs) && galloc->n_buffers > 0",
+                        "postcondition": "(ensures (result == true) ==> (t->data != NULL || t->buffer != NULL || ggml_gallocr_is_own(galloc, t)) && (result == false) ==> (t->data == NULL && t->buffer == NULL && !ggml_gallocr_is_own(galloc, t))) && (result == (t->data != NULL || t->buffer != NULL || ggml_gallocr_is_own(galloc, t)))",
+                        "callee_specs": {
+                          "ggml_gallocr_is_own": {
+                            "function_name": "ggml_gallocr_is_own",
+                            "precondition": "requires valid(galloc) && valid(t) && t != NULL && galloc != NULL",
+                            "postcondition": "(ensures (result == true) iff (t is owned/managed by galloc and will be allocated by galloc) && (result == false) implies (t->data is external to galloc's management or t is not managed by galloc)) && (result == ggml_gallocr_hash_get(galloc, t)->allocated)",
+                            "callee_specs": {
+                              "ggml_gallocr_hash_get": {
+                                "function_name": "ggml_gallocr_hash_get",
+                                "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                                "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                                "callee_specs": {
+                                  "ggml_hash_find_or_insert": {
+                                    "function_name": "ggml_hash_find_or_insert",
+                                    "precondition": "true",
+                                    "postcondition": "true",
+                                    "callee_specs": {},
+                                    "loop_invariants": [],
+                                    "status": "generated",
+                                    "spec_disagreement": false
+                                  }
+                                },
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_gallocr_free_extra_space": {
+                        "function_name": "ggml_gallocr_free_extra_space",
+                        "precondition": "requires valid(galloc) && valid(node) && valid(parent) && !null(galloc->bufts) && !null(galloc->buf_tallocs) && valid(ggml_gallocr_hash_get(galloc, node)) && valid(ggml_gallocr_hash_get(galloc, parent)) && (let hn = ggml_gallocr_hash_get(galloc, node) in let p_hn = ggml_gallocr_hash_get(galloc, parent) in hn->buffer_id == p_hn->buffer_id && hn->buffer_id >= 0 && hn->buffer_id < galloc->n_buffers && valid(galloc->bufts[hn->buffer_id]) && valid(galloc->buf_tallocs[hn->buffer_id]) && hn->addr.chunk == p_hn->addr.chunk && hn->addr.offset == p_hn->addr.offset && p_hn->allocated == false && (parent_size >= node_size where parent_size = ggml_backend_buft_get_alloc_size(galloc->bufts[p_hn->buffer_id], parent) && node_size = ggml_backend_buft_get_alloc_size(galloc->bufts[hn->buffer_id], node)) && no overflow in (p_hn->addr.offset + aligned_offset(NULL, parent_size, galloc->buf_tallocs[p_hn->buffer_id]->alignment)))",
+                        "postcondition": "ensures (let hn = ggml_gallocr_hash_get(galloc, node) in let p_hn = ggml_gallocr_hash_get(galloc, parent) in let parent_size_aligned = aligned_offset(NULL, ggml_backend_buft_get_alloc_size(galloc->bufts[p_hn->buffer_id], parent), galloc->buf_tallocs[p_hn->buffer_id]->alignment) in let node_size_aligned = aligned_offset(NULL, ggml_backend_buft_get_alloc_size(galloc->bufts[hn->buffer_id], node), galloc->buf_tallocs[hn->buffer_id]->alignment) in (parent_size_aligned > node_size_aligned ==> (extra space of size (parent_size_aligned - node_size_aligned) starting at offset (p_hn->addr.offset + node_size_aligned) in buffer p_hn->buffer_id is freed and available for reallocation)) && (parent_size_aligned <= node_size_aligned ==> no change to allocator state))",
+                        "callee_specs": {
+                          "GGML_ASSERT": {
+                            "function_name": "GGML_ASSERT",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "aligned_offset": {
+                            "function_name": "aligned_offset",
+                            "precondition": "requires alignment > 0 && (alignment & (alignment - 1)) == 0 && offset >= 0 && offset <= SIZE_MAX - alignment && (uintptr_t)buffer + offset does not overflow",
+                            "postcondition": "(ensures result >= offset && result % alignment == 0 && result is the smallest multiple of alignment that is >= offset when considering the buffer's base address && result <= offset + alignment - 1 && result - offset < alignment) && (result == offset + ((alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment) && result % alignment == ((uintptr_t)buffer + result) % alignment && ((uintptr_t)buffer + result) % alignment == 0)",
+                            "callee_specs": {
+                              "assert": {
+                                "function_name": "assert",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_gallocr_hash_get": {
+                            "function_name": "ggml_gallocr_hash_get",
+                            "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                            "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                            "callee_specs": {
+                              "ggml_hash_find_or_insert": {
+                                "function_name": "ggml_hash_find_or_insert",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "AT_PRINTF": {
+                            "function_name": "AT_PRINTF",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_backend_buft_get_alloc_size": {
+                            "function_name": "ggml_backend_buft_get_alloc_size",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_dyn_tallocr_free_bytes": {
+                            "function_name": "ggml_dyn_tallocr_free_bytes",
+                            "precondition": "requires valid(alloc) && alloc->alignment > 0 && addr.chunk >= 0 && addr.chunk < alloc->n_chunks && valid(alloc->chunks[addr.chunk]) && addr.offset >= 0 && size > 0 && aligned_offset(NULL, size, alloc->alignment) <= SIZE_MAX && addr.offset + aligned_offset(NULL, size, alloc->alignment) <= alloc->chunks[addr.chunk]->size && (forall i in 0..alloc->chunks[addr.chunk]->n_free_blocks: valid(&alloc->chunks[addr.chunk]->free_blocks[i]) && alloc->chunks[addr.chunk]->free_blocks[i].offset >= 0 && alloc->chunks[addr.chunk]->free_blocks[i].size > 0 && alloc->chunks[addr.chunk]->free_blocks[i].offset + alloc->chunks[addr.chunk]->free_blocks[i].size <= alloc->chunks[addr.chunk]->size) && alloc->chunks[addr.chunk]->n_free_blocks >= 0 && alloc->chunks[addr.chunk]->n_free_blocks < MAX_FREE_BLOCKS",
+                            "postcondition": "ensures the memory region starting at addr with size 'size' (aligned to alloc->alignment) is freed and added to the free block list of alloc->chunks[addr.chunk], either by merging with adjacent free blocks or by inserting a new free block, making that memory available for future allocations && alloc->n_chunks == old(alloc->n_chunks) && addr.chunk < alloc->n_chunks && alloc->chunks[addr.chunk] == old(alloc->chunks[addr.chunk])",
+                            "callee_specs": {
+                              "ggml_dyn_tallocr_insert_block": {
+                                "function_name": "ggml_dyn_tallocr_insert_block",
+                                "precondition": "requires valid(chunk) && valid_range(chunk->free_blocks, 0, MAX_FREE_BLOCKS) && chunk->n_free_blocks < MAX_FREE_BLOCKS && chunk->n_free_blocks >= 0 && size > 0 && offset >= 0 && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset < offset implies chunk->free_blocks[i].offset + chunk->free_blocks[i].size <= offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset > offset implies offset + size <= chunk->free_blocks[i].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && offset + size does not overflow",
+                                "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == offset && chunk->free_blocks[j].size == size) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..old(chunk->n_free_blocks)-1: exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == old(chunk->free_blocks[i].offset) && chunk->free_blocks[j].size == old(chunk->free_blocks[i].size))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && (exists insert_pos in 0..chunk->n_free_blocks-1: chunk->free_blocks[insert_pos].offset == offset && chunk->free_blocks[insert_pos].size == size && (forall i in 0..insert_pos-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i]) && (forall i in insert_pos..old(chunk->n_free_blocks)-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i+1])))",
+                                "callee_specs": {
+                                  "GGML_ASSERT": {
+                                    "function_name": "GGML_ASSERT",
+                                    "precondition": "true",
+                                    "postcondition": "true",
+                                    "callee_specs": {},
+                                    "loop_invariants": [],
+                                    "status": "generated",
+                                    "spec_disagreement": false
+                                  }
+                                },
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              },
+                              "aligned_offset": {
+                                "function_name": "aligned_offset",
+                                "precondition": "requires alignment > 0 && (alignment & (alignment - 1)) == 0 && offset >= 0 && offset <= SIZE_MAX - alignment && (uintptr_t)buffer + offset does not overflow",
+                                "postcondition": "(ensures result >= offset && result % alignment == 0 && result is the smallest multiple of alignment that is >= offset when considering the buffer's base address && result <= offset + alignment - 1 && result - offset < alignment) && (result == offset + ((alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment) && result % alignment == ((uintptr_t)buffer + result) % alignment && ((uintptr_t)buffer + result) % alignment == 0)",
+                                "callee_specs": {
+                                  "assert": {
+                                    "function_name": "assert",
+                                    "precondition": "true",
+                                    "postcondition": "true",
+                                    "callee_specs": {},
+                                    "loop_invariants": [],
+                                    "status": "generated",
+                                    "spec_disagreement": false
+                                  }
+                                },
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              },
+                              "ggml_dyn_tallocr_remove_block": {
+                                "function_name": "ggml_dyn_tallocr_remove_block",
+                                "precondition": "requires valid(chunk) && chunk->n_free_blocks > 0 && idx >= 0 && idx < chunk->n_free_blocks && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks + 1)",
+                                "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (forall j: 0 <= j < idx ==> chunk->free_blocks[j] == old(chunk->free_blocks[j])) && (forall j: idx <= j < chunk->n_free_blocks ==> chunk->free_blocks[j] == old(chunk->free_blocks[j+1]))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && memcmp(chunk->free_blocks, old(chunk->free_blocks), idx * sizeof(chunk->free_blocks[0])) == 0 && memcmp(&chunk->free_blocks[idx], &old(chunk->free_blocks[idx+1]), (chunk->n_free_blocks - idx) * sizeof(chunk->free_blocks[0])) == 0)",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_op_can_inplace": {
+                        "function_name": "ggml_op_can_inplace",
+                        "precondition": "op is a valid ggml_op enum value",
+                        "postcondition": "(result == 0 || result == 1) && (result == (op == GGML_OP_FILL || op == GGML_OP_SCALE || op == GGML_OP_DIAG_MASK_ZERO || op == GGML_OP_DIAG_MASK_INF || op == GGML_OP_ADD || op == GGML_OP_ADD_ID || op == GGML_OP_ADD1 || op == GGML_OP_SUB || op == GGML_OP_MUL || op == GGML_OP_DIV || op == GGML_OP_SQR || op == GGML_OP_SQRT || op == GGML_OP_LOG || op == GGML_OP_UNARY || op == GGML_OP_ROPE || op == GGML_OP_ROPE_BACK || op == GGML_OP_SILU_BACK || op == GGML_OP_RMS_NORM || op == GGML_OP_RMS_NORM_BACK || op == GGML_OP_SOFT_MAX || op == GGML_OP_SOFT_MAX_BACK))",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_gallocr_hash_get": {
+                        "function_name": "ggml_gallocr_hash_get",
+                        "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                        "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                        "callee_specs": {
+                          "ggml_hash_find_or_insert": {
+                            "function_name": "ggml_hash_find_or_insert",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "AT_PRINTF": {
+                        "function_name": "AT_PRINTF",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "GGML_ASSERT": {
+                        "function_name": "GGML_ASSERT",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_backend_buft_get_alloc_size": {
+                        "function_name": "ggml_backend_buft_get_alloc_size",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_dyn_tallocr_alloc": {
+                        "function_name": "ggml_dyn_tallocr_alloc",
+                        "precondition": "requires valid(alloc) && valid(tensor) && size > 0 && alloc->alignment > 0 && alloc->max_chunk_size > 0 && alloc->max_chunk_size <= SIZE_MAX/2 && alloc->n_chunks >= 0 && alloc->n_chunks < MAX_CHUNKS && (forall i: 0 <= i < alloc->n_chunks ==> valid(alloc->chunks[i]) && alloc->chunks[i]->n_free_blocks >= 0 && alloc->chunks[i]->max_size >= 0) && size <= SIZE_MAX - alloc->alignment && !overflow(aligned_offset(NULL, size, alloc->alignment))",
+                        "postcondition": "(ensures valid(result.chunk) && result.chunk >= 0 && result.chunk < alloc->n_chunks && result.offset >= 0 && result.offset < alloc->chunks[result.chunk]->max_size && (result represents a valid allocation of aligned_offset(NULL, size, alloc->alignment) bytes from alloc that can be assigned to tensor address) && alloc->chunks[result.chunk]->max_size >= result.offset + aligned_offset(NULL, size, alloc->alignment)) && (result.chunk >= 0 && result.chunk < alloc->n_chunks && result.offset >= 0 && alloc->chunks[result.chunk]->max_size >= result.offset + aligned_offset(NULL, size, alloc->alignment))",
+                        "callee_specs": {
+                          "GGML_ABORT": {
+                            "function_name": "GGML_ABORT",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "add_allocated_tensor": {
+                            "function_name": "add_allocated_tensor",
+                            "precondition": "requires valid(alloc) && valid(tensor) && addr.chunk >= 0 && addr.chunk < alloc->n_chunks && valid(alloc->chunks[addr.chunk]) && addr.offset >= 0 && addr.offset < alloc->chunks[addr.chunk]->max_size && alloc->n_chunks <= MAX_CHUNKS && exists i in 0..1024: alloc->allocated_tensors[i].tensor == null(alloc->allocated_tensors[i].tensor)",
+                            "postcondition": "ensures exists i in 0..1024: alloc->allocated_tensors[i].tensor == tensor && alloc->allocated_tensors[i].addr.chunk == addr.chunk && alloc->allocated_tensors[i].addr.offset == addr.offset && forall j in 0..1024: (alloc->allocated_tensors[j].tensor != null(alloc->allocated_tensors[j].tensor)) ==> valid(alloc->allocated_tensors[j].tensor) && alloc->allocated_tensors[j].addr.chunk >= 0 && alloc->allocated_tensors[j].addr.chunk < alloc->n_chunks",
+                            "callee_specs": {
+                              "GGML_ABORT": {
+                                "function_name": "GGML_ABORT",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_dyn_tallocr_remove_block": {
+                            "function_name": "ggml_dyn_tallocr_remove_block",
+                            "precondition": "requires valid(chunk) && chunk->n_free_blocks > 0 && idx >= 0 && idx < chunk->n_free_blocks && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks + 1)",
+                            "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (forall j: 0 <= j < idx ==> chunk->free_blocks[j] == old(chunk->free_blocks[j])) && (forall j: idx <= j < chunk->n_free_blocks ==> chunk->free_blocks[j] == old(chunk->free_blocks[j+1]))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && memcmp(chunk->free_blocks, old(chunk->free_blocks), idx * sizeof(chunk->free_blocks[0])) == 0 && memcmp(&chunk->free_blocks[idx], &old(chunk->free_blocks[idx+1]), (chunk->n_free_blocks - idx) * sizeof(chunk->free_blocks[0])) == 0)",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_dyn_tallocr_new_chunk": {
+                            "function_name": "ggml_dyn_tallocr_new_chunk",
+                            "precondition": "requires valid(alloc) && min_size > 0 && alloc->n_chunks < GGML_VBUFFER_MAX_CHUNKS && valid_range(alloc->chunks, 0, alloc->n_chunks) && alloc->max_chunk_size <= SIZE_MAX/2 && min_size <= SIZE_MAX/2",
+                            "postcondition": "(result < 0) || ((ensures (result >= 0 && result < alloc->n_chunks && result == old(alloc->n_chunks) && alloc->n_chunks == old(alloc->n_chunks) + 1 && valid(alloc->chunks[result]) && alloc->chunks[result]->n_free_blocks == 1 && alloc->chunks[result]->free_blocks[0].offset == 0 && alloc->chunks[result]->free_blocks[0].size >= min_size && (alloc->chunks[result]->free_blocks[0].size == max(min_size, alloc->max_chunk_size) || (old(alloc->n_chunks) == GGML_VBUFFER_MAX_CHUNKS - 1 && alloc->chunks[result]->free_blocks[0].size == SIZE_MAX/2))) || (result == -1 && alloc->n_chunks == old(alloc->n_chunks))) && (result == -1 ? alloc->n_chunks >= GGML_VBUFFER_MAX_CHUNKS : (result == old(alloc->n_chunks) && alloc->chunks[result]->free_blocks[0].size >= min_size)))",
+                            "callee_specs": {
+                              "calloc": {
+                                "function_name": "calloc",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              },
+                              "MAX": {
+                                "function_name": "MAX",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "MAX": {
+                            "function_name": "MAX",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "aligned_offset": {
+                            "function_name": "aligned_offset",
+                            "precondition": "requires alignment > 0 && (alignment & (alignment - 1)) == 0 && offset >= 0 && offset <= SIZE_MAX - alignment && (uintptr_t)buffer + offset does not overflow",
+                            "postcondition": "(ensures result >= offset && result % alignment == 0 && result is the smallest multiple of alignment that is >= offset when considering the buffer's base address && result <= offset + alignment - 1 && result - offset < alignment) && (result == offset + ((alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment) && result % alignment == ((uintptr_t)buffer + result) % alignment && ((uintptr_t)buffer + result) % alignment == 0)",
+                            "callee_specs": {
+                              "assert": {
+                                "function_name": "assert",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "GGML_LOG_ERROR": {
+                            "function_name": "GGML_LOG_ERROR",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "AT_PRINTF": {
+                            "function_name": "AT_PRINTF",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "GGML_LOG_DEBUG": {
+                            "function_name": "GGML_LOG_DEBUG",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_buffer_address_less": {
+                            "function_name": "ggml_buffer_address_less",
+                            "precondition": "true",
+                            "postcondition": "(result == (a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset)) && (result == (a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset))",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "GGML_UNUSED": {
+                            "function_name": "GGML_UNUSED",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_nbytes": {
+                            "function_name": "ggml_nbytes",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      }
+                    },
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "memset": {
+                    "function_name": "memset",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_op_desc": {
+                    "function_name": "ggml_op_desc",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_gallocr_hash_get": {
+                    "function_name": "ggml_gallocr_hash_get",
+                    "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                    "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                    "callee_specs": {
+                      "ggml_hash_find_or_insert": {
+                        "function_name": "ggml_hash_find_or_insert",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      }
+                    },
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "AT_PRINTF": {
+                    "function_name": "AT_PRINTF",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_hash_set_reset": {
+                    "function_name": "ggml_hash_set_reset",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_gallocr_free_node": {
+                    "function_name": "ggml_gallocr_free_node",
+                    "precondition": "requires valid(galloc) && valid(node) && valid(galloc->bufts) && valid(galloc->buf_tallocs) && valid(galloc->buffers) && galloc->n_buffers > 0 && (let hn = ggml_gallocr_hash_get(galloc, node) in valid(hn) && hn->buffer_id >= 0 && hn->buffer_id < galloc->n_buffers && valid(galloc->buf_tallocs[hn->buffer_id]) && valid(galloc->bufts[hn->buffer_id]) && (hn->allocated == true || (node->flags & GGML_TENSOR_FLAG_OUTPUT)) && (hn->allocated == false || (hn->n_views == 0 && hn->n_children == 0)))",
+                    "postcondition": "ensures (node->flags & GGML_TENSOR_FLAG_OUTPUT) ==> (old(ggml_gallocr_hash_get(galloc, node)->allocated) == ggml_gallocr_hash_get(galloc, node)->allocated) && !(node->flags & GGML_TENSOR_FLAG_OUTPUT) ==> (ggml_gallocr_hash_get(galloc, node)->allocated == false && the tensor's memory has been freed from the allocator and can be reused for subsequent allocations && the allocator's internal state is updated to reflect the freed tensor)",
+                    "callee_specs": {
+                      "remove_allocated_tensor": {
+                        "function_name": "remove_allocated_tensor",
+                        "precondition": "requires valid(alloc) && valid(tensor) && addr.chunk >= 0 && addr.chunk < alloc->n_chunks && valid(alloc->chunks[addr.chunk]) && exists i in 0..1024: (alloc->allocated_tensors[i].addr.chunk == addr.chunk && alloc->allocated_tensors[i].addr.offset == addr.offset && alloc->allocated_tensors[i].tensor != NULL)",
+                        "postcondition": "ensures exists i in 0..1024: (alloc->allocated_tensors[i].addr.chunk == addr.chunk && alloc->allocated_tensors[i].addr.offset == addr.offset && alloc->allocated_tensors[i].tensor == NULL) && forall j in 0..1024: (j != i ==> alloc->allocated_tensors[j] == old(alloc->allocated_tensors[j]))",
+                        "callee_specs": {
+                          "GGML_ABORT": {
+                            "function_name": "GGML_ABORT",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_gallocr_hash_get": {
+                        "function_name": "ggml_gallocr_hash_get",
+                        "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                        "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                        "callee_specs": {
+                          "ggml_hash_find_or_insert": {
+                            "function_name": "ggml_hash_find_or_insert",
+                            "precondition": "true",
+                            "postcondition": "true",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_backend_buft_get_alloc_size": {
+                        "function_name": "ggml_backend_buft_get_alloc_size",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "AT_PRINTF": {
+                        "function_name": "AT_PRINTF",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_dyn_tallocr_free_bytes": {
+                        "function_name": "ggml_dyn_tallocr_free_bytes",
+                        "precondition": "requires valid(alloc) && alloc->alignment > 0 && addr.chunk >= 0 && addr.chunk < alloc->n_chunks && valid(alloc->chunks[addr.chunk]) && addr.offset >= 0 && size > 0 && aligned_offset(NULL, size, alloc->alignment) <= SIZE_MAX && addr.offset + aligned_offset(NULL, size, alloc->alignment) <= alloc->chunks[addr.chunk]->size && (forall i in 0..alloc->chunks[addr.chunk]->n_free_blocks: valid(&alloc->chunks[addr.chunk]->free_blocks[i]) && alloc->chunks[addr.chunk]->free_blocks[i].offset >= 0 && alloc->chunks[addr.chunk]->free_blocks[i].size > 0 && alloc->chunks[addr.chunk]->free_blocks[i].offset + alloc->chunks[addr.chunk]->free_blocks[i].size <= alloc->chunks[addr.chunk]->size) && alloc->chunks[addr.chunk]->n_free_blocks >= 0 && alloc->chunks[addr.chunk]->n_free_blocks < MAX_FREE_BLOCKS",
+                        "postcondition": "ensures the memory region starting at addr with size 'size' (aligned to alloc->alignment) is freed and added to the free block list of alloc->chunks[addr.chunk], either by merging with adjacent free blocks or by inserting a new free block, making that memory available for future allocations && alloc->n_chunks == old(alloc->n_chunks) && addr.chunk < alloc->n_chunks && alloc->chunks[addr.chunk] == old(alloc->chunks[addr.chunk])",
+                        "callee_specs": {
+                          "ggml_dyn_tallocr_insert_block": {
+                            "function_name": "ggml_dyn_tallocr_insert_block",
+                            "precondition": "requires valid(chunk) && valid_range(chunk->free_blocks, 0, MAX_FREE_BLOCKS) && chunk->n_free_blocks < MAX_FREE_BLOCKS && chunk->n_free_blocks >= 0 && size > 0 && offset >= 0 && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset < offset implies chunk->free_blocks[i].offset + chunk->free_blocks[i].size <= offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset > offset implies offset + size <= chunk->free_blocks[i].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && offset + size does not overflow",
+                            "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == offset && chunk->free_blocks[j].size == size) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..old(chunk->n_free_blocks)-1: exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == old(chunk->free_blocks[i].offset) && chunk->free_blocks[j].size == old(chunk->free_blocks[i].size))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && (exists insert_pos in 0..chunk->n_free_blocks-1: chunk->free_blocks[insert_pos].offset == offset && chunk->free_blocks[insert_pos].size == size && (forall i in 0..insert_pos-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i]) && (forall i in insert_pos..old(chunk->n_free_blocks)-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i+1])))",
+                            "callee_specs": {
+                              "GGML_ASSERT": {
+                                "function_name": "GGML_ASSERT",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "aligned_offset": {
+                            "function_name": "aligned_offset",
+                            "precondition": "requires alignment > 0 && (alignment & (alignment - 1)) == 0 && offset >= 0 && offset <= SIZE_MAX - alignment && (uintptr_t)buffer + offset does not overflow",
+                            "postcondition": "(ensures result >= offset && result % alignment == 0 && result is the smallest multiple of alignment that is >= offset when considering the buffer's base address && result <= offset + alignment - 1 && result - offset < alignment) && (result == offset + ((alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment) && result % alignment == ((uintptr_t)buffer + result) % alignment && ((uintptr_t)buffer + result) % alignment == 0)",
+                            "callee_specs": {
+                              "assert": {
+                                "function_name": "assert",
+                                "precondition": "true",
+                                "postcondition": "true",
+                                "callee_specs": {},
+                                "loop_invariants": [],
+                                "status": "generated",
+                                "spec_disagreement": false
+                              }
+                            },
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          },
+                          "ggml_dyn_tallocr_remove_block": {
+                            "function_name": "ggml_dyn_tallocr_remove_block",
+                            "precondition": "requires valid(chunk) && chunk->n_free_blocks > 0 && idx >= 0 && idx < chunk->n_free_blocks && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks + 1)",
+                            "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (forall j: 0 <= j < idx ==> chunk->free_blocks[j] == old(chunk->free_blocks[j])) && (forall j: idx <= j < chunk->n_free_blocks ==> chunk->free_blocks[j] == old(chunk->free_blocks[j+1]))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && memcmp(chunk->free_blocks, old(chunk->free_blocks), idx * sizeof(chunk->free_blocks[0])) == 0 && memcmp(&chunk->free_blocks[idx], &old(chunk->free_blocks[idx+1]), (chunk->n_free_blocks - idx) * sizeof(chunk->free_blocks[0])) == 0)",
+                            "callee_specs": {},
+                            "loop_invariants": [],
+                            "status": "generated",
+                            "spec_disagreement": false
+                          }
+                        },
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      }
+                    },
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_vbuffer_chunk_size": {
+                "function_name": "ggml_vbuffer_chunk_size",
+                "precondition": "requires valid(buf) && buf != NULL && chunk >= 0 && chunk < buf->n_chunks && valid_range(buf->chunks, 0, buf->n_chunks) && (buf->chunks[chunk] == NULL || valid(buf->chunks[chunk]))",
+                "postcondition": "(ensures result >= 0 && (buf->chunks[chunk] == NULL ==> result == 0) && (buf->chunks[chunk] != NULL ==> result == ggml_backend_buffer_get_size(buf->chunks[chunk]))) && (buf->chunks[chunk] ? ggml_backend_buffer_get_size(buf->chunks[chunk]) : 0)",
+                "callee_specs": {
+                  "ggml_backend_buffer_get_size": {
+                    "function_name": "ggml_backend_buffer_get_size",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_backend_buft_name": {
+                "function_name": "ggml_backend_buft_name",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_hash_set_free": {
+                "function_name": "ggml_hash_set_free",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_dyn_tallocr_reset": {
+                "function_name": "ggml_dyn_tallocr_reset",
+                "precondition": "requires valid(alloc) && valid(alloc->chunks) && alloc->n_chunks >= 0 && alloc->n_chunks <= GGML_VBUFFER_MAX_CHUNKS && forall i in 0..GGML_VBUFFER_MAX_CHUNKS: (alloc->chunks[i] == NULL || valid(alloc->chunks[i]))",
+                "postcondition": "(ensures valid(alloc) && alloc->n_chunks == 0 && forall i in 0..GGML_VBUFFER_MAX_CHUNKS: alloc->chunks[i] == NULL && (alloc is reset to initial state, ready for fresh allocation tracking with all previous allocation records cleared)) && (alloc->n_chunks == 0 && forall i in 0..GGML_VBUFFER_MAX_CHUNKS: alloc->chunks[i] == NULL)",
+                "callee_specs": {
+                  "free": {
+                    "function_name": "free",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_dyn_tallocr_max_size": {
+                "function_name": "ggml_dyn_tallocr_max_size",
+                "precondition": "requires valid(alloc) && valid(alloc->chunks) && alloc->n_chunks >= 0 && chunk >= 0",
+                "postcondition": "(ensures result >= 0 && (chunk < alloc->n_chunks ==> (valid(alloc->chunks[chunk]) && result == alloc->chunks[chunk]->max_size)) && (chunk >= alloc->n_chunks ==> result == 0)) && (chunk < alloc->n_chunks ? alloc->chunks[chunk]->max_size : 0)",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_vbuffer_alloc": {
+                "function_name": "ggml_vbuffer_alloc",
+                "precondition": "requires valid(buft) && valid(talloc) && talloc->n_chunks >= 0 && talloc->n_chunks <= MAX_CHUNKS && (forall i in 0..talloc->n_chunks: valid(talloc->chunks[i]) && talloc->chunks[i]->max_size <= SIZE_MAX) && usage is a valid enum ggml_backend_buffer_usage value",
+                "postcondition": "ensures (result == NULL) || (valid(result) && result->chunks != NULL && (forall i in 0..talloc->n_chunks: valid(result->chunks[i])))",
+                "callee_specs": {
+                  "calloc": {
+                    "function_name": "calloc",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_backend_buffer_set_usage": {
+                    "function_name": "ggml_backend_buffer_set_usage",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_backend_buft_alloc_buffer": {
+                    "function_name": "ggml_backend_buft_alloc_buffer",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_vbuffer_free": {
+                    "function_name": "ggml_vbuffer_free",
+                    "precondition": "buf == NULL || (valid(buf) && buf was allocated via calloc && forall i in [0..GGML_VBUFFER_MAX_CHUNKS): (buf->chunks[i] == NULL || valid(buf->chunks[i])))",
+                    "postcondition": "ensures if buf was not NULL: all resources associated with buf are freed, including all non-NULL buf->chunks[i] for i in [0..GGML_VBUFFER_MAX_CHUNKS), and buf itself is freed and no longer valid; if buf was NULL: no operation performed and no side effects",
+                    "callee_specs": {
+                      "free": {
+                        "function_name": "free",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      },
+                      "ggml_backend_buffer_free": {
+                        "function_name": "ggml_backend_buffer_free",
+                        "precondition": "true",
+                        "postcondition": "true",
+                        "callee_specs": {},
+                        "loop_invariants": [],
+                        "status": "generated",
+                        "spec_disagreement": false
+                      }
+                    },
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_hash_set_new": {
+                "function_name": "ggml_hash_set_new",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "calloc": {
+                "function_name": "calloc",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "GGML_LOG_ERROR": {
+                "function_name": "GGML_LOG_ERROR",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_gallocr_hash_get": {
+                "function_name": "ggml_gallocr_hash_get",
+                "precondition": "requires valid(galloc) && valid(t) && valid(galloc->hash_set.keys) && valid(galloc->hash_values) && galloc->hash_set.size > 0 && valid_range(galloc->hash_values, 0, galloc->hash_set.size)",
+                "postcondition": "(ensures valid(result) && result != NULL && result == &galloc->hash_values[i] where i < galloc->hash_set.size && result->buffer_id >= -1 && result->n_views >= 0 && result->n_children >= 0 && valid(result->addr) && result can be safely read and written) && (result == &galloc->hash_values[ggml_hash_find_or_insert(&galloc->hash_set, t)])",
+                "callee_specs": {
+                  "ggml_hash_find_or_insert": {
+                    "function_name": "ggml_hash_find_or_insert",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_backend_buft_get_alloc_size": {
+                "function_name": "ggml_backend_buft_get_alloc_size",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "GGML_ASSERT": {
+                "function_name": "GGML_ASSERT",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "free": {
+                "function_name": "free",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_vbuffer_size": {
+                "function_name": "ggml_vbuffer_size",
+                "precondition": "requires valid(buf) && valid(buf->chunks) && forall i in [0..GGML_VBUFFER_MAX_CHUNKS): (buf->chunks[i] == NULL || valid(buf->chunks[i])) && (buf->chunks[i] != NULL implies ggml_backend_buffer_get_size(buf->chunks[i]) >= 0 && ggml_backend_buffer_get_size(buf->chunks[i]) <= SIZE_MAX) && (no integer overflow when summing all chunk sizes)",
+                "postcondition": "ensures result >= 0 && result == sum of ggml_backend_buffer_get_size(buf->chunks[i]) for all i where buf->chunks[i] != NULL && result <= SIZE_MAX && (no overflow occurred in computing result)",
+                "callee_specs": {
+                  "ggml_backend_buffer_get_size": {
+                    "function_name": "ggml_backend_buffer_get_size",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "GGML_LOG_DEBUG": {
+                "function_name": "GGML_LOG_DEBUG",
+                "precondition": "true",
+                "postcondition": "true",
+                "callee_specs": {},
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              },
+              "ggml_vbuffer_free": {
+                "function_name": "ggml_vbuffer_free",
+                "precondition": "buf == NULL || (valid(buf) && buf was allocated via calloc && forall i in [0..GGML_VBUFFER_MAX_CHUNKS): (buf->chunks[i] == NULL || valid(buf->chunks[i])))",
+                "postcondition": "ensures if buf was not NULL: all resources associated with buf are freed, including all non-NULL buf->chunks[i] for i in [0..GGML_VBUFFER_MAX_CHUNKS), and buf itself is freed and no longer valid; if buf was NULL: no operation performed and no side effects",
+                "callee_specs": {
+                  "free": {
+                    "function_name": "free",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  },
+                  "ggml_backend_buffer_free": {
+                    "function_name": "ggml_backend_buffer_free",
+                    "precondition": "true",
+                    "postcondition": "true",
+                    "callee_specs": {},
+                    "loop_invariants": [],
+                    "status": "generated",
+                    "spec_disagreement": false
+                  }
+                },
+                "loop_invariants": [],
+                "status": "generated",
+                "spec_disagreement": false
+              }
+            },
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

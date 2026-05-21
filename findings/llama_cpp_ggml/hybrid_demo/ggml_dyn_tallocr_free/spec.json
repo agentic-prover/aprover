@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-05-21T12:19:58.689921+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_free",
+    "precondition": "requires valid(alloc) && alloc->n_chunks >= 0 && alloc->n_chunks <= 128 && (forall i in 0..alloc->n_chunks: valid(alloc->chunks[i]) || null(alloc->chunks[i])) && (forall i in 0..alloc->n_chunks, j in 0..alloc->n_chunks: i != j ==> alloc->chunks[i] != alloc->chunks[j] || null(alloc->chunks[i]))",
+    "postcondition": "ensures (forall i in 0..old(alloc->n_chunks): old(alloc->chunks[i]) is freed) && old(alloc) is freed && the memory/resources associated with alloc are released and alloc becomes invalid for future use",
+    "callee_specs": {
+      "free": {
+        "function_name": "free",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

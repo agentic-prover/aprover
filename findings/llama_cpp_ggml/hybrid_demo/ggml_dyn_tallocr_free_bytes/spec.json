@@ -1,0 +1,60 @@
+{
+  "saved_at": "2026-05-21T12:20:02.110422+00:00",
+  "spec": {
+    "function_name": "ggml_dyn_tallocr_free_bytes",
+    "precondition": "requires valid(alloc) && alloc->alignment > 0 && addr.chunk >= 0 && addr.chunk < alloc->n_chunks && valid(alloc->chunks[addr.chunk]) && addr.offset >= 0 && size > 0 && aligned_offset(NULL, size, alloc->alignment) <= SIZE_MAX && addr.offset + aligned_offset(NULL, size, alloc->alignment) <= alloc->chunks[addr.chunk]->size && (forall i in 0..alloc->chunks[addr.chunk]->n_free_blocks: valid(&alloc->chunks[addr.chunk]->free_blocks[i]) && alloc->chunks[addr.chunk]->free_blocks[i].offset >= 0 && alloc->chunks[addr.chunk]->free_blocks[i].size > 0 && alloc->chunks[addr.chunk]->free_blocks[i].offset + alloc->chunks[addr.chunk]->free_blocks[i].size <= alloc->chunks[addr.chunk]->size) && alloc->chunks[addr.chunk]->n_free_blocks >= 0 && alloc->chunks[addr.chunk]->n_free_blocks < MAX_FREE_BLOCKS",
+    "postcondition": "ensures the memory region starting at addr with size 'size' (aligned to alloc->alignment) is freed and added to the free block list of alloc->chunks[addr.chunk], either by merging with adjacent free blocks or by inserting a new free block, making that memory available for future allocations && alloc->n_chunks == old(alloc->n_chunks) && addr.chunk < alloc->n_chunks && alloc->chunks[addr.chunk] == old(alloc->chunks[addr.chunk])",
+    "callee_specs": {
+      "ggml_dyn_tallocr_insert_block": {
+        "function_name": "ggml_dyn_tallocr_insert_block",
+        "precondition": "requires valid(chunk) && valid_range(chunk->free_blocks, 0, MAX_FREE_BLOCKS) && chunk->n_free_blocks < MAX_FREE_BLOCKS && chunk->n_free_blocks >= 0 && size > 0 && offset >= 0 && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset < offset implies chunk->free_blocks[i].offset + chunk->free_blocks[i].size <= offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].offset > offset implies offset + size <= chunk->free_blocks[i].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && offset + size does not overflow",
+        "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == offset && chunk->free_blocks[j].size == size) && (forall i in 0..chunk->n_free_blocks-2: chunk->free_blocks[i].offset < chunk->free_blocks[i+1].offset) && (forall i in 0..chunk->n_free_blocks-1: chunk->free_blocks[i].size > 0 && chunk->free_blocks[i].offset >= 0) && (forall i in 0..old(chunk->n_free_blocks)-1: exists j in 0..chunk->n_free_blocks-1: chunk->free_blocks[j].offset == old(chunk->free_blocks[i].offset) && chunk->free_blocks[j].size == old(chunk->free_blocks[i].size))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) + 1 && (exists insert_pos in 0..chunk->n_free_blocks-1: chunk->free_blocks[insert_pos].offset == offset && chunk->free_blocks[insert_pos].size == size && (forall i in 0..insert_pos-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i]) && (forall i in insert_pos..old(chunk->n_free_blocks)-1: old(chunk->free_blocks[i]) == chunk->free_blocks[i+1])))",
+        "callee_specs": {
+          "GGML_ASSERT": {
+            "function_name": "GGML_ASSERT",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "aligned_offset": {
+        "function_name": "aligned_offset",
+        "precondition": "requires alignment > 0 && (alignment & (alignment - 1)) == 0 && offset >= 0 && offset <= SIZE_MAX - alignment && (uintptr_t)buffer + offset does not overflow",
+        "postcondition": "(ensures result >= offset && result % alignment == 0 && result is the smallest multiple of alignment that is >= offset when considering the buffer's base address && result <= offset + alignment - 1 && result - offset < alignment) && (result == offset + ((alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment) && result % alignment == ((uintptr_t)buffer + result) % alignment && ((uintptr_t)buffer + result) % alignment == 0)",
+        "callee_specs": {
+          "assert": {
+            "function_name": "assert",
+            "precondition": "true",
+            "postcondition": "true",
+            "callee_specs": {},
+            "loop_invariants": [],
+            "status": "generated",
+            "spec_disagreement": false
+          }
+        },
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      },
+      "ggml_dyn_tallocr_remove_block": {
+        "function_name": "ggml_dyn_tallocr_remove_block",
+        "precondition": "requires valid(chunk) && chunk->n_free_blocks > 0 && idx >= 0 && idx < chunk->n_free_blocks && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks + 1)",
+        "postcondition": "(ensures chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && valid_range(chunk->free_blocks, 0, chunk->n_free_blocks) && (forall j: 0 <= j < idx ==> chunk->free_blocks[j] == old(chunk->free_blocks[j])) && (forall j: idx <= j < chunk->n_free_blocks ==> chunk->free_blocks[j] == old(chunk->free_blocks[j+1]))) && (chunk->n_free_blocks == old(chunk->n_free_blocks) - 1 && memcmp(chunk->free_blocks, old(chunk->free_blocks), idx * sizeof(chunk->free_blocks[0])) == 0 && memcmp(&chunk->free_blocks[idx], &old(chunk->free_blocks[idx+1]), (chunk->n_free_blocks - idx) * sizeof(chunk->free_blocks[0])) == 0)",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}
