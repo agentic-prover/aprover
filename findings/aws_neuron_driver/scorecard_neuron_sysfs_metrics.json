@@ -1,0 +1,177 @@
+[
+  {
+    "fn": "nsysfsmetric_create_attr",
+    "status": "FAIL (nsysfsmetric_create_attr.pointer_dereference.1)",
+    "elapsed": 1.9316082000732422
+  },
+  {
+    "fn": "nsysfsmetric_dec_counter",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "nsysfsmetric_destroy",
+    "status": "VERIFIED",
+    "elapsed": 5.034983158111572
+  },
+  {
+    "fn": "nsysfsmetric_destroy_counters",
+    "status": "VERIFIED",
+    "elapsed": 1.41379976272583
+  },
+  {
+    "fn": "nsysfsmetric_destroy_nodes",
+    "status": "VERIFIED",
+    "elapsed": 1.2093253135681152
+  },
+  {
+    "fn": "nsysfsmetric_find_attr",
+    "status": "FAIL (nsysfsmetric_find_attr.pointer_dereference.7)",
+    "elapsed": 1.2270872592926025
+  },
+  {
+    "fn": "nsysfsmetric_find_metrics",
+    "status": "FAIL (nsysfsmetric_find_metrics.pointer_dereference.1)",
+    "elapsed": 1.2160718441009521
+  },
+  {
+    "fn": "nsysfsmetric_find_node",
+    "status": "VERIFIED",
+    "elapsed": 1.2451024055480957
+  },
+  {
+    "fn": "nsysfsmetric_generic_metric_attr_show",
+    "status": "FAIL (nsysfsmetric_generic_metric_attr_show.pointer_dereference.5)",
+    "elapsed": 1.216801404953003
+  },
+  {
+    "fn": "nsysfsmetric_generic_metric_attr_store",
+    "status": "FAIL (nsysfsmetric_generic_metric_attr_store.pointer_dereference.5)",
+    "elapsed": 1.2047557830810547
+  },
+  {
+    "fn": "nsysfsmetric_get_metric_id",
+    "status": "VERIFIED",
+    "elapsed": 1.1989753246307373
+  },
+  {
+    "fn": "nsysfsmetric_get_neuron_architecture",
+    "status": "FAIL (nsysfsmetric_get_neuron_architecture.pointer_dereference.7)",
+    "elapsed": 1.405107021331787
+  },
+  {
+    "fn": "nsysfsmetric_inc_counter",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "nsysfsmetric_inc_reset_fail_count",
+    "status": "VERIFIED",
+    "elapsed": 1.3133997917175293
+  },
+  {
+    "fn": "nsysfsmetric_inc_reset_req_count",
+    "status": "VERIFIED",
+    "elapsed": 1.2920551300048828
+  },
+  {
+    "fn": "nsysfsmetric_init_and_add_dynamic_counter_nodes",
+    "status": "FAIL (nsysfsmetric_init_and_add_dynamic_counter_nodes.pointer_dereference.13)",
+    "elapsed": 7.354952812194824
+  },
+  {
+    "fn": "nsysfsmetric_init_and_add_nc_default_nodes",
+    "status": "FAIL (nsysfsmetric_init_and_add_nc_default_nodes.pointer_dereference.1)",
+    "elapsed": 7.47585916519165
+  },
+  {
+    "fn": "nsysfsmetric_init_and_add_nodes",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6184258460998535
+  },
+  {
+    "fn": "nsysfsmetric_init_and_add_one_dynamic_counter_node",
+    "status": "VERIFIED",
+    "elapsed": 1.232457160949707
+  },
+  {
+    "fn": "nsysfsmetric_init_and_add_one_node",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6320509910583496
+  },
+  {
+    "fn": "nsysfsmetric_init_and_add_root_node",
+    "status": "VERIFIED",
+    "elapsed": 1.4321990013122559
+  },
+  {
+    "fn": "nsysfsmetric_init_attr_group",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6278917789459229
+  },
+  {
+    "fn": "nsysfsmetric_nds_aggregate",
+    "status": "FAIL (nsysfsmetric_nds_aggregate.pointer_dereference.7)",
+    "elapsed": 7.389700889587402
+  },
+  {
+    "fn": "nsysfsmetric_node_release",
+    "status": "FAIL (nsysfsmetric_node_release.pointer_dereference.5)",
+    "elapsed": 1.2046339511871338
+  },
+  {
+    "fn": "nsysfsmetric_register",
+    "status": "FAIL (nsysfsmetric_register.pointer_dereference.7)",
+    "elapsed": 7.265778064727783
+  },
+  {
+    "fn": "nsysfsmetric_set_counter",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "nsysfsmetric_set_nrt_other_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.3322112560272217
+  },
+  {
+    "fn": "nsysfsmetric_set_nrt_peak_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.7392475605010986
+  },
+  {
+    "fn": "nsysfsmetric_set_nrt_present_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.7132680416107178
+  },
+  {
+    "fn": "nsysfsmetric_set_nrt_total_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.7119641304016113
+  },
+  {
+    "fn": "nsysfsmetric_show_nrt_other_metrics",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6460304260253906
+  },
+  {
+    "fn": "nsysfsmetric_show_nrt_peak_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.5522525310516357
+  },
+  {
+    "fn": "nsysfsmetric_show_nrt_present_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.796370506286621
+  },
+  {
+    "fn": "nsysfsmetric_show_nrt_total_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.7219140529632568
+  },
+  {
+    "fn": "nsysfsmetric_update_counter",
+    "status": "FAIL (nsysfsmetric_update_counter.pointer_dereference.1)",
+    "elapsed": 6.479707956314087
+  }
+]
