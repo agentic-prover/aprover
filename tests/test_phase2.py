@@ -919,6 +919,47 @@ def test_generate_nd_decls_array_param_fallback_no_literals():
     assert "float _out_buf[9];" in on
 
 
+def test_source_precondition_extractor_handles_local_static_const():
+    """Source-assert extractor now picks up
+    ``static const int qk = QK_MXFP4; assert(k % qk == 0);`` where
+    ``qk`` is a lowercase local const, not an ALL_CAPS macro.
+
+    Discovered via the llama.cpp ggml-quants.c sweep: every
+    ``quantize_row_<type>_ref`` and ``dequantize_row_<type>`` that
+    uses a local-const ``qk`` instead of the macro name was failing
+    its body's ``assert(k % qk == 0)``. Real callers obey the
+    precondition; harness should mirror it via __CPROVER_assume.
+    """
+    from bmc_agent.harness_generator import _extract_source_precondition_asserts
+
+    # Macro form (already worked) -- regression check.
+    body_macro = "{ assert(k % QK_K == 0); }"
+    assert _extract_source_precondition_asserts(body_macro, ["k"]) == [
+        "__CPROVER_assume(k % QK_K == 0);"
+    ]
+
+    # Local-static-const form (newly working).
+    body_const = (
+        "{ static const int qk = QK_MXFP4;\n"
+        " assert(k % qk == 0);\n"
+        " int nb = k / qk; }"
+    )
+    assert _extract_source_precondition_asserts(body_const, ["k"]) == [
+        "__CPROVER_assume(k % qk == 0);"
+    ]
+
+    # Multiple local consts before the assert.
+    body_multi = (
+        "{ static const int qk = QK4_0;\n"
+        " static const size_t alignment = 16;\n"
+        " assert(k % qk == 0 && alignment >= 1);\n"
+        " /* ... */ }"
+    )
+    assert _extract_source_precondition_asserts(body_multi, ["k"]) == [
+        "__CPROVER_assume(k % qk == 0 && alignment >= 1);"
+    ]
+
+
 def test_strip_restrict_quals_handles_ggml_macros():
     """``_strip_restrict_quals`` removes restrict-like qualifier macros
     that appear between the base type and the pointer ``*``. Without

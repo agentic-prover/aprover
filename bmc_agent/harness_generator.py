@@ -877,12 +877,43 @@ def _extract_source_precondition_asserts(
                     and not n.startswith("_")  # exclude __builtin_*, _Static_*
                 )
             }
+            # Also accept identifiers introduced as ``static const int <n> = ...;``
+            # or ``static const size_t <n> = ...;`` etc., before the assert.
+            # ggml-quants.c uses ``static const int qk = QK_MXFP4;`` then
+            # ``assert(k % qk == 0)`` — qk is lowercase but functionally a
+            # compile-time constant. Without this, the assert is rejected and
+            # the harness explores k-not-multiple-of-qk, tripping the assert
+            # as a "confirmed bug" that is in fact an internal precondition.
+            if non_param:
+                _local_const_re = _re.compile(
+                    r"\bstatic\s+const\s+(?:int|size_t|int8_t|int16_t|int32_t|int64_t|"
+                    r"uint8_t|uint16_t|uint32_t|uint64_t|long|short|signed|unsigned)"
+                    r"(?:\s+[a-z_]+)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*="
+                )
+                # Scan only the prelude up to where we matched the assert.
+                local_consts = set(_local_const_re.findall(body[:start]))
+                non_param = non_param - local_consts
             if non_param:
                 continue
             if expr in seen:
                 continue
             seen.add(expr)
             out.append(f"__CPROVER_assume({expr});")
+            continue
+        # Allow ``static const <type> <name> = <expr>;`` declarations to
+        # appear in the prelude — these are compile-time constants used
+        # to anchor the precondition assert (ggml-quants pattern:
+        # ``static const int qk = QK_MXFP4; assert(k % qk == 0);``).
+        # Skip the declaration entirely so the scanner can continue
+        # toward the assert.
+        _const_decl = _re.match(
+            r"static\s+const\s+(?:int|size_t|int8_t|int16_t|int32_t|int64_t|"
+            r"uint8_t|uint16_t|uint32_t|uint64_t|long|short|signed|unsigned)"
+            r"(?:\s+[a-z_]+)?\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^;]+;",
+            body[pos:],
+        )
+        if _const_decl:
+            pos += _const_decl.end()
             continue
         # Not an assert: detect "side-effecting statement starts".
         # Crude heuristic — if we hit any '=' or ';' or '(' that isn't
