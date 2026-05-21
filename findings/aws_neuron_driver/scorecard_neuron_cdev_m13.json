@@ -1,0 +1,592 @@
+[
+  {
+    "fn": "device_reset_show",
+    "status": "FAIL (device_reset_show.array_bounds.2)",
+    "elapsed": 1.6081476211547852
+  },
+  {
+    "fn": "driver_reset_store",
+    "status": "FAIL (driver_reset_store.pointer_dereference.7)",
+    "elapsed": 1.7476344108581543
+  },
+  {
+    "fn": "fw_api_version_show",
+    "status": "FAIL (fw_api_version_show.array_bounds.2)",
+    "elapsed": 1.4293229579925537
+  },
+  {
+    "fn": "narch_fill_device_basic_info",
+    "status": "VERIFIED",
+    "elapsed": 1.1011955738067627
+  },
+  {
+    "fn": "ncdev_acquire_neuron_ds",
+    "status": "FAIL (ncdev_acquire_neuron_ds.pointer_dereference.1)",
+    "elapsed": 7.295090675354004
+  },
+  {
+    "fn": "ncdev_available_perf_profiles",
+    "status": "FAIL (ncdev_available_perf_profiles.pointer_dereference.1)",
+    "elapsed": 6.749623775482178
+  },
+  {
+    "fn": "ncdev_bar_read",
+    "status": "FAIL (ncdev_bar_read.pointer_dereference.11)",
+    "elapsed": 6.9797704219818115
+  },
+  {
+    "fn": "ncdev_bar_rw",
+    "status": "VERIFIED",
+    "elapsed": 1.242034912109375
+  },
+  {
+    "fn": "ncdev_bar_write",
+    "status": "VERIFIED",
+    "elapsed": 1.2126097679138184
+  },
+  {
+    "fn": "ncdev_bar_write_data",
+    "status": "FAIL (ncdev_bar_write_data.pointer_dereference.25)",
+    "elapsed": 7.2889814376831055
+  },
+  {
+    "fn": "ncdev_cinit_set_state",
+    "status": "FAIL (ncdev_ncid_valid.pointer_dereference.1)",
+    "elapsed": 7.318711757659912
+  },
+  {
+    "fn": "ncdev_class_attr_cleanup",
+    "status": "VERIFIED",
+    "elapsed": 1.1133055686950684
+  },
+  {
+    "fn": "ncdev_class_attr_init",
+    "status": "VERIFIED",
+    "elapsed": 1.0846571922302246
+  },
+  {
+    "fn": "ncdev_class_cur_perf_profile_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6760320663452148
+  },
+  {
+    "fn": "ncdev_class_hbm_7200_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6530280113220215
+  },
+  {
+    "fn": "ncdev_class_node_cnt_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.677802562713623
+  },
+  {
+    "fn": "ncdev_class_node_id_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.7018001079559326
+  },
+  {
+    "fn": "ncdev_class_reservation_id_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.7444436550140381
+  },
+  {
+    "fn": "ncdev_class_server_id_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.679842472076416
+  },
+  {
+    "fn": "ncdev_class_ultraserver_mode_show",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.7080674171447754
+  },
+  {
+    "fn": "ncdev_cleanup",
+    "status": "VERIFIED",
+    "elapsed": 1.4016029834747314
+  },
+  {
+    "fn": "ncdev_compatible_version",
+    "status": "FAIL (ncdev_compatible_version.pointer_dereference.1)",
+    "elapsed": 1.1504883766174316
+  },
+  {
+    "fn": "ncdev_create_device_node",
+    "status": "VERIFIED",
+    "elapsed": 1.441824197769165
+  },
+  {
+    "fn": "ncdev_crwl_nc_range_mark",
+    "status": "FAIL (ncdev_crwl_nc_range_mark.pointer_dereference.7)",
+    "elapsed": 1.1801731586456299
+  },
+  {
+    "fn": "ncdev_crwl_nc_range_unmark",
+    "status": "FAIL (ncdev_crwl_nc_range_unmark.pointer_dereference.7)",
+    "elapsed": 1.1447279453277588
+  },
+  {
+    "fn": "ncdev_crwl_reader_enter",
+    "status": "VERIFIED",
+    "elapsed": 1.2344043254852295
+  },
+  {
+    "fn": "ncdev_crwl_reader_exit",
+    "status": "VERIFIED",
+    "elapsed": 1.2301115989685059
+  },
+  {
+    "fn": "ncdev_crwl_writer_downgrade",
+    "status": "VERIFIED",
+    "elapsed": 1.2060725688934326
+  },
+  {
+    "fn": "ncdev_crwl_writer_enter",
+    "status": "VERIFIED",
+    "elapsed": 1.237515926361084
+  },
+  {
+    "fn": "ncdev_delete_device_node",
+    "status": "FAIL (ncdev_remove_device_node.pointer_dereference.5)",
+    "elapsed": 15.122663259506226
+  },
+  {
+    "fn": "ncdev_device_app_pid_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.1899926662445068
+  },
+  {
+    "fn": "ncdev_device_basic_info",
+    "status": "VERIFIED",
+    "elapsed": 1.1357359886169434
+  },
+  {
+    "fn": "ncdev_device_bdf",
+    "status": "FAIL (ncdev_device_bdf.pointer_dereference.13)",
+    "elapsed": 6.951331853866577
+  },
+  {
+    "fn": "ncdev_device_bdf_ext",
+    "status": "FAIL (ncdev_device_bdf_ext.pointer_dereference.7)",
+    "elapsed": 1.9972889423370361
+  },
+  {
+    "fn": "ncdev_device_get_all_apps_info",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ncdev_device_info",
+    "status": "FAIL (ncdev_device_info.pointer_dereference.1)",
+    "elapsed": 6.209912300109863
+  },
+  {
+    "fn": "ncdev_device_ready_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.2503857612609863
+  },
+  {
+    "fn": "ncdev_device_reset_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.1940624713897705
+  },
+  {
+    "fn": "ncdev_device_reset_status_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.1683571338653564
+  },
+  {
+    "fn": "ncdev_dma_ack_completed",
+    "status": "VERIFIED",
+    "elapsed": 1.150456190109253
+  },
+  {
+    "fn": "ncdev_dma_copy_descriptors",
+    "status": "FAIL (ncdev_dma_copy_descriptors.pointer_dereference.1)",
+    "elapsed": 6.773340225219727
+  },
+  {
+    "fn": "ncdev_dma_copy_start",
+    "status": "VERIFIED",
+    "elapsed": 1.1577112674713135
+  },
+  {
+    "fn": "ncdev_dma_descriptor_copyout",
+    "status": "VERIFIED",
+    "elapsed": 1.2181150913238525
+  },
+  {
+    "fn": "ncdev_dma_engine_get_state",
+    "status": "VERIFIED",
+    "elapsed": 1.2121756076812744
+  },
+  {
+    "fn": "ncdev_dma_engine_set_state",
+    "status": "VERIFIED",
+    "elapsed": 1.1831772327423096
+  },
+  {
+    "fn": "ncdev_dma_queue_get_state",
+    "status": "VERIFIED",
+    "elapsed": 1.1645746231079102
+  },
+  {
+    "fn": "ncdev_dma_queue_init",
+    "status": "VERIFIED",
+    "elapsed": 1.2262907028198242
+  },
+  {
+    "fn": "ncdev_dma_queue_init_batch",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ncdev_dma_queue_init_batch_entry",
+    "status": "VERIFIED",
+    "elapsed": 1.1515915393829346
+  },
+  {
+    "fn": "ncdev_dma_queue_release",
+    "status": "VERIFIED",
+    "elapsed": 1.2073111534118652
+  },
+  {
+    "fn": "ncdev_driver_info",
+    "status": "VERIFIED",
+    "elapsed": 1.0855977535247803
+  },
+  {
+    "fn": "ncdev_dump_log",
+    "status": "FAIL (ncdev_dump_log.pointer_dereference.1)",
+    "elapsed": 1.369297742843628
+  },
+  {
+    "fn": "ncdev_dump_mem_chunks",
+    "status": "VERIFIED",
+    "elapsed": 1.2452912330627441
+  },
+  {
+    "fn": "ncdev_events_ioctl",
+    "status": "VERIFIED",
+    "elapsed": 1.227402925491333
+  },
+  {
+    "fn": "ncdev_flush",
+    "status": "FAIL (ncdev_flush.pointer_dereference.7)",
+    "elapsed": 1.133162260055542
+  },
+  {
+    "fn": "ncdev_get_async_h2d_dma_compl_queues",
+    "status": "FAIL (ncdev_get_async_h2d_dma_compl_queues.pointer_dereference.1)",
+    "elapsed": 6.522831678390503
+  },
+  {
+    "fn": "ncdev_get_dmabuf_fd",
+    "status": "VERIFIED",
+    "elapsed": 1.082984209060669
+  },
+  {
+    "fn": "ncdev_get_host_device_id",
+    "status": "VERIFIED",
+    "elapsed": 1.159658432006836
+  },
+  {
+    "fn": "ncdev_get_logical_to_physical_nc_map",
+    "status": "FAIL (ncdev_get_logical_to_physical_nc_map.pointer_dereference.1)",
+    "elapsed": 1.1284523010253906
+  },
+  {
+    "fn": "ncdev_get_va_placement",
+    "status": "VERIFIED",
+    "elapsed": 1.0799133777618408
+  },
+  {
+    "fn": "ncdev_h2t_dma_alloc_queues",
+    "status": "FAIL (ncdev_h2t_dma_alloc_queues.pointer_dereference.1)",
+    "elapsed": 6.71007513999939
+  },
+  {
+    "fn": "ncdev_h2t_dma_free_queues",
+    "status": "FAIL (ncdev_h2t_dma_free_queues.pointer_dereference.1)",
+    "elapsed": 6.614652633666992
+  },
+  {
+    "fn": "ncdev_hbm_scrub_start",
+    "status": "FAIL (ncdev_hbm_scrub_start.pointer_dereference.1)",
+    "elapsed": 6.266402006149292
+  },
+  {
+    "fn": "ncdev_hbm_scrub_wait_for_cmpl",
+    "status": "FAIL (ncdev_hbm_scrub_wait_for_cmpl.pointer_dereference.1)",
+    "elapsed": 6.170935392379761
+  },
+  {
+    "fn": "ncdev_host_device_id_to_rid_map",
+    "status": "FAIL (ncdev_host_device_id_to_rid_map.pointer_dereference.1)",
+    "elapsed": 1.086188554763794
+  },
+  {
+    "fn": "ncdev_init_device_node",
+    "status": "VERIFIED",
+    "elapsed": 1.1818115711212158
+  },
+  {
+    "fn": "ncdev_ioctl",
+    "status": "FAIL (ncdev_acquire_neuron_ds.pointer_dereference.1)",
+    "elapsed": 2.481651544570923
+  },
+  {
+    "fn": "ncdev_mem_alloc",
+    "status": "FAIL (ncdev_mem_chunk_to_mem_handle.pointer_dereference.1)",
+    "elapsed": 7.028730869293213
+  },
+  {
+    "fn": "ncdev_mem_alloc_libnrt",
+    "status": "FAIL (ncdev_mem_chunk_to_mem_handle.pointer_dereference.1)",
+    "elapsed": 6.508932113647461
+  },
+  {
+    "fn": "ncdev_mem_buf_copy",
+    "status": "FAIL (ncdev_mem_buf_copy.pointer_dereference.1)",
+    "elapsed": 7.833847522735596
+  },
+  {
+    "fn": "ncdev_mem_buf_zerocopy64",
+    "status": "FAIL (ncdev_mem_buf_zerocopy64.pointer_dereference.7)",
+    "elapsed": 7.523622035980225
+  },
+  {
+    "fn": "ncdev_mem_buf_zerocopy64_batch",
+    "status": "VERIFIED",
+    "elapsed": 1.2434048652648926
+  },
+  {
+    "fn": "ncdev_mem_chunk_to_mem_handle",
+    "status": "VERIFIED",
+    "elapsed": 1.1747233867645264
+  },
+  {
+    "fn": "ncdev_mem_copy",
+    "status": "VERIFIED",
+    "elapsed": 1.189589500427246
+  },
+  {
+    "fn": "ncdev_mem_copy_async",
+    "status": "VERIFIED",
+    "elapsed": 1.2127656936645508
+  },
+  {
+    "fn": "ncdev_mem_copy_async_wait",
+    "status": "VERIFIED",
+    "elapsed": 1.173494815826416
+  },
+  {
+    "fn": "ncdev_mem_free",
+    "status": "VERIFIED",
+    "elapsed": 1.1864633560180664
+  },
+  {
+    "fn": "ncdev_mem_get_extended_info",
+    "status": "FAIL (ncdev_mem_get_extended_info.pointer_dereference.1)",
+    "elapsed": 6.545991659164429
+  },
+  {
+    "fn": "ncdev_mem_get_info_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.1875360012054443
+  },
+  {
+    "fn": "ncdev_mem_get_mc_mmap_info",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6443376541137695
+  },
+  {
+    "fn": "ncdev_mem_get_pa_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.1352565288543701
+  },
+  {
+    "fn": "ncdev_mem_handle_to_mem_chunk",
+    "status": "FAIL (ncdev_mem_handle_to_mem_chunk.pointer_dereference.1)",
+    "elapsed": 8.598141431808472
+  },
+  {
+    "fn": "ncdev_memset",
+    "status": "VERIFIED",
+    "elapsed": 1.1898095607757568
+  },
+  {
+    "fn": "ncdev_metric_ctrl",
+    "status": "VERIFIED",
+    "elapsed": 1.1726689338684082
+  },
+  {
+    "fn": "ncdev_misc_flush",
+    "status": "VERIFIED",
+    "elapsed": 1.112220287322998
+  },
+  {
+    "fn": "ncdev_misc_ioctl",
+    "status": "FAIL (ncdev_crwl_nc_range_unmark.pointer_dereference.7)",
+    "elapsed": 1.299980640411377
+  },
+  {
+    "fn": "ncdev_mmap",
+    "status": "FAIL (ncdev_mmap.pointer_dereference.7)",
+    "elapsed": 1.1203036308288574
+  },
+  {
+    "fn": "ncdev_module_exit",
+    "status": "VERIFIED",
+    "elapsed": 1.0582621097564697
+  },
+  {
+    "fn": "ncdev_module_init",
+    "status": "VERIFIED",
+    "elapsed": 1.4267711639404297
+  },
+  {
+    "fn": "ncdev_nc_model_started_count",
+    "status": "FAIL (ncdev_nc_model_started_count.array_bounds.1)",
+    "elapsed": 6.722256660461426
+  },
+  {
+    "fn": "ncdev_nc_nq_init_deprecated",
+    "status": "VERIFIED",
+    "elapsed": 1.1570250988006592
+  },
+  {
+    "fn": "ncdev_nc_nq_init_libnrt",
+    "status": "FAIL (ncdev_mem_chunk_to_mem_handle.pointer_dereference.1)",
+    "elapsed": 7.408085823059082
+  },
+  {
+    "fn": "ncdev_nc_nq_init_with_realloc_libnrt",
+    "status": "FAIL (ncdev_mem_chunk_to_mem_handle.pointer_dereference.1)",
+    "elapsed": 7.2086262702941895
+  },
+  {
+    "fn": "ncdev_nc_pid_state_dump",
+    "status": "FAIL (ncdev_dump_log.pointer_dereference.1)",
+    "elapsed": 1.5115201473236084
+  },
+  {
+    "fn": "ncdev_nc_reset",
+    "status": "VERIFIED",
+    "elapsed": 1.1606760025024414
+  },
+  {
+    "fn": "ncdev_nc_reset_ready",
+    "status": "VERIFIED",
+    "elapsed": 1.1410181522369385
+  },
+  {
+    "fn": "ncdev_ncid_valid",
+    "status": "FAIL (ncdev_ncid_valid.pointer_dereference.1)",
+    "elapsed": 1.0555791854858398
+  },
+  {
+    "fn": "ncdev_open",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6416428089141846
+  },
+  {
+    "fn": "ncdev_pod_ctrl",
+    "status": "FAIL (ncdev_pod_ctrl.pointer_dereference.7)",
+    "elapsed": 1.1039958000183105
+  },
+  {
+    "fn": "ncdev_pod_info",
+    "status": "FAIL (ncdev_pod_info.pointer_dereference.1)",
+    "elapsed": 1.2167026996612549
+  },
+  {
+    "fn": "ncdev_pod_status",
+    "status": "FAIL (ncdev_pod_status.pointer_dereference.1)",
+    "elapsed": 1.2233779430389404
+  },
+  {
+    "fn": "ncdev_post_metric",
+    "status": "FAIL (ncdev_post_metric.pointer_dereference.1)",
+    "elapsed": 6.727948904037476
+  },
+  {
+    "fn": "ncdev_power_profile_get",
+    "status": "FAIL (ncdev_power_profile_get.pointer_dereference.1)",
+    "elapsed": 6.501969337463379
+  },
+  {
+    "fn": "ncdev_power_profile_set",
+    "status": "FAIL (ncdev_power_profile_set.pointer_dereference.1)",
+    "elapsed": 6.444782733917236
+  },
+  {
+    "fn": "ncdev_printk",
+    "status": "FAIL (ncdev_printk.array_bounds.1)",
+    "elapsed": 1.1129367351531982
+  },
+  {
+    "fn": "ncdev_program_engine",
+    "status": "FAIL (ncdev_program_engine.pointer_dereference.1)",
+    "elapsed": 6.598453521728516
+  },
+  {
+    "fn": "ncdev_program_engine_nc",
+    "status": "FAIL (ncdev_program_engine_nc.pointer_dereference.1)",
+    "elapsed": 6.576849699020386
+  },
+  {
+    "fn": "ncdev_read_hw_counters",
+    "status": "VERIFIED",
+    "elapsed": 1.2097265720367432
+  },
+  {
+    "fn": "ncdev_release",
+    "status": "FAIL (ncdev_release.pointer_dereference.13)",
+    "elapsed": 1.106316089630127
+  },
+  {
+    "fn": "ncdev_release_neuron_ds",
+    "status": "VERIFIED",
+    "elapsed": 1.194793939590454
+  },
+  {
+    "fn": "ncdev_remove_device_node",
+    "status": "VERIFIED",
+    "elapsed": 1.1418280601501465
+  },
+  {
+    "fn": "ncdev_resource_mmap_info",
+    "status": "VERIFIED",
+    "elapsed": 1.2352733612060547
+  },
+  {
+    "fn": "ncdev_semaphore_ioctl",
+    "status": "FAIL (ncdev_ncid_valid.pointer_dereference.1)",
+    "elapsed": 7.03703761100769
+  },
+  {
+    "fn": "ncdev_throttling_notifications_set",
+    "status": "VERIFIED",
+    "elapsed": 1.2045042514801025
+  },
+  {
+    "fn": "ncdev_verify_mem_region",
+    "status": "FAIL (ncdev_verify_mem_region.pointer_dereference.1)",
+    "elapsed": 1.495285987854004
+  },
+  {
+    "fn": "neuron_connected_devices_show",
+    "status": "FAIL (neuron_connected_devices_show.pointer_dereference.7)",
+    "elapsed": 1.8122873306274414
+  },
+  {
+    "fn": "neuron_copy_from_user",
+    "status": "VERIFIED",
+    "elapsed": 1.1152234077453613
+  },
+  {
+    "fn": "neuron_core_count_show",
+    "status": "FAIL (neuron_core_count_show.pointer_dereference.1)",
+    "elapsed": 1.1576709747314453
+  }
+]
