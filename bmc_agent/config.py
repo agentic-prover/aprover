@@ -180,6 +180,23 @@ class Config:
     infer_array_param_bounds: bool = False
     infer_array_param_bounds_max: int = 64
 
+    # Scale-down mode for ML / numerics kernels (M2). When True, the
+    # harness adds upper-bound __CPROVER_assume clauses to value
+    # parameters whose names match ML parametric-size conventions
+    # (``B``, ``T``, ``C``, ``NH``, ``V``, ``Vp``, ``OC``, ``N``,
+    # ``batch_size``, ``seq_len``, ``num_heads``, ``channels``,
+    # ``vocab_size``, ``padded_vocab_size``, ``num_layers``). Each
+    # such param is constrained to ``[0, scale_down_size]``, making
+    # float-arithmetic kernels (matmul, attention, layernorm,
+    # softmax) tractable at scaled-down problem sizes instead of
+    # running CBMC against arbitrarily-large B*T*C inner loops.
+    # The LLM-generated precondition's lower-bound clauses (e.g.
+    # ``B > 0``) compose with these upper bounds to give a small
+    # exploration space without contradicting the spec.
+    # Default off; turn on with ``BMC_AGENT_SCALE_DOWN=true``.
+    scale_down: bool = False
+    scale_down_size: int = 4
+
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
     # absent (we still surface the field to give the pipeline a single knob).
@@ -330,6 +347,8 @@ class Config:
             infer_field_validity=os.environ.get("BMC_AGENT_INFER_FIELD_VALIDITY", "false").lower() == "true",
             infer_array_param_bounds=os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS", "false").lower() == "true",
             infer_array_param_bounds_max=int(os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS_MAX", "64")),
+            scale_down=os.environ.get("BMC_AGENT_SCALE_DOWN", "false").lower() == "true",
+            scale_down_size=int(os.environ.get("BMC_AGENT_SCALE_DOWN_SIZE", "4")),
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),

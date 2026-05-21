@@ -919,6 +919,105 @@ def test_generate_nd_decls_array_param_fallback_no_literals():
     assert "float _out_buf[9];" in on
 
 
+def test_scale_down_assumes_bounds_ml_size_params():
+    """Scale-down emits ``__CPROVER_assume(<size> >= 0 && <size> <= N)``
+    for every value parameter whose name matches the ML parametric-size
+    convention.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _scale_down_assumes
+
+    sig = FunctionSignature(
+        name="matmul_forward", return_type="void",
+        parameters=[
+            ("float*", "out"),
+            ("float*", "inp"),
+            ("float*", "weight"),
+            ("float*", "bias"),
+            ("int", "B"),
+            ("int", "T"),
+            ("int", "C"),
+            ("int", "OC"),
+        ],
+    )
+    func = FunctionInfo(
+        name="matmul_forward", signature=sig, body="",
+        callees=set(), source_file="x.c",
+    )
+    out = _scale_down_assumes(func, size_limit=4)
+    src = "\n".join(out)
+    # Each ML size param gets a [0, 4] bound; pointer params get nothing.
+    assert "__CPROVER_assume(B >= 0 && B <= 4);" in src
+    assert "__CPROVER_assume(T >= 0 && T <= 4);" in src
+    assert "__CPROVER_assume(C >= 0 && C <= 4);" in src
+    assert "__CPROVER_assume(OC >= 0 && OC <= 4);" in src
+    # Pointer params not in this assume set.
+    assert "out >=" not in src
+    assert "inp >=" not in src
+
+
+def test_scale_down_assumes_skips_pointer_and_unknown_names():
+    """Pointer params + value params whose names don't match the ML
+    convention are left alone.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _scale_down_assumes
+
+    sig = FunctionSignature(
+        name="f", return_type="void",
+        parameters=[
+            ("int", "B"),         # ML name → bound
+            ("int*", "T"),        # ML name BUT pointer → skip
+            ("int", "ordinary"),  # not ML name → skip
+            ("float", "lr"),      # ML name but float → skip (not in INT set)
+        ],
+    )
+    func = FunctionInfo(
+        name="f", signature=sig, body="",
+        callees=set(), source_file="x.c",
+    )
+    out = _scale_down_assumes(func, size_limit=4)
+    src = "\n".join(out)
+    assert "__CPROVER_assume(B >= 0 && B <= 4);" in src
+    assert len(out) == 1, f"expected only B bounded; got {out}"
+
+
+def test_generate_nd_decls_scale_down_bumps_array_buffer():
+    """Under ``scale_down=True``, top-level pointer params without
+    literal subscripts get a ``scale_down_size**3`` backing buffer
+    (default 64 elements at scale_down_size=4) so 3D tensor indices
+    ``out[b*T*OC + t*OC + o]`` don't escape the harness allocation.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="matmul_forward", return_type="void",
+        parameters=[("float*", "out"), ("int", "B"), ("int", "T"), ("int", "OC")],
+    )
+    # Body uses computed indices (NOT literal subscripts), so M1.2's
+    # literal-subscript scan returns None and we fall back to the
+    # scale-down-derived size.
+    body = (
+        "{ for (int b = 0; b < B; b++) "
+        "for (int t = 0; t < T; t++) "
+        "for (int o = 0; o < OC; o++) "
+        "out[b*T*OC + t*OC + o] = 0.0f; }"
+    )
+    func = FunctionInfo(
+        name="matmul_forward", signature=sig, body=body,
+        callees=set(), source_file="x.c",
+    )
+    on = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4,
+        infer_array_param_bounds=True,
+        scale_down=True,
+        scale_down_size=4,
+    ))
+    # scale_down_size^3 = 64 elements.
+    assert "float _out_buf[64];" in on
+
+
 def test_generate_nd_decls_double_pointer_cursor():
     """`T**` params (in-out cursors) get a backing buffer + cursor + addr-of.
 

@@ -1871,6 +1871,53 @@ def _looks_like_integer_type(t: str) -> bool:
     }
 
 
+# ML-shaped size parameter names recognised by the scale-down mode.
+# Matches both the conventional terse 1-3 letter names used in C ML
+# code (Karpathy llm.c, GPT-NeoX C, ggml) and the longer
+# self-explanatory variants used in Rust ports / production code.
+_ML_SIZE_PARAM_NAMES = {
+    "B", "T", "C", "NH", "V", "Vp", "OC", "N", "L", "H", "D",
+    "n_dims", "n_heads", "n_layers", "n_tokens",
+    "batch_size", "seq_len", "num_heads", "channels",
+    "vocab_size", "padded_vocab_size", "num_layers",
+    "num_tokens", "num_parameters", "num_activations",
+}
+_INT_PARAM_TYPES = {
+    "int", "unsigned int", "signed int",
+    "long", "unsigned long", "signed long",
+    "short", "unsigned short", "signed short",
+    "size_t", "ssize_t", "ptrdiff_t",
+    "int32_t", "uint32_t", "int64_t", "uint64_t",
+}
+
+
+def _scale_down_assumes(func: FunctionInfo, size_limit: int) -> list[str]:
+    """Emit __CPROVER_assume statements that bound ML-shaped int value
+    parameters to [0, size_limit]. Detects parameter names matching the
+    ML parametric-size convention (B, T, C, NH, V, Vp, OC, ...) AND
+    whose type is a plain integer (not a pointer). Returns a list of
+    bare assume strings (caller adds indentation).
+    """
+    if size_limit <= 0:
+        return []
+    out: list[str] = []
+    for ptype, pname in func.signature.parameters:
+        if not pname or pname not in _ML_SIZE_PARAM_NAMES:
+            continue
+        t = ptype.strip()
+        # Skip pointer params; only bound value parameters.
+        if "*" in t:
+            continue
+        # Normalise the type to one of our known integer shapes.
+        t_norm = re.sub(r"\s+", " ", t).strip()
+        if t_norm not in _INT_PARAM_TYPES:
+            continue
+        out.append(
+            f"__CPROVER_assume({pname} >= 0 && {pname} <= {size_limit});"
+        )
+    return out
+
+
 def _max_literal_subscript(body: str, pname: str) -> Optional[int]:
     """Return the maximum *constant* integer subscript on ``pname[K]`` in
     ``body``, or None if no literal subscripts are present.
@@ -1916,6 +1963,8 @@ def _generate_nd_decls(
     infer_field_validity: bool = False,
     infer_array_param_bounds: bool = False,
     infer_array_param_bounds_max: int = 64,
+    scale_down: bool = False,
+    scale_down_size: int = 4,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -2183,6 +2232,17 @@ def _generate_nd_decls(
                 max_idx = _max_literal_subscript(func.body or "", pname)
                 if max_idx is not None:
                     bound = min(max_idx + 1, infer_array_param_bounds_max)
+                elif scale_down:
+                    # Under scale-down, ML kernels iterate over B*T*C-style
+                    # ranges with size params bounded to scale_down_size.
+                    # Size the backing buffer to scale_down_size^3 so a 3D
+                    # tensor index ``out[b*T*OC + t*OC + o]`` with each
+                    # coord in [0, scale_down_size) doesn't escape. Capped
+                    # by infer_array_param_bounds_max to prevent runaway.
+                    bound = min(
+                        scale_down_size ** 3,
+                        infer_array_param_bounds_max,
+                    )
                 else:
                     bound = cbmc_unwind + 1
                 buf_name = f"_{pname}_buf"
@@ -2309,8 +2369,10 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
-            infer_array_param_bounds=getattr(self.config, "infer_array_param_bounds", False),
+            infer_array_param_bounds=(getattr(self.config, "infer_array_param_bounds", False) or getattr(self.config, "scale_down", False)),
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
+            scale_down=getattr(self.config, "scale_down", False),
+            scale_down_size=getattr(self.config, "scale_down_size", 4),
         )
 
         # --- 6. Precondition assumptions ---
@@ -3115,8 +3177,10 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
-            infer_array_param_bounds=getattr(self.config, "infer_array_param_bounds", False),
+            infer_array_param_bounds=(getattr(self.config, "infer_array_param_bounds", False) or getattr(self.config, "scale_down", False)),
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
+            scale_down=getattr(self.config, "scale_down", False),
+            scale_down_size=getattr(self.config, "scale_down_size", 4),
         )
 
         # --- 6. Precondition assumptions ---
@@ -3271,6 +3335,23 @@ class HarnessGenerator:
             for s in source_assume_stmts:
                 harness_body_lines.append(f"    {s}")
 
+        # Step 1.9: scale-down bounds on ML parametric-size value params.
+        # Bounds B, T, C, NH, V, Vp, OC, ... to [0, scale_down_size] so
+        # float-arithmetic kernels (matmul, attention, layernorm) become
+        # tractable instead of CBMC enumerating B*T*C inner-loop iterations
+        # at arbitrarily-large sizes.
+        if getattr(self.config, "scale_down", False):
+            sd_assumes = _scale_down_assumes(
+                func, getattr(self.config, "scale_down_size", 4),
+            )
+            if sd_assumes:
+                harness_body_lines.append("")
+                harness_body_lines.append(
+                    "    /* Step 1.9: scale-down bounds on ML parametric-size params */"
+                )
+                for s in sd_assumes:
+                    harness_body_lines.append(f"    {s}")
+
         # Step 2: constrain by precondition
         harness_body_lines.append("")
         harness_body_lines.append(
@@ -3372,8 +3453,10 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
-            infer_array_param_bounds=getattr(self.config, "infer_array_param_bounds", False),
+            infer_array_param_bounds=(getattr(self.config, "infer_array_param_bounds", False) or getattr(self.config, "scale_down", False)),
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
+            scale_down=getattr(self.config, "scale_down", False),
+            scale_down_size=getattr(self.config, "scale_down_size", 4),
         )
 
         # Precondition assume + postcondition assert via existing DSL.
@@ -3437,6 +3520,18 @@ class HarnessGenerator:
                 "    /* Step 1.8: source-level assert() preconditions (auto-promoted) */"
             )
             body_lines.extend(f"    {s}" for s in source_assume_stmts)
+
+        # Step 1.9: scale-down bounds on ML parametric-size value params
+        # (mirrors the non-real-libc path).
+        if getattr(self.config, "scale_down", False):
+            sd_assumes = _scale_down_assumes(
+                func, getattr(self.config, "scale_down_size", 4),
+            )
+            if sd_assumes:
+                body_lines.append(
+                    "    /* Step 1.9: scale-down bounds on ML parametric-size params */"
+                )
+                body_lines.extend(f"    {s}" for s in sd_assumes)
 
         if assume_stmts:
             body_lines.append("    /* Step 2: precondition assumptions */")
