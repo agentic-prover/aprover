@@ -1,0 +1,260 @@
+[
+  {
+    "fn": "ggml_vec_dot_iq1_m_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 7.324051380157471,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_iq1_s_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 7.2389562129974365,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_iq2_s_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_iq2_s_q8_K_generic.array_bounds.1)",
+    "elapsed": 20.61393976211548,
+    "fail_count": 3
+  },
+  {
+    "fn": "ggml_vec_dot_iq2_xs_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_iq2_xs_q8_K_generic.pointer_dereference.17)",
+    "elapsed": 20.066489696502686,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vec_dot_iq2_xxs_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 19.341500759124756,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_iq3_s_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_iq3_s_q8_K_generic.array_bounds.1)",
+    "elapsed": 21.10163378715515,
+    "fail_count": 4
+  },
+  {
+    "fn": "ggml_vec_dot_iq3_xxs_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_iq3_xxs_q8_K_generic.precondition_instance.2)",
+    "elapsed": 20.044092655181885,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vec_dot_iq4_nl_q8_0_generic",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_iq4_xs_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_iq4_xs_q8_K_generic.assertion.2)",
+    "elapsed": 20.26969838142395,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vec_dot_mxfp4_q8_0_generic",
+    "status": "FAIL (ggml_vec_dot_mxfp4_q8_0_generic.assertion.2)",
+    "elapsed": 20.536737203598022,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vec_dot_nvfp4_q8_0_generic",
+    "status": "FAIL (ggml_vec_dot_nvfp4_q8_0.assertion.2)",
+    "elapsed": 20.459539651870728,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vec_dot_q1_0_q8_0_generic",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_q2_K_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_q2_K_q8_K_generic.array_bounds.1)",
+    "elapsed": 6.9005961418151855,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vec_dot_q3_K_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 6.742203712463379,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_q4_0_q8_0_generic",
+    "status": "FAIL (ggml_vec_dot_q4_0_q8_0_generic.assertion.1)",
+    "elapsed": 6.7226338386535645,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vec_dot_q4_1_q8_1_generic",
+    "status": "FAIL (ggml_vec_dot_q4_1_q8_1_generic.assertion.1)",
+    "elapsed": 6.782845735549927,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vec_dot_q4_K_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 6.728609323501587,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_q5_0_q8_0_generic",
+    "status": "FAIL (ggml_vec_dot_q5_0_q8_0_generic.assertion.1)",
+    "elapsed": 6.963618755340576,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vec_dot_q5_1_q8_1_generic",
+    "status": "FAIL (ggml_vec_dot_q5_1_q8_1_generic.assertion.1)",
+    "elapsed": 6.808895587921143,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vec_dot_q5_K_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 6.809496641159058,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vec_dot_q6_K_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_q6_K_q8_K_generic.pointer_dereference.13)",
+    "elapsed": 6.76678466796875,
+    "fail_count": 4
+  },
+  {
+    "fn": "ggml_vec_dot_q8_0_q8_0_generic",
+    "status": "FAIL (ggml_vec_dot_q8_0_q8_0_generic.assertion.1)",
+    "elapsed": 6.775233030319214,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vec_dot_tq1_0_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_tq1_0_q8_K_generic.pointer_dereference.11)",
+    "elapsed": 6.860793590545654,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vec_dot_tq2_0_q8_K_generic",
+    "status": "FAIL (ggml_vec_dot_tq2_0_q8_K_generic.pointer_dereference.5)",
+    "elapsed": 6.93757176399231,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_row_iq4_nl",
+    "status": "VERIFIED",
+    "elapsed": 6.595571517944336,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_iq4_xs",
+    "status": "VERIFIED",
+    "elapsed": 6.86073112487793,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_mxfp4",
+    "status": "VERIFIED",
+    "elapsed": 6.414849042892456,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_nvfp4",
+    "status": "VERIFIED",
+    "elapsed": 6.525707960128784,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q1_0",
+    "status": "VERIFIED",
+    "elapsed": 6.430180788040161,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q2_K",
+    "status": "VERIFIED",
+    "elapsed": 6.666494846343994,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q3_K",
+    "status": "VERIFIED",
+    "elapsed": 6.360610246658325,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_0",
+    "status": "VERIFIED",
+    "elapsed": 6.36250114440918,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_1",
+    "status": "VERIFIED",
+    "elapsed": 6.479126930236816,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_K",
+    "status": "VERIFIED",
+    "elapsed": 6.9054481983184814,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_0",
+    "status": "VERIFIED",
+    "elapsed": 6.507939338684082,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_1",
+    "status": "VERIFIED",
+    "elapsed": 6.4404966831207275,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_K",
+    "status": "VERIFIED",
+    "elapsed": 6.774832487106323,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q6_K",
+    "status": "VERIFIED",
+    "elapsed": 6.901993751525879,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q8_0_generic",
+    "status": "VERIFIED",
+    "elapsed": 6.626845836639404,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q8_1_generic",
+    "status": "VERIFIED",
+    "elapsed": 6.518421649932861,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q8_K_generic",
+    "status": "VERIFIED",
+    "elapsed": 6.414546251296997,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_tq1_0",
+    "status": "VERIFIED",
+    "elapsed": 6.715765714645386,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_tq2_0",
+    "status": "VERIFIED",
+    "elapsed": 6.6349036693573,
+    "fail_count": 0
+  }
+]
