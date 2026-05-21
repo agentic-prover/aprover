@@ -919,6 +919,48 @@ def test_generate_nd_decls_array_param_fallback_no_literals():
     assert "float _out_buf[9];" in on
 
 
+def test_void_pointer_param_gets_backing_under_flags():
+    """``void *`` / ``const void *`` parameters get a malloc'd byte
+    buffer backing under ``infer_field_validity=True`` or
+    ``infer_array_param_bounds=True``, so body code that casts the
+    pointer to a struct type and dereferences has a valid region.
+
+    Regression: ggml-cpu/quants.c's vec_dot functions take
+    ``const void * vx, const void * vy`` then cast to struct pointers
+    inside the body. The default ``vx = NULL`` emit traps on the first
+    cast-and-deref. The malloc'd backing lets the body cast and deref
+    against valid (nondet) bytes.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="ggml_vec_dot_test", return_type="void",
+        parameters=[
+            ("int", "n"),
+            ("const void *", "vx"),
+            ("const void *", "vy"),
+        ],
+    )
+    func = FunctionInfo(
+        name="ggml_vec_dot_test", signature=sig, body="",
+        callees=set(), source_file="x.c",
+    )
+
+    # Flag off → vx, vy stay NULL (backwards-compatible default).
+    off = "\n".join(_generate_nd_decls(func, cbmc_unwind=4))
+    assert "vx = NULL" in off
+    assert "vy = NULL" in off
+
+    # Flag on → vx, vy point to malloc'd backing buffers.
+    on = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4, infer_field_validity=True,
+    ))
+    assert "vx = (const void *)_vx_void_backing" in on
+    assert "vy = (const void *)_vy_void_backing" in on
+    assert "malloc(" in on
+
+
 def test_source_precondition_extractor_handles_local_static_const():
     """Source-assert extractor now picks up
     ``static const int qk = QK_MXFP4; assert(k % qk == 0);`` where

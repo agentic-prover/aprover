@@ -2200,8 +2200,39 @@ def _generate_nd_decls(
             star_count = ptype_stripped.count("*")
 
             if base_type.lower() in ("void", "const void"):
-                lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
-                lines.append(f"    {ptype_stripped} {pname} = NULL;")
+                if infer_field_validity or infer_array_param_bounds:
+                    # When field-validity/array-param-bounds modes are on,
+                    # emit a malloc'd byte buffer instead of NULL so the
+                    # body's downstream cast (``const block_iq1_m *x =
+                    # (const block_iq1_m *)vx;`` and then ``x[i].field``)
+                    # has a valid backing region to deref. Without this,
+                    # every dot-product / vec-* function in
+                    # ggml-cpu/quants.c traps on the first body deref of
+                    # the cast pointer. The buffer is sized as
+                    # ``scale_down_size**3`` (default 64) under scale-down
+                    # or ``cbmc_unwind+1`` otherwise -- enough for typical
+                    # block-quantized struct iteration.
+                    bbytes = (
+                        scale_down_size ** 3 if scale_down
+                        else (cbmc_unwind + 1) * 64  # bump for struct-cast targets
+                    )
+                    backing_name = f"_{pname}_void_backing"
+                    lines.append(
+                        f"    /* {ptype_stripped} {pname} — void* param, "
+                        f"backed by {bbytes}-byte buffer (later cast in body) */"
+                    )
+                    lines.append(
+                        f"    unsigned char *{backing_name} = "
+                        f"(unsigned char *)malloc({bbytes});"
+                    )
+                    lines.append(f"    __CPROVER_assume({backing_name} != NULL);")
+                    lines.append(
+                        f"    {ptype_stripped} {pname} = "
+                        f"({ptype_stripped}){backing_name};"
+                    )
+                else:
+                    lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
+                    lines.append(f"    {ptype_stripped} {pname} = NULL;")
             elif star_count == 2 and pname in cursor_pnames:
                 # T** in-out cursor — allocate backing buffer + cursor + addr-of.
                 #
