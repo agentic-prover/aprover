@@ -1,272 +1,272 @@
 [
   {
     "fn": "__check_pds_reservation_id",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3903484344482422
+    "status": "VERIFIED",
+    "elapsed": 1.1268932819366455
   },
   {
     "fn": "__check_userver_ctl",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3932967185974121
+    "status": "VERIFIED",
+    "elapsed": 1.100471019744873
   },
   {
     "fn": "__check_userver_etimeout",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3792564868927002
+    "status": "VERIFIED",
+    "elapsed": 1.1341800689697266
   },
   {
     "fn": "_npe_get_pod_status",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3878765106201172
+    "status": "VERIFIED",
+    "elapsed": 1.1489479541778564
   },
   {
     "fn": "npe_all_rst_complete",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.37043118476867676
+    "status": "VERIFIED",
+    "elapsed": 1.0966544151306152
   },
   {
     "fn": "npe_check_election_results",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3246424198150635
+    "status": "FAIL (npe_check_election_results.pointer_dereference.5)",
+    "elapsed": 6.740943431854248
   },
   {
     "fn": "npe_class_node_cnt_show_data",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3556187152862549
+    "status": "FAIL (npe_class_node_cnt_show_data.pointer_dereference.1)",
+    "elapsed": 1.1428728103637695
   },
   {
     "fn": "npe_class_node_id_show_data",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.34700870513916016
+    "status": "VERIFIED",
+    "elapsed": 1.1208133697509766
   },
   {
     "fn": "npe_class_server_id_show_data",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3632068634033203
+    "status": "VERIFIED",
+    "elapsed": 1.1113221645355225
   },
   {
     "fn": "npe_class_ultraserver_mode_show_data",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3643002510070801
+    "status": "VERIFIED",
+    "elapsed": 1.1118807792663574
   },
   {
     "fn": "npe_cleanup",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.31681036949157715
+    "status": "VERIFIED",
+    "elapsed": 1.1167879104614258
   },
   {
     "fn": "npe_create_thread",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3800680637359619
+    "status": "VERIFIED",
+    "elapsed": 1.1140556335449219
   },
   {
     "fn": "npe_election_canceled",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.38253116607666016
+    "status": "VERIFIED",
+    "elapsed": 1.137526512145996
   },
   {
     "fn": "npe_election_exec_on_rst",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.4348926544189453
+    "status": "FAIL (npe_election_exec_on_rst.array_bounds.1)",
+    "elapsed": 7.112074136734009
   },
   {
     "fn": "npe_election_thread_fn",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.42429471015930176
+    "status": "VERIFIED",
+    "elapsed": 1.1302547454833984
   },
   {
     "fn": "npe_election_timeout",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.4164855480194092
+    "status": "VERIFIED",
+    "elapsed": 1.0921037197113037
   },
   {
     "fn": "npe_get_modal_node_cnt",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.37858104705810547
+    "status": "VERIFIED",
+    "elapsed": 1.1195273399353027
   },
   {
     "fn": "npe_get_modal_node_id",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.36005592346191406
+    "status": "FAIL (npe_get_modal_node_id.pointer_dereference.1)",
+    "elapsed": 1.1105926036834717
   },
   {
     "fn": "npe_get_modal_serial_number",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.36800265312194824
+    "status": "VERIFIED",
+    "elapsed": 1.0915591716766357
   },
   {
     "fn": "npe_get_node_id",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.34409546852111816
+    "status": "VERIFIED",
+    "elapsed": 1.1175613403320312
   },
   {
     "fn": "npe_get_pod_id",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3301544189453125
+    "status": "FAIL (npe_get_pod_id.precondition_instance.3)",
+    "elapsed": 1.151017665863037
   },
   {
     "fn": "npe_get_pod_mode",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.33856892585754395
+    "status": "VERIFIED",
+    "elapsed": 1.104832410812378
   },
   {
     "fn": "npe_get_pod_modes_supported",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3445451259613037
+    "status": "VERIFIED",
+    "elapsed": 1.1184806823730469
   },
   {
     "fn": "npe_get_pod_status",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.32765650749206543
+    "status": "VERIFIED",
+    "elapsed": 1.0954549312591553
   },
   {
     "fn": "npe_get_pod_sz",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3123209476470947
+    "status": "VERIFIED",
+    "elapsed": 1.109579086303711
   },
   {
     "fn": "npe_init",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.335782527923584
+    "status": "VERIFIED",
+    "elapsed": 1.0856177806854248
   },
   {
     "fn": "npe_initiate_election",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3282630443572998
+    "status": "VERIFIED",
+    "elapsed": 1.1148836612701416
   },
   {
     "fn": "npe_miscram_neighbor_election_data_clr",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.2871825695037842
+    "status": "VERIFIED",
+    "elapsed": 1.2334644794464111
   },
   {
     "fn": "npe_miscram_neighbor_election_data_set",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3026280403137207
+    "status": "VERIFIED",
+    "elapsed": 1.207136869430542
   },
   {
     "fn": "npe_miscram_pod_sernum_get",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.30138707160949707
+    "status": "VERIFIED",
+    "elapsed": 1.2049016952514648
   },
   {
     "fn": "npe_miscram_pod_sernum_set",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3010585308074951
+    "status": "VERIFIED",
+    "elapsed": 1.2198293209075928
   },
   {
     "fn": "npe_miscram_read",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3244030475616455
+    "status": "VERIFIED",
+    "elapsed": 1.199768304824829
   },
   {
     "fn": "npe_miscram_sts_info_get",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3415546417236328
+    "status": "VERIFIED",
+    "elapsed": 1.2042655944824219
   },
   {
     "fn": "npe_miscram_sts_info_set",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3163604736328125
+    "status": "VERIFIED",
+    "elapsed": 1.208669662475586
   },
   {
     "fn": "npe_miscram_write",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.31661343574523926
+    "status": "VERIFIED",
+    "elapsed": 1.1809542179107666
   },
   {
     "fn": "npe_mode_is_supported",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3235752582550049
+    "status": "VERIFIED",
+    "elapsed": 1.1077919006347656
   },
   {
     "fn": "npe_msleep_stoppable",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3849678039550781
+    "status": "VERIFIED",
+    "elapsed": 1.1084568500518799
   },
   {
     "fn": "npe_node_cnt_to_mode",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.39179420471191406
+    "status": "VERIFIED",
+    "elapsed": 1.1085076332092285
   },
   {
     "fn": "npe_notify_mark",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.4175405502319336
+    "status": "VERIFIED",
+    "elapsed": 1.0892186164855957
   },
   {
     "fn": "npe_pds_config_init",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.33211445808410645
+    "status": "VERIFIED",
+    "elapsed": 1.1506929397583008
   },
   {
     "fn": "npe_pod_ctl_inject_link_error",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3682844638824463
+    "status": "VERIFIED",
+    "elapsed": 1.1129157543182373
   },
   {
     "fn": "npe_pod_ctl_is_set",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.33486294746398926
+    "status": "VERIFIED",
+    "elapsed": 1.107179880142212
   },
   {
     "fn": "npe_pod_ctrl",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.2994403839111328
+    "status": "FAIL (npe_pod_ctrl.pointer_dereference.1)",
+    "elapsed": 6.950939655303955
   },
   {
     "fn": "npe_pod_neighbor_io_destroy",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3120412826538086
+    "status": "VERIFIED",
+    "elapsed": 1.116255283355713
   },
   {
     "fn": "npe_pod_neighbor_io_init",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.34844231605529785
+    "status": "VERIFIED",
+    "elapsed": 1.2003695964813232
   },
   {
     "fn": "npe_pod_neighbor_io_read",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.37405920028686523
+    "status": "VERIFIED",
+    "elapsed": 1.8284382820129395
   },
   {
     "fn": "npe_pod_neighbor_io_read_ack_completed",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.30973339080810547
+    "status": "VERIFIED",
+    "elapsed": 1.186305046081543
   },
   {
     "fn": "npe_pod_state_busy",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.32057905197143555
+    "status": "VERIFIED",
+    "elapsed": 1.0919318199157715
   },
   {
     "fn": "npe_primary_device_do_election",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3291926383972168
+    "status": "FAIL (npe_primary_device_do_election.array_bounds.1)",
+    "elapsed": 13.91371488571167
   },
   {
     "fn": "npe_read_neighbor_election_data",
     "status": "COMPILE_ERR",
-    "elapsed": 0.3340120315551758
+    "elapsed": 0.3107168674468994
   },
   {
     "fn": "npe_read_neighbor_read_election_status",
     "status": "COMPILE_ERR",
-    "elapsed": 0.3443772792816162
+    "elapsed": 0.31431102752685547
   },
   {
     "fn": "npe_read_neighbor_serial_numbers",
     "status": "COMPILE_ERR",
-    "elapsed": 0.3507809638977051
+    "elapsed": 0.3052358627319336
   },
   {
     "fn": "npe_secondary_device_vet",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.3182108402252197
+    "status": "FAIL (npe_secondary_device_vet.array_bounds.1)",
+    "elapsed": 13.961203813552856
   },
   {
     "fn": "npe_stop_thread",
-    "status": "COMPILE_ERR",
-    "elapsed": 0.33150410652160645
+    "status": "VERIFIED",
+    "elapsed": 1.112243413925171
   }
 ]
