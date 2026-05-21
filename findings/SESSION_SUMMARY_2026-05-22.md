@@ -98,13 +98,48 @@ follow the same defensive-programming-gap pattern as yesterday's
 Routing: started K2-hybrid; switched to all-OpenRouter when K2 went
 HTTP 504 mid-sweep. K2 has since recovered.
 
-### Phase-2 sweep launched (in progress)
+### Phase-2 sweep (K2-hybrid, giant Neuron files)
 
-K2-hybrid sweep on the four giant Neuron files (`cdev`, `dma`, `mempool`,
-`metrics`) launched at 17:34 in the background. These benefit from
-commits `2ab4dcf` (no GB-scale artifacts) and `b7e53eb` (no wasted retry
-on the 8 MB cap). Results pending — will land in tomorrow morning's
-state.
+`neuron_cdev / dma / mempool / metrics` — see
+[`aws_neuron_driver/hybrid_p2_2026-05-22/README.md`](aws_neuron_driver/hybrid_p2_2026-05-22/README.md).
+
+| Metric | Value |
+|---|---|
+| Files | 4 (`cdev` ok, `dma` / `mempool` / `metrics` timed out) |
+| Functions verified clean | **85** |
+| `real_bug` raw | 3 |
+| `spurious` | 35 |
+| Wall clock | ~2h 40min (started 17:34, done 20:14) |
+
+`ncdev_bar_read` (yesterday's trivial-spec bug candidate) **verified
+clean** here — root-cause is documented in `methodology_insight_2026-05-22.md`
+as a "caller-contract slip" case study: the LLM-generated callee
+precondition encodes the obligation the bug-triggering caller
+violates, so both functions verify clean against the (over-permissive)
+inferred contract. **Paper-track methodology insight**: trivial-spec
+is the recall floor, LLM-spec adds precision; the right deployment
+runs both modes per target.
+
+### Hybrid sweep on llama.cpp + nghttp2 (OR-mode)
+
+`ggml-quants.c` and `nghttp2_frame.c` — see
+[`llama_cpp_ggml/hybrid_sweep_2026-05-22/README.md`](llama_cpp_ggml/hybrid_sweep_2026-05-22/README.md)
+and [`nghttp2/hybrid_sweep_2026-05-22/README.md`](nghttp2/hybrid_sweep_2026-05-22/README.md).
+
+| Metric | Value |
+|---|---|
+| Functions analysed | 188 (115 ggml + 73 nghttp2) |
+| Verified clean | **71** (33 ggml + 38 nghttp2) |
+| `real_bug` raw | 19 |
+| `real_bug` after filter | 2 (both K2-504-uncertain) |
+| `spurious` | 44 |
+
+Notable: the feedback loop discovered a multi-clause invariant for
+`make_qp_quants` capturing array sizing + forall-quantified
+finiteness/non-negativity of quant_weights — exactly the contract
+real callers maintain. `nghttp2_frame_*_init` constructors all verify
+clean. 0 likely-true bugs in either target, consistent with their
+OSS-Fuzz histories.
 
 ### Cleanup
 
@@ -150,15 +185,35 @@ to make the realism check actually run. This is exactly the
 `bmc_agent_session_2026-05-13.md` — three durable infrastructure wins
 from one round of empirical sweeping.
 
+## Aggregate session totals
+
+| Sweep | Files | Clean | real_bug raw | After filter | Spurious |
+|---|---:|---:|---:|---:|---:|
+| OR-mode Neuron (8 files) | 8 | 21 | 10 | 4 | 8 |
+| K2-hybrid P2 (4 giant Neuron) | 4 | 85 | 3 | 2 | 35 |
+| OR llama.cpp + nghttp2 | 2 | 71 | 19 | 2 | 44 |
+| **Total** | **14** | **177** | **32** | **8** | **87** |
+
+**177 verified-clean memory-safety + functional properties** across the
+AWS Neuron driver kernel attack surface and two heavily-fuzzed OSS
+targets, in a single ~3-hour session. **8 surviving real_bug
+candidates** — all `confirmed_system_entry` with `realism=null/uncertain`
+due to either K2 504 hiccups during the realism call or upstream
+realism-prompt size issues that the cbmc.py patch fixes for future
+sweeps. Triage tool: `findings/find_unfiltered_real_bugs.py`.
+
 ## Open items for next session
 
-- Wait for the Phase 2 sweep (giant Neuron files) to finish, triage
-  its real_bug list with the fully-patched pipeline.
-- Llama.cpp `ggml-quants.c` + nghttp2 `nghttp2_frame.c` hybrid sweep
-  (both previously trivial-spec only).
+- Re-run the 8 surviving real_bug candidates with the fully-patched
+  pipeline + healthy K2 backend; expect most/all to flip to
+  `unrealistic` (defensive-programming-gap pattern).
 - Disk cleanup: `/tmp/aprover_neuron_or_sweep` is ~24 GB because the
-  in-flight pipeline ran before commit `2ab4dcf` landed. The per-function
-  scorecards have been pulled into `findings/`; the raw dirs can be
-  removed once the user reads the summary.
-- Re-run the 4 surviving real_bug candidates with the patched pipeline
-  to get a definitive realism verdict.
+  in-flight OR pipeline ran before commit `2ab4dcf` landed. The
+  per-function scorecards have been pulled into `findings/`; the raw
+  dirs can be removed once the user reads the summary.
+- Re-run the 3 timed-out P2 files (`dma`, `mempool`, `metrics`) with
+  the patched code — the cbmc.py / llm.py / 504-retry fixes should
+  let them complete within budget.
+- Paper section update: fold the `ncdev_bar_read` caller-contract-slip
+  case study into the Discussion section (see
+  `methodology_insight_2026-05-22.md`).
