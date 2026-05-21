@@ -1,0 +1,87 @@
+[
+  {
+    "fn": "npower_acquire_lock",
+    "status": "VERIFIED",
+    "elapsed": 1.1349520683288574
+  },
+  {
+    "fn": "npower_aggregate_stats",
+    "status": "VERIFIED",
+    "elapsed": 1.384345293045044
+  },
+  {
+    "fn": "npower_calculate_stats",
+    "status": "VERIFIED",
+    "elapsed": 1.074852466583252
+  },
+  {
+    "fn": "npower_copy_stats",
+    "status": "VERIFIED",
+    "elapsed": 1.0143816471099854
+  },
+  {
+    "fn": "npower_enabled_in_fw",
+    "status": "VERIFIED",
+    "elapsed": 1.1139347553253174
+  },
+  {
+    "fn": "npower_format_stats",
+    "status": "FAIL (npower_format_stats.array_bounds.1)",
+    "elapsed": 1.0920085906982422
+  },
+  {
+    "fn": "npower_get_sample_num",
+    "status": "VERIFIED",
+    "elapsed": 0.9984095096588135
+  },
+  {
+    "fn": "npower_get_stats",
+    "status": "FAIL (npower_copy_stats.pointer_dereference.11)",
+    "elapsed": 1.0147640705108643
+  },
+  {
+    "fn": "npower_get_utilization",
+    "status": "VERIFIED",
+    "elapsed": 1.014822244644165
+  },
+  {
+    "fn": "npower_in_simulated_env",
+    "status": "VERIFIED",
+    "elapsed": 1.0032484531402588
+  },
+  {
+    "fn": "npower_init_samples",
+    "status": "FAIL (npower_init_samples.pointer_dereference.25)",
+    "elapsed": 1.0137042999267578
+  },
+  {
+    "fn": "npower_init_stats",
+    "status": "VERIFIED",
+    "elapsed": 4.676079750061035
+  },
+  {
+    "fn": "npower_passed_minute_boundary",
+    "status": "VERIFIED",
+    "elapsed": 1.148191213607788
+  },
+  {
+    "fn": "npower_release_lock",
+    "status": "VERIFIED",
+    "elapsed": 1.146550178527832
+  },
+  {
+    "fn": "npower_sample_utilization",
+    "status": "FAIL (npower_passed_minute_boundary.pointer_dereference.11)",
+    "elapsed": 1.142848253250122
+  },
+  {
+    "fn": "npower_select_power",
+    "status": "FAIL (npower_select_power.pointer_dereference.1)",
+    "elapsed": 7.052441596984863
+  },
+  {
+    "fn": "npower_store_utilization",
+    "status": "FAIL (npower_store_utilization.pointer_dereference.25)",
+    "elapsed": 7.058846950531006
+  }
+]

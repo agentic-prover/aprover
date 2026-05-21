@@ -1,0 +1,62 @@
+[
+  {
+    "fn": "mc_handle_find",
+    "status": "FAIL (mc_handle_find.pointer_dereference.7)",
+    "elapsed": 6.954036712646484
+  },
+  {
+    "fn": "nmch_handle_alloc",
+    "status": "FAIL (nmch_handle_alloc.pointer_dereference.7)",
+    "elapsed": 7.51740026473999
+  },
+  {
+    "fn": "nmch_handle_cleanup",
+    "status": "FAIL (nmch_handle_cleanup.pointer_dereference.13)",
+    "elapsed": 6.967685699462891
+  },
+  {
+    "fn": "nmch_handle_free",
+    "status": "FAIL (nmch_handle_free.pointer_dereference.7)",
+    "elapsed": 7.3198511600494385
+  },
+  {
+    "fn": "nmch_handle_init",
+    "status": "VERIFIED",
+    "elapsed": 1.2397139072418213
+  },
+  {
+    "fn": "nmch_handle_to_idx",
+    "status": "VERIFIED",
+    "elapsed": 1.0761892795562744
+  },
+  {
+    "fn": "nmch_idx_to_handle",
+    "status": "VERIFIED",
+    "elapsed": 1.062448501586914
+  },
+  {
+    "fn": "nmch_idx_valid",
+    "status": "VERIFIED",
+    "elapsed": 1.0425300598144531
+  },
+  {
+    "fn": "nmch_l2_tbl_entry_valid",
+    "status": "VERIFIED",
+    "elapsed": 1.0522406101226807
+  },
+  {
+    "fn": "nmch_l2tbl_alloc",
+    "status": "VERIFIED",
+    "elapsed": 1.0519490242004395
+  },
+  {
+    "fn": "nmch_service_is_down",
+    "status": "VERIFIED",
+    "elapsed": 1.126375675201416
+  },
+  {
+    "fn": "nmch_service_set_down",
+    "status": "VERIFIED",
+    "elapsed": 1.0967285633087158
+  }
+]

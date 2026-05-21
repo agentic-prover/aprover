@@ -3380,6 +3380,19 @@ class HarnessGenerator:
             # Without ``<stddef.h>`` prepended (no libc in kernel mode)
             # that token is undefined; CBMC reports ``failed to find
             # symbol 'NULL'``. Provide a local fallback.
+            #
+            # Also: check whether the preprocessed source already
+            # provides a full body for ``struct pci_dev`` (different
+            # kernel TUs include different parts of the PCI subsystem;
+            # neuron_pid.c only sees the forward-decl, but neuron_cdev.c
+            # pulls in the full body via deeper includes). If the body
+            # IS present, our placeholder would clash; if it isn't,
+            # M1's ``sizeof(*pdev)`` in struct-field validity init
+            # errors on the incomplete type.
+            _src_text = parsed_file.preprocessed_source or ""
+            _has_pci_dev_body = bool(
+                re.search(r"\bstruct\s+pci_dev\s*\{", _src_text)
+            )
             sections.append(
                 "/* Kernel-mode harness — provide minimal stddef/assert */\n"
                 "#ifndef NULL\n"
@@ -3447,13 +3460,16 @@ class HarnessGenerator:
                 "void *get_current(void);\n"
                 "int task_tgid_nr(void *task);\n"
                 "int task_pid_nr(void *task);\n"
-                "/* Opaque-struct full-definition backing for struct pci_dev.\n"
-                " * Kernel headers only forward-declare it; the full body lives\n"
-                " * in drivers/pci/pci.h (not included). Without a body,\n"
-                " * ``sizeof(*pdev)`` in M1's struct-field validity init errors\n"
-                " * with 'invalid application of sizeof to an incomplete type'.\n"
-                " * Placeholder size >=2K covers a typical PCI device. */\n"
-                "struct pci_dev { unsigned char _opaque[2048]; };\n"
+                "int device_init_wakeup(void *dev, int val);\n"
+                + (
+                    "/* Opaque-struct full-definition backing for struct pci_dev.\n"
+                    " * Forward-decl only in this TU; the full body lives in\n"
+                    " * drivers/pci/pci.h which isn't pulled in. M1's struct-\n"
+                    " * field validity init emits ``sizeof(*pdev)`` which\n"
+                    " * errors on an incomplete type. Placeholder >=2K. */\n"
+                    "struct pci_dev { unsigned char _opaque[2048]; };\n"
+                    if not _has_pci_dev_body else ""
+                )
             )
         else:
             _stdlib_fns  = {"malloc", "free", "calloc", "realloc", "abort", "exit"}
