@@ -1,0 +1,182 @@
+[
+  {
+    "fn": "__check_nmetric_log_posts",
+    "status": "VERIFIED",
+    "elapsed": 1.0976002216339111
+  },
+  {
+    "fn": "__check_nmetric_metric_post_delay",
+    "status": "VERIFIED",
+    "elapsed": 1.082744836807251
+  },
+  {
+    "fn": "nmetric_aggregate_and_post_tick",
+    "status": "VERIFIED",
+    "elapsed": 1.180988073348999
+  },
+  {
+    "fn": "nmetric_aggregate_nd_counter_entry",
+    "status": "FAIL (nmetric_aggregate_nd_counter_entry.pointer_dereference.7)",
+    "elapsed": 7.81106424331665
+  },
+  {
+    "fn": "nmetric_aggregate_version_metrics",
+    "status": "FAIL (nmetric_aggregate_version_metrics.pointer_dereference.7)",
+    "elapsed": 1.110748052597046
+  },
+  {
+    "fn": "nmetric_cache_shared_bufs",
+    "status": "FAIL (nmetric_cache_shared_bufs.pointer_dereference.53)",
+    "elapsed": 6.749085187911987
+  },
+  {
+    "fn": "nmetric_check_post_tick",
+    "status": "VERIFIED",
+    "elapsed": 1.0989689826965332
+  },
+  {
+    "fn": "nmetric_create_thread",
+    "status": "VERIFIED",
+    "elapsed": 1.2652184963226318
+  },
+  {
+    "fn": "nmetric_full_aggregate",
+    "status": "VERIFIED",
+    "elapsed": 1.215637445449829
+  },
+  {
+    "fn": "nmetric_increment_reset_failure_count",
+    "status": "VERIFIED",
+    "elapsed": 1.1886746883392334
+  },
+  {
+    "fn": "nmetric_init",
+    "status": "VERIFIED",
+    "elapsed": 4.957518577575684
+  },
+  {
+    "fn": "nmetric_init_constants_metrics",
+    "status": "UNKNOWN",
+    "elapsed": 2.3491101264953613
+  },
+  {
+    "fn": "nmetric_init_driver_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.1730616092681885
+  },
+  {
+    "fn": "nmetric_mock_fw_io_post_metric",
+    "status": "FAIL (nmetric_mock_fw_io_post_metric.pointer_arithmetic.5)",
+    "elapsed": 1.3149399757385254
+  },
+  {
+    "fn": "nmetric_partial_aggregate",
+    "status": "VERIFIED",
+    "elapsed": 1.1765823364257812
+  },
+  {
+    "fn": "nmetric_post_and_reset_driver_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.1147141456604004
+  },
+  {
+    "fn": "nmetric_post_constant",
+    "status": "FAIL (nmetric_post_constant.precondition_instance.2)",
+    "elapsed": 1.188629388809204
+  },
+  {
+    "fn": "nmetric_post_constant_u64_fmt",
+    "status": "FAIL (nmetric_post_constant_u64_fmt.pointer_dereference.17)",
+    "elapsed": 1.136659860610962
+  },
+  {
+    "fn": "nmetric_post_counter",
+    "status": "FAIL (nmetric_post_counter.pointer_dereference.11)",
+    "elapsed": 1.1301960945129395
+  },
+  {
+    "fn": "nmetric_post_decimal_constant_u64",
+    "status": "FAIL (nmetric_post_constant_u64_fmt.pointer_dereference.17)",
+    "elapsed": 1.1334562301635742
+  },
+  {
+    "fn": "nmetric_post_driver_ecc_metrics",
+    "status": "FAIL (nmetric_post_driver_ecc_metrics.pointer_dereference.7)",
+    "elapsed": 7.602263450622559
+  },
+  {
+    "fn": "nmetric_post_driver_userver_metrics",
+    "status": "FAIL (nmetric_post_driver_userver_metrics.pointer_dereference.1)",
+    "elapsed": 1.6232082843780518
+  },
+  {
+    "fn": "nmetric_post_feature_bitmap",
+    "status": "VERIFIED",
+    "elapsed": 1.1070528030395508
+  },
+  {
+    "fn": "nmetric_post_hex_constant_u64",
+    "status": "FAIL (nmetric_post_constant_u64_fmt.pointer_dereference.17)",
+    "elapsed": 1.104701280593872
+  },
+  {
+    "fn": "nmetric_post_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.3926575183868408
+  },
+  {
+    "fn": "nmetric_post_u64_fmt",
+    "status": "VERIFIED",
+    "elapsed": 1.1207244396209717
+  },
+  {
+    "fn": "nmetric_post_utilization",
+    "status": "FAIL (nmetric_post_utilization.pointer_dereference.11)",
+    "elapsed": 7.6307008266448975
+  },
+  {
+    "fn": "nmetric_post_version",
+    "status": "VERIFIED",
+    "elapsed": 1.104271411895752
+  },
+  {
+    "fn": "nmetric_post_version_with_max_usage",
+    "status": "VERIFIED",
+    "elapsed": 1.0983715057373047
+  },
+  {
+    "fn": "nmetric_sample_high_freq",
+    "status": "VERIFIED",
+    "elapsed": 1.195211410522461
+  },
+  {
+    "fn": "nmetric_set_mode",
+    "status": "VERIFIED",
+    "elapsed": 1.2093279361724854
+  },
+  {
+    "fn": "nmetric_set_performance_profile",
+    "status": "FAIL (nmetric_set_performance_profile.pointer_dereference.1)",
+    "elapsed": 6.601228713989258
+  },
+  {
+    "fn": "nmetric_set_reset_time_metrics",
+    "status": "VERIFIED",
+    "elapsed": 1.177565097808838
+  },
+  {
+    "fn": "nmetric_start_new_session",
+    "status": "VERIFIED",
+    "elapsed": 1.276226282119751
+  },
+  {
+    "fn": "nmetric_stop_thread",
+    "status": "VERIFIED",
+    "elapsed": 1.265852451324463
+  },
+  {
+    "fn": "nmetric_thread_fn",
+    "status": "FAIL (nmetric_thread_fn.precondition_instance.1)",
+    "elapsed": 8.440145492553711
+  }
+]

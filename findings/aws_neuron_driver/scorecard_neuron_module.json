@@ -1,0 +1,22 @@
+[
+  {
+    "fn": "__exittest",
+    "status": "COMPILE_ERR",
+    "elapsed": 1.0457847118377686
+  },
+  {
+    "fn": "__inittest",
+    "status": "COMPILE_ERR",
+    "elapsed": 1.002028465270996
+  },
+  {
+    "fn": "neuron_module_exit",
+    "status": "COMPILE_ERR",
+    "elapsed": 1.0103576183319092
+  },
+  {
+    "fn": "neuron_module_init",
+    "status": "COMPILE_ERR",
+    "elapsed": 1.0024235248565674
+  }
+]

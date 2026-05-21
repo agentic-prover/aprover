@@ -1,0 +1,17 @@
+[
+  {
+    "fn": "neuron_dhal_cleanup",
+    "status": "VERIFIED",
+    "elapsed": 0.9686143398284912
+  },
+  {
+    "fn": "neuron_dhal_free",
+    "status": "VERIFIED",
+    "elapsed": 0.9717047214508057
+  },
+  {
+    "fn": "neuron_dhal_init",
+    "status": "FAIL (neuron_dhal_init.pointer_dereference.1)",
+    "elapsed": 0.9863471984863281
+  }
+]

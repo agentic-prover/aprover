@@ -1,0 +1,32 @@
+[
+  {
+    "fn": "narch_get_arch",
+    "status": "VERIFIED",
+    "elapsed": 0.6015229225158691
+  },
+  {
+    "fn": "narch_get_instance_type_name",
+    "status": "VERIFIED",
+    "elapsed": 0.6151659488677979
+  },
+  {
+    "fn": "narch_get_revision",
+    "status": "VERIFIED",
+    "elapsed": 0.6027977466583252
+  },
+  {
+    "fn": "narch_init",
+    "status": "VERIFIED",
+    "elapsed": 0.606511116027832
+  },
+  {
+    "fn": "narch_is_emu",
+    "status": "VERIFIED",
+    "elapsed": 0.622567892074585
+  },
+  {
+    "fn": "narch_is_qemu",
+    "status": "VERIFIED",
+    "elapsed": 0.6174414157867432
+  }
+]
