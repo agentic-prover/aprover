@@ -52,8 +52,15 @@ REPORT_AMC_with_figure.md
 *.log
 amc.log
 
-# Env
+# Env / secrets (defense-in-depth: never push API keys)
 .env
+.env.*
+*.env
+*_keys.env
+*_secret*
+*.secret
+**/secrets.json
+**/credentials.json
 examples/vibeos/repo/
 
 # Probed candidate crates (cloned to project root by exploration scripts)
