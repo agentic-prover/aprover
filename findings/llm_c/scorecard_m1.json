@@ -1,0 +1,182 @@
+[
+  {
+    "fn": "attention_backward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "attention_forward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "crossentropy_forward",
+    "v23": "PTR-DEREF (crossentropy_forward.pointer_dereference.5)",
+    "m1": "FAIL (crossentropy_forward.pointer_dereference.5)",
+    "elapsed": 1.762497901916504
+  },
+  {
+    "fn": "crossentropy_softmax_backward",
+    "v23": "PTR-DEREF (crossentropy_softmax_backward.pointer_dereference.5)",
+    "m1": "FAIL (crossentropy_softmax_backward.pointer_dereference.5)",
+    "elapsed": 3.185177803039551
+  },
+  {
+    "fn": "encoder_backward",
+    "v23": "ERROR",
+    "m1": "COMPILE_ERR",
+    "elapsed": 0.09921765327453613
+  },
+  {
+    "fn": "encoder_forward",
+    "v23": "PTR-DEREF (encoder_forward.pointer_dereference.5)",
+    "m1": "FAIL (encoder_forward.pointer_dereference.5)",
+    "elapsed": 1.6122055053710938
+  },
+  {
+    "fn": "fill_in_activation_sizes",
+    "v23": "PTR-DEREF (fill_in_activation_sizes.pointer_dereference.11)",
+    "m1": "FAIL (fill_in_activation_sizes.pointer_dereference.11)",
+    "elapsed": 0.7225828170776367
+  },
+  {
+    "fn": "fill_in_parameter_sizes",
+    "v23": "VERIFIED",
+    "m1": "FAIL (fill_in_parameter_sizes.pointer_dereference.11)",
+    "elapsed": 0.6463119983673096
+  },
+  {
+    "fn": "gelu_backward",
+    "v23": "PTR-DEREF (gelu_backward.pointer_dereference.5)",
+    "m1": "FAIL (gelu_backward.pointer_dereference.5)",
+    "elapsed": 2.628969430923462
+  },
+  {
+    "fn": "gelu_forward",
+    "v23": "PTR-DEREF (gelu_forward.pointer_dereference.5)",
+    "m1": "FAIL (gelu_forward.pointer_dereference.5)",
+    "elapsed": 1.3583064079284668
+  },
+  {
+    "fn": "gpt2_backward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "gpt2_build_from_checkpoint",
+    "v23": "UNWIND (fread.unwind.0)",
+    "m1": "VERIFIED",
+    "elapsed": 2.1857526302337646
+  },
+  {
+    "fn": "gpt2_forward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "gpt2_free",
+    "v23": "PRECOND-FP (gpt2_free.precondition_instance.1)",
+    "m1": "VERIFIED",
+    "elapsed": 0.5265512466430664
+  },
+  {
+    "fn": "gpt2_update",
+    "v23": "PTR-DEREF (gpt2_update.pointer_dereference.43)",
+    "m1": "FAIL (gpt2_update.pointer_dereference.79)",
+    "elapsed": 37.84518885612488
+  },
+  {
+    "fn": "gpt2_zero_grad",
+    "v23": "PRECOND-FP (gpt2_zero_grad.precondition_instance.1)",
+    "m1": "VERIFIED",
+    "elapsed": 0.44106364250183105
+  },
+  {
+    "fn": "layernorm_backward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "layernorm_forward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "main",
+    "v23": "UNWIND (fread.unwind.0)",
+    "m1": "VERIFIED",
+    "elapsed": 2.3499691486358643
+  },
+  {
+    "fn": "malloc_and_point_activations",
+    "v23": "VERIFIED",
+    "m1": "FAIL (malloc_and_point_activations.pointer_dereference.5)",
+    "elapsed": 0.45922303199768066
+  },
+  {
+    "fn": "malloc_and_point_parameters",
+    "v23": "PTR-DEREF (malloc_and_point_parameters.pointer_dereference.5)",
+    "m1": "FAIL (malloc_and_point_parameters.pointer_dereference.5)",
+    "elapsed": 0.4523813724517822
+  },
+  {
+    "fn": "matmul_backward",
+    "v23": "PTR-DEREF (matmul_backward.pointer_dereference.5)",
+    "m1": "FAIL (matmul_backward.pointer_dereference.5)",
+    "elapsed": 28.241333961486816
+  },
+  {
+    "fn": "matmul_forward",
+    "v23": "PTR-DEREF (matmul_forward_naive.pointer_dereference.5)",
+    "m1": "FAIL (matmul_forward_naive.pointer_dereference.5)",
+    "elapsed": 8.93253779411316
+  },
+  {
+    "fn": "matmul_forward_naive",
+    "v23": "PTR-DEREF (matmul_forward_naive.pointer_dereference.5)",
+    "m1": "FAIL (matmul_forward_naive.pointer_dereference.5)",
+    "elapsed": 9.074018955230713
+  },
+  {
+    "fn": "random_f32",
+    "v23": "VERIFIED",
+    "m1": "VERIFIED",
+    "elapsed": 0.37551236152648926
+  },
+  {
+    "fn": "random_u32",
+    "v23": "VERIFIED",
+    "m1": "VERIFIED",
+    "elapsed": 0.3518106937408447
+  },
+  {
+    "fn": "residual_backward",
+    "v23": "PTR-DEREF (residual_backward.pointer_dereference.5)",
+    "m1": "FAIL (residual_backward.pointer_dereference.5)",
+    "elapsed": 0.38570737838745117
+  },
+  {
+    "fn": "residual_forward",
+    "v23": "PTR-DEREF (residual_forward.pointer_dereference.5)",
+    "m1": "FAIL (residual_forward.pointer_dereference.5)",
+    "elapsed": 0.3680856227874756
+  },
+  {
+    "fn": "sample_mult",
+    "v23": "PTR-DEREF (sample_mult.pointer_dereference.5)",
+    "m1": "FAIL (sample_mult.pointer_dereference.5)",
+    "elapsed": 0.3607919216156006
+  },
+  {
+    "fn": "softmax_forward",
+    "v23": "PTR-DEREF (softmax_forward.pointer_dereference.5)",
+    "m1": "FAIL (softmax_forward.pointer_dereference.5)",
+    "elapsed": 49.760162115097046
+  }
+]

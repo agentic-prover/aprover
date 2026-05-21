@@ -1,0 +1,182 @@
+[
+  {
+    "fn": "attention_backward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "attention_forward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "crossentropy_forward",
+    "v23": "PTR-DEREF (crossentropy_forward.pointer_dereference.5)",
+    "m1": "FAIL (crossentropy_forward.pointer_dereference.5)",
+    "elapsed": 2.009364366531372
+  },
+  {
+    "fn": "crossentropy_softmax_backward",
+    "v23": "PTR-DEREF (crossentropy_softmax_backward.pointer_dereference.5)",
+    "m1": "FAIL (crossentropy_softmax_backward.pointer_dereference.5)",
+    "elapsed": 10.182990789413452
+  },
+  {
+    "fn": "encoder_backward",
+    "v23": "ERROR",
+    "m1": "COMPILE_ERR",
+    "elapsed": 0.10466384887695312
+  },
+  {
+    "fn": "encoder_forward",
+    "v23": "PTR-DEREF (encoder_forward.pointer_dereference.5)",
+    "m1": "FAIL (encoder_forward.pointer_dereference.5)",
+    "elapsed": 2.0927138328552246
+  },
+  {
+    "fn": "fill_in_activation_sizes",
+    "v23": "PTR-DEREF (fill_in_activation_sizes.pointer_dereference.11)",
+    "m1": "VERIFIED",
+    "elapsed": 0.37985992431640625
+  },
+  {
+    "fn": "fill_in_parameter_sizes",
+    "v23": "VERIFIED",
+    "m1": "VERIFIED",
+    "elapsed": 0.3724212646484375
+  },
+  {
+    "fn": "gelu_backward",
+    "v23": "PTR-DEREF (gelu_backward.pointer_dereference.5)",
+    "m1": "VERIFIED",
+    "elapsed": 0.44553446769714355
+  },
+  {
+    "fn": "gelu_forward",
+    "v23": "PTR-DEREF (gelu_forward.pointer_dereference.5)",
+    "m1": "VERIFIED",
+    "elapsed": 0.6452727317810059
+  },
+  {
+    "fn": "gpt2_backward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "gpt2_build_from_checkpoint",
+    "v23": "UNWIND (fread.unwind.0)",
+    "m1": "VERIFIED",
+    "elapsed": 2.2097761631011963
+  },
+  {
+    "fn": "gpt2_forward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "gpt2_free",
+    "v23": "PRECOND-FP (gpt2_free.precondition_instance.1)",
+    "m1": "VERIFIED",
+    "elapsed": 0.5542223453521729
+  },
+  {
+    "fn": "gpt2_update",
+    "v23": "PTR-DEREF (gpt2_update.pointer_dereference.43)",
+    "m1": "FAIL (gpt2_update.pointer_dereference.79)",
+    "elapsed": 43.18060374259949
+  },
+  {
+    "fn": "gpt2_zero_grad",
+    "v23": "PRECOND-FP (gpt2_zero_grad.precondition_instance.1)",
+    "m1": "VERIFIED",
+    "elapsed": 0.4496042728424072
+  },
+  {
+    "fn": "layernorm_backward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "layernorm_forward",
+    "v23": "TIMEOUT",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "main",
+    "v23": "UNWIND (fread.unwind.0)",
+    "m1": "VERIFIED",
+    "elapsed": 2.3454020023345947
+  },
+  {
+    "fn": "malloc_and_point_activations",
+    "v23": "VERIFIED",
+    "m1": "VERIFIED",
+    "elapsed": 0.4836595058441162
+  },
+  {
+    "fn": "malloc_and_point_parameters",
+    "v23": "PTR-DEREF (malloc_and_point_parameters.pointer_dereference.5)",
+    "m1": "VERIFIED",
+    "elapsed": 0.46936655044555664
+  },
+  {
+    "fn": "matmul_backward",
+    "v23": "PTR-DEREF (matmul_backward.pointer_dereference.5)",
+    "m1": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "matmul_forward",
+    "v23": "PTR-DEREF (matmul_forward_naive.pointer_dereference.5)",
+    "m1": "FAIL (matmul_forward_naive.pointer_dereference.11)",
+    "elapsed": 9.597074031829834
+  },
+  {
+    "fn": "matmul_forward_naive",
+    "v23": "PTR-DEREF (matmul_forward_naive.pointer_dereference.5)",
+    "m1": "FAIL (matmul_forward_naive.pointer_dereference.11)",
+    "elapsed": 9.5260751247406
+  },
+  {
+    "fn": "random_f32",
+    "v23": "VERIFIED",
+    "m1": "VERIFIED",
+    "elapsed": 0.38523268699645996
+  },
+  {
+    "fn": "random_u32",
+    "v23": "VERIFIED",
+    "m1": "VERIFIED",
+    "elapsed": 0.361436128616333
+  },
+  {
+    "fn": "residual_backward",
+    "v23": "PTR-DEREF (residual_backward.pointer_dereference.5)",
+    "m1": "VERIFIED",
+    "elapsed": 0.3619670867919922
+  },
+  {
+    "fn": "residual_forward",
+    "v23": "PTR-DEREF (residual_forward.pointer_dereference.5)",
+    "m1": "VERIFIED",
+    "elapsed": 0.37319469451904297
+  },
+  {
+    "fn": "sample_mult",
+    "v23": "PTR-DEREF (sample_mult.pointer_dereference.5)",
+    "m1": "VERIFIED",
+    "elapsed": 0.3964822292327881
+  },
+  {
+    "fn": "softmax_forward",
+    "v23": "PTR-DEREF (softmax_forward.pointer_dereference.5)",
+    "m1": "FAIL (softmax_forward.pointer_dereference.5)",
+    "elapsed": 43.46942377090454
+  }
+]

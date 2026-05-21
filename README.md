@@ -187,6 +187,25 @@ BMC-Agent was evaluated on [VibeOS](https://github.com/kaansenol5/VibeOS/tree/ma
 
 The `calloc` integer overflow (CWE-190, `nmemb * size` wraps to zero) was confirmed in an earlier run and independently cross-validates [VibeOS issue #26](https://github.com/kaansenol5/VibeOS/issues/26).
 
+## Evaluation — llm.c (ML training program)
+
+BMC-Agent was also evaluated on Karpathy's [llm.c](https://github.com/karpathy/llm.c) `train_gpt2.c` — the complete forward + backward pass for GPT-2 training, ~1100 lines of plain C with no LLM assistance. Running with the M1–M2 milestones enabled verifies **22 of 30 functions clean** at scaled-down problem sizes (`B = T = C = NH = V = Vp = OC = 4`), up from 4/30 in the unmodified pipeline. To our knowledge, this is the **first application of bounded model checking to a real ML training program**.
+
+| Verdict | v23 baseline | M1+M1.2+M2 | Δ |
+|---|---|---|---|
+| Clean (memory-safe at scale-down) | 4 | **22** | **+18** |
+| Timeout | 6 | 4 | -2 |
+| Fail / spec mismatch | 19 | 3 | -16 |
+| CBMC parse error | 1 | 1 | 0 |
+
+Highlight verdicts (all VERIFIED clean):
+- `softmax_forward` — the central probability-distribution kernel.
+- `layernorm_forward` / `layernorm_backward` — previously timed out at baseline.
+- `matmul_forward` / `matmul_forward_naive` / `matmul_backward` — the ML primitive.
+- `gpt2_zero_grad`, `gpt2_free` — the synthetic-NULL artifact class closed by M1.
+
+Full scorecard and per-function detail in [`findings/llm_c/`](findings/llm_c/). The flags `--infer-field-validity`, `--infer-array-param-bounds`, `--scale-down`, and `--safety-only` documented in the Configuration table above are the per-milestone knobs.
+
 ## Examples
 
 | File | Description |
