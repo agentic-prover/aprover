@@ -1,0 +1,12 @@
+Parsed 5026 functions total
+After primary-source restrict: 6
+  ndmabuf_attach                                FAIL (pointer_dereference.1)        (1.2s)
+  ndmabuf_detach                                FAIL (pointer_dereference.1)        (1.3s)
+  ndmabuf_get_fd                                FAIL (ndmabuf_get_fd.pointer_dereference.1) (3.5s)
+  ndmabuf_map                                   TIMEOUT                             (60.0s)
+  ndmabuf_release                               VERIFIED                            (1.2s)
+  ndmabuf_unmap                                 TIMEOUT                             (60.0s)
+
+  FAIL                   3
+  TIMEOUT                2
+  VERIFIED               1

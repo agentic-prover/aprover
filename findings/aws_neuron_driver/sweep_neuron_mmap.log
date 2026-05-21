@@ -1,0 +1,23 @@
+Parsed 4739 functions total
+After primary-source restrict: 17
+  nmap_dm_special                               VERIFIED                            (1.1s)
+  nmap_dm_special_resource_addr_valid           FAIL (nmap_dm_special_resource_addr_valid.pointer_dereference.1) (1.1s)
+  nmap_dm_special_resource_get                  FAIL (nmap_dm_special_resource_get.pointer_dereference.1) (1.0s)
+  nmmap_create_node                             TIMEOUT                             (60.0s)
+  nmmap_delete_all_nodes                        FAIL (nmmap_delete_all_nodes.array_bounds.1) (6.9s)
+  nmmap_delete_node                             FAIL (nmmap_delete_node.pointer_dereference.13) (1.1s)
+  nmmap_dm                                      FAIL (nmmap_dm.pointer_dereference.19) (6.5s)
+  nmmap_dm_mc                                   VERIFIED                            (1.1s)
+  nmmap_dm_root                                 VERIFIED                            (1.3s)
+  nmmap_get_mc                                  TIMEOUT                             (60.0s)
+  nmmap_get_mc_from_pa                          VERIFIED                            (1.0s)
+  nmmap_get_va_placement                        FAIL (nmmap_get_va_placement.pointer_dereference.1) (1.1s)
+  nmmap_insert_node_rbtree                      FAIL (nmmap_insert_node_rbtree.pointer_dereference.7) (1.0s)
+  nmmap_mem                                     FAIL (nmmap_dm_mc.pointer_dereference.1) (6.7s)
+  nmmap_offset                                  VERIFIED                            (1.0s)
+  nmmap_remove_node_rbtree                      VERIFIED                            (1.0s)
+  nmmap_search_va                               FAIL (nmmap_search_va.array_bounds.1) (7.6s)
+
+  FAIL                   9
+  VERIFIED               6
+  TIMEOUT                2
