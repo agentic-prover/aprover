@@ -1,0 +1,290 @@
+[
+  {
+    "fn": "add_allocated_tensor",
+    "status": "VERIFIED",
+    "elapsed": 0.40876030921936035,
+    "fail_count": 0
+  },
+  {
+    "fn": "aligned_offset",
+    "status": "VERIFIED",
+    "elapsed": 0.3980553150177002,
+    "fail_count": 0
+  },
+  {
+    "fn": "alloc_tensor_range",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.19383025169372559,
+    "fail_count": 0
+  },
+  {
+    "fn": "free_buffers",
+    "status": "FAIL (free_buffers.precondition_instance.2)",
+    "elapsed": 0.46655821800231934,
+    "fail_count": 1
+  },
+  {
+    "fn": "get_node_buffer_id",
+    "status": "FAIL (get_node_buffer_id.pointer_dereference.5)",
+    "elapsed": 0.4328296184539795,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_backend_alloc_ctx_tensors",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.19847846031188965,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_backend_alloc_ctx_tensors_from_buft",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.17575788497924805,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_backend_alloc_ctx_tensors_from_buft_impl",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.20085883140563965,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_backend_alloc_ctx_tensors_from_buft_size",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.17787885665893555,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_buffer_address_less",
+    "status": "VERIFIED",
+    "elapsed": 0.297351598739624,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_dyn_tallocr_alloc",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_dyn_tallocr_free",
+    "status": "FAIL (ggml_dyn_tallocr_free.pointer_dereference.3)",
+    "elapsed": 0.47646427154541016,
+    "fail_count": 13
+  },
+  {
+    "fn": "ggml_dyn_tallocr_free_bytes",
+    "status": "FAIL (aligned_offset.assertion.1)",
+    "elapsed": 6.413106679916382,
+    "fail_count": 135
+  },
+  {
+    "fn": "ggml_dyn_tallocr_insert_block",
+    "status": "VERIFIED",
+    "elapsed": 3.391594409942627,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_dyn_tallocr_max_size",
+    "status": "FAIL (ggml_dyn_tallocr_max_size.pointer_dereference.13)",
+    "elapsed": 0.34955501556396484,
+    "fail_count": 6
+  },
+  {
+    "fn": "ggml_dyn_tallocr_new",
+    "status": "VERIFIED",
+    "elapsed": 0.43633079528808594,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_dyn_tallocr_new_chunk",
+    "status": "VERIFIED",
+    "elapsed": 0.37859511375427246,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_dyn_tallocr_remove_block",
+    "status": "VERIFIED",
+    "elapsed": 2.0994184017181396,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_dyn_tallocr_reset",
+    "status": "FAIL (ggml_dyn_tallocr_reset.pointer_dereference.3)",
+    "elapsed": 0.4100632667541504,
+    "fail_count": 10
+  },
+  {
+    "fn": "ggml_gallocr_alloc_graph",
+    "status": "FAIL (ggml_dyn_tallocr_reset.array_bounds.1)",
+    "elapsed": 5.293844699859619,
+    "fail_count": 363
+  },
+  {
+    "fn": "ggml_gallocr_alloc_graph_impl",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_gallocr_allocate_node",
+    "status": "FAIL (aligned_offset.assertion.1)",
+    "elapsed": 30.648442268371582,
+    "fail_count": 326
+  },
+  {
+    "fn": "ggml_gallocr_free",
+    "status": "FAIL (ggml_dyn_tallocr_free.pointer_dereference.1)",
+    "elapsed": 0.6008932590484619,
+    "fail_count": 274
+  },
+  {
+    "fn": "ggml_gallocr_free_extra_space",
+    "status": "FAIL (aligned_offset.assertion.1)",
+    "elapsed": 20.39502501487732,
+    "fail_count": 285
+  },
+  {
+    "fn": "ggml_gallocr_free_node",
+    "status": "FAIL (aligned_offset.assertion.1)",
+    "elapsed": 12.957927465438843,
+    "fail_count": 255
+  },
+  {
+    "fn": "ggml_gallocr_get_buffer_size",
+    "status": "FAIL (ggml_gallocr_get_buffer_size.pointer_dereference.1)",
+    "elapsed": 0.3607175350189209,
+    "fail_count": 62
+  },
+  {
+    "fn": "ggml_gallocr_hash_get",
+    "status": "FAIL (ggml_gallocr_hash_get.pointer_dereference.1)",
+    "elapsed": 0.7324798107147217,
+    "fail_count": 66
+  },
+  {
+    "fn": "ggml_gallocr_init_tensor",
+    "status": "FAIL (ggml_gallocr_init_tensor.assertion.1)",
+    "elapsed": 0.36844611167907715,
+    "fail_count": 53
+  },
+  {
+    "fn": "ggml_gallocr_is_allocated",
+    "status": "FAIL (ggml_gallocr_hash_get.pointer_dereference.1)",
+    "elapsed": 0.9271326065063477,
+    "fail_count": 72
+  },
+  {
+    "fn": "ggml_gallocr_is_own",
+    "status": "FAIL (ggml_gallocr_hash_get.pointer_dereference.1)",
+    "elapsed": 0.9117395877838135,
+    "fail_count": 72
+  },
+  {
+    "fn": "ggml_gallocr_needs_realloc",
+    "status": "FAIL (ggml_gallocr_needs_realloc.pointer_dereference.1)",
+    "elapsed": 0.42625927925109863,
+    "fail_count": 73
+  },
+  {
+    "fn": "ggml_gallocr_new",
+    "status": "VERIFIED",
+    "elapsed": 0.442610502243042,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_gallocr_new_n",
+    "status": "VERIFIED",
+    "elapsed": 0.6987113952636719,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_gallocr_node_needs_realloc",
+    "status": "FAIL (ggml_gallocr_node_needs_realloc.pointer_dereference.19)",
+    "elapsed": 0.35474276542663574,
+    "fail_count": 12
+  },
+  {
+    "fn": "ggml_gallocr_reserve",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_gallocr_reserve_n",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_gallocr_reserve_n_impl",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_gallocr_reserve_n_size",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_op_can_inplace",
+    "status": "VERIFIED",
+    "elapsed": 0.3393378257751465,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_tallocr_alloc",
+    "status": "FAIL (ggml_tallocr_alloc.assertion.1)",
+    "elapsed": 0.3717007637023926,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_tallocr_new",
+    "status": "FAIL (aligned_offset.assertion.1)",
+    "elapsed": 0.33056187629699707,
+    "fail_count": 2
+  },
+  {
+    "fn": "ggml_vbuffer_alloc",
+    "status": "FAIL (ggml_vbuffer_alloc.pointer_dereference.13)",
+    "elapsed": 0.4439237117767334,
+    "fail_count": 6
+  },
+  {
+    "fn": "ggml_vbuffer_chunk_size",
+    "status": "FAIL (ggml_vbuffer_chunk_size.array_bounds.1)",
+    "elapsed": 0.3181464672088623,
+    "fail_count": 1
+  },
+  {
+    "fn": "ggml_vbuffer_free",
+    "status": "VERIFIED",
+    "elapsed": 0.3674499988555908,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vbuffer_reset",
+    "status": "VERIFIED",
+    "elapsed": 0.3348500728607178,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vbuffer_size",
+    "status": "VERIFIED",
+    "elapsed": 0.32769060134887695,
+    "fail_count": 0
+  },
+  {
+    "fn": "ggml_vbuffer_tensor_alloc",
+    "status": "FAIL (ggml_vbuffer_tensor_alloc.array_bounds.1)",
+    "elapsed": 0.34186649322509766,
+    "fail_count": 2
+  },
+  {
+    "fn": "remove_allocated_tensor",
+    "status": "VERIFIED",
+    "elapsed": 0.32750391960144043,
+    "fail_count": 0
+  }
+]
