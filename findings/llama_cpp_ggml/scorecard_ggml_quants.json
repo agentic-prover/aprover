@@ -1,0 +1,692 @@
+[
+  {
+    "fn": "best_index_int8",
+    "status": "FAIL (best_index_int8.pointer_dereference.11)",
+    "elapsed": 7.321229696273804,
+    "fail_count": 4
+  },
+  {
+    "fn": "best_index_mxfp4",
+    "status": "VERIFIED",
+    "elapsed": 7.406948804855347,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq1_m",
+    "status": "VERIFIED",
+    "elapsed": 7.889551639556885,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq1_s",
+    "status": "VERIFIED",
+    "elapsed": 7.777283191680908,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq2_s",
+    "status": "VERIFIED",
+    "elapsed": 7.774879217147827,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq2_xs",
+    "status": "VERIFIED",
+    "elapsed": 7.487932920455933,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq2_xxs",
+    "status": "VERIFIED",
+    "elapsed": 7.4956066608428955,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq3_s",
+    "status": "VERIFIED",
+    "elapsed": 8.277268409729004,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq3_xxs",
+    "status": "VERIFIED",
+    "elapsed": 7.7629570960998535,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq4_nl",
+    "status": "VERIFIED",
+    "elapsed": 7.365083694458008,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_iq4_xs",
+    "status": "VERIFIED",
+    "elapsed": 7.352248430252075,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_mxfp4",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.32145094871521,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_nvfp4",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.420267343521118,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q1_0",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.228644371032715,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q2_K",
+    "status": "VERIFIED",
+    "elapsed": 7.536381006240845,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q3_K",
+    "status": "VERIFIED",
+    "elapsed": 7.768451452255249,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q4_0",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.252623081207275,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q4_1",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.257949113845825,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q4_K",
+    "status": "VERIFIED",
+    "elapsed": 7.501209497451782,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q5_0",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.249664545059204,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q5_1",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.264062166213989,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q5_K",
+    "status": "VERIFIED",
+    "elapsed": 7.450759410858154,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q6_K",
+    "status": "FAIL (dequantize_row_q6_K.pointer_dereference.53)",
+    "elapsed": 7.904550075531006,
+    "fail_count": 2
+  },
+  {
+    "fn": "dequantize_row_q8_0",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.270317316055298,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_q8_K",
+    "status": "VERIFIED",
+    "elapsed": 7.740051507949829,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_tq1_0",
+    "status": "VERIFIED",
+    "elapsed": 7.73874568939209,
+    "fail_count": 0
+  },
+  {
+    "fn": "dequantize_row_tq2_0",
+    "status": "VERIFIED",
+    "elapsed": 7.736138582229614,
+    "fail_count": 0
+  },
+  {
+    "fn": "get_scale_min_k4",
+    "status": "FAIL (get_scale_min_k4.pointer_dereference.11)",
+    "elapsed": 7.6650309562683105,
+    "fail_count": 6
+  },
+  {
+    "fn": "ggml_validate_row_data",
+    "status": "UNKNOWN",
+    "elapsed": 10.162147998809814,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq1_find_best_neighbour",
+    "status": "FAIL (iq1_find_best_neighbour.pointer_dereference.11)",
+    "elapsed": 9.057934761047363,
+    "fail_count": 3
+  },
+  {
+    "fn": "iq1_find_best_neighbour2",
+    "status": "FAIL (iq1_find_best_neighbour2.pointer_dereference.11)",
+    "elapsed": 9.400441646575928,
+    "fail_count": 5
+  },
+  {
+    "fn": "iq1_sort_helper",
+    "status": "FAIL (iq1_sort_helper.pointer_dereference.1)",
+    "elapsed": 7.575421333312988,
+    "fail_count": 16
+  },
+  {
+    "fn": "iq2_compare_func",
+    "status": "FAIL (iq2_compare_func.pointer_dereference.1)",
+    "elapsed": 7.648926734924316,
+    "fail_count": 36
+  },
+  {
+    "fn": "iq2_data_index",
+    "status": "VERIFIED",
+    "elapsed": 7.6075146198272705,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq2_find_best_neighbour",
+    "status": "FAIL (iq2_find_best_neighbour.pointer_dereference.11)",
+    "elapsed": 7.9896886348724365,
+    "fail_count": 3
+  },
+  {
+    "fn": "iq2_grid_size",
+    "status": "VERIFIED",
+    "elapsed": 7.529618740081787,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq2xs_free_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.701846361160278,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq2xs_init_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.93887734413147,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq3_compare_func",
+    "status": "FAIL (iq3_compare_func.pointer_dereference.1)",
+    "elapsed": 7.4075236320495605,
+    "fail_count": 36
+  },
+  {
+    "fn": "iq3_data_index",
+    "status": "VERIFIED",
+    "elapsed": 7.500466823577881,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq3_find_best_neighbour",
+    "status": "FAIL (iq3_find_best_neighbour.pointer_dereference.11)",
+    "elapsed": 7.862187623977661,
+    "fail_count": 3
+  },
+  {
+    "fn": "iq3xs_free_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.652674913406372,
+    "fail_count": 0
+  },
+  {
+    "fn": "iq3xs_init_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.574154376983643,
+    "fail_count": 0
+  },
+  {
+    "fn": "isinf_fp16",
+    "status": "VERIFIED",
+    "elapsed": 7.49650239944458,
+    "fail_count": 0
+  },
+  {
+    "fn": "isnan_fp16",
+    "status": "VERIFIED",
+    "elapsed": 7.486203908920288,
+    "fail_count": 0
+  },
+  {
+    "fn": "make_q3_quants",
+    "status": "FAIL (nearest_int.assertion.1)",
+    "elapsed": 36.84543967247009,
+    "fail_count": 1
+  },
+  {
+    "fn": "make_qkx1_quants",
+    "status": "FAIL (make_qkx1_quants.pointer_dereference.11)",
+    "elapsed": 11.380149126052856,
+    "fail_count": 6
+  },
+  {
+    "fn": "make_qp_quants",
+    "status": "FAIL (nearest_int.assertion.1)",
+    "elapsed": 28.90003228187561,
+    "fail_count": 1
+  },
+  {
+    "fn": "nearest_int",
+    "status": "FAIL (nearest_int.assertion.1)",
+    "elapsed": 7.482537746429443,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_iq1_m",
+    "status": "FAIL (quantize_row_iq1_m_impl.precondition_instance.1)",
+    "elapsed": 8.8806791305542,
+    "fail_count": 3
+  },
+  {
+    "fn": "quantize_iq1_s",
+    "status": "FAIL (quantize_row_iq1_s_impl.pointer_dereference.1)",
+    "elapsed": 8.959227800369263,
+    "fail_count": 6
+  },
+  {
+    "fn": "quantize_iq2_s",
+    "status": "FAIL (quantize_row_iq2_s_impl.precondition_instance.1)",
+    "elapsed": 9.086700916290283,
+    "fail_count": 5
+  },
+  {
+    "fn": "quantize_iq2_xs",
+    "status": "FAIL (quantize_row_iq2_xs_impl.pointer_dereference.1)",
+    "elapsed": 8.977956295013428,
+    "fail_count": 5
+  },
+  {
+    "fn": "quantize_iq2_xxs",
+    "status": "FAIL (quantize_row_iq2_xxs_impl.pointer_dereference.1)",
+    "elapsed": 9.281738758087158,
+    "fail_count": 4
+  },
+  {
+    "fn": "quantize_iq3_s",
+    "status": "FAIL (quantize_row_iq3_s_impl.precondition_instance.1)",
+    "elapsed": 9.138057947158813,
+    "fail_count": 5
+  },
+  {
+    "fn": "quantize_iq3_xxs",
+    "status": "FAIL (quantize_row_iq3_xxs_impl.pointer_dereference.1)",
+    "elapsed": 9.03301477432251,
+    "fail_count": 4
+  },
+  {
+    "fn": "quantize_iq4_nl",
+    "status": "VERIFIED",
+    "elapsed": 8.858333349227905,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_iq4_xs",
+    "status": "VERIFIED",
+    "elapsed": 9.003945112228394,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_mxfp4",
+    "status": "FAIL (quantize_row_mxfp4_ref.assertion.1)",
+    "elapsed": 8.069008111953735,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_nvfp4",
+    "status": "FAIL (quantize_row_nvfp4_ref.assertion.1)",
+    "elapsed": 7.792783975601196,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q1_0",
+    "status": "FAIL (quantize_row_q1_0_ref.assertion.1)",
+    "elapsed": 8.293353796005249,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q2_K",
+    "status": "FAIL (quantize_row_q2_K_impl.assertion.1)",
+    "elapsed": 8.892524480819702,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q3_K",
+    "status": "FAIL (quantize_row_q3_K_impl.assertion.1)",
+    "elapsed": 8.606987476348877,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q4_0",
+    "status": "VERIFIED",
+    "elapsed": 10.607682228088379,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_q4_1",
+    "status": "VERIFIED",
+    "elapsed": 10.78670883178711,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_q4_K",
+    "status": "FAIL (quantize_row_q4_K_impl.assertion.1)",
+    "elapsed": 8.800732374191284,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q5_0",
+    "status": "VERIFIED",
+    "elapsed": 10.685933589935303,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_q5_1",
+    "status": "VERIFIED",
+    "elapsed": 10.670082330703735,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_q5_K",
+    "status": "FAIL (quantize_row_q5_K_impl.assertion.1)",
+    "elapsed": 8.595256567001343,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q6_K",
+    "status": "FAIL (quantize_row_q6_K_impl.assertion.1)",
+    "elapsed": 8.27001166343689,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_q8_0",
+    "status": "FAIL (quantize_row_q8_0_ref.assertion.1)",
+    "elapsed": 7.583818674087524,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_row_iq1_m_impl",
+    "status": "FAIL (quantize_row_iq1_m_impl.precondition_instance.1)",
+    "elapsed": 8.019962787628174,
+    "fail_count": 3
+  },
+  {
+    "fn": "quantize_row_iq1_s_impl",
+    "status": "FAIL (quantize_row_iq1_s_impl.pointer_dereference.1)",
+    "elapsed": 7.9346044063568115,
+    "fail_count": 6
+  },
+  {
+    "fn": "quantize_row_iq2_s_impl",
+    "status": "FAIL (quantize_row_iq2_s_impl.precondition_instance.1)",
+    "elapsed": 7.7938926219940186,
+    "fail_count": 5
+  },
+  {
+    "fn": "quantize_row_iq2_s_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.730487823486328,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_iq2_xs_impl",
+    "status": "FAIL (quantize_row_iq2_xs_impl.pointer_dereference.1)",
+    "elapsed": 7.9679787158966064,
+    "fail_count": 5
+  },
+  {
+    "fn": "quantize_row_iq2_xxs_impl",
+    "status": "FAIL (quantize_row_iq2_xxs_impl.pointer_dereference.1)",
+    "elapsed": 7.867642164230347,
+    "fail_count": 4
+  },
+  {
+    "fn": "quantize_row_iq3_s_impl",
+    "status": "FAIL (quantize_row_iq3_s_impl.precondition_instance.1)",
+    "elapsed": 8.054634094238281,
+    "fail_count": 5
+  },
+  {
+    "fn": "quantize_row_iq3_s_ref",
+    "status": "VERIFIED",
+    "elapsed": 8.136405229568481,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_iq3_xxs_impl",
+    "status": "FAIL (quantize_row_iq3_xxs_impl.pointer_dereference.1)",
+    "elapsed": 8.12409782409668,
+    "fail_count": 4
+  },
+  {
+    "fn": "quantize_row_iq3_xxs_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.773271083831787,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_iq4_nl_impl",
+    "status": "TIMEOUT",
+    "elapsed": 60,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_iq4_nl_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.771489858627319,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_iq4_xs_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.626524448394775,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_mxfp4_ref",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.315195560455322,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_nvfp4_ref",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.157147407531738,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q1_0_ref",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.1677916049957275,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q2_K_impl",
+    "status": "FAIL (quantize_row_q2_K_impl.assertion.1)",
+    "elapsed": 7.693514108657837,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_row_q2_K_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.413745164871216,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q3_K_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.642190933227539,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q3_K_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.490262269973755,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_0_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.723638534545898,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_0_ref",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.13305401802063,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_1_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.5343523025512695,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_1_ref",
+    "status": "FAIL (quantize_row_q4_1_ref.assertion.1)",
+    "elapsed": 7.284010887145996,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_row_q4_K_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.552933692932129,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q4_K_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.451305150985718,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_0_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.464460849761963,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_0_ref",
+    "status": "COMPILE_ERR",
+    "elapsed": 4.079551935195923,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_1_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.508810043334961,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_1_ref",
+    "status": "FAIL (quantize_row_q5_1_ref.assertion.1)",
+    "elapsed": 7.29145884513855,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_row_q5_K_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.575446367263794,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q5_K_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.497487306594849,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q6_K_impl",
+    "status": "VERIFIED",
+    "elapsed": 7.581298112869263,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q6_K_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.640259742736816,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q8_0_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.462071418762207,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q8_1_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.517189025878906,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_q8_K_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.378679037094116,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_tq1_0_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.533473968505859,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_row_tq2_0_ref",
+    "status": "VERIFIED",
+    "elapsed": 7.490794658660889,
+    "fail_count": 0
+  },
+  {
+    "fn": "quantize_tq1_0",
+    "status": "FAIL (quantize_row_tq1_0_ref.assertion.1)",
+    "elapsed": 7.523536205291748,
+    "fail_count": 1
+  },
+  {
+    "fn": "quantize_tq2_0",
+    "status": "FAIL (quantize_row_tq2_0_ref.assertion.1)",
+    "elapsed": 7.560105085372925,
+    "fail_count": 1
+  },
+  {
+    "fn": "validate_e_e8m0",
+    "status": "VERIFIED",
+    "elapsed": 7.5890421867370605,
+    "fail_count": 0
+  },
+  {
+    "fn": "validate_float",
+    "status": "VERIFIED",
+    "elapsed": 7.509985446929932,
+    "fail_count": 0
+  },
+  {
+    "fn": "validate_fp16",
+    "status": "VERIFIED",
+    "elapsed": 7.484642505645752,
+    "fail_count": 0
+  }
+]
