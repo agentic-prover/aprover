@@ -67,6 +67,25 @@ clean → bug_reporter stamped `realism=unrealistic` with reasoning
 `[feedback-converged] in-sweep iteration succeeded`. This is the
 in-sweep iteration architecture described in `bmc_agent_session_2026-05-13.md`.
 
+### Constraints the feedback loop actually learned
+
+Pulled from `<stem>/learned_constraints.json` after the sweep:
+
+| Scope | Learned clause |
+|---|---|
+| project (neuron_core) | `ndhal != NULL && ndhal->ndhal_nc.nc_get_event_addr != NULL` |
+| function (neuron_ds.get_neuroncore_counter_value) | `entry != NULL && entry->mc != NULL && entry->mc->va != NULL` |
+| function (neuron_log.neuron_log_rec_add) | `nd != NULL && (nd->log_obj.log == NULL \|\| valid_range(nd->log_obj.log, 0, 1024))` |
+
+These map cleanly onto invariants real kernel callers maintain — the
+ndhal handler table is populated by `ndhal_register_arch` at probe,
+`entry->mc->va` is set by the memory chunk allocator before any reader
+runs, and `nd->log_obj.log` is the field whose existing in-body NULL
+check the function already enforces.
+
+This is concrete evidence that the feedback loop discovers contracts
+*from the realism stage's analysis of the CEx*, not just from heuristics.
+
 ## Wall clock / cost
 
 - Total wall clock: ~32 min (parallel=2)
