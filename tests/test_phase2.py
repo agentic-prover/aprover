@@ -811,6 +811,114 @@ def test_generate_nd_decls_llmc_gpt2_shape_under_flag():
     assert "_model_obj.num_activations >= 0" in out
 
 
+def test_max_literal_subscript_finds_max_index():
+    """Body scanner finds the largest integer-literal subscript on a name."""
+    from bmc_agent.harness_generator import _max_literal_subscript
+
+    body = """{
+        param[0] = config.x;
+        param[1] = config.y;
+        param[15] = 42;
+        param[i] = 0;          /* index expr -- ignored */
+        other[99] = 0;         /* different name -- ignored */
+        notparam[5] = 0;       /* prefix collision -- ignored */
+    }"""
+    assert _max_literal_subscript(body, "param") == 15
+    assert _max_literal_subscript(body, "other") == 99
+    # No literal subscripts → None (caller uses cbmc_unwind+1 fallback).
+    assert _max_literal_subscript("{ for (i = 0; i < 4; i++) param[i] = 0; }", "param") is None
+
+
+def test_max_literal_subscript_handles_hex_and_octal():
+    """Decimal, hex (0x...), octal (0...) literals all recognised."""
+    from bmc_agent.harness_generator import _max_literal_subscript
+    body = "{ a[0x10] = 1; a[017] = 2; a[20] = 3; }"
+    assert _max_literal_subscript(body, "a") == 20  # 0x10 = 16, 017 = 15
+
+
+def test_generate_nd_decls_array_param_sized_from_body_subscripts():
+    """Top-level ``size_t *param_sizes`` whose body writes
+    ``param_sizes[15]`` gets a 16-element backing under the flag.
+
+    Regression: llm.c's fill_in_parameter_sizes(size_t* param_sizes,
+    GPT2Config config) writes param_sizes[0..15]. Before M1.2 the
+    harness emitted ``size_t _param_sizes_val; size_t* param_sizes =
+    &_param_sizes_val;`` — a 1-element backing that produces pointer-OOB
+    on every write past index 0.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    body = "{\n" + "\n".join(
+        f"    param_sizes[{i}] = config.channels;" for i in range(16)
+    ) + "\n}"
+    sig = FunctionSignature(
+        name="fill_in_parameter_sizes", return_type="void",
+        parameters=[("size_t*", "param_sizes"), ("int", "config")],
+    )
+    func = FunctionInfo(
+        name="fill_in_parameter_sizes", signature=sig, body=body,
+        callees=set(), source_file="x.c",
+    )
+
+    # Flag off → default 1-element backing (bug).
+    off = "\n".join(_generate_nd_decls(func, cbmc_unwind=4))
+    assert "_param_sizes_val" in off  # default fallback emitted
+    assert "size_t _param_sizes_buf[" not in off
+
+    # Flag on → sized backing.
+    on = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4, infer_array_param_bounds=True,
+    ))
+    assert "size_t _param_sizes_buf[16];" in on
+    assert "param_sizes = (size_t*)_param_sizes_buf;" in on
+
+
+def test_generate_nd_decls_array_param_caps_at_max():
+    """``infer_array_param_bounds_max`` caps runaway sizing if the body
+    contains an unrealistic subscript (e.g. a macro the parser didn't
+    expand resolved to a giant value).
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="f", return_type="void",
+        parameters=[("int*", "buf")],
+    )
+    func = FunctionInfo(
+        name="f", signature=sig, body="{ buf[9999] = 0; }",
+        callees=set(), source_file="x.c",
+    )
+    on = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=4,
+        infer_array_param_bounds=True,
+        infer_array_param_bounds_max=32,
+    ))
+    assert "int _buf_buf[32];" in on
+
+
+def test_generate_nd_decls_array_param_fallback_no_literals():
+    """No literal subscripts in body → fall back to cbmc_unwind+1 size."""
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="loop_write", return_type="void",
+        parameters=[("float*", "out")],
+    )
+    func = FunctionInfo(
+        name="loop_write", signature=sig,
+        body="{ for (int i = 0; i < n; i++) out[i] = 0.0f; }",
+        callees=set(), source_file="x.c",
+    )
+    on = "\n".join(_generate_nd_decls(
+        func, cbmc_unwind=8, infer_array_param_bounds=True,
+    ))
+    # Fallback: cbmc_unwind+1 = 9
+    assert "float _out_buf[9];" in on
+
+
 def test_generate_nd_decls_double_pointer_cursor():
     """`T**` params (in-out cursors) get a backing buffer + cursor + addr-of.
 

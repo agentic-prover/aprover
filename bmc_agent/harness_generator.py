@@ -1871,6 +1871,41 @@ def _looks_like_integer_type(t: str) -> bool:
     }
 
 
+def _max_literal_subscript(body: str, pname: str) -> Optional[int]:
+    """Return the maximum *constant* integer subscript on ``pname[K]`` in
+    ``body``, or None if no literal subscripts are present.
+
+    Conservative: only matches integer literals (decimal, hex, octal),
+    not constant expressions or macros. ``param[0]`` through
+    ``param[15]`` resolves to 15; ``param[i]``, ``param[B*T]`` are
+    skipped. Used to size the harness backing buffer for top-level
+    pointer params like llm.c's ``fill_in_parameter_sizes(size_t*
+    param_sizes, ...)`` which writes ``param_sizes[0..15]`` against a
+    fixed-size table.
+    """
+    # Strip strings/chars/comments to avoid false matches inside literals.
+    body_clean = _strip_c_comments(body or "")
+    if not body_clean:
+        return None
+    # Match `pname[K]` where K is an integer literal. Allow surrounding
+    # whitespace. Anchor on a word boundary on the left so longer names
+    # ending in pname aren't matched.
+    pat = re.compile(
+        r"(?<![A-Za-z0-9_])" + re.escape(pname) +
+        r"\s*\[\s*(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)\s*[uUlL]*\s*\]"
+    )
+    max_idx: Optional[int] = None
+    for m in pat.finditer(body_clean):
+        tok = m.group(1)
+        try:
+            n = int(tok, 0)  # auto-detects 0x / 0 prefixes
+        except ValueError:
+            continue
+        if max_idx is None or n > max_idx:
+            max_idx = n
+    return max_idx
+
+
 def _generate_nd_decls(
     func: FunctionInfo,
     cbmc_unwind: int = 4,
@@ -1879,6 +1914,8 @@ def _generate_nd_decls(
     raw_bytes: bool = False,
     struct_definitions: Optional[dict] = None,
     infer_field_validity: bool = False,
+    infer_array_param_bounds: bool = False,
+    infer_array_param_bounds_max: int = 64,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -2129,6 +2166,39 @@ def _generate_nd_decls(
                     lines.append(
                         f"    /* {pname} is non-null by construction (addr of {obj_name}) */"
                     )
+            elif (
+                infer_array_param_bounds
+                and star_count == 1
+                and clean_base in _PRIMITIVE_POINTEE_TYPES
+            ):
+                # Top-level primitive-pointer param sized from the body.
+                # Default fallback below would emit a single-element
+                # local + addr-of, which produces a pointer-OOB FP when
+                # the function writes ``param[1..N]`` against a fixed-size
+                # table (e.g. llm.c's fill_in_parameter_sizes writes
+                # param_sizes[0..15]). Body-scan finds the max literal
+                # subscript and sizes accordingly; cap at
+                # infer_array_param_bounds_max to prevent runaway sizing
+                # on macro-resolved subscripts the parser couldn't see.
+                max_idx = _max_literal_subscript(func.body or "", pname)
+                if max_idx is not None:
+                    bound = min(max_idx + 1, infer_array_param_bounds_max)
+                else:
+                    bound = cbmc_unwind + 1
+                buf_name = f"_{pname}_buf"
+                lines.append(
+                    f"    /* sized backing for '{pname}' "
+                    f"({bound} elements; "
+                    f"{'literal-subscript scan' if max_idx is not None else 'cbmc_unwind+1 fallback'}) */"
+                )
+                lines.append(f"    {clean_base} {buf_name}[{bound}];")
+                lines.append(
+                    f"    {ptype_stripped} {pname} = ({ptype_stripped}){buf_name};"
+                )
+                if pname in nonnull_params:
+                    lines.append(
+                        f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */"
+                    )
             elif "const" in ptype_stripped.lower():
                 lines.append(f"    {clean_base} {local_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
@@ -2239,6 +2309,8 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
+            infer_array_param_bounds=getattr(self.config, "infer_array_param_bounds", False),
+            infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
         )
 
         # --- 6. Precondition assumptions ---
@@ -3043,6 +3115,8 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
+            infer_array_param_bounds=getattr(self.config, "infer_array_param_bounds", False),
+            infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
         )
 
         # --- 6. Precondition assumptions ---
@@ -3298,6 +3372,8 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
+            infer_array_param_bounds=getattr(self.config, "infer_array_param_bounds", False),
+            infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
         )
 
         # Precondition assume + postcondition assert via existing DSL.

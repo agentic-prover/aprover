@@ -163,6 +163,23 @@ class Config:
     # ``BMC_AGENT_INFER_FIELD_VALIDITY=true``.
     infer_field_validity: bool = False
 
+    # Top-level array-parameter bounds inference. When True, a top-level
+    # pointer parameter ``T *param`` of a known primitive type
+    # (``size_t *``, ``int *``, ``float *``, …) gets a backing array
+    # sized from the maximum literal subscript found in the function
+    # body. The default single-element local backing leaves the harness
+    # exploring writes to ``param[1]..param[15]`` against a 1-element
+    # object, producing a pointer-OOB false positive on functions like
+    # llm.c's ``fill_in_parameter_sizes`` that write a fixed-size
+    # parameter table. With this flag on, the body-scan finds the
+    # ``param_sizes[15]`` write and sizes the backing to 16.
+    # If no literal subscripts are found, falls back to ``cbmc_unwind+1``.
+    # Capped at ``infer_array_param_bounds_max`` (default 64) to prevent
+    # runaway sizing on functions that subscript by macros that the
+    # parser couldn't resolve.
+    infer_array_param_bounds: bool = False
+    infer_array_param_bounds_max: int = 64
+
     # Kani (Rust BMC) settings — parallels CBMC.  Kani's defaults are higher
     # than CBMC's; the unwind is left at None so kani picks its own when
     # absent (we still surface the field to give the pipeline a single knob).
@@ -311,6 +328,8 @@ class Config:
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",
             infer_field_validity=os.environ.get("BMC_AGENT_INFER_FIELD_VALIDITY", "false").lower() == "true",
+            infer_array_param_bounds=os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS", "false").lower() == "true",
+            infer_array_param_bounds_max=int(os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS_MAX", "64")),
             kani_path=os.environ.get("BMC_AGENT_KANI_PATH", "kani"),
             kani_unwind=int(os.environ.get("BMC_AGENT_KANI_UNWIND", "4")),
             kani_timeout=int(os.environ.get("BMC_AGENT_KANI_TIMEOUT", "120")),
