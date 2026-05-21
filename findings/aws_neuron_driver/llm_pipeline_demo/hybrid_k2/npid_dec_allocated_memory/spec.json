@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:11:56.481483+00:00",
+  "spec": {
+    "function_name": "npid_dec_allocated_memory",
+    "precondition": "requires valid(nd) && (location >= 1) && (location <= sizeof(nd->attached_processes[0].memory_used)/sizeof(size_t))",
+    "postcondition": "(ensures (result == 0 || result == -1) && (result == 0 ==> (exists slot: slot >= 0 && slot < MAX_PROCESSES && nd->attached_processes[slot] corresponds to current process))) && (result == (npid_find_process_slot(nd) == -1 ? -1 : 0))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

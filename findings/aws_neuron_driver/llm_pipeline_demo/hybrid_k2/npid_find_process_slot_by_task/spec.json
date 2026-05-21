@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-05-21T12:13:50.233323+00:00",
+  "spec": {
+    "function_name": "npid_find_process_slot_by_task",
+    "precondition": "requires valid(nd) && valid_range(nd->attached_processes, 0, 16)",
+    "postcondition": "(result < 0) || ((ensures (result == -1) || (result >= 0 && result < 16)) && ((result == -1 && forall i in 0..16: nd->attached_processes[i].task != get_current()) || (result >= 0 && result < 16 && nd->attached_processes[result].task == get_current())))",
+    "callee_specs": {
+      "get_current": {
+        "function_name": "get_current",
+        "precondition": "true",
+        "postcondition": "true",
+        "callee_specs": {},
+        "loop_invariants": [],
+        "status": "generated",
+        "spec_disagreement": false
+      }
+    },
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}

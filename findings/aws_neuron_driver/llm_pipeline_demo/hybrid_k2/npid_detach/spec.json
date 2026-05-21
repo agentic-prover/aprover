@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:11:56.481633+00:00",
+  "spec": {
+    "function_name": "npid_detach",
+    "precondition": "requires valid(nd) && valid_range(nd->attached_processes, 0, MAX_PROCESSES) && exists slot: (0 <= slot < MAX_PROCESSES && nd->attached_processes[slot].pid == current_pid && nd->attached_processes[slot].open_count > 0)",
+    "postcondition": "(result < 0) || ((ensures (result == -1 && (forall i: (0 <= i < MAX_PROCESSES ==> nd->attached_processes[i].pid != current_pid))) || (result >= 0 && exists slot: (0 <= slot < MAX_PROCESSES && nd->attached_processes[slot].open_count == result && (result == 0 ==> nd->attached_processes[slot].pid == 0 && null(nd->attached_processes[slot].task))))) && (let slot = npid_find_process_slot(nd); (slot == -1 && result == -1) || (slot >= 0 && result == nd->attached_processes[slot].open_count - 1)))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

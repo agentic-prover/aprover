@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:11:56.481201+00:00",
+  "spec": {
+    "function_name": "npid_attach",
+    "precondition": "requires valid(nd) && valid_range(nd->attached_processes, 0, 16) && forall i in 0..16: (nd->attached_processes[i].pid != 0 ==> nd->attached_processes[i].open_count > 0)",
+    "postcondition": "(ensures (result == true ==> (exists i in 0..16: nd->attached_processes[i].pid == task_tgid_nr(get_current()) && nd->attached_processes[i].open_count >= 1)) && (result == false ==> (forall i in 0..16: nd->attached_processes[i].pid != 0 && nd->attached_processes[i].pid != task_tgid_nr(get_current())))) && (result == (npid_find_process_slot(nd) != -1 || (count of zero-pid slots in nd->attached_processes[0..16]) > 0))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "generated",
+    "spec_disagreement": false
+  }
+}

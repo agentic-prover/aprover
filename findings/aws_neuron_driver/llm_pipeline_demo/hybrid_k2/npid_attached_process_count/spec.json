@@ -1,0 +1,12 @@
+{
+  "saved_at": "2026-05-21T12:13:50.090589+00:00",
+  "spec": {
+    "function_name": "npid_attached_process_count",
+    "precondition": "requires valid(nd) && valid_range(&nd->attached_processes[0], 0, 16)",
+    "postcondition": "(ensures result >= 0 && result <= 16) && (result == (count of i in 0..16 where nd->attached_processes[i].pid != 0))",
+    "callee_specs": {},
+    "loop_invariants": [],
+    "status": "refined",
+    "spec_disagreement": false
+  }
+}
