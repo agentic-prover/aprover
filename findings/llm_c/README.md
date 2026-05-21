@@ -99,15 +99,53 @@ Highlight verdicts:
 - `matmul_forward`, `matmul_forward_naive`, `matmul_backward` — verified clean (the ML primitive).
 - `gpt2_zero_grad`, `gpt2_free` — verified clean (M1 closed the synthetic NULL FP class).
 
+## M4 — Equivalence between optimized and reference (Week 4 demonstration)
+
+llm.c ships `matmul_forward` and `matmul_forward_naive` side by side
+precisely for equivalence comparisons. A hand-crafted equivalence
+harness at `scale_down_size = 2` with bounded float inputs
+(`|x| <= 1`) verifies:
+
+```
+|matmul_forward(out, inp, weight, bias, B, T, C, OC)[i]
+ - matmul_forward_naive(out, inp, weight, bias, B, T, C, OC)[i]|
+  <= 1e-4 * |naive[i]| + 8 * 1e-7
+```
+
+with **0 of 2985 properties failed — VERIFICATION SUCCESSFUL**.
+
+**Honest caveat:** at `scale_down_size = 2`, `B*T <= 4` which never
+satisfies `B*T % 8 == 0`, so `matmul_forward` takes its early-return
+fallback (`if (B*T % LOOP_UNROLL != 0) return matmul_forward_naive(...)`)
+and the optimized loop never fires. The verified equivalence in this
+regime is the algorithmic skeleton, not the optimization itself. To
+exercise the optimized path requires `B*T ∈ {8, 16, 24, ...}`, which
+needs `scale_down_size ≥ 4` plus longer CBMC budget on float
+arithmetic (Week 5+ research).
+
+What this *does* prove: bmc-agent CAN express equivalence claims
+between an optimized ML kernel and its reference, the dual-call
+harness shape works end-to-end, and the ulp-tolerance formulation
+verifies cleanly under CBMC's float model. This is methodology
+demonstration, not a strong correctness claim about the optimized
+path.
+
+The auto-detection helper (`_detect_naive_pairs`) is wired into
+`bmc_agent/harness_generator.py` for the future M4 pipeline
+integration.
+
 ## What's not yet verified (next steps)
 
 - **Algebraic invariants** (softmax sums to 1, attention is causal,
   cross-entropy non-negative, Adam's `v_memory >= 0`, layernorm's
-  `rstd > 0`). Week 3 of the plan. Requires per-function spec
-  hand-coding or extended algebraic-invariant prompt mode.
-- **Equivalence between optimized and reference impl**
-  (`matmul_forward` vs `matmul_forward_naive`). Week 4 of the plan.
-  Both impls shipped side-by-side in llm.c precisely for this check.
+  `rstd > 0`). Week 3 of the plan. CBMC + float arithmetic + the
+  full `[0, 1]` claim on softmax timed out at 5-minute budget;
+  the weaker `result >= 0` claim was attempted with cadical-solver
+  and 10-minute budget. Results pending. Per-function spec
+  hand-coding may be needed.
+- **Equivalence exercising the optimized path** (matmul at
+  `B*T = 8` or `16`) — requires SDS ≥ 4 and longer CBMC budget on
+  chained float arithmetic.
 - **Functional spec for encoder_forward**
   (`out = token_emb + pos_emb`). Doable at scale-down sizes;
   Week 3 work.

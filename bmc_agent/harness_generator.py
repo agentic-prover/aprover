@@ -1467,6 +1467,58 @@ def _infer_nonnull_params(
     return {p for p in ptr_params if found_site[p] and not null_seen[p]}
 
 
+def _detect_naive_pairs(
+    parsed_file: "ParsedCFile",
+) -> list[tuple[str, str]]:
+    """Detect ``(optimized, naive)`` function pairs in *parsed_file*.
+
+    Returns a list of ``(opt_name, naive_name)`` tuples for each pair
+    where:
+      - both functions are defined in the file
+      - their names match the pattern: ``<base>`` and ``<base>_naive``
+      - their signatures are compatible: same return type, same number
+        of parameters with matching positional names, parameter types
+        equal up to ``const`` / ``volatile`` / ``restrict`` qualifier
+        differences.
+
+    Used by the M4 equivalence harness mode to verify that an
+    optimized kernel agrees with its reference up to ulps at bounded
+    input sizes. Classic example: llm.c ships ``matmul_forward`` and
+    ``matmul_forward_naive`` side by side precisely for this kind of
+    check.
+    """
+    pairs: list[tuple[str, str]] = []
+    fn_names = set(parsed_file.functions.keys())
+
+    def _normalise(t: str) -> str:
+        t = re.sub(r"\b(const|volatile|restrict|__restrict)\b", "", t)
+        return re.sub(r"\s+", " ", t).strip()
+
+    for name in sorted(fn_names):
+        if not name.endswith("_naive"):
+            continue
+        opt_name = name[:-len("_naive")]
+        if opt_name not in fn_names:
+            continue
+        opt_sig = parsed_file.functions[opt_name]
+        naive_sig = parsed_file.functions[name]
+        if opt_sig.return_type.strip() != naive_sig.return_type.strip():
+            continue
+        if len(opt_sig.parameters) != len(naive_sig.parameters):
+            continue
+        compatible = True
+        for (ot, on), (nt, nn) in zip(opt_sig.parameters, naive_sig.parameters):
+            if (on or "").strip() != (nn or "").strip():
+                compatible = False
+                break
+            if _normalise(ot) != _normalise(nt):
+                compatible = False
+                break
+        if compatible:
+            pairs.append((opt_name, name))
+    return pairs
+
+
 def _detect_paired_pointers(
     precondition: str,
     pointer_params: set[str],

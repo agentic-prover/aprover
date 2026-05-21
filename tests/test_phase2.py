@@ -919,6 +919,95 @@ def test_generate_nd_decls_array_param_fallback_no_literals():
     assert "float _out_buf[9];" in on
 
 
+def test_detect_naive_pairs_finds_optimized_reference_pairs():
+    """``_detect_naive_pairs`` finds ``(<f>, <f>_naive)`` pairs in a
+    parsed file when signatures match up to const-qualifier differences.
+
+    Classic example: llm.c ships ``matmul_forward`` and
+    ``matmul_forward_naive`` for explicit equivalence checks. M4's
+    equivalence harness mode uses this detection to auto-generate
+    dual-call harnesses.
+    """
+    from bmc_agent.parser import FunctionSignature, ParsedCFile
+    from bmc_agent.harness_generator import _detect_naive_pairs
+
+    pf = ParsedCFile(
+        path="x.c",
+        functions={
+            "matmul_forward_naive": FunctionSignature(
+                name="matmul_forward_naive",
+                return_type="void",
+                parameters=[
+                    ("float *", "out"), ("float *", "inp"),
+                    ("float *", "weight"), ("float *", "bias"),
+                    ("int", "B"), ("int", "T"),
+                ],
+            ),
+            "matmul_forward": FunctionSignature(
+                name="matmul_forward",
+                return_type="void",
+                # const-qualifier difference is OK.
+                parameters=[
+                    ("float *", "out"), ("const float *", "inp"),
+                    ("const float *", "weight"), ("const float *", "bias"),
+                    ("int", "B"), ("int", "T"),
+                ],
+            ),
+            "unrelated": FunctionSignature(
+                name="unrelated", return_type="int",
+                parameters=[],
+            ),
+        },
+        call_graph={},
+        function_bodies={},
+    )
+    pairs = _detect_naive_pairs(pf)
+    assert pairs == [("matmul_forward", "matmul_forward_naive")]
+
+
+def test_detect_naive_pairs_skips_unmatched():
+    """Mismatched signatures (return type, param count, param name) are
+    rejected -- prevents false-positive pairing on coincidentally-named
+    functions.
+    """
+    from bmc_agent.parser import FunctionSignature, ParsedCFile
+    from bmc_agent.harness_generator import _detect_naive_pairs
+
+    pf = ParsedCFile(
+        path="x.c",
+        functions={
+            "f_naive": FunctionSignature(
+                name="f_naive", return_type="void",
+                parameters=[("int", "x")],
+            ),
+            "f": FunctionSignature(
+                name="f", return_type="int",   # mismatched return
+                parameters=[("int", "x")],
+            ),
+            "g_naive": FunctionSignature(
+                name="g_naive", return_type="void",
+                parameters=[("int", "x"), ("int", "y")],
+            ),
+            "g": FunctionSignature(
+                name="g", return_type="void",
+                parameters=[("int", "x")],     # mismatched arity
+            ),
+            "h_naive": FunctionSignature(
+                name="h_naive", return_type="void",
+                parameters=[("int", "x")],
+            ),
+            "h": FunctionSignature(
+                name="h", return_type="void",
+                parameters=[("int", "y")],     # mismatched name
+            ),
+        },
+        call_graph={},
+        function_bodies={},
+    )
+    pairs = _detect_naive_pairs(pf)
+    assert pairs == []
+
+
 def test_scale_down_assumes_bounds_ml_size_params():
     """Scale-down emits ``__CPROVER_assume(<size> >= 0 && <size> <= N)``
     for every value parameter whose name matches the ML parametric-size
