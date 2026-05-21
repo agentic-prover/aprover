@@ -15,7 +15,9 @@ that surface.
 **Repository:** `https://github.com/aws-neuron/aws-neuron-driver`
 **Commit:** `4b5e49d` (cloned 2026-05-21)
 
-## Aggregate scorecard (9 files, 232 functions)
+## Aggregate scorecard (this README captures the original 9-file sweep; see commits + findings/arch/ for the full 30+ file coverage including arch-specific v1/v2/v3/v4 subdirs and the pelect re-sweep after the 2D-array harness-gen fix landed mid-session)
+
+## Original sweep (9 files, 232 functions)
 
 | File | Verified | FAIL | Compile-err | Timeout |
 |---|---:|---:|---:|---:|
