@@ -743,12 +743,12 @@ class CExValidator:
             # `<fn>.precondition_instance.<N>` property fires when a stdlib
             # call inside <fn>'s body (e.g. memset(model->grads, ...)) has
             # an implicit non-null precondition that the harness witnesses
-            # violated. With no variable assignments AND no explicit
-            # in-source NULL check, the violation requires the immediate
-            # caller to pass NULL -- which the chain shows the immediate
-            # caller does NOT do (it derefs the pointer first), and
-            # propagating up to system entry would need transitive
-            # precondition analysis we don't yet do. Concrete v23 victims:
+            # violated. When the caller-chain hasn't traced to system
+            # entry, we can't confirm that any real flow actually produces
+            # the violating pointer state -- the immediate caller just
+            # forwards the parameter and propagating the precondition
+            # transitively would need cross-function analysis we don't yet
+            # do. Concrete v23 victims:
             #   gpt2_zero_grad.precondition_instance.1 (caller chain
             #     [gpt2_backward, gpt2_zero_grad] -- gpt2_backward also
             #     derefs `model`, so it never passes NULL in practice)
@@ -760,14 +760,18 @@ class CExValidator:
                 ".precondition_instance." in _fp
                 or ".pointer_dereference." in _fp
             )
-            _empty_vars = not (counterexample.variable_assignments or {})
-            # Note: we intentionally do NOT require is_system_reachable=False.
-            # Even when the chain "reaches system entry" by call-graph walk,
-            # that just means we hit the top of the analysed corpus; it
-            # doesn't mean an attacker can produce NULL/invalid pointer at
-            # the entry. The combination of implicit-precondition shape +
-            # empty witness is the dispositive signal.
-            if _implicit_pc and _empty_vars:
+            # Gate on is_system_reachable=False: the implicit precondition
+            # only matters if the witness's pointer state can be produced
+            # by a real flow from system entry. When the upward walk fails
+            # to reach main (the chain stops at the immediate caller or
+            # the analyzed corpus top), the CEx parameter (e.g.
+            # `_model_obj`) shows up as a fully-populated struct whose
+            # pointer fields are NULL only because the harness's default
+            # object init zero-fills them. Without a concrete system-entry
+            # reproducer we can't claim the violation is reachable in
+            # practice -- the immediate caller just forwards the parameter
+            # without constructing it.
+            if _implicit_pc and not is_system_reachable:
                 result = ValidationResult(
                     function_name=func_name,
                     counterexample=counterexample,
@@ -778,17 +782,18 @@ class CExValidator:
                     reasoning=(
                         f"Implicit-precondition CEx on '{func_name}' "
                         f"(property '{_fp}'): the function lacks an explicit "
-                        f"NULL/validity check on a pointer parameter, and "
-                        f"the immediate caller {reachable_from} doesn't itself "
-                        f"establish the precondition. Real callers along the "
-                        f"chain to system entry typically maintain the implicit "
-                        f"invariant (e.g. main constructs the struct via a "
-                        f"build/init routine). Without cross-function "
-                        f"precondition propagation we can't confirm this is "
-                        f"reachable in practice -- classifying UNRESOLVED "
-                        f"rather than REAL_BUG to avoid the v23-class "
-                        f"false-positive (gpt2_zero_grad / "
-                        f"fill_in_parameter_sizes pattern)."
+                        f"NULL/validity check on a pointer parameter, the "
+                        f"immediate caller {reachable_from} just forwards the "
+                        f"parameter without constructing it, and the upward "
+                        f"chain {full_chain} did not reach system entry. "
+                        f"Real callers along a complete chain to main "
+                        f"typically maintain the implicit invariant (e.g. "
+                        f"main constructs the struct via a build/init "
+                        f"routine). Without a system-entry reproducer we "
+                        f"can't confirm this is reachable in practice -- "
+                        f"classifying UNRESOLVED rather than REAL_BUG to "
+                        f"avoid the v23-class false-positive (gpt2_zero_grad "
+                        f"/ fill_in_parameter_sizes pattern)."
                     ),
                     outcome=CExOutcome.UNRESOLVED,
                     system_entry_reached=False,

@@ -1626,14 +1626,21 @@ def test_entry_fn_structural_panic_still_real_bug(tmp_path: Path):
 
 
 def test_implicit_null_precondition_downgrades_to_unresolved(tmp_path: Path):
-    """Caller-reachable CEx on `<fn>.precondition_instance.N` with empty
-    variable_assignments and no chain to system entry should classify
-    UNRESOLVED, not REAL_BUG. Regression: v23 overnight on llm.c marked
+    """Caller-reachable CEx on `<fn>.precondition_instance.N` where the
+    upward chain doesn't reach system entry should classify UNRESOLVED,
+    not REAL_BUG. Regression: v23 overnight on llm.c marked
     gpt2_zero_grad and fill_in_parameter_sizes as REAL_BUG via the
     'reachable from caller' path -- but the caller (gpt2_backward) also
     derefs the pointer without NULL-checking, so it never actually
     passes NULL. The implicit precondition is maintained transitively
-    up to main."""
+    up to main, which the analyzer's caller walk can't see.
+
+    The witness uses a realistic CBMC variable_assignments shape: every
+    CBMC trace populates __CPROVER_* bookkeeping vars + standard streams,
+    plus the nondet-initialised parameter object whose pointer fields
+    are zero by default-init. An earlier version of this test used an
+    empty dict and inadvertently let a buggy `not variable_assignments`
+    detection pass while failing on real data."""
     from bmc_agent.cbmc import CBMCResult, Counterexample
     from bmc_agent.cex_validator import CExValidator, CExOutcome
     from bmc_agent.harness_generator import HarnessGenerator
@@ -1647,26 +1654,51 @@ def test_implicit_null_precondition_downgrades_to_unresolved(tmp_path: Path):
     from bmc_agent.parser import parse_c_file
     parsed = parse_c_file(EXAMPLE_C)
 
-    caller = _make_func_info("rb_write", callees={"rb_is_full"})
-    func   = _make_func_info("rb_is_full", callees=set())
-    all_funcs = {"rb_write": caller, "rb_is_full": func}
+    # Mirror the v23 gpt2_zero_grad call graph:
+    #   main → gpt2_backward → gpt2_zero_grad
+    # main constructs a valid struct so it CAN'T produce the NULL state;
+    # the immediate caller (gpt2_backward equivalent) CAN reach gpt2_zero_grad
+    # equivalent with the synthetic NULL state. Net: upward walk stops at
+    # gpt2_backward, system_entry_reached=False.
+    main_fn = _make_func_info("main", callees={"rb_write"})
+    caller  = _make_func_info("rb_write", callees={"rb_is_full"})
+    func    = _make_func_info("rb_is_full", callees=set())
+    all_funcs = {"main": main_fn, "rb_write": caller, "rb_is_full": func}
     all_specs = {n: _make_spec(n) for n in all_funcs}
     spec = _make_spec("rb_is_full")
 
-    # CBMC's `<fn>.precondition_instance.<N>` shape with no variable
-    # assignments -- classic implicit-NULL-precondition pattern.
+    # Real-shape CBMC counterexample for an implicit-NULL precondition:
+    # only CBMC bookkeeping + a default-zero-init struct parameter, no
+    # caller-chosen "real" values. Mirrors the v23 gpt2_zero_grad trace.
     cex = Counterexample(
         failing_property="rb_is_full.precondition_instance.1",
-        variable_assignments={},
+        variable_assignments={
+            "__CPROVER_dead_object": "NULL",
+            "__CPROVER_deallocated": "NULL",
+            "__CPROVER_max_malloc_size": "36028797018963968ul",
+            "__CPROVER_memory_leak": "NULL",
+            "__CPROVER_rounding_mode": "0",
+            "stderr": "((FILE *)NULL)",
+            "stdout": "((FILE *)NULL)",
+            "_rb_obj": "{members: [{name: 'buf', value: ((char *)NULL)}, "
+                       "{name: 'capacity', value: 0}]}",
+        },
         trace=["function-call at ?:?", "__CPROVER_dead_object = NULL"],
     )
 
-    # Mock: caller CAN reach the state (reachability passes), but
-    # chain-to-system-entry isn't traced (no further callers analysed).
+    # Stage the reachability check so main CAN'T produce the state
+    # (chain stops there, system entry not reached) but rb_write CAN.
+    def _reachability(caller, callee_name, **kwargs):
+        return caller.name != "main"
+
     mock_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
 
     with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_reachable), \
-         patch("shutil.which", return_value="/usr/bin/cbmc"):
+         patch("shutil.which", return_value="/usr/bin/cbmc"), \
+         patch.object(
+             CExValidator, "_check_caller_reachability",
+             side_effect=_reachability, autospec=False,
+         ):
         result = validator.validate(
             func=func, spec=spec, counterexample=cex,
             all_funcs=all_funcs, all_specs=all_specs,
@@ -1676,6 +1708,61 @@ def test_implicit_null_precondition_downgrades_to_unresolved(tmp_path: Path):
     assert result.outcome == CExOutcome.UNRESOLVED, \
         f"expected UNRESOLVED downgrade, got {result.outcome}"
     assert "implicit" in result.reasoning.lower() or "precondition" in result.reasoning.lower()
+    assert result.system_entry_reached is False, \
+        "downgrade should record system_entry_reached=False"
+
+
+def test_implicit_precondition_with_system_entry_reached_stays_real_bug(tmp_path: Path):
+    """Counterpart: when the upward chain DOES walk all the way to
+    system entry, the implicit-precondition CEx is a real reachable
+    violation -- main itself can construct the NULL-pointer state. We
+    must NOT downgrade in that case."""
+    from bmc_agent.cbmc import CBMCResult, Counterexample
+    from bmc_agent.cex_validator import CExValidator, CExOutcome
+    from bmc_agent.harness_generator import HarnessGenerator
+
+    config = _make_config(tmp_path)
+    store = _make_store(tmp_path)
+    llm = _make_llm_mock()
+    harness_gen = HarnessGenerator(config)
+    validator = CExValidator(config, llm, store, harness_gen)
+
+    from bmc_agent.parser import parse_c_file
+    parsed = parse_c_file(EXAMPLE_C)
+
+    main_fn = _make_func_info("main", callees={"rb_write"})
+    caller  = _make_func_info("rb_write", callees={"rb_is_full"})
+    func    = _make_func_info("rb_is_full", callees=set())
+    all_funcs = {"main": main_fn, "rb_write": caller, "rb_is_full": func}
+    all_specs = {n: _make_spec(n) for n in all_funcs}
+    spec = _make_spec("rb_is_full")
+
+    cex = Counterexample(
+        failing_property="rb_is_full.precondition_instance.1",
+        variable_assignments={
+            "__CPROVER_dead_object": "NULL",
+            "_rb_obj": "{name: 'buf', value: ((char *)NULL)}",
+        },
+        trace=["function-call at ?:?"],
+    )
+    mock_reachable = CBMCResult(verified=False, counterexamples=[cex], raw_output="")
+
+    # Every caller can reach the state -- chain walks all the way to main.
+    with patch("bmc_agent.cex_validator.run_cbmc", return_value=mock_reachable), \
+         patch("shutil.which", return_value="/usr/bin/cbmc"), \
+         patch.object(
+             CExValidator, "_check_caller_reachability",
+             return_value=True, autospec=False,
+         ):
+        result = validator.validate(
+            func=func, spec=spec, counterexample=cex,
+            all_funcs=all_funcs, all_specs=all_specs,
+            parsed_file=parsed, driver_name="test_driver",
+        )
+
+    assert result.outcome == CExOutcome.REAL_BUG, \
+        f"expected REAL_BUG when chain reaches system entry, got {result.outcome}"
+    assert result.system_entry_reached is True
 
 
 def test_explicit_overflow_in_caller_path_stays_real_bug(tmp_path: Path):
