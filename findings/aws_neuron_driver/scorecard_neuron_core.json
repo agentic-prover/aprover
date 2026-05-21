@@ -1,0 +1,32 @@
+[
+  {
+    "fn": "nc_event_get",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.5782551765441895
+  },
+  {
+    "fn": "nc_event_set",
+    "status": "FAIL (nc_event_set.pointer_dereference.1)",
+    "elapsed": 6.553726434707642
+  },
+  {
+    "fn": "nc_semaphore_decrement",
+    "status": "FAIL (nc_semaphore_decrement.pointer_dereference.1)",
+    "elapsed": 6.722627639770508
+  },
+  {
+    "fn": "nc_semaphore_increment",
+    "status": "FAIL (nc_semaphore_increment.pointer_dereference.1)",
+    "elapsed": 6.638642072677612
+  },
+  {
+    "fn": "nc_semaphore_read",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.6355547904968262
+  },
+  {
+    "fn": "nc_semaphore_write",
+    "status": "FAIL (nc_semaphore_write.pointer_dereference.1)",
+    "elapsed": 6.62494158744812
+  }
+]

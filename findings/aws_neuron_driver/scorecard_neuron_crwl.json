@@ -1,0 +1,52 @@
+[
+  {
+    "fn": "ncrwl_nc_range_mark",
+    "status": "FAIL (ncrwl_nc_range_mark.pointer_dereference.7)",
+    "elapsed": 1.1805131435394287
+  },
+  {
+    "fn": "ncrwl_nc_range_pid_get",
+    "status": "VERIFIED",
+    "elapsed": 1.0508451461791992
+  },
+  {
+    "fn": "ncrwl_nc_range_unmark",
+    "status": "FAIL (ncrwl_nc_range_unmark.pointer_dereference.1)",
+    "elapsed": 1.0504786968231201
+  },
+  {
+    "fn": "ncrwl_range_mark_cnt_get",
+    "status": "VERIFIED",
+    "elapsed": 1.0332727432250977
+  },
+  {
+    "fn": "ncrwl_reader_enter",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ncrwl_reader_exit",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ncrwl_release_current_process",
+    "status": "VERIFIED",
+    "elapsed": 6.91606879234314
+  },
+  {
+    "fn": "ncrwl_validate_uuid",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ncrwl_writer_downgrade",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ncrwl_writer_enter",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  }
+]

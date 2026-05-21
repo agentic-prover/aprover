@@ -1,0 +1,167 @@
+[
+  {
+    "fn": "__check_dev_nc_map",
+    "status": "VERIFIED",
+    "elapsed": 1.1622693538665771
+  },
+  {
+    "fn": "__check_dma_teardown_on_exit",
+    "status": "VERIFIED",
+    "elapsed": 1.1927127838134766
+  },
+  {
+    "fn": "__check_nc_per_dev_param",
+    "status": "VERIFIED",
+    "elapsed": 1.1861371994018555
+  },
+  {
+    "fn": "ndmar_ack_completed",
+    "status": "VERIFIED",
+    "elapsed": 1.2482564449310303
+  },
+  {
+    "fn": "ndmar_acquire_engine",
+    "status": "VERIFIED",
+    "elapsed": 1.3179113864898682
+  },
+  {
+    "fn": "ndmar_acquire_engine_nl",
+    "status": "VERIFIED",
+    "elapsed": 1.3375144004821777
+  },
+  {
+    "fn": "ndmar_close",
+    "status": "VERIFIED",
+    "elapsed": 1.2452361583709717
+  },
+  {
+    "fn": "ndmar_close_nc",
+    "status": "FAIL (ndmar_close_nc.array_bounds.1)",
+    "elapsed": 8.341626644134521
+  },
+  {
+    "fn": "ndmar_close_ncs",
+    "status": "FAIL (ndmar_close_ncs.pointer_dereference.1)",
+    "elapsed": 7.814380884170532
+  },
+  {
+    "fn": "ndmar_eng_get_state",
+    "status": "FAIL (ndmar_eng_get_state.pointer_dereference.19)",
+    "elapsed": 6.777019500732422
+  },
+  {
+    "fn": "ndmar_eng_init",
+    "status": "FAIL (ndmar_eng_init.pointer_dereference.1)",
+    "elapsed": 7.255006551742554
+  },
+  {
+    "fn": "ndmar_eng_set_state",
+    "status": "VERIFIED",
+    "elapsed": 1.2448697090148926
+  },
+  {
+    "fn": "ndmar_get_queue",
+    "status": "VERIFIED",
+    "elapsed": 1.2896430492401123
+  },
+  {
+    "fn": "ndmar_get_ring",
+    "status": "VERIFIED",
+    "elapsed": 1.1976878643035889
+  },
+  {
+    "fn": "ndmar_h2t_ring_alloc",
+    "status": "FAIL (ndmar_h2t_ring_alloc.pointer_dereference.1)",
+    "elapsed": 7.951106309890747
+  },
+  {
+    "fn": "ndmar_h2t_ring_claim",
+    "status": "VERIFIED",
+    "elapsed": 1.3251252174377441
+  },
+  {
+    "fn": "ndmar_h2t_ring_free",
+    "status": "VERIFIED",
+    "elapsed": 1.307126522064209
+  },
+  {
+    "fn": "ndmar_h2t_ring_free_all",
+    "status": "FAIL (ndmar_h2t_ring_free_all.pointer_dereference.1)",
+    "elapsed": 8.019623279571533
+  },
+  {
+    "fn": "ndmar_h2t_ring_init",
+    "status": "VERIFIED",
+    "elapsed": 1.3431150913238525
+  },
+  {
+    "fn": "ndmar_h2t_ring_release",
+    "status": "FAIL (ndmar_h2t_ring_release.pointer_dereference.1)",
+    "elapsed": 7.780288934707642
+  },
+  {
+    "fn": "ndmar_h2t_ring_request",
+    "status": "FAIL (ndmar_h2t_ring_request.pointer_dereference.1)",
+    "elapsed": 7.673032760620117
+  },
+  {
+    "fn": "ndmar_handle_process_exit",
+    "status": "FAIL (ndmar_handle_process_exit.pointer_dereference.7)",
+    "elapsed": 10.43294072151184
+  },
+  {
+    "fn": "ndmar_init",
+    "status": "VERIFIED",
+    "elapsed": 1.2488014698028564
+  },
+  {
+    "fn": "ndmar_init_nc",
+    "status": "FAIL (ndmar_init_nc.array_bounds.1)",
+    "elapsed": 8.975656270980835
+  },
+  {
+    "fn": "ndmar_init_ncs",
+    "status": "FAIL (ndmar_init_ncs.pointer_dereference.1)",
+    "elapsed": 8.99731159210205
+  },
+  {
+    "fn": "ndmar_preinit",
+    "status": "VERIFIED",
+    "elapsed": 10.33631157875061
+  },
+  {
+    "fn": "ndmar_queue_copy_start",
+    "status": "FAIL (ndmar_queue_copy_start.array_bounds.1)",
+    "elapsed": 9.03869891166687
+  },
+  {
+    "fn": "ndmar_queue_get_descriptor_info",
+    "status": "FAIL (ndmar_queue_get_descriptor_info.pointer_dereference.1)",
+    "elapsed": 8.009580373764038
+  },
+  {
+    "fn": "ndmar_queue_init",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ndmar_queue_release",
+    "status": "VERIFIED",
+    "elapsed": 1.2212178707122803
+  },
+  {
+    "fn": "ndmar_release_engine",
+    "status": "VERIFIED",
+    "elapsed": 1.197629451751709
+  },
+  {
+    "fn": "ndmar_ring_get_desc_count",
+    "status": "VERIFIED",
+    "elapsed": 1.1097800731658936
+  },
+  {
+    "fn": "ndmar_ring_set_mem_chunk",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  }
+]

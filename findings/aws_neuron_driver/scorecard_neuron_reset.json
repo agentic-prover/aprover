@@ -1,0 +1,72 @@
+[
+  {
+    "fn": "__check_no_reset",
+    "status": "VERIFIED",
+    "elapsed": 1.114112377166748
+  },
+  {
+    "fn": "__check_reset_top_dma",
+    "status": "VERIFIED",
+    "elapsed": 1.1160705089569092
+  },
+  {
+    "fn": "nr_call_post_reset_config",
+    "status": "FAIL (nr_call_post_reset_config.pointer_dereference.1)",
+    "elapsed": 7.715272903442383
+  },
+  {
+    "fn": "nr_create_thread",
+    "status": "VERIFIED",
+    "elapsed": 1.2728259563446045
+  },
+  {
+    "fn": "nr_find_req",
+    "status": "FAIL (nr_find_req.pointer_dereference.7)",
+    "elapsed": 6.959393262863159
+  },
+  {
+    "fn": "nr_free_req_queue",
+    "status": "FAIL (nr_free_req_queue.pointer_dereference.1)",
+    "elapsed": 1.1517188549041748
+  },
+  {
+    "fn": "nr_initiate_reset_via_fw",
+    "status": "FAIL (nr_initiate_reset_via_fw.pointer_dereference.19)",
+    "elapsed": 7.411526203155518
+  },
+  {
+    "fn": "nr_msleep_stoppable",
+    "status": "VERIFIED",
+    "elapsed": 1.2498726844787598
+  },
+  {
+    "fn": "nr_op_in_reset_wnd",
+    "status": "VERIFIED",
+    "elapsed": 6.007053375244141
+  },
+  {
+    "fn": "nr_reset_thread_fn",
+    "status": "FAIL (nr_reset_thread_fn.pointer_dereference.5)",
+    "elapsed": 2.032966136932373
+  },
+  {
+    "fn": "nr_start",
+    "status": "VERIFIED",
+    "elapsed": 1.1160402297973633
+  },
+  {
+    "fn": "nr_start_ncs",
+    "status": "VERIFIED",
+    "elapsed": 1.2455554008483887
+  },
+  {
+    "fn": "nr_stop_thread",
+    "status": "VERIFIED",
+    "elapsed": 1.3270049095153809
+  },
+  {
+    "fn": "nr_wait",
+    "status": "COMPILE_ERR",
+    "elapsed": 0.733039140701294
+  }
+]

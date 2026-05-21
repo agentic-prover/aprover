@@ -1,0 +1,17 @@
+[
+  {
+    "fn": "reg_read32",
+    "status": "FAIL (reg_read32.pointer_dereference.1)",
+    "elapsed": 1.048130989074707
+  },
+  {
+    "fn": "reg_write32",
+    "status": "VERIFIED",
+    "elapsed": 1.0324947834014893
+  },
+  {
+    "fn": "reg_write32_masked",
+    "status": "VERIFIED",
+    "elapsed": 1.0521695613861084
+  }
+]

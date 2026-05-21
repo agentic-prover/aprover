@@ -1,0 +1,77 @@
+[
+  {
+    "fn": "__check_dup_helper_enable",
+    "status": "VERIFIED",
+    "elapsed": 1.316040277481079
+  },
+  {
+    "fn": "__check_wc_enable",
+    "status": "VERIFIED",
+    "elapsed": 1.3491673469543457
+  },
+  {
+    "fn": "is_valid_bar",
+    "status": "FAIL (is_valid_bar.pointer_dereference.1)",
+    "elapsed": 2.157336473464966
+  },
+  {
+    "fn": "neuron_pci_device_close",
+    "status": "VERIFIED",
+    "elapsed": 1.5113017559051514
+  },
+  {
+    "fn": "neuron_pci_device_init",
+    "status": "VERIFIED",
+    "elapsed": 5.97645115852356
+  },
+  {
+    "fn": "neuron_pci_get_device",
+    "status": "FAIL (neuron_pci_get_device.array_bounds.1)",
+    "elapsed": 1.302314281463623
+  },
+  {
+    "fn": "neuron_pci_handle_dup_routing_id",
+    "status": "VERIFIED",
+    "elapsed": 1.3304405212402344
+  },
+  {
+    "fn": "neuron_pci_module_exit",
+    "status": "VERIFIED",
+    "elapsed": 1.3618793487548828
+  },
+  {
+    "fn": "neuron_pci_module_init",
+    "status": "VERIFIED",
+    "elapsed": 1.2771036624908447
+  },
+  {
+    "fn": "neuron_pci_probe",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "neuron_pci_release_bar",
+    "status": "FAIL (is_valid_bar.pointer_dereference.1)",
+    "elapsed": 2.0817432403564453
+  },
+  {
+    "fn": "neuron_pci_remove",
+    "status": "FAIL (neuron_pci_remove.pointer_dereference.1)",
+    "elapsed": 2.123671293258667
+  },
+  {
+    "fn": "neuron_pci_reserve_bar",
+    "status": "FAIL (is_valid_bar.pointer_dereference.1)",
+    "elapsed": 2.384003162384033
+  },
+  {
+    "fn": "neuron_pci_set_device_architecture",
+    "status": "VERIFIED",
+    "elapsed": 6.537969350814819
+  },
+  {
+    "fn": "neuron_pci_set_npdev",
+    "status": "FAIL (is_valid_bar.pointer_dereference.1)",
+    "elapsed": 24.001139879226685
+  }
+]

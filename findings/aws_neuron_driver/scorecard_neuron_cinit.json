@@ -1,0 +1,27 @@
+[
+  {
+    "fn": "nci_reset_state",
+    "status": "VERIFIED",
+    "elapsed": 1.0065317153930664
+  },
+  {
+    "fn": "nci_reset_state_nc",
+    "status": "FAIL (nci_reset_state_nc.pointer_dereference.5)",
+    "elapsed": 33.09469723701477
+  },
+  {
+    "fn": "nci_set_state",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "nci_start",
+    "status": "FAIL (nci_start.array_bounds.1)",
+    "elapsed": 7.368023157119751
+  },
+  {
+    "fn": "nci_wait",
+    "status": "FAIL (nci_wait.array_bounds.1)",
+    "elapsed": 6.860901832580566
+  }
+]
