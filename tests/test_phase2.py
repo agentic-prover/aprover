@@ -919,6 +919,59 @@ def test_generate_nd_decls_array_param_fallback_no_literals():
     assert "float _out_buf[9];" in on
 
 
+def test_strip_restrict_quals_handles_ggml_macros():
+    """``_strip_restrict_quals`` removes restrict-like qualifier macros
+    that appear between the base type and the pointer ``*``. Without
+    this, ``const float * GGML_RESTRICT x`` ends in ``GGML_RESTRICT``
+    instead of ``*`` and the harness emits a wild uninitialised
+    pointer parameter -- root cause of the dequantize_row_iq3_s.*
+    pointer_dereference.1 FP class seen in the llama.cpp ggml-quants
+    sweep.
+    """
+    from bmc_agent.harness_generator import _strip_restrict_quals
+
+    assert _strip_restrict_quals("const float * GGML_RESTRICT") == "const float *"
+    assert _strip_restrict_quals("float * __restrict") == "float *"
+    assert _strip_restrict_quals("uint8_t * restrict") == "uint8_t *"
+    assert _strip_restrict_quals("const block_iq3_s * GGML_RESTRICT") == "const block_iq3_s *"
+    # Idempotent: already-stripped strings stay unchanged.
+    assert _strip_restrict_quals("const float *") == "const float *"
+    # const is NOT stripped (handled separately downstream).
+    assert _strip_restrict_quals("const int *") == "const int *"
+
+
+def test_generate_nd_decls_recognises_pointer_through_ggml_restrict():
+    """End-to-end: a ``GGML_RESTRICT``-qualified pointer param emits
+    a proper pointer init (local + addr-of), not a wild uninitialised
+    declaration. Regression test for the dequantize_row_iq3_s harness
+    bug discovered in the llama.cpp ggml-quants sweep.
+    """
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    from bmc_agent.harness_generator import _generate_nd_decls
+
+    sig = FunctionSignature(
+        name="dequantize_row_test", return_type="void",
+        parameters=[
+            ("const float * GGML_RESTRICT", "x"),
+            ("float * GGML_RESTRICT", "y"),
+            ("int64_t", "k"),
+        ],
+    )
+    func = FunctionInfo(
+        name="dequantize_row_test", signature=sig, body="",
+        callees=set(), source_file="x.c",
+    )
+    out = "\n".join(_generate_nd_decls(func, cbmc_unwind=4))
+    # The pointer params get pointer init, not wild declarations.
+    # Without the fix: "const float * GGML_RESTRICT x;" appears
+    # (uninitialised). With the fix: x is bound to a local's address
+    # via the existing pointer-param logic.
+    assert "x = &" in out or "x = (" in out or "x_buf" in out, (
+        f"x should get pointer init; harness output was:\n{out}"
+    )
+    assert "y = &" in out or "y = (" in out or "y_buf" in out
+
+
 def test_detect_naive_pairs_finds_optimized_reference_pairs():
     """``_detect_naive_pairs`` finds ``(<f>, <f>_naive)`` pairs in a
     parsed file when signatures match up to const-qualifier differences.

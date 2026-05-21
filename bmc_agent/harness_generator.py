@@ -1424,7 +1424,7 @@ def _infer_nonnull_params(
     for ptype, pname in func.signature.parameters:
         if not pname:
             continue
-        ptype_stripped = ptype.strip()
+        ptype_stripped = _strip_restrict_quals(ptype)
         if (ptype_stripped.endswith("*") or "*" in pname):
             base = ptype_stripped.rstrip("*").strip()
             if base.lower() not in ("void", "const void") and ptype_stripped.count("*") == 1:
@@ -1970,6 +1970,31 @@ def _scale_down_assumes(func: FunctionInfo, size_limit: int) -> list[str]:
     return out
 
 
+# Per-token restrict-like qualifiers that appear between the base
+# type and the pointer ``*`` in C source. Stripping them before
+# pointer detection means ``const float * GGML_RESTRICT x`` is
+# recognised as a pointer parameter (without the strip the type
+# string ends in ``GGML_RESTRICT`` and the harness emits a value
+# parameter, leaving ``x`` as an uninitialised wild pointer).
+_RESTRICT_LIKE_QUALIFIERS = {
+    "restrict", "__restrict", "__restrict__",
+    "GGML_RESTRICT",  # ggml-specific macro
+    "KANI_RESTRICT",  # Kani helper macro
+    "__pure", "__const",
+}
+
+
+def _strip_restrict_quals(ptype: str) -> str:
+    """Strip restrict-like qualifiers and attribute macros from a
+    parameter type string. Preserves ``const`` / ``volatile`` (handled
+    separately in downstream paths). Idempotent."""
+    out = ptype
+    for q in _RESTRICT_LIKE_QUALIFIERS:
+        out = re.sub(rf"\b{re.escape(q)}\b", "", out)
+    # Collapse whitespace.
+    return re.sub(r"\s+", " ", out).strip()
+
+
 def _max_literal_subscript(body: str, pname: str) -> Optional[int]:
     """Return the maximum *constant* integer subscript on ``pname[K]`` in
     ``body``, or None if no literal subscripts are present.
@@ -2045,7 +2070,7 @@ def _generate_nd_decls(
     for ptype, pname in func.signature.parameters:
         if not pname:
             continue
-        if ptype.strip().endswith("*") or "*" in pname:
+        if _strip_restrict_quals(ptype).endswith("*") or "*" in pname:
             pointer_pnames.add(pname)
     paired_groups = (
         _detect_paired_pointers(precondition, pointer_pnames)
@@ -2126,7 +2151,13 @@ def _generate_nd_decls(
             continue
         if pname in paired_emitted:
             continue
-        ptype_stripped = ptype.strip()
+        # Strip restrict-like qualifiers / project attribute macros
+        # (``GGML_RESTRICT``, ``__restrict``, ...) BEFORE checking for
+        # pointer-ness. Otherwise ``const float * GGML_RESTRICT x`` ends
+        # in ``GGML_RESTRICT`` and falls through to value-param emit,
+        # leaving x as a wild uninitialised pointer (root cause of the
+        # ggml-quants.c dequantize_row_*.pointer_dereference.1 FP class).
+        ptype_stripped = _strip_restrict_quals(ptype)
 
         if ptype_stripped.endswith("*") or "*" in pname:
             # Pointer parameter
