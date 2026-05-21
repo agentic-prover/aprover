@@ -1,0 +1,32 @@
+[
+  {
+    "fn": "ndmabuf_attach",
+    "status": "FAIL (pointer_dereference.1)",
+    "elapsed": 1.2325139045715332
+  },
+  {
+    "fn": "ndmabuf_detach",
+    "status": "FAIL (pointer_dereference.1)",
+    "elapsed": 1.2989730834960938
+  },
+  {
+    "fn": "ndmabuf_get_fd",
+    "status": "FAIL (ndmabuf_get_fd.pointer_dereference.1)",
+    "elapsed": 3.450296640396118
+  },
+  {
+    "fn": "ndmabuf_map",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  },
+  {
+    "fn": "ndmabuf_release",
+    "status": "VERIFIED",
+    "elapsed": 1.1729044914245605
+  },
+  {
+    "fn": "ndmabuf_unmap",
+    "status": "TIMEOUT",
+    "elapsed": 60
+  }
+]
