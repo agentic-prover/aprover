@@ -1861,6 +1861,37 @@ def _emit_struct_field_init(
             btype = "unsigned char" if base != "int8_t" else "signed char"
             out.append(f"    {btype} {backing}[{buf_size}];")
             out.append(f"    {obj_name}.{fname} = ({t}){backing};")
+        elif infer_field_validity and (
+            base.startswith("struct ") or base.startswith("union ")
+        ):
+            # M1.3 — struct-pointer field validity. Mirror the M1
+            # disjunctive init pattern but use a fixed-size byte buffer
+            # (256 bytes) cast to the struct pointer type instead of
+            # ``sizeof(struct X)``. This avoids the "incomplete type"
+            # error CBMC raises for forward-declared structs.
+            #
+            # Real bug class this addresses: most kernel-driver FAILs
+            # this session were ``ptr->field->subfield`` chains where
+            # the harness left struct-pointer fields nondet. Examples:
+            # ``galloc->hash_values[i]`` in ggml-alloc, ``ctx->state``
+            # in dma_ctx, ``dma_ctx->ring->qid`` in neuron_dma.
+            #
+            # Conservative scope: only applied to struct/union pointer
+            # fields under ``infer_field_validity``. Function pointers,
+            # array-of-pointer fields, and complex generic templates
+            # remain nondet.
+            sel_var = f"_{obj_name}_{fname}_is_null"
+            backing_ptr = f"{backing}_p"
+            out.append(
+                f"    unsigned char *{backing_ptr} = "
+                f"(unsigned char *)malloc(256);"
+            )
+            out.append(f"    __CPROVER_assume({backing_ptr} != NULL);")
+            out.append(f"    unsigned char {sel_var};")
+            out.append(
+                f"    {obj_name}.{fname} = {sel_var} ? "
+                f"({t})0 : ({t}){backing_ptr};"
+            )
         elif infer_field_validity and base in _PRIMITIVE_POINTEE_TYPES:
             # Disjunctive NULL-or-backing init for primitive-pointer
             # fields. Without this, CBMC's nondet model picks "non-NULL

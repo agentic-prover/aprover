@@ -716,7 +716,8 @@ def test_struct_field_init_primitive_pointer_disjunctive_when_on():
 def test_struct_field_init_void_pointer_still_nondet_when_on():
     """``void *`` fields stay nondet even with ``infer_field_validity=True``
     — we don't know ``sizeof(*p)`` for void, so we can't safely allocate a
-    backing buffer. Same for unrecognised opaque struct pointers.
+    backing buffer. (Struct-pointer fields DO get backing under M1.3 —
+    see test_struct_field_init_struct_pointer_under_m1_3.)
     """
     from bmc_agent.harness_generator import _emit_struct_field_init
 
@@ -724,12 +725,42 @@ def test_struct_field_init_void_pointer_still_nondet_when_on():
         "_obj", "void *", "ctx", cbmc_unwind=4,
         infer_field_validity=True,
     )
+    assert out_void == [], "void* must stay nondet under infer_field_validity"
+
+
+def test_struct_field_init_struct_pointer_under_m1_3():
+    """M1.3: ``struct T *`` fields get a disjunctive NULL-or-256-byte-
+    backing init under ``infer_field_validity=True``, even for
+    forward-declared (opaque) struct types. Uses a byte buffer cast to
+    the struct pointer instead of ``sizeof(struct T)`` to avoid the
+    incomplete-type error.
+
+    Real bug class this addresses: ggml-alloc's ``galloc->hash_values``
+    (struct hash_node *), neuron driver's struct-pointer fields that
+    M1 left nondet -- the .pointer_dereference.7+ FP class.
+    """
+    from bmc_agent.harness_generator import _emit_struct_field_init
+
     out_opaque = _emit_struct_field_init(
         "_obj", "struct OpaqueThing *", "thing", cbmc_unwind=4,
         infer_field_validity=True,
     )
-    assert out_void   == [], "void* must stay nondet under infer_field_validity"
-    assert out_opaque == [], "opaque struct* must stay nondet under infer_field_validity"
+    src = "\n".join(out_opaque)
+    assert "__obj_thing_buf_p" in src
+    assert "malloc(256)" in src
+    assert "__CPROVER_assume(__obj_thing_buf_p != NULL);" in src
+    assert "_obj.thing = __obj_thing_is_null ?" in src
+    assert "(struct OpaqueThing *)0" in src
+    assert "(struct OpaqueThing *)__obj_thing_buf_p" in src
+
+    # union pointer fields too
+    out_union = _emit_struct_field_init(
+        "_obj", "union Foo *", "u", cbmc_unwind=4,
+        infer_field_validity=True,
+    )
+    src_u = "\n".join(out_union)
+    assert "malloc(256)" in src_u
+    assert "(union Foo *)__obj_u_buf_p" in src_u
 
 
 def test_generate_nd_decls_threads_infer_field_validity():
