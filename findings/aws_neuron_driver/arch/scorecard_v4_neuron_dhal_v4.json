@@ -1,0 +1,52 @@
+[
+  {
+    "fn": "mmap_get_bar4_offset_v4",
+    "status": "FAIL (mmap_get_bar4_offset_v4.pointer_dereference.1)",
+    "elapsed": 1.368678331375122
+  },
+  {
+    "fn": "mpset_set_dram_and_mpset_info_v4",
+    "status": "FAIL (mpset_set_dram_and_mpset_info_v4.pointer_dereference.23)",
+    "elapsed": 1.5446434020996094
+  },
+  {
+    "fn": "ncdev_logical_to_physical_nc_map_v4",
+    "status": "FAIL (ncdev_logical_to_physical_nc_map_v4.array_bounds.1)",
+    "elapsed": 1.3132283687591553
+  },
+  {
+    "fn": "ndhal_instance_type_3xl",
+    "status": "VERIFIED",
+    "elapsed": 1.3519341945648193
+  },
+  {
+    "fn": "ndhal_platform_type_v4",
+    "status": "VERIFIED",
+    "elapsed": 1.2848973274230957
+  },
+  {
+    "fn": "ndhal_register_funcs_trn3",
+    "status": "FAIL (ndhal_register_funcs_trn3.pointer_dereference.1)",
+    "elapsed": 1.3548610210418701
+  },
+  {
+    "fn": "ndhal_register_funcs_v4",
+    "status": "FAIL (ndhal_register_funcs_v4.pointer_dereference.1)",
+    "elapsed": 1.2924792766571045
+  },
+  {
+    "fn": "neuron_pci_get_device_id_v4",
+    "status": "FAIL (neuron_pci_get_device_id_v4.pointer_dereference.7)",
+    "elapsed": 7.697667598724365
+  },
+  {
+    "fn": "neuron_pci_routing_id_to_user_id",
+    "status": "FAIL (neuron_pci_routing_id_to_user_id.pointer_dereference.1)",
+    "elapsed": 1.3321096897125244
+  },
+  {
+    "fn": "perf_update_hbm_7200_supported_v4",
+    "status": "VERIFIED",
+    "elapsed": 1.3368632793426514
+  }
+]

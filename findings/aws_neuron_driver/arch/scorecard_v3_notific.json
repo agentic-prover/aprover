@@ -1,0 +1,32 @@
+[
+  {
+    "fn": "get_sdma_misc_base",
+    "status": "FAIL (get_sdma_misc_base.array_bounds.1)",
+    "elapsed": 0.889737606048584
+  },
+  {
+    "fn": "notific_decode_nc_nq_head_reg_access_v3",
+    "status": "VERIFIED",
+    "elapsed": 0.868295431137085
+  },
+  {
+    "fn": "notific_decode_nq_head_reg_access_v3",
+    "status": "VERIFIED",
+    "elapsed": 0.8970944881439209
+  },
+  {
+    "fn": "notific_decode_sdma_nq_head_reg_access_v3",
+    "status": "FAIL (get_sdma_misc_base.array_bounds.2)",
+    "elapsed": 0.9274468421936035
+  },
+  {
+    "fn": "notific_decode_topsp_nq_head_reg_access_v3",
+    "status": "VERIFIED",
+    "elapsed": 0.8906762599945068
+  },
+  {
+    "fn": "notific_get_relative_offset_sdma_v3",
+    "status": "FAIL (get_sdma_misc_base.array_bounds.1)",
+    "elapsed": 0.8790042400360107
+  }
+]

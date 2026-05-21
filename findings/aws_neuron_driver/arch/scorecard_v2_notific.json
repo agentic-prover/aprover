@@ -1,0 +1,27 @@
+[
+  {
+    "fn": "notific_decode_nc_nq_head_reg_access",
+    "status": "VERIFIED",
+    "elapsed": 0.9024171829223633
+  },
+  {
+    "fn": "notific_decode_nq_head_reg_access_v2",
+    "status": "VERIFIED",
+    "elapsed": 0.9086854457855225
+  },
+  {
+    "fn": "notific_decode_sdma_nq_head_reg_access",
+    "status": "FAIL (notific_decode_sdma_nq_head_reg_access.array_bounds.1)",
+    "elapsed": 0.8632774353027344
+  },
+  {
+    "fn": "notific_decode_topsp_nq_head_reg_access",
+    "status": "VERIFIED",
+    "elapsed": 0.8563222885131836
+  },
+  {
+    "fn": "notific_get_relative_offset_sdma_v2",
+    "status": "FAIL (notific_get_relative_offset_sdma_v2.array_bounds.1)",
+    "elapsed": 0.8746829032897949
+  }
+]
