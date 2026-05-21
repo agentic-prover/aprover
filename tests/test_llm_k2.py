@@ -417,6 +417,66 @@ def test_openai_http_error_propagates():
     assert "401" in str(exc_info.value) or "Unauthorized" in str(exc_info.value)
 
 
+def test_http_4xx_does_not_burn_retries():
+    """HTTP 4xx is a permanent client error (e.g. OpenRouter's 8MB
+    request-size 400, auth 401, etc.). The retry classifier must NOT
+    treat it as transient. Observed: OpenRouter rejected oversized
+    realism prompts and bmc-agent burned 3×backoff before giving up."""
+    from bmc_agent.config import Config
+    from bmc_agent.llm import LLMClient, LLMError
+
+    attempts = {"n": 0}
+
+    class _Resp:
+        status_code = 400
+        reason_phrase = "Bad Request"
+        # Mimic OpenRouter's 8MB-exceeded payload.
+        text = '{"error":{"message":"The total text input size exceeds 8 MB","code":400}}'
+
+        def json(self):
+            return {}
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            attempts["n"] += 1
+            return _Resp()
+
+    class _FakeHttpx:
+        Client = _FakeClient
+
+        @staticmethod
+        def Timeout(*a, **k):  # noqa: N802
+            return None
+
+    config = Config(
+        llm_model="x",
+        llm_api_key="key",
+        llm_base_url="https://openrouter.ai/api/v1",
+        llm_provider="openai",
+    )
+    # If 4xx were treated as transient, max_spec_retries=3 would cause
+    # 3 HTTP calls. We expect exactly 1.
+    config.max_spec_retries = 3
+    client = LLMClient(config)
+
+    with patch.dict("sys.modules", {"httpx": _FakeHttpx}):
+        with pytest.raises(LLMError):
+            client.complete("s", "u")
+
+    assert attempts["n"] == 1, (
+        f"HTTP 4xx should not retry; saw {attempts['n']} attempts"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Hybrid per-role LLM routing
 # ---------------------------------------------------------------------------

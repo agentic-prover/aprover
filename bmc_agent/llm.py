@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Optional
 
@@ -171,7 +172,19 @@ class LLMClient:
                     last_error = exc
                     cls_name = type(exc).__name__
                     msg = str(exc).lower()
-                    transient = any(
+                    # HTTP 4xx is a permanent client error (bad request,
+                    # auth, request-too-large) — retrying just burns
+                    # another LLM round-trip and N×retry_backoff seconds.
+                    # Observed: OpenRouter rejects realism/reproducer
+                    # prompts >8MB with HTTP 400. The (now-fixed) cbmc.py
+                    # raw_output blow-up made every kernel-TU realism call
+                    # fire this. Burned ~90s/failure × 3 attempts before
+                    # we used to give up.
+                    is_4xx = bool(
+                        re.search(r"http\s*4\d\d\b", msg)
+                        or re.search(r'"code"\s*:\s*4\d\d', msg)
+                    )
+                    transient = (not is_4xx) and any(
                         tag in cls_name.lower() or tag in msg
                         for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
                     )
