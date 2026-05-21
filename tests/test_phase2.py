@@ -743,7 +743,7 @@ def test_struct_field_init_struct_pointer_under_m1_3():
 
     out_opaque = _emit_struct_field_init(
         "_obj", "struct OpaqueThing *", "thing", cbmc_unwind=4,
-        infer_field_validity=True,
+        infer_struct_field_validity=True,
     )
     src = "\n".join(out_opaque)
     assert "__obj_thing_buf_p" in src
@@ -756,7 +756,7 @@ def test_struct_field_init_struct_pointer_under_m1_3():
     # union pointer fields too
     out_union = _emit_struct_field_init(
         "_obj", "union Foo *", "u", cbmc_unwind=4,
-        infer_field_validity=True,
+        infer_struct_field_validity=True,
     )
     src_u = "\n".join(out_union)
     assert "malloc(256)" in src_u

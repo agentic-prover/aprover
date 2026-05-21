@@ -163,6 +163,26 @@ class Config:
     # ``BMC_AGENT_INFER_FIELD_VALIDITY=true``.
     infer_field_validity: bool = False
 
+    # M1.3 — struct-pointer field validity. Extends M1's disjunctive
+    # init pattern from primitive-pointer fields to struct-pointer and
+    # union-pointer fields. When True, ``struct T *field`` inside a
+    # struct parameter becomes NULL or a malloc'd 256-byte buffer cast
+    # to the struct pointer type.
+    #
+    # NOTE: Verdict-impact is target-dependent.
+    # - ML / disciplined-NULL-check code (llm.c): may help verify
+    #   functions that NULL-check before deref.
+    # - Kernel code (AWS Neuron driver): regresses ~5-10% of verifieds
+    #   because the explicit NULL branch exposes
+    #   defensive-programming gaps in functions that don't NULL-check
+    #   caller-provided handles.
+    #
+    # Empirically tested on neuron_dma.c: 33/60 baseline → 28/60
+    # with this flag on. So default OFF; opt in via
+    # ``BMC_AGENT_INFER_STRUCT_FIELD_VALIDITY=true`` when the target
+    # has disciplined NULL-checking.
+    infer_struct_field_validity: bool = False
+
     # Top-level array-parameter bounds inference. When True, a top-level
     # pointer parameter ``T *param`` of a known primitive type
     # (``size_t *``, ``int *``, ``float *``, …) gets a backing array
@@ -357,6 +377,7 @@ class Config:
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",
             infer_field_validity=os.environ.get("BMC_AGENT_INFER_FIELD_VALIDITY", "false").lower() == "true",
+            infer_struct_field_validity=os.environ.get("BMC_AGENT_INFER_STRUCT_FIELD_VALIDITY", "false").lower() == "true",
             infer_array_param_bounds=os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS", "false").lower() == "true",
             infer_array_param_bounds_max=int(os.environ.get("BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS_MAX", "64")),
             scale_down=os.environ.get("BMC_AGENT_SCALE_DOWN", "false").lower() == "true",

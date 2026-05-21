@@ -1765,6 +1765,7 @@ def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
     enclosing_struct_tag: Optional[str] = None,
     infer_field_validity: bool = False,
+    infer_struct_field_validity: bool = False,
 ) -> list[str]:
     """Emit harness statements that initialise a single struct field.
 
@@ -1878,7 +1879,7 @@ def _emit_struct_field_init(
             btype = "unsigned char" if base != "int8_t" else "signed char"
             out.append(f"    {btype} {backing}[{buf_size}];")
             out.append(f"    {obj_name}.{fname} = ({t}){backing};")
-        elif infer_field_validity and (
+        elif infer_struct_field_validity and (
             base.startswith("struct ") or base.startswith("union ")
         ):
             # M1.3 — struct-pointer field validity. Mirror the M1
@@ -2117,6 +2118,7 @@ def _generate_nd_decls(
     raw_bytes: bool = False,
     struct_definitions: Optional[dict] = None,
     infer_field_validity: bool = False,
+    infer_struct_field_validity: bool = False,
     infer_array_param_bounds: bool = False,
     infer_array_param_bounds_max: int = 64,
     scale_down: bool = False,
@@ -2402,6 +2404,7 @@ def _generate_nd_decls(
                             obj_name, ftype, fname, cbmc_unwind,
                             enclosing_struct_tag=struct_tag,
                             infer_field_validity=infer_field_validity,
+                            infer_struct_field_validity=infer_struct_field_validity,
                         )
                     )
                 if pname in nonnull_params:
@@ -2562,6 +2565,7 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
+            infer_struct_field_validity=getattr(self.config, "infer_struct_field_validity", False),
             infer_array_param_bounds=(getattr(self.config, "infer_array_param_bounds", False) or getattr(self.config, "scale_down", False)),
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
             scale_down=getattr(self.config, "scale_down", False),
@@ -3370,6 +3374,7 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
+            infer_struct_field_validity=getattr(self.config, "infer_struct_field_validity", False),
             infer_array_param_bounds=(getattr(self.config, "infer_array_param_bounds", False) or getattr(self.config, "scale_down", False)),
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
             scale_down=getattr(self.config, "scale_down", False),
@@ -3731,6 +3736,7 @@ class HarnessGenerator:
             raw_bytes=getattr(self.config, "raw_bytes", False),
             struct_definitions=getattr(parsed_file, "struct_definitions", None),
             infer_field_validity=getattr(self.config, "infer_field_validity", False),
+            infer_struct_field_validity=getattr(self.config, "infer_struct_field_validity", False),
             infer_array_param_bounds=(getattr(self.config, "infer_array_param_bounds", False) or getattr(self.config, "scale_down", False)),
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
             scale_down=getattr(self.config, "scale_down", False),
