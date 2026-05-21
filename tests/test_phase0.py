@@ -188,6 +188,89 @@ def test_cbmc_result_graceful_when_missing():
     assert result.error
 
 
+def test_raw_output_capped_for_huge_cbmc_json():
+    """raw_output must be capped so a multi-GB CBMC JSON dump cannot
+    poison bug_report.json / classification.json. We saw a kernel TU
+    produce a 9GB cbmc_result.json on real hardware; cap to ~68KB."""
+    from bmc_agent.cbmc import _parse_cbmc_output
+
+    # Build a fake JSON-shaped CBMC output that's much larger than the cap.
+    huge_filler = "x" * (500_000)
+    raw = '[{"messageText": "Starting BMC", "messageType": "STATUS-MESSAGE"}, ' \
+          f'"FILLER: {huge_filler}", ' \
+          '{"messageText": "VERIFICATION SUCCESSFUL", "messageType": "STATUS-MESSAGE"}, ' \
+          '{"cProverStatus": "success"}]'
+    result = _parse_cbmc_output(raw, stderr="", returncode=0)
+
+    # raw_output stays small (head + tail + elision marker; total ~ 70KB).
+    assert len(result.raw_output) < 100_000, (
+        f"raw_output not capped: {len(result.raw_output)} bytes (input was {len(raw)})"
+    )
+    # The elision marker must be present so a reader knows the dump was trimmed.
+    assert "elided" in result.raw_output
+
+
+def test_struct_assignment_does_not_blow_up_variable_assignments():
+    """A CBMC trace with a struct-valued assignment must not stringify the
+    nested struct/array state into variable_assignments. Observed in the
+    AWS Neuron sweep: a single struct neuron_device assignment was
+    megabytes when ``str(rhs_dict)`` was used as the fallback. That blob
+    poisoned the realism / reproducer prompts (OpenRouter rejects >8MB)."""
+    from bmc_agent.cbmc import _extract_counterexamples
+
+    # Synthesize a CBMC trace step where rhs.value is a complex struct dict
+    # (no top-level "data" key — that's the pathological path).
+    big_members = [
+        {"name": f"field_{i}",
+         "value": {"binary": "0" * 32, "data": str(i),
+                   "name": "integer", "type": "signed int", "width": 32}}
+        for i in range(200)  # mimic a kernel struct with hundreds of fields
+    ]
+    messages = [{
+        "result": [{
+            "property": "main.assertion.1",
+            "status": "FAILURE",
+            "description": "synthetic failure",
+            "trace": [{
+                "stepType": "assignment",
+                "lhs": "device_obj",
+                "value": {"members": big_members},
+                "sourceLocation": {"file": "fake.c", "line": "10"},
+            }],
+        }]
+    }]
+    cexes = _extract_counterexamples(messages)
+    assert len(cexes) == 1
+    rhs = cexes[0].variable_assignments.get("device_obj", "")
+    # Was: str({'members': [...]}) which serializes all 200 fields → huge.
+    # Now: short summary marker.
+    assert len(rhs) < 100, f"rhs not summarised: {rhs[:200]!r} ({len(rhs)} bytes)"
+    assert "struct" in rhs and "200" in rhs
+
+
+def test_scalar_assignment_still_uses_data_field():
+    """Sanity: ordinary scalar assignments are unaffected by the
+    struct-summarisation change."""
+    from bmc_agent.cbmc import _extract_counterexamples
+
+    messages = [{
+        "result": [{
+            "property": "main.assertion.1",
+            "status": "FAILURE",
+            "description": "synthetic failure",
+            "trace": [{
+                "stepType": "assignment",
+                "lhs": "x",
+                "value": {"binary": "0" * 32, "data": "42",
+                          "name": "integer", "type": "signed int", "width": 32},
+                "sourceLocation": {"file": "fake.c", "line": "10"},
+            }],
+        }]
+    }]
+    cexes = _extract_counterexamples(messages)
+    assert cexes[0].variable_assignments["x"] == "42"
+
+
 # ---------------------------------------------------------------------------
 # 5.  Artifact storage
 # ---------------------------------------------------------------------------

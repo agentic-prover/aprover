@@ -213,7 +213,7 @@ def _parse_cbmc_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
     if returncode not in (0, 10):
         # Probably a parse / compile error
         err_msg = stderr.strip() or f"cbmc exited with code {returncode}"
-        return CBMCResult(verified=False, raw_output=raw, error=err_msg)
+        return CBMCResult(verified=False, raw_output=_cap_raw(raw), error=err_msg)
 
     verified = returncode == 0
     counterexamples: list[Counterexample] = []
@@ -232,8 +232,29 @@ def _parse_cbmc_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
     return CBMCResult(
         verified=verified,
         counterexamples=counterexamples,
-        raw_output=raw,
+        raw_output=_cap_raw(raw),
     )
+
+
+# Cap raw CBMC output before stashing on CBMCResult. CBMC's --json-ui dumps
+# the entire trace including full struct/array snapshots per step. For a
+# kernel TU (preprocessed ~3MB, struct neuron_device with 28 fields), the
+# JSON output can hit 9+ GB and explode bug_report.json. We only keep
+# raw_output for diagnostic context (verification status, top-of-trace
+# preview), so cap to 64KB head + 4KB tail with an elision marker.
+_RAW_OUTPUT_HEAD = 64 * 1024
+_RAW_OUTPUT_TAIL = 4 * 1024
+
+
+def _cap_raw(raw: str) -> str:
+    if raw is None:
+        return ""
+    if len(raw) <= _RAW_OUTPUT_HEAD + _RAW_OUTPUT_TAIL + 128:
+        return raw
+    head = raw[:_RAW_OUTPUT_HEAD]
+    tail = raw[-_RAW_OUTPUT_TAIL:]
+    omitted = len(raw) - _RAW_OUTPUT_HEAD - _RAW_OUTPUT_TAIL
+    return f"{head}\n/* ... {omitted} bytes elided ... */\n{tail}"
 
 
 def _extract_counterexamples(messages: list | dict) -> list[Counterexample]:
@@ -284,11 +305,32 @@ def _extract_counterexamples(messages: list | dict) -> list[Counterexample]:
                 if step_type == "assignment":
                     lhs = trace_entry.get("lhs", "")
                     rhs_value = trace_entry.get("value", {})
-                    rhs_str = (
-                        rhs_value.get("data", str(rhs_value))
-                        if isinstance(rhs_value, dict)
-                        else str(rhs_value)
-                    )
+                    if isinstance(rhs_value, dict):
+                        # Scalar leaf values have a ``data`` field; use it
+                        # verbatim. Struct/array values have ``members`` /
+                        # ``elements`` and no ``data`` — for those, emit a
+                        # one-line summary rather than ``str(dict)`` of the
+                        # nested state. A full struct stringification for a
+                        # 28-field kernel ``neuron_device`` can hit megabytes
+                        # per assignment (observed: ts_nq_destroy produced a
+                        # 264MB bug_report.json because every assignment was
+                        # a stringified struct). That blob then poisoned the
+                        # realism / reproducer prompts (OpenRouter rejects
+                        # requests >8MB).
+                        if "data" in rhs_value:
+                            rhs_str = str(rhs_value["data"])
+                        elif "members" in rhs_value:
+                            n = len(rhs_value.get("members") or [])
+                            rhs_str = f"<struct: {n} members>"
+                        elif "elements" in rhs_value:
+                            n = len(rhs_value.get("elements") or [])
+                            rhs_str = f"<array: {n} elements>"
+                        else:
+                            # Last-ditch: cap stringified form so a missing
+                            # key doesn't reintroduce the blow-up.
+                            rhs_str = str(rhs_value)[:512]
+                    else:
+                        rhs_str = str(rhs_value)[:512]
                     var_assignments[lhs] = rhs_str
                     trace_lines.append(f"{lhs} = {rhs_str}")
                 elif step_type == "output":
