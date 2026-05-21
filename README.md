@@ -5,13 +5,15 @@
 
 **AProver — Agentic Prover for AI-Generated Code** — is a suite of LLM-driven formal verification agents. The first agent — **BMC-Agent** — is a prototype of *agentic model checking*: an architecture that pairs an LLM agent (for specification generation, counterexample classification, and spec refinement) with a sound bounded model checking backend. The agent handles semantic reasoning; the solver provides formal guarantees within the unwinding bound.
 
+BMC-Agent supports two source languages with two solver backends, selected automatically by the source file's extension: **C** via CBMC, and **Rust** via Kani. The pipeline, classifier, refinement loop, and confidence tiers are shared; the parser and harness generator dispatch per language.
+
 The design principle is *agents propose, conventional tools dispose*: every soundness-relevant decision the LLM produces passes through a conventional check (CBMC query, SMT soundness guard, or runtime confirmation) before affecting the verification verdict.
 
 ## How it works
 
 ```
 Phase 1    Spec Generator        [AGENTIC]       LLM generates pre/postconditions top-down per function
-Phase 2    BMC Engine            [CONVENTIONAL]  Checks each function against its spec via CBMC
+Phase 2    BMC Engine            [CONVENTIONAL]  Checks each function against its spec via CBMC (C) or Kani (Rust)
 Phase 3 S1 CEx Classifier        [AGENTIC]       LLM + CBMC: REAL_BUG / SPURIOUS / UNRESOLVED
 Phase 3 S2 Feasibility check     [CONVENTIONAL]  Re-verifies violation with real callee bodies inlined
 Phase 3 S3 Dynamic validation    [CONVENTIONAL]  Compiles + runs GCC harness to confirm fault at runtime
@@ -39,7 +41,8 @@ The **realism checker** (Phase 3 S4) runs an LLM audit on every `REAL_BUG` findi
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- [CBMC](https://github.com/diffblue/cbmc) on `PATH`
+- [CBMC](https://github.com/diffblue/cbmc) on `PATH` (for C input)
+- [Kani](https://github.com/model-checking/kani) on `PATH` (for Rust input; optional if you only verify C)
 - An Anthropic API key (`ANTHROPIC_API_KEY`)
 
 ## Installation
@@ -59,6 +62,17 @@ export ANTHROPIC_API_KEY=your_key_here
 uv run bmc-agent verify --source examples/simple_driver.c \
                         --driver simple_driver \
                         --output artifacts/
+
+# Verify a Rust source file (backend dispatch is automatic by extension)
+uv run bmc-agent verify --source path/to/your_module.rs \
+                        --driver your_module \
+                        --output artifacts/
+
+# Verify a Rust file inside a real cargo workspace (multi-crate)
+BMC_AGENT_KANI_REAL_CRATE=true uv run bmc-agent verify \
+  --source path/to/crate/src/lib.rs \
+  --driver crate_lib \
+  --output artifacts/
 
 # Generate specs only
 uv run bmc-agent generate --source examples/simple_driver.c --driver simple_driver
@@ -118,6 +132,16 @@ All settings are available as environment variables or `Config` dataclass fields
 | `BMC_AGENT_ENABLE_REALISM_CHECK` | `false` | Phase 3 S4: LLM realism audit on every REAL_BUG finding |
 | `BMC_AGENT_ENABLE_REALISM_THINKING` | `false` | Use extended thinking in the realism checker (higher quality, slower) |
 | `BMC_AGENT_CBMC_UNSIGNED_OVERFLOW_CHECK` | `false` | Pass `--unsigned-overflow-check` to CBMC — detects integer overflow bugs (e.g. `calloc` `nmemb*size` wrap, CWE-190) |
+| `BMC_AGENT_CBMC_REAL_LIBC` | `false` | Skip Python-side preprocessing and let CBMC see the real libc headers; required for sources that include `stdio.h` / `stdlib.h` directly (OpenSSL, libxml2, llm.c, …) |
+| `BMC_AGENT_STRICT_DSL` | `false` | Forbid natural-language clauses in pre/post; pushes prose into the JSON `reasoning` field. Required for parser-state-heavy code where the LLM otherwise defaults to prose |
+| `BMC_AGENT_RAW_BYTES` | `false` | Treat single `const char *` parameters as raw N-byte buffers (no NUL constraint). Required for wire-format readers that may read past `strlen` |
+| `BMC_AGENT_KANI_PATH` | `kani` | Kani binary path (Rust backend) |
+| `BMC_AGENT_KANI_UNWIND` | `4` | Kani loop unwinding bound |
+| `BMC_AGENT_KANI_TIMEOUT` | `120` | Kani solver timeout per harness (seconds) |
+| `BMC_AGENT_KANI_SLICE_BOUND` | `4` | Bounded length used for `&[T]` slice / `Vec<T>` backing arrays in Kani harnesses |
+| `BMC_AGENT_KANI_REAL_CRATE` | `false` | Run Kani via `cargo kani --tests --harness` inside the real crate root (multi-crate workspaces) instead of as a standalone `kani harness.rs` invocation |
+| `BMC_AGENT_ENABLE_FEEDBACK_LOOP` | `false` | Enable the self-improvement loop: (a) developer code-changes, (b) function-spec invariant tightening, (c) project-wide invariant inference, with in-sweep iteration |
+| `BMC_AGENT_ENABLE_FLAG_SELECTION` | `false` | Let the LLM select CBMC flags per function based on observed properties |
 
 `BMC_AGENT_SKIP_REFINEMENT=true` is the FilteringOnly ablation: running the same input with and without this flag measures whether the refinement loop adds value beyond simple counterexample filtering.
 
@@ -183,16 +207,28 @@ bmc_agent/
   config.py             Configuration dataclass
   pipeline.py           End-to-end orchestrator
   spec_generator.py     Phase 1: LLM spec generation (top-down, caller-driven)
-  bmc_engine.py         Phase 2: CBMC runner with parallel dispatch
+  bmc_engine.py         Phase 2: solver runner with parallel dispatch
   cex_validator.py      Phase 3 S1/S2: counterexample classification + feasibility check
   harness_generator.py  CBMC and GCC harness synthesis
   dsl_to_cbmc.py        Spec DSL → __CPROVER_assume / assert translation
   dynamic_validator.py  Phase 3 S3: GCC harness compile + run
   realism_checker.py    Phase 3 S4: LLM realism audit (REALISTIC / UNREALISTIC / UNCERTAIN)
   spec_quality.py       Phase 4: mutation testing, coverage, consistency checks
+  feedback_loop.py      Optional self-improvement loop (arms a/b/c, in-sweep iteration)
+  flag_selector.py      Optional per-function CBMC flag selection
+  domain_analyzer.py    Domain-knowledge injection for spec generation
+  preprocessor.py       Source preprocessing (cpp, real-libc bypass)
+  bug_reporter.py       Confidence-tier classification + bug-report assembly
+  parser.py             C parser (tree-sitter-c)
+  rust_parser.py        Rust parser (tree-sitter-rust): free fns, impl methods, generics
+  source_parser.py      Language-dispatch frontend
+  kani.py               Kani invocation + result parsing
+  cbmc.py               CBMC invocation + counterexample parsing
+  llm.py                LLM client (Anthropic, OpenRouter-compatible providers)
+  spec.py               Spec dataclass + serialization
   evaluation/           Baselines, metrics, corpus, report generation
-  backends/             BMCBackend ABC + CBMCBackend (KaniBackend scaffolded)
-examples/               Synthetic and real-world C targets
+  backends/             BMCBackend ABC, CBMCBackend, KaniBackend
+examples/               Synthetic and real-world C / Rust targets
 tests/                  Unit and integration tests
 ```
 
@@ -200,9 +236,18 @@ tests/                  Unit and integration tests
 
 BMC-Agent is an active research prototype. The pipeline and all confidence tiers are stable.
 
-**Working:** full C verification pipeline, whole-codebase `verify-dir` mode, cross-file call-graph construction, Phase 3 S1 counterexample classification, Phase 3 S2 feasibility check (real callee inlining), Phase 3 S3 dynamic validation (bare-metal-compatible GCC harness), Phase 3 S4 realism checker (LLM audit with optional extended thinking), five-tier confidence reporting (`confirmed_dynamic` / `confirmed_system_entry` / `confirmed_bmc` / `likely` / `unlikely`), CEGAR spec refinement loop, callee stub postcondition constraints, FilteringOnly ablation (`--skip-refinement`), domain knowledge injection (`--domain-knowledge`), spec-quality module, prompt caching.
+**Working:**
+- Full C verification pipeline via CBMC and full Rust verification pipeline via Kani; backend dispatch by source extension.
+- Whole-codebase `verify-dir` mode; cross-file call-graph construction.
+- Phase 3 S1 counterexample classification with structural downgrades (entry-fn postcondition, implicit-NULL precondition, structural-panic + over-refinement, path-divergent unwind).
+- Phase 3 S2 feasibility check (real callee inlining), Phase 3 S3 dynamic validation (bare-metal-compatible GCC harness), Phase 3 S4 realism checker (LLM audit with optional extended thinking and witness-pattern auto-rejection).
+- Five-tier confidence reporting (`confirmed_dynamic` / `confirmed_system_entry` / `confirmed_bmc` / `likely` / `unlikely`).
+- CEGAR spec refinement loop, callee stub postcondition constraints, FilteringOnly ablation (`--skip-refinement`), domain knowledge injection (`--domain-knowledge`), spec-quality module, prompt caching.
+- Wire-format C support (`--real-libc`, `--strict-dsl`, `--raw-bytes`, paired-pointer detection, `T**` in-out cursor pattern) — validated on OpenSSL ASN.1, libxml2, jq, protobuf upb.
+- Rust harness generator supports primitives, raw pointers, `&T`, `&[T]` slices, `Vec<T>`, `Option<T>`, `&str`, tuple returns, generics with monomorphisation, `where` clauses, `unsafe fn`, pointer-newtype detection (`SendPtr { ptr: *mut T }`); cargo-mode for multi-crate workspaces.
+- Self-improvement feedback loop (`--enable-feedback-loop`) with three arms (developer code-changes, function-spec invariant tightening, project-wide invariant inference) and in-sweep iteration.
 
-**Partial / planned:** spec-quality analysis at scale; Kani (Rust) backend; evaluation corpus beyond VibeOS; manual precision audit of sampled findings.
+**Partial / planned:** spec-quality analysis at scale; evaluation corpus beyond VibeOS; manual precision audit of sampled findings; constructor-pattern precondition inference (planned for ML-kernel targets); loop-invariant generation in spec gen.
 
 ## License
 
