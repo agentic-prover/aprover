@@ -4783,6 +4783,14 @@ _SYSTEM_FUNCTION_NAMES: frozenset[str] = frozenset({
     "sin", "cos", "tan", "sqrt", "fabs", "ceil", "floor", "pow",
     # <unistd.h>
     "read", "write", "close", "lseek",
+    # <inttypes.h> — declarations reference the glibc-internal ``__gwchar_t``
+    # typedef. Our typedef-strip rule removes ``__gwchar_t`` (because it
+    # starts with ``__``) but used to leave these declarations behind,
+    # producing ``syntax error before '*'`` when CBMC parses the harness.
+    # Observed on every libarchive file (the codebase pulls in
+    # ``<inttypes.h>`` transitively via ``archive_string.h``).
+    "imaxabs", "imaxdiv",
+    "strtoimax", "strtoumax", "wcstoimax", "wcstoumax",
 })
 
 

@@ -324,6 +324,7 @@ class AMCPipeline:
                 preprocessed_source = preprocess(
                     source_file,
                     include_dirs=self.config.include_dirs,
+                    defines=list(getattr(self.config, "cbmc_defines", None) or []),
                     cc=self.config.cc_path,
                 )
             except Exception as exc:
@@ -1264,6 +1265,7 @@ class AMCPipeline:
                     expanded = preprocess(
                         c_file,
                         include_dirs=[str(source_dir)] + include_dirs,
+                        defines=list(getattr(self.config, "cbmc_defines", None) or []),
                         cc=self.config.cc_path,
                     )
                     parsed_pass1 = parse_c_file(c_file, source_text=expanded)
