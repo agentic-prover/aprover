@@ -333,6 +333,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_dynamic_validation = True
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
+    if getattr(args, "lite_mode", False):
+        config.lite_mode = True
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -362,13 +364,23 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     # filter, the printed list contains stale ``REAL BUG confirmed``
     # entries that the system itself has since rejected, wasting
     # triage time and giving a false impression of the run's success.
-    def _final_classification_is_spurious(driver_name: str, fn_name: str) -> bool:
+    #
+    # classification.json is overwritten per-CEX, so a function with N
+    # counterexamples ends up holding only the last one's verdict. Match
+    # on ``failing_property`` so we only suppress when the persisted
+    # verdict describes the same CEX the report came from — otherwise a
+    # later spurious unwind-artifact would mask an earlier real bug.
+    def _final_classification_is_spurious(driver_name: str, fn_name: str, violated_property: str) -> bool:
         import json, os
         path = os.path.join(config.artifact_dir, driver_name, fn_name, "classification.json")
         try:
             with open(path) as f:
                 data = json.load(f)
-            return (data.get("classification") or {}).get("outcome") == "spurious"
+            cls = data.get("classification") or {}
+            saved_prop = (cls.get("counterexample") or {}).get("failing_property")
+            if saved_prop and violated_property and saved_prop != violated_property:
+                return False
+            return cls.get("outcome") == "spurious"
         except Exception:
             return False
 
@@ -381,7 +393,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     survivors = [
         r for r in bug_reports
         if not _realism_was_unrealistic(r)
-        and not _final_classification_is_spurious(args.driver, r.function_name)
+        and not _final_classification_is_spurious(args.driver, r.function_name, getattr(r, "violated_property", "") or "")
     ]
     dropped = len(bug_reports) - len(survivors)
 
@@ -534,6 +546,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.cbmc_defines = list(args.defines)
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
+    if getattr(args, "lite_mode", False):
+        config.lite_mode = True
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -736,6 +750,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="security",
         help="Threat model: shapes CBMC baseline flags, spec prompts, and realism context (default: security)",
     )
+    ver.add_argument(
+        "--lite-mode",
+        action="store_true",
+        default=False,
+        help=(
+            "bmc-agent-lite: skip the LLM spec_gen call for every function "
+            "(every function gets a permissive pre=post=true spec) and also "
+            "skip Pass 1.5 domain-knowledge extraction. CBMC's built-in checks "
+            "(--bounds-check / --pointer-check / --signed-overflow-check) "
+            "surface memory-safety bugs directly from nondet harness inputs. "
+            "LLM budget shifts to realism + classifier in Phase 3, where the "
+            "LLM adds real signal rather than parroting the function body. "
+            "Pairs well with --raw-bytes."
+        ),
+    )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -864,6 +893,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["security", "safety", "functional"],
         default="security",
         help="Threat model: shapes CBMC baseline flags, spec prompts, and realism context (default: security)",
+    )
+    vd.add_argument(
+        "--lite-mode",
+        action="store_true",
+        default=False,
+        help=(
+            "bmc-agent-lite: skip the LLM spec_gen call for every function "
+            "(permissive pre=post=true spec) and skip Pass 1.5 domain extraction. "
+            "CBMC built-in checks surface memory-safety bugs from nondet harness "
+            "inputs; LLM budget shifts to realism + classifier in Phase 3. "
+            "Pairs well with --raw-bytes."
+        ),
     )
     _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)

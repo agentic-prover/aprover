@@ -89,8 +89,23 @@ class Config:
     #                          or OpenRouter proxy)
     #   "openai"           -- OpenAI-compatible /v1/chat/completions (K2 Think, OpenAI,
     #                          most self-hosted endpoints)
-    # Empty string => auto-detect from base_url (K2 Think domain, /v1 suffix, etc.).
+    #   "claude-code"      -- shell out to the local Claude Code CLI (`claude -p`).
+    #                          No API key required: uses the host's existing login.
+    # Empty string => auto-detect: claude-code when no API key is set anywhere,
+    # otherwise openai for K2-Think / /v1 base URLs and anthropic for the rest.
     llm_provider: str = ""
+
+    # Path to the Claude Code CLI binary, used only when provider == "claude-code".
+    # Override via BMC_AGENT_CLAUDE_CODE_BIN if `claude` isn't on $PATH.
+    claude_code_bin: str = "claude"
+
+    # Per-call timeout for the claude-code provider. The local ``claude -p``
+    # path has ~5-6k tokens of fixed CLI overhead per call and runs serially,
+    # so the API-mode default (180s) is too tight for prompts that legitimately
+    # produce thousands of output tokens (e.g. reproducer generation, large
+    # spec-gen). Bumped to 600s by default; override via
+    # ``BMC_AGENT_CLAUDE_CODE_TIMEOUT_S``. Ignored when provider != claude-code.
+    claude_code_timeout_s: float = 600.0
 
     # Per-role LLM overrides for hybrid backends. Maps a role name (e.g.
     # "spec_gen", "feedback_distill") to a partial settings dict with
@@ -329,12 +344,24 @@ class Config:
     # "functional" : spec correctness only, no extra CBMC checks.
     threat_model: str = "security"
 
+    # Lite mode: skip LLM spec_gen entirely. Every function gets a permissive
+    # (pre=post=true) spec, the harness inputs are nondet (subject to the
+    # global harness flags), and CBMC's built-in checks (--bounds-check,
+    # --pointer-check, --signed-overflow-check) surface memory-safety bugs
+    # directly. The LLM budget shifts to realism + classifier in Phase 3,
+    # where the LLM adds real signal rather than parroting the function body.
+    # Also skips Pass 1.5 (domain knowledge extraction) since that feeds
+    # spec_gen prompts. Off by default to preserve existing behaviour.
+    lite_mode: bool = False
+
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly.
 
         Priority: ``llm_api_key`` field → ``BMC_AGENT_LLM_API_KEY`` →
         ``K2THINK_API_KEY`` (when provider resolves to openai) →
-        ``ANTHROPIC_API_KEY``.
+        ``ANTHROPIC_API_KEY``. The ``claude-code`` provider doesn't need
+        a key (it shells out to the locally-logged-in CLI), so this can
+        legitimately return an empty string for that provider.
         """
         if self.llm_api_key:
             return self.llm_api_key
@@ -364,17 +391,32 @@ class Config:
         }
 
     def resolved_provider(self) -> str:
-        """Return the active provider ("anthropic" or "openai").
+        """Return the active provider ("anthropic", "openai", or "claude-code").
 
         If ``llm_provider`` is set explicitly, honour it. Otherwise auto-detect:
-        K2 Think and other OpenAI-compatible base URLs route to "openai";
-        everything else (default, Anthropic, OpenRouter) routes to "anthropic".
+
+        * K2 Think and other OpenAI-compatible base URLs route to "openai".
+        * If no API key is set anywhere (and no explicit base_url suggests
+          openai), route to "claude-code" so the local Claude Code CLI is
+          used — this is the zero-config default.
+        * Everything else (Anthropic key set, OpenRouter, etc.) routes to
+          "anthropic".
         """
         if self.llm_provider:
             return self.llm_provider
         base = (self.llm_base_url or "").lower()
         if "k2think.ai" in base or base.endswith("/v1") or base.endswith("/v1/"):
             return "openai"
+        # Zero-config default: if no API key was found in any of the usual
+        # places, fall back to the local Claude Code CLI.
+        if not (
+            self.llm_api_key
+            or os.environ.get("BMC_AGENT_LLM_API_KEY", "")
+            or os.environ.get("ANTHROPIC_API_KEY", "")
+            or os.environ.get("K2THINK_API_KEY", "")
+            or os.environ.get("BMC_AGENT_HYBRID_SPEC_GEN_KEY", "")
+        ):
+            return "claude-code"
         return "anthropic"
 
     @classmethod
@@ -390,6 +432,9 @@ class Config:
             llm_base_url=os.environ.get("BMC_AGENT_LLM_BASE_URL", ""),
             llm_request_timeout_s=float(os.environ.get("BMC_AGENT_LLM_TIMEOUT_S", "180.0")),
             llm_provider=os.environ.get("BMC_AGENT_LLM_PROVIDER", ""),
+            claude_code_bin=os.environ.get("BMC_AGENT_CLAUDE_CODE_BIN", "claude"),
+            claude_code_timeout_s=float(os.environ.get("BMC_AGENT_CLAUDE_CODE_TIMEOUT_S", "600.0")),
+            lite_mode=os.environ.get("BMC_AGENT_LITE_MODE", "false").lower() == "true",
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),

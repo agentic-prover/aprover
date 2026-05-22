@@ -57,18 +57,35 @@ def test_provider_auto_v1_suffix():
     assert c.resolved_provider() == "openai"
 
 
-def test_provider_default_anthropic():
+def test_provider_default_anthropic(monkeypatch):
+    # Ensure an API key is visible so resolved_provider() doesn't fall back
+    # to the claude-code CLI path (which kicks in only when no key is set
+    # anywhere). With a key present, the default fallback is "anthropic".
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    from bmc_agent.config import Config
+
+    c = Config(llm_api_key="sk-test")
+    assert c.resolved_provider() == "anthropic"
+
+
+def test_provider_openrouter_stays_anthropic(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    from bmc_agent.config import Config
+
+    c = Config(llm_api_key="sk-test", llm_base_url="https://openrouter.ai/api")
+    assert c.resolved_provider() == "anthropic"
+
+
+def test_provider_no_api_key_falls_back_to_claude_code(monkeypatch):
+    # New behaviour: when no API key is set anywhere, resolved_provider()
+    # returns "claude-code" so the local CLI subscription is used.
+    for key in ("ANTHROPIC_API_KEY", "BMC_AGENT_LLM_API_KEY",
+                "K2THINK_API_KEY", "BMC_AGENT_HYBRID_SPEC_GEN_KEY"):
+        monkeypatch.delenv(key, raising=False)
     from bmc_agent.config import Config
 
     c = Config()
-    assert c.resolved_provider() == "anthropic"
-
-
-def test_provider_openrouter_stays_anthropic():
-    from bmc_agent.config import Config
-
-    c = Config(llm_base_url="https://openrouter.ai/api")
-    assert c.resolved_provider() == "anthropic"
+    assert c.resolved_provider() == "claude-code"
 
 
 def test_provider_explicit_override():

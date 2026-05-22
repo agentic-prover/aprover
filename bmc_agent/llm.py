@@ -1,15 +1,19 @@
 """
 LLM client wrapper for BMC-Agent.
 
-Dispatches between two providers, selected by ``config.resolved_provider()``:
+Dispatches between three providers, selected by ``config.resolved_provider()``:
 
 * ``"anthropic"`` -- native Anthropic Messages API via the ``anthropic`` SDK
   (claude-* models on api.anthropic.com or via the OpenRouter proxy).
 * ``"openai"`` -- OpenAI-compatible ``/v1/chat/completions`` over plain HTTPS,
   covering K2 Think (``api.k2think.ai``), OpenAI, and most self-hosted endpoints
   that mimic that schema.
+* ``"claude-code"`` -- the Claude Code CLI in non-interactive mode (``claude -p``).
+  No API key required: the host's existing Claude Code login is reused. Useful
+  when you want bmc-agent's reasoning to run through your local subscription
+  rather than the API.
 
-Both paths share the same public surface (``complete(system, user) -> str``),
+All paths share the same public surface (``complete(system, user) -> str``),
 the same retry policy (exponential backoff on rate-limit / server / transient
 errors), and the same token-usage logging.
 """
@@ -161,6 +165,8 @@ class LLMClient:
                         # on this path already emit a <think>...</think> trace
                         # that _strip_reasoning_blocks() handles transparently.
                         return self._complete_openai(system_prompt, user_prompt, max_tokens, temperature)
+                    if provider == "claude-code":
+                        return self._complete_claude_code(system_prompt, user_prompt, max_tokens, temperature)
                     return self._complete_anthropic(
                         system_prompt,
                         user_prompt,
@@ -377,6 +383,108 @@ class LLMClient:
                 f"completion_tokens={usage.get('completion_tokens')}"
             )
         return stripped
+
+    def _complete_claude_code(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """Shell out to the Claude Code CLI in non-interactive mode.
+
+        Uses ``claude -p`` (--print) with all tools disabled, no session
+        persistence, and JSON output. The user prompt is piped via stdin so
+        we don't hit ARG_MAX on long C source bodies. Authentication is
+        delegated to the local Claude Code install — no API key required
+        in bmc-agent's environment.
+
+        ``temperature`` is currently ignored: the Claude Code CLI doesn't
+        expose a temperature flag. ``max_tokens`` is also not directly
+        configurable per call; the CLI uses the model's default cap.
+        """
+        import subprocess
+
+        cli = (self.config.claude_code_bin or "claude").strip()
+        cmd: list[str] = [
+            cli,
+            "-p",
+            "--tools", "",
+            "--output-format", "json",
+            "--no-session-persistence",
+        ]
+        # --model is optional; when ``llm_model`` is empty or looks like a
+        # non-claude name (e.g. left over from a K2 Think config), we let the
+        # CLI pick the default for the user's session.
+        model = (self.config.llm_model or "").strip()
+        if model and ("claude" in model.lower() or model.lower() in ("sonnet", "opus", "haiku")):
+            cmd += ["--model", model]
+        if system_prompt:
+            cmd += ["--system-prompt", system_prompt]
+
+        # Use the claude-code-specific timeout (default 600s). The API-mode
+        # default (~180s from BMC_AGENT_LLM_TIMEOUT_S) is too tight here:
+        # ``claude -p`` carries ~5-6k tokens of fixed CLI overhead per call
+        # and runs serially, so prompts that legitimately produce thousands
+        # of output tokens (reproducer generation, large spec-gen) will
+        # blow past 180s on the first try. Fall back to ``llm_request_timeout_s``
+        # if the new field is absent (forward-compat with older Config objects).
+        timeout_s = float(
+            getattr(self.config, "claude_code_timeout_s", None)
+            or getattr(self.config, "llm_request_timeout_s", 180.0)
+        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=user_prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise LLMError(f"claude -p timed out after {timeout_s}s") from exc
+        except FileNotFoundError as exc:
+            raise LLMError(
+                f"claude CLI not found at {cli!r}. Install Claude Code or set "
+                "BMC_AGENT_CLAUDE_CODE_BIN to its path."
+            ) from exc
+
+        if proc.returncode != 0:
+            raise LLMError(
+                f"claude -p exited {proc.returncode}: "
+                f"stderr={proc.stderr[:400]!r} stdout={proc.stdout[:200]!r}"
+            )
+
+        stdout = proc.stdout.strip()
+        if not stdout:
+            raise LLMError("claude -p produced empty stdout")
+
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError:
+            # Fall back to treating the raw stdout as the response (e.g. if
+            # an older CLI version doesn't honour --output-format json).
+            return _strip_reasoning_blocks(stdout)
+
+        if data.get("is_error"):
+            raise LLMError(f"claude -p reported is_error: {data.get('result', '')[:400]}")
+
+        usage = data.get("usage") or {}
+        if usage:
+            logger.debug(
+                "LLM usage (claude-code): input_tokens=%s output_tokens=%s "
+                "cache_creation=%s cache_read=%s cost_usd=%s",
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+                usage.get("cache_creation_input_tokens"),
+                usage.get("cache_read_input_tokens"),
+                data.get("total_cost_usd"),
+            )
+
+        result = data.get("result")
+        if not isinstance(result, str):
+            raise LLMError(f"claude -p response missing 'result' string: {data}")
+        return _strip_reasoning_blocks(result)
 
     # ------------------------------------------------------------------
     # Internal helpers

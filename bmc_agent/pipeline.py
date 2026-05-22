@@ -1320,17 +1320,22 @@ class AMCPipeline:
 
         # ------------------------------------------------------------------
         # Pass 1.5: auto-extract domain knowledge from the codebase unless the
-        # caller already supplied a non-empty domain_knowledge string.
+        # caller already supplied a non-empty domain_knowledge string. Skipped
+        # entirely in lite_mode — the domain knowledge feeds spec_gen prompts,
+        # which lite_mode bypasses.
         # ------------------------------------------------------------------
-        from bmc_agent.domain_analyzer import analyze_codebase as _analyze_domain
-        domain_knowledge = _analyze_domain(
-            source_dir=source_dir,
-            include_dirs=include_dirs,
-            file_parsed_c=file_parsed_c,
-            file_expanded=file_expanded,
-            llm=self.llm,
-            user_domain_knowledge=domain_knowledge,
-        )
+        if bool(getattr(self.config, "lite_mode", False)):
+            logger.info("Pass 1.5 skipped (lite_mode): domain knowledge not needed for permissive specs")
+        else:
+            from bmc_agent.domain_analyzer import analyze_codebase as _analyze_domain
+            domain_knowledge = _analyze_domain(
+                source_dir=source_dir,
+                include_dirs=include_dirs,
+                file_parsed_c=file_parsed_c,
+                file_expanded=file_expanded,
+                llm=self.llm,
+                user_domain_knowledge=domain_knowledge,
+            )
 
         # ------------------------------------------------------------------
         # Pass 2: run the full AMC pipeline per file using cached preprocessed

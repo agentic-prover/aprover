@@ -85,6 +85,26 @@ def _stub_spec(func_name: str) -> Spec:
     return spec
 
 
+def _permissive_spec(func_name: str) -> Spec:
+    """Permissive spec for bmc-agent-lite mode.
+
+    Skips the LLM spec_gen call entirely. The harness generator still wires
+    nondet inputs subject to the global flags (``raw_bytes``,
+    ``infer_array_param_bounds``, etc.), and CBMC's built-in checks
+    (``--bounds-check``, ``--pointer-check``, ``--signed-overflow-check``)
+    still fire. The LLM budget shifts to Phase 3 (realism + classifier),
+    where it adds real value rather than parroting the function body.
+    """
+    spec = Spec(
+        function_name=func_name,
+        precondition="true",
+        postcondition="true",
+        status=SpecStatus.GENERATED,
+    )
+    spec.__dict__["lite"] = True
+    return spec
+
+
 # ---------------------------------------------------------------------------
 # SCC computation (Kosaraju's algorithm)
 # ---------------------------------------------------------------------------
@@ -981,6 +1001,14 @@ class SpecGenerator:
             func_info = parsed.get_function_info(fn_name)
             if func_info is None:
                 return fn_name, _fallback_spec(fn_name, "function info not found")
+
+            # Lite mode: skip the LLM spec_gen call and emit a permissive
+            # spec (pre = post = true). CBMC's built-in checks still surface
+            # memory-safety bugs from the harness inputs, and the LLM budget
+            # shifts to realism / classifier in Phase 3 where the LLM adds
+            # net signal rather than parroting the function body.
+            if bool(getattr(self.config, "lite_mode", False)):
+                return fn_name, _permissive_spec(fn_name)
 
             struct_context = self._extract_struct_context(func_info, parsed)
 
