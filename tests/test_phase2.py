@@ -2954,7 +2954,11 @@ def test_strip_cascade_preserves_user_typedef_with_standard_type():
 
 def test_infer_extern_return_contract_zero_or_negative(tmp_path: Path):
     """Siblings consistently returning 0 or negative literals should
-    yield ``__CPROVER_assume(result <= 0);`` for the stubbed extern."""
+    yield ``__CPROVER_assume(result <= 0 && result >= -4095);`` for
+    the stubbed extern. The lower bound (-4095, the kernel ERRNO
+    range) was added because the looser form silently failed FUT
+    POSTs of the shape ``ret == 0 || ret < 0`` when the very-negative
+    long return was truncated to a POSITIVE int by the caller."""
     from bmc_agent.harness_generator import _infer_extern_return_contract
     from bmc_agent.parser import parse_c_file
     src = tmp_path / "vfs.c"
@@ -2966,7 +2970,7 @@ def test_infer_extern_return_contract_zero_or_negative(tmp_path: Path):
     )
     parsed = parse_c_file(str(src))
     out = _infer_extern_return_contract("vfs_rename", "int", parsed)
-    assert out == ["__CPROVER_assume(result <= 0);"], out
+    assert out == ["__CPROVER_assume(result <= 0 && result >= -4095);"], out
 
 
 def test_infer_extern_return_contract_ignores_non_literal_returns(tmp_path: Path):
@@ -2989,7 +2993,7 @@ def test_infer_extern_return_contract_ignores_non_literal_returns(tmp_path: Path
     )
     parsed = parse_c_file(str(src))
     out = _infer_extern_return_contract("vfs_rename", "int", parsed)
-    assert out == ["__CPROVER_assume(result <= 0);"], out
+    assert out == ["__CPROVER_assume(result <= 0 && result >= -4095);"], out
 
 
 def test_infer_extern_return_contract_skips_when_no_consensus(tmp_path: Path):
@@ -3025,7 +3029,7 @@ def test_infer_extern_return_contract_requires_matching_return_type(tmp_path: Pa
     )
     parsed = parse_c_file(str(src))
     out = _infer_extern_return_contract("vfs_rename", "int", parsed)
-    assert out == ["__CPROVER_assume(result == 0);"] or out == ["__CPROVER_assume(result <= 0);"], out
+    assert out == ["__CPROVER_assume(result == 0);"] or out == ["__CPROVER_assume(result <= 0 && result >= -4095);"], out
 
 
 def test_infer_extern_return_contract_requires_underscore_prefix(tmp_path: Path):
@@ -3082,7 +3086,7 @@ def test_infer_extern_return_contract_offset_pattern_requires_mixed_sibling(tmp_
     )
     parsed = parse_c_file(str(src))
     out = _infer_extern_return_contract("api_target", "int", parsed)
-    assert out == ["__CPROVER_assume(result < 0);"], out
+    assert out == ["__CPROVER_assume(result < 0 && result >= -4095);"], out
 
 
 def test_infer_extern_return_contract_pointer_return_skipped(tmp_path: Path):
@@ -4406,6 +4410,38 @@ void f(int n, float * s, int nrc) { return; }
     assert sig is not None
     names = [p[1] for p in sig.parameters]
     assert names == ["n", "s", "nrc"], names
+
+
+def test_param_extraction_handles_pointer_without_space(tmp_path):
+    """``void*param`` (no space between ``*`` and identifier) — common
+    in kernel-style code. The parser must not return type=``void*param``
+    name=``''``."""
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "t.c"
+    src.write_text(
+        "static int handler(int cmd, void*param) { return 0; }\n"
+    )
+    pf = parse_c_file(str(src))
+    sig = pf.functions.get("handler")
+    assert sig is not None
+    names = [p[1] for p in sig.parameters]
+    types = [p[0] for p in sig.parameters]
+    assert names == ["cmd", "param"], (names, types)
+    # The pointer star moves to the type half.
+    assert types[1].rstrip().endswith("*"), types
+
+
+def test_param_extraction_handles_double_pointer_without_space(tmp_path):
+    """``int**pp`` — both stars to the type half, name intact."""
+    from bmc_agent.parser import parse_c_file
+    src = tmp_path / "t.c"
+    src.write_text("int handler(int**pp) { return *pp ? **pp : 0; }\n")
+    pf = parse_c_file(str(src))
+    sig = pf.functions.get("handler")
+    assert sig is not None
+    p_type, p_name = sig.parameters[0]
+    assert p_name == "pp"
+    assert p_type.rstrip().endswith("**")
 
 
 def test_is_address_taken_detects_qsort_comparator():

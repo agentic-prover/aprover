@@ -1,0 +1,1878 @@
+[
+  {
+    "file": "archive_acl",
+    "fn": "archive_acl_clear",
+    "prop": "archive_acl_clear.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `acl` parameter without NULL check, but real callers in libarchive always pass valid initialized archive_acl structures, never NULL."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "archive_acl_count",
+    "prop": "archive_acl_count.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `acl->acl_head` without NULL check on `acl`, but real callers in a library context never pass NULL for the primary ACL structure parameter."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "archive_acl_copy",
+    "prop": "archive_acl_copy.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences src parameter (src->mode, src->acl_head) without NULL check, but real callers never pass NULL for either dest or src in archive_acl_copy operations."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "acl_new_entry",
+    "prop": "acl_new_entry.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for the `acl` parameter, but real callers in libarchive always pass a valid initialized `archive_acl` structure from a parent archive object."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "append_entry",
+    "prop": "append_entry.pointer_dereference.125",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set the char** parameter `p` to NULL or left it uninitialized, but real callers always pass a valid pointer to a char* that points to allocated buffer space."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "append_entry_w",
+    "prop": "append_entry_w.pointer_dereference.71",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set wp (wchar_t **) to NULL in the harness, but real callers always pass a valid pointer to a wchar_t* buffer since the function's purpose is to append formatted ACL entries to an output s"
+  },
+  {
+    "file": "archive_acl",
+    "fn": "archive_acl_to_text_w",
+    "prop": "archive_acl_to_text_w.pointer_dereference.17",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set the `acl` parameter to NULL, but real callers in libarchive always pass a valid pointer to an initialized archive_acl structure."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "archive_acl_next",
+    "prop": "archive_acl_next.pointer_dereference.139",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferences acl->acl_p at line 139 after the NULL check at line 118, but the function explicitly guards all acl_p field accesses with a NULL check and only dereferences when non-NULL (lin"
+  },
+  {
+    "file": "archive_acl",
+    "fn": "is_nfs4_flags_w",
+    "prop": "is_nfs4_flags_w.pointer.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer dereference of `permset` without NULL check, but real callers in ACL parsing always pass a valid stack-allocated int pointer."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "is_nfs4_flags",
+    "prop": "is_nfs4_flags.pointer.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for `permset` parameter, but real callers always provide a valid pointer to an int they want modified."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "is_nfs4_perms",
+    "prop": "is_nfs4_perms.pointer.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `start` or `end` to NULL or invalid pointer values that real callers (parsing ACL strings) never produce, causing pointer dereference failure in the loop condition or `*p++`."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "is_nfs4_perms_w",
+    "prop": "is_nfs4_perms_w.pointer.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `*p++` dereferencing without checking that `start` is non-NULL, but real callers in ACL parsing always pass valid pointers to substring boundaries within an already-validated buffe"
+  },
+  {
+    "file": "archive_acl",
+    "fn": "ismode",
+    "prop": "ismode.pointer.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged the dereference `*permset` without a NULL check, but real callers in ACL parsing always pass a valid stack-allocated int pointer."
+  },
+  {
+    "file": "archive_match",
+    "fn": "add_owner_name",
+    "prop": "match_list_add.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "match_list_add dereferences list parameter without NULL check, but real callers in archive_match.c always pass address of valid struct match_list fields from the archive_match context, never NULL."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "next_field_w",
+    "prop": "next_field_w.pointer_dereference.65",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely passes NULL or uninitialized pointer for wp/start/end parameters, but real callers in ACL parsing always pass valid pointers to initialized wchar_t strings."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "next_field",
+    "prop": "next_field.pointer_dereference.83",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `*p` at line 83 without checking if `p` itself is NULL, but real callers in ACL parsing always pass valid pointer addresses to stack/heap variables."
+  },
+  {
+    "file": "archive_acl",
+    "fn": "ismode_w",
+    "prop": "ismode_w.pointer.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC's pointer.1 failure is likely flagging the dereference `*permset` without a NULL check, but real callers in libarchive's ACL parsing code always pass a valid stack-allocated int pointer, never NU"
+  },
+  {
+    "file": "archive_match",
+    "fn": "add_pattern_from_file",
+    "prop": "add_pattern_from_file.pointer_dereference.4",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of parameter `a` or `mlist` without NULL check, but real callers in libarchive always pass valid pointers to these internal helper functions."
+  },
+  {
+    "file": "archive_match",
+    "fn": "add_pattern_wcs",
+    "prop": "add_pattern_wcs.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `pattern` parameter as NULL, but real callers in archive_match always pass valid wchar_t strings from user input or internal state."
+  },
+  {
+    "file": "archive_match",
+    "fn": "add_pattern_mbs",
+    "prop": "match_list_add.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "archive_mstring_copy_mbs_len likely failed (returning error) but add_pattern_mbs ignores the return value and passes a partially-initialized match to match_list_add; real callers would check mstring_c"
+  },
+  {
+    "file": "archive_match",
+    "fn": "archive_match_include_date",
+    "prop": "set_timefilter_date.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function casts `_a` to `struct archive_match *` and passes to `set_timefilter_date` without NULL check, but real callers of this public API never pass NULL archive handles."
+  },
+  {
+    "file": "archive_match",
+    "fn": "archive_match_free",
+    "prop": "archive_match_free.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for `_a` despite the explicit NULL check at function entry, or the `archive_check_magic` macro dereferences `_a` before the NULL check can protect it\u2014real callers eithe"
+  },
+  {
+    "file": "archive_match",
+    "fn": "archive_match_path_unmatched_inclusions",
+    "prop": "archive_match_path_unmatched_inclusions.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->inclusions` after the cast from `_a`, but real callers pass a valid archive_match pointer that survives the magic check\u2014this is a handle-NULL deref artifact where CBMC set `_a` t"
+  },
+  {
+    "file": "archive_match",
+    "fn": "archive_match_set_inclusion_recursion",
+    "prop": "archive_match_set_inclusion_recursion.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: archive_check_magic likely validates _a is non-NULL but CBMC explores path where _a is NULL at cast, which real callers never pass."
+  },
+  {
+    "file": "archive_match",
+    "fn": "cmp_key_mbs",
+    "prop": "strcmp.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "The `key` parameter is dereferenced by strcmp without NULL check, but real callers in archive_match.c always pass valid string pointers from controlled match operations, never NULL."
+  },
+  {
+    "file": "archive_match",
+    "fn": "entry_list_free",
+    "prop": "entry_list_free.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `list` without NULL check but real callers in libarchive always pass valid `entry_list` pointers from initialized structures, never NULL."
+  },
+  {
+    "file": "archive_match",
+    "fn": "match_list_add",
+    "prop": "match_list_add.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `list->last` without NULL check but real callers always pass initialized match_list structures where `last` points to valid memory (typically `&list->first` initially)."
+  },
+  {
+    "file": "archive_match",
+    "fn": "entry_list_add",
+    "prop": "entry_list_add.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `list->last` without NULL check but real callers always pass initialized entry_list structures where `last` points to a valid location (typically `&list->first` initially)."
+  },
+  {
+    "file": "archive_match",
+    "fn": "cmp_node_mbs",
+    "prop": "strcmp.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "The function checks p1 and p2 for NULL before strcmp, but CBMC likely flagged a path where archive_mstring_get_mbs succeeds (returns non-error) yet leaves p1/p2 pointing to invalid memory\u2014an artifact "
+  },
+  {
+    "file": "archive_match",
+    "fn": "match_list_free",
+    "prop": "match_list_free.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `list->first` without NULL check on `list` itself, but real callers in libarchive always pass valid `struct match_list*` pointers, never NULL."
+  },
+  {
+    "file": "archive_match",
+    "fn": "match_list_unmatched_inclusions_next",
+    "prop": "match_list_unmatched_inclusions_next.pointer_dereference.97",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferences `list` at line 97 without NULL check, but real callers in libarchive always pass valid `list` pointers from initialized `archive_match` structures."
+  },
+  {
+    "file": "archive_match",
+    "fn": "match_owner_id",
+    "prop": "match_owner_id.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences ids->ids without NULL check on ids parameter, but real callers in archive_match.c always pass valid struct id_array pointers from initialized match objects."
+  },
+  {
+    "file": "archive_match",
+    "fn": "match_owner_name_mbs",
+    "prop": "match_owner_name_mbs.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `list` parameter to NULL when real callers always pass a valid initialized match_list structure (sibling-field pattern: iterating `list->first` without NULL check on `list` itself)."
+  },
+  {
+    "file": "archive_match",
+    "fn": "path_excluded",
+    "prop": "path_excluded.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "Function checks `a == NULL` at entry and returns early, so line 25 dereference of `a` (likely `a->inclusions.first`) cannot be NULL in real execution."
+  },
+  {
+    "file": "archive_pathmatch",
+    "fn": "pm",
+    "prop": "pm.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for `p` or `s` parameters, but real callers (archive_pathmatch wrapper) would never invoke pm with NULL pointers."
+  },
+  {
+    "file": "archive_pathmatch",
+    "fn": "__archive_pathmatch_w",
+    "prop": "__archive_pathmatch_w.pointer_dereference.23",
+    "verdict": "UNREALISTIC",
+    "reason": "Dereferences `p` and `s` after NULL checks at lines 5-7, but CBMC likely walks an impossible path where parameters pass initial checks yet become NULL later in the same function execution."
+  },
+  {
+    "file": "archive_pathmatch",
+    "fn": "pm_list",
+    "prop": "pm_list.pointer.1",
+    "verdict": "REALISTIC",
+    "reason": "The function dereferences `p` (e.g., `*p` in multiple locations) after incrementing it without verifying `p < end`, particularly in the `case '\\\\'` fall-through and after `rangeEnd = *++p` when handli"
+  },
+  {
+    "file": "archive_pathmatch",
+    "fn": "pm_slashskip_w",
+    "prop": "pm_slashskip_w.pointer_dereference.5",
+    "verdict": "REALISTIC",
+    "reason": "The function dereferences s[1] without checking if s[0] is the null terminator first, allowing out-of-bounds read when s points to a single-character string ending in '.' or '/'."
+  },
+  {
+    "file": "archive_pathmatch",
+    "fn": "pm_w",
+    "prop": "pm_w.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `p` or `s` without NULL checks, but real callers (archive_pathmatch_w wrapper) never pass NULL pointers for pattern/string parameters."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "archive_read_format_cab_bid",
+    "prop": "archive_read_format_cab_bid.pointer_dereference.1",
+    "verdict": "REALISTIC",
+    "reason": "The pointer arithmetic `p + 8` in the inner while-loop condition can overflow when `p` approaches the end of the `bytes_avail` window, and the subsequent `find_cab_magic(p)` call may read beyond valid"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "archive_read_format_cab_cleanup",
+    "prop": "archive_read_format_cab_cleanup.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format` without NULL check, but real callers in libarchive's cleanup path always ensure `a->format` is valid before invoking format-specific cleanup functions."
+  },
+  {
+    "file": "archive_pathmatch",
+    "fn": "pm_list_w",
+    "prop": "pm_list_w.pointer.1",
+    "verdict": "REALISTIC",
+    "reason": "The function dereferences `*p` and `*++p` without checking that the incremented pointer remains `< end`, allowing out-of-bounds reads when processing escape sequences or ranges at the end of the input"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "archive_read_format_cab_options",
+    "prop": "archive_read_format_cab_options.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` without NULL check, but real callers in libarchive's format-registration system always populate `format->data` during initialization before invoking format-specific"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "archive_read_format_cab_read_data_skip",
+    "prop": "archive_read_format_cab_read_data_skip.pointer_dereference.73",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` at line 73 without NULL checks, but real callers in libarchive's read pipeline always initialize format->data before invoking format-specific callbacks."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "archive_read_format_cab_read_data",
+    "prop": "archive_read_format_cab_read_data.pointer_dereference.67",
+    "verdict": "UNREALISTIC",
+    "reason": "Dereferences cab->entry_cffile without NULL check, but this is a format-specific read function only called after successful header parsing that populates entry_cffile."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_checksum_cfdata",
+    "prop": "cab_checksum_cfdata.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely passes NULL or uninitialized pointer for parameter `p` which real callers (parsing CAB file data) always populate with valid buffer addresses from archive reads."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_checksum_finish",
+    "prop": "cab_checksum_finish.pointer_dereference.85",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `cab->entry_cfdata` (line 5) or `cab->entry_cffolder` (line 31) without NULL checks, but real callers in the CAB format reader always populate these pointers during archive initializ"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_checksum_update",
+    "prop": "cab_checksum_update.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set cfdata->sum_ptr to non-NULL while sum==0 or left cfdata uninitialized, but real callers ensure coherent state between sum field and sum_ptr before calling this function (early return g"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_consume_cfdata",
+    "prop": "cab_consume_cfdata.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set cab->entry_cfdata to NULL in the harness, but real callers ensure it's populated before calling cab_consume_cfdata (cfdata is dereferenced immediately without NULL check, indicating an"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_minimum_consume_cfdata",
+    "prop": "cab_minimum_consume_cfdata.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `cab->entry_cfdata` or `cab->entry_cffolder` to NULL in the harness, but real callers ensure these are initialized before calling this function (typical handle-NULL deref pattern in ar"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_next_cfdata",
+    "prop": "cab_next_cfdata.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set cab->entry_cffolder to NULL in the harness, but real callers ensure it's initialized before calling cab_next_cfdata (the function dereferences it without NULL checks throughout)."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_read_ahead_cfdata",
+    "prop": "cab_read_ahead_cfdata.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set cab->entry_cffolder to NULL in the harness, but real callers ensure it's populated before invoking cab_read_ahead_cfdata (typical handle-NULL deref pattern in format parsers)."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_read_ahead_cfdata_deflate",
+    "prop": "cab_read_ahead_cfdata_deflate.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set cfdata (cab->entry_cfdata) to NULL when real callers always populate it before invoking this function."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_read_ahead_cfdata_none",
+    "prop": "cab_read_ahead_cfdata_none.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `cfdata` (from `cab->entry_cfdata`) without NULL check, but real callers in CAB format parsing always initialize entry_cfdata before invoking read-ahead functions on active entries."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_read_ahead_cfdata_lzx",
+    "prop": "cab_read_ahead_cfdata_lzx.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of `cfdata` (line `cfdata = cab->entry_cfdata;`) but real callers ensure `cab->entry_cfdata` is populated before invoking this function, making NULL an artifact of th"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_read_header",
+    "prop": "cab_read_header.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely sets `a->format->data` (cab pointer) to NULL, but real callers always initialize format data before invoking format-specific read functions."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_read_data",
+    "prop": "cab_read_data.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `cab->entry_cfdata` dereference at line 20/42 without NULL check, but real callers ensure this is populated during archive parsing before cab_read_data is invoked on valid CAB entr"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "cab_skip_sfx",
+    "prop": "cab_skip_sfx.pointer_arithmetic.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer arithmetic `p + 8 < q` or `p += next` where `__archive_read_ahead` returned non-NULL but CBMC's harness allowed `bytes` to be inconsistent with the returned buffer size\u2014rea"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "find_cab_magic",
+    "prop": "memcmp.precondition.1",
+    "verdict": "UNREALISTIC",
+    "reason": "memcmp precondition failure on `p` pointer validity/bounds \u2014 real callers in archive_read_support_format_cab.c pass pointers into validated buffer regions with sufficient length, but CBMC's harness li"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_br_fillup",
+    "prop": "lzx_br_fillup.pointer_dereference.29",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set strm->next_in to NULL or strm->avail_in to a value inconsistent with next_in validity, but real callers maintain the invariant that next_in is valid when avail_in > 0 (standard streami"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_cleanup_bitstream",
+    "prop": "lzx_cleanup_bitstream.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences strm->ds without NULL check, but this is internal cleanup code where real callers ensure ds is initialized during stream setup."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_decode",
+    "prop": "lzx_br_fixup.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set strm or strm->ds to NULL in the harness, but real callers always initialize the lzx_stream structure before calling lzx_decode."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_decode_blocks",
+    "prop": "lzx_decode_blocks.pointer_dereference.250",
+    "verdict": "UNCERTAIN",
+    "reason": "Failure at line 250 requires seeing the exact dereference and knowing if strm/ds can be NULL or if pos_tbl/huffman struct fields are validly initialized by real callers."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_decode_free",
+    "prop": "lzx_decode_free.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "Function checks strm->ds for NULL at entry but CBMC likely dereferences strm itself without NULL check\u2014real callers never pass NULL strm to a cleanup function."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_read_bitlen",
+    "prop": "lzx_decode_huffman.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes uninitialized or NULL `ds->pt` struct where real callers always initialize the pretree Huffman table before calling lzx_read_bitlen."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_decode_init",
+    "prop": "lzx_decode_init.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences strm->ds after allocating it, but CBMC harness likely passes strm with uninitialized fields while real callers ensure strm is properly initialized before calli"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_huffman_free",
+    "prop": "lzx_huffman_free.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL hf pointer, but real callers in CAB decompression context always pass valid huffman struct pointers from initialized state."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_huffman_init",
+    "prop": "lzx_huffman_init.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: CBMC likely flags `hf->bitlen` or `hf->tbl` field access when `hf` is NULL, but real callers in libarchive always pass a valid initialized `struct huffman*` from their decompression"
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_decode_huffman",
+    "prop": "lzx_decode_huffman.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL or uninitialized huffman pointer, but real callers in CAB decompression always initialize huffman tables before decode operations."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_read_blocks",
+    "prop": "lzx_read_blocks.pointer_dereference.7",
+    "verdict": "UNCERTAIN",
+    "reason": "Failure at pointer dereference in lzx_read_blocks without seeing the specific dereference line or knowing if strm/ds can be NULL from callers"
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "archive_read_format_cpio_options",
+    "prop": "archive_read_format_cpio_options.pointer_dereference.43",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` at line 43 without NULL checks, but real callers in libarchive always initialize format->data before invoking format-specific option handlers."
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "archive_read_format_cpio_cleanup",
+    "prop": "archive_read_format_cpio_cleanup.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely sets `a->format->data` to NULL when real callers ensure cleanup is only invoked on properly initialized archive structures with non-NULL format data."
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "archive_read_format_cpio_bid",
+    "prop": "archive_read_format_cpio_bid.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `a->format->data` as NULL when real callers always initialize the cpio struct before calling bid functions in libarchive's format-detection flow."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_read_pre_tree",
+    "prop": "lzx_read_pre_tree.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set strm or strm->ds to NULL in the harness, but real callers in libarchive's CAB decompression always pass a valid initialized lzx_stream with allocated ds before calling lzx_read_pre_tre"
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "archive_read_format_cpio_read_data",
+    "prop": "archive_read_format_cpio_read_data.pointer_dereference.115",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged deref of `a->format->data` at line 115, but real callers in libarchive always initialize format->data during format registration before invoking read_data callbacks."
+  },
+  {
+    "file": "archive_read_support_format_cab",
+    "fn": "lzx_translation",
+    "prop": "lzx_translation.pointer.3",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer arithmetic on `b` or `end` when `p` is NULL, but real callers pass valid buffers (the function guards with `size <= 10` and operates on decompressed data streams)."
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "archive_read_format_cpio_skip",
+    "prop": "archive_read_format_cpio_skip.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Dereferences `a->format->data` without NULL check but real callers in libarchive always initialize format->data during format registration before invoking skip callbacks."
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "is_afio_large",
+    "prop": "is_afio_large.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL or invalid pointer for `h` parameter, but real callers always pass valid buffer after length check (len >= afiol_header_size guards all accesses)."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "archive_read_format_iso9660_bid",
+    "prop": "archive_read_format_iso9660_bid.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "iso9660 struct pointer dereferenced without NULL check, but real callers initialize format->data before calling bid function."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "archive_read_format_iso9660_cleanup",
+    "prop": "archive_read_format_iso9660_cleanup.pointer_dereference.139",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format` to NULL in the harness, but real callers in libarchive's cleanup path always ensure `a->format` is valid before calling format-specific cleanup functions."
+  },
+  {
+    "file": "archive_read_support_format_cpio",
+    "fn": "find_newc_header",
+    "prop": "find_newc_header.pointer_arithmetic.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer arithmetic on `h` (from `__archive_read_ahead`) being NULL, but the function explicitly returns ARCHIVE_FATAL when `h == NULL` at line 13-14, so `p = h` and subsequent arit"
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "archive_read_format_iso9660_options",
+    "prop": "archive_read_format_iso9660_options.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferenced `a->format` or `a->format->data` without NULL check, but real callers in libarchive always initialize format state before calling format-specific option handlers."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "cache_get_entry",
+    "prop": "cache_get_entry.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferenced iso9660 parameter without NULL check, but real callers in libarchive always pass valid iso9660 context after initialization."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "cache_add_entry",
+    "prop": "cache_add_entry.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set iso9660->cache_files.last to NULL in harness, but real callers initialize this pointer during iso9660 structure setup before any cache operations."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "archive_read_format_iso9660_read_data",
+    "prop": "archive_read_format_iso9660_read_data.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "Pointer dereference at line 37 (iso9660->entry_content->offset) occurs after entry_content is checked non-NULL and advanced via linked-list traversal; CBMC likely models entry_content->next as arbitra"
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "choose_volume",
+    "prop": "choose_volume.pointer_dereference.139",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of parameter `a` (struct archive_read *) at line 139, but real callers in libarchive never pass NULL for the archive handle\u2014it's a fundamental context object always i"
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "heap_add_entry",
+    "prop": "heap_add_entry.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `heap->files[parent]->key` deref when `heap->files` is NULL, but real callers always initialize the heap_queue structure before calling heap_add_entry."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isBootRecord",
+    "prop": "isBootRecord.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "Parameter `h` is dereferenced without NULL check but real callers in ISO9660 parsing always pass valid buffer pointers from read operations."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isEVD",
+    "prop": "isEVD.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "Parameter `h` is dereferenced without NULL check but real callers in ISO9660 parsing always pass valid buffer pointers from archive read operations."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "heap_get_entry",
+    "prop": "heap_get_entry.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models heap->files as NULL or heap->used as garbage, but real callers maintain heap invariant where used>0 implies files[0..used-1] are valid pointers."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "build_pathname_utf16be",
+    "prop": "build_pathname_utf16be.pointer_dereference.77",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `p[*len]` or `memcpy(p + *len, ...)` at line 77 with `p` being NULL, but real callers allocate a buffer before invoking this recursive path-builder."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isJolietSVD",
+    "prop": "isJolietSVD.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences parameter `h` (unsigned char pointer) without NULL check, but real callers always pass valid buffer from parsed ISO9660 volume descriptor sectors."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isNull",
+    "prop": "memcmp.precondition.2",
+    "verdict": "REALISTIC",
+    "reason": "The function does not validate that `h + offset` remains within valid bounds before passing to memcmp, allowing caller-controlled offset to cause out-of-bounds access."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isSVD",
+    "prop": "isRootDirectoryRecord.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes unconstrained `h` pointer where real callers always provide valid 2048-byte sector buffer from archive read."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isVDSetTerminator",
+    "prop": "isVDSetTerminator.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences parameter `h` at index 0 without NULL check, but real callers in ISO9660 parsing always pass valid buffer pointers from read operations."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isRootDirectoryRecord",
+    "prop": "isRootDirectoryRecord.pointer_dereference.17",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness passes NULL or uninitialized pointer p, but real callers in ISO9660 parsing always pass valid directory record buffers after reading from archive."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isPVD",
+    "prop": "isPVD.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for the `iso9660` parameter, but real callers in archive_read_support_format_iso9660.c always pass a valid initialized struct pointer when invoking isPVD."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isValid733Integer",
+    "prop": "isValid733Integer.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences p[0] through p[7] without NULL check, but real callers in ISO9660 parsing always pass valid pointers to 8-byte fields from parsed structures."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isodate7",
+    "prop": "isodate7.pointer_dereference.35",
+    "verdict": "UNREALISTIC",
+    "reason": "Parameter v is dereferenced without NULL check but real callers parsing ISO9660 directory records always pass valid 7-byte timestamp buffers, never NULL."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isVolumePartition",
+    "prop": "isVolumePartition.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `h` parameter without NULL check but real callers (parsing ISO9660 volume descriptors) always pass valid buffer pointers from read operations."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isodate17",
+    "prop": "isodate17.pointer_dereference.35",
+    "verdict": "REALISTIC",
+    "reason": "Function dereferences v[0] through v[16] without any NULL check, and caller can pass NULL pointer."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "isodate7_valid",
+    "prop": "isodate7_valid.pointer_dereference.35",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness passed NULL for parameter `v` but real callers in ISO9660 parsing always pass valid 7-byte buffer pointers from parsed directory records."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "parse_rockridge",
+    "prop": "parse_rockridge.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for parameter 'a' or 'file', but real callers in ISO9660 parsing always provide valid pointers to initialized structures."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "next_cache_entry",
+    "prop": "cache_add_entry.pointer_dereference.13",
+    "verdict": "UNCERTAIN",
+    "reason": "Trace truncated mid-expression (file->nu...) prevents analysis of whether cache_add_entry receives NULL from a bounded harness artifact or actual control flow bug."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "parse_file_info",
+    "prop": "parse_file_info.pointer_dereference.23",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set iso9660->logical_block_size to zero causing division-by-zero or set iso9660 struct fields incoherently; real callers initialize iso9660 state properly before parsing directory records."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "parse_rockridge_TF1",
+    "prop": "isodate17.pointer_dereference.5",
+    "verdict": "REALISTIC",
+    "reason": "The function checks data_length >= 17 before calling isodate17() but does not verify the pointer arithmetic stays within the original buffer bounds, allowing out-of-bounds access if the initial data_l"
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "parse_rockridge_SL1",
+    "prop": "parse_rockridge_SL1.pointer_dereference.40",
+    "verdict": "REALISTIC",
+    "reason": "The function reads `nlen` from untrusted input and advances `data` by `nlen` without verifying `nlen <= data_length` in all code paths (e.g., cases 0x02, 0x04, 0x08, 0x10, 0x20 don't consume data but "
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "re_get_entry",
+    "prop": "re_get_entry.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences iso9660 parameter without NULL check, but real callers in archive_read_support_format_iso9660.c always pass valid iso9660 context pointer from archive's format_data."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "re_add_entry",
+    "prop": "re_add_entry.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL iso9660 parameter, but real callers in archive_read_support_format_iso9660.c always pass valid iso9660 context from archive extraction state."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "next_CE",
+    "prop": "next_CE.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models heap->reqs as NULL or uninitialized, but real callers always initialize the read_ce_queue structure before calling next_CE on a valid heap with allocated reqs array."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "read_CE",
+    "prop": "read_CE.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `heap->reqs[0].file` dereference without proving `heap->cnt > 0`, but the while-loop condition `heap->cnt && heap->reqs[0].offset == ...` guarantees cnt is nonzero before entering "
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "read_children",
+    "prop": "read_children.pointer_dereference.103",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `parent->name.s` dereference at line 103 (in error message), but real callers never pass a NULL parent since this is an internal function processing a validated directory hierarchy"
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "rede_get_entry",
+    "prop": "rede_get_entry.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `re` without NULL check but this is a static inline helper where real callers in the ISO9660 parser always pass valid file_info pointers from their own data structures."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "release_files",
+    "prop": "release_files.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set iso9660 parameter to NULL when real callers always pass a valid initialized iso9660 structure pointer."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "register_CE",
+    "prop": "register_CE.pointer_dereference.97",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL when real callers always initialize iso9660 context before calling register_CE."
+  },
+  {
+    "file": "archive_read_support_format_iso9660",
+    "fn": "zisofs_read_data",
+    "prop": "zisofs_read_data.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL in the harness, but real callers always initialize this through archive_read_support_format_iso9660() before invoking zisofs_read_data."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "archive_read_format_mtree_options",
+    "prop": "archive_read_format_mtree_options.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` without NULL checks, but real callers in libarchive always initialize format->data before invoking format-specific option handlers."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "bid_entry",
+    "prop": "bid_entry.pointer_arithmetic.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `pp + len` forming `pp_end` when `len` is unconstrained, but real callers pass coherent buffer pointer + length pairs from parsed input."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "bid_keyword_list",
+    "prop": "bid_keyword_list.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "The dereference `*p` after `len > 0` checks occurs when CBMC's harness passes a buffer shorter than `len` claims, but real callers pass coherent buffer+length pairs from parsed mtree data."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "cleanup",
+    "prop": "cleanup.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL in the harness, but real callers ensure `mtree` is allocated before cleanup is invoked as a registered cleanup handler."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "detect_form",
+    "prop": "detect_form.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `__archive_read_ahead` returning non-NULL with `avail` set but `p` pointing to unmapped memory, whereas real callers ensure returned pointer is valid for at least `avail` bytes when"
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "la_strsep",
+    "prop": "la_strsep.pointer_dereference.29",
+    "verdict": "UNREALISTIC",
+    "reason": "Function checks sp/(*sp)/(**sp) for NULL/empty before any dereference; CBMC likely exploring impossible path after the guard returns NULL."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "free_options",
+    "prop": "free_options.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely creates a malformed mtree_option linked list (e.g., corrupted next pointer or head pointing to invalid memory) that real callers never produce since they construct these lists thro"
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "mtree_cmp_key",
+    "prop": "mtree_cmp_key.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for `key` parameter, but real callers (rb-tree lookup functions) always pass valid string keys when searching for mtree entries by name."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "mtree_cmp_node",
+    "prop": "mtree_cmp_node.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL or uninitialized rb_node pointers, but real callers (red-black tree operations) never invoke comparison function with NULL nodes or nodes lacking valid name fields."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "parse_digest",
+    "prop": "parse_digest.pointer_dereference.11",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `a` parameter as potentially NULL, but real callers in libarchive always pass a valid `archive_read` pointer to format-specific parsing functions."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "parse_device",
+    "prop": "la_strsep.pointer_dereference.17",
+    "verdict": "UNREALISTIC",
+    "reason": "la_strsep modifies `dev` pointer in-place; CBMC harness likely passes NULL or uninitialized `dev` after the strchr split, but real callers ensure `val` is a valid null-terminated string where strchr e"
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "parse_line",
+    "prop": "parse_line.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "The function dereferences `mp->options` without NULL-checking `mp`, but real callers in mtree parsing always pass a valid mtree_entry pointer allocated during file parsing."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "process_global_set",
+    "prop": "process_global_set.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `strchr(line, '=')` returning NULL then dereferencing through `eq > next` comparison, but real callers ensure line contains valid mtree global-set syntax with '=' present."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "parse_file",
+    "prop": "parse_file.pointer_dereference.48",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for `mentry` parameter, but real callers in mtree parsing flow always provide valid allocated mtree_entry structs from the parsed tree."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "process_add_entry",
+    "prop": "process_add_entry.pointer_dereference.71",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of the `a` parameter (line 71 is near `archive_set_error(&a->archive, ...)`), but real callers in libarchive never pass NULL for the `archive_read` context pointer."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "process_global_unset",
+    "prop": "process_global_unset.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `global` as NULL when real callers (mtree parser) always pass a valid pointer to the global options list head."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "read_header",
+    "prop": "read_header.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL in the harness, but real callers ensure `mtree` is properly initialized during archive format setup before `read_header` is invoked."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "read_mtree",
+    "prop": "read_mtree.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `readline` returning success (len > 0) but leaving `p` as NULL, whereas real callers ensure `p` is valid when `len > 0`."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "readline",
+    "prop": "readline.pointer.1",
+    "verdict": "REALISTIC",
+    "reason": "The loop at line \"for (u = mtree->line.s + find_off; *u; ++u)\" can access u[1] and u[2] without bounds checking when u[0] == '\\\\', potentially reading past the null terminator if the string ends with "
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "skip",
+    "prop": "skip.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` without NULL checks, but real callers in libarchive's format-dispatch system always initialize format->data before invoking skip callbacks."
+  },
+  {
+    "file": "archive_read_support_format_mtree",
+    "fn": "remove_option",
+    "prop": "remove_option.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set the `global` parameter to NULL, but real callers pass a valid pointer to a struct mtree_option* (the dereference `*global` at line 37 would fail only if `global` itself is NULL, which "
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "add_value",
+    "prop": "add_value.pointer_dereference.39",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set code->tree to NULL or uninitialized when real callers always populate the huffman_code struct before calling add_value."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_cleanup",
+    "prop": "archive_read_format_rar_cleanup.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format` to NULL in the harness, but real callers in libarchive's cleanup path always ensure `a->format` is valid before invoking format-specific cleanup functions."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_has_encrypted_entries",
+    "prop": "archive_read_format_rar_has_encrypted_entries.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "Function checks _a, _a->format, and rar for NULL before dereferencing; CBMC likely flagged _a->format->data dereference but real callers never pass _a with non-NULL format field pointing to invalid me"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_options",
+    "prop": "archive_read_format_rar_options.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `a->format->data` without NULL check, but real callers in libarchive always initialize format->data before invoking format-specific option handlers."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_bid",
+    "prop": "archive_read_format_rar_bid.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models __archive_read_ahead returning NULL on first call then non-NULL on second call in PE-scan loop, but real callers ensure consistent buffer availability or the function returns early."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_read_data",
+    "prop": "archive_read_format_rar_read_data.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format` or `a->format->data` to NULL in the harness, but real callers always initialize the format structure before invoking format-specific read functions."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_read_data_skip",
+    "prop": "archive_read_format_rar_read_data_skip.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `a->format->data` deref at line 8, but real callers always invoke this through archive_read infrastructure that ensures `a->format` is non-NULL and properly initialized."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "archive_read_format_rar_seek_data",
+    "prop": "archive_read_format_rar_seek_data.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "Pointer dereference at line 19 (likely `a->format->data`) where CBMC harness passes NULL `archive_read*` or uninitialized `format` field, but real callers always operate on properly initialized archiv"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "clear_filters",
+    "prop": "clear_filters.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness passes uninitialized filters struct where real callers always initialize stack/progs/vm fields before calling clear_filters."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "copy_from_lzss_window_to_unp",
+    "prop": "copy_from_lzss_window_to_unp.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set rar->lzss.window to NULL in harness, but real callers initialize LZSS state before invoking copy operations on the window buffer."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "create_filter",
+    "prop": "create_filter.precondition_instance.8",
+    "verdict": "UNREALISTIC",
+    "reason": "The precondition failure is likely on the `memcpy(filter->globaldata, globaldata, globaldatalen)` where CBMC hasn't constrained that when `globaldata` is non-NULL, `globaldatalen` must be valid for th"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "copy_from_lzss_window",
+    "prop": "copy_from_lzss_window.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferences `a->format->data` without NULL check, but real callers in libarchive always initialize format->data before invoking format-specific functions like copy_from_lzss_window."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "execute_filter",
+    "prop": "execute_filter.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set filter->prog to NULL in the harness, but real callers in the RAR format parser always populate filter->prog before calling execute_filter."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "delete_filter",
+    "prop": "delete_filter.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC precondition failure on a filter parameter that real callers never pass as NULL or invalid; the function safely handles NULL via the while-guard and real code paths always provide valid filter po"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "delete_program_code",
+    "prop": "delete_program_code.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC precondition failure on a linked-list traversal where real callers never pass invalid/dangling pointers to delete_program_code."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "expand",
+    "prop": "expand.pointer_dereference.349",
+    "verdict": "UNCERTAIN",
+    "reason": "Failure at line 349 in expand() but function body is truncated before that line, cannot determine if it's a realistic bounds violation or CBMC artifact without seeing the actual dereference context."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "free_codes",
+    "prop": "free_codes.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely leaves `a->format` or `a->format->data` NULL, but real callers in libarchive always initialize the format structure before invoking format-specific functions like free_codes."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "lzss_emit_literal",
+    "prop": "lzss_emit_literal.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "lzss_current_pointer likely returns a pointer into a pre-allocated window buffer that CBMC models as potentially NULL, but real callers initialize the LZSS state with a valid buffer before decompressi"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "lzss_emit_match",
+    "prop": "lzss_emit_match.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged array access `rar->lzss.window[dstoffs]` or `rar->lzss.window[srcoffs]` but real callers ensure offset/length parameters are coherent with the initialized lzss window size through "
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "make_table_recurse",
+    "prop": "make_table_recurse.array_bounds.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `code->tree[node]` access but the function explicitly checks `node < 0 || node >= code->numentries` at entry, making out-of-bounds access impossible for real callers who respect th"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "new_node",
+    "prop": "new_node.pointer_dereference.33",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `code` parameter as NULL, but real callers in RAR decompression always pass a valid initialized huffman_code struct."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "parse_codes",
+    "prop": "parse_codes.pointer_dereference.163",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL in the harness, but real callers always initialize the format data structure before calling parse_codes."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "parse_filter",
+    "prop": "parse_filter.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "Dereferences `filters->stack` without NULL check at line `if (!filters->stack->next)`, but this occurs immediately after unconditionally appending `filter` to the stack via `*nextfilter = filter`, gua"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "ppmd_read",
+    "prop": "ppmd_read.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set the IByteIn parameter `p` to NULL or left `a->format` uninitialized, but real callers in the RAR decompression context always provide a valid IByteIn structure with properly initialize"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "rar_br_preparation",
+    "prop": "rar_br_preparation.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` without NULL check, but real callers in libarchive always initialize format->data during format detection before invoking format-specific functions like rar_br_prep"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "rar_br_fillup",
+    "prop": "rar_br_fillup.pointer_dereference.337",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `br->next_in` dereference at line 337 (the final `*br->next_in++`), but real callers ensure `br` is properly initialized and the preceding `if (br->next_in == NULL) return (0);` ch"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "rar_decode_byte",
+    "prop": "rar_decode_byte.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL, but real callers in libarchive always initialize the format data structure before invoking format-specific decode functions."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "read_data_compressed",
+    "prop": "rar_br_preparation.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: rar_br_preparation fails (returns < ARCHIVE_WARN) but CBMC walks past the return statement to dereference rar->br fields; real callers never continue after error returns."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "rar_read_ahead",
+    "prop": "rar_read_ahead.pointer_dereference.67",
+    "verdict": "UNREALISTIC",
+    "reason": "The function dereferences `avail` pointer without NULL check, but the conditional `if (avail)` guards all dereferences, making this a CBMC artifact where the pointer is set non-NULL but pointing to in"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "read_data_stored",
+    "prop": "read_data_stored.pointer_dereference.49",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `a->format->data` as potentially NULL, but real libarchive callers always initialize format->data during archive_read_support_format_rar() before invoking read callbacks."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "read_exttime",
+    "prop": "read_exttime.pointer.1",
+    "verdict": "REALISTIC",
+    "reason": "localtime/localtime_r/localtime_s can return NULL on invalid time_t (e.g., out-of-range), but tm is dereferenced without NULL check at `nsec = tm->tm_sec + rem / NS_UNIT`"
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "read_filter",
+    "prop": "rar_decode_byte.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "The failure is in rar_decode_byte dereferencing a pointer, but the function is called with stack-allocated local variables (&flags, &val, &code[i]) which cannot be NULL in real execution."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "read_next_symbol",
+    "prop": "read_next_symbol.pointer_dereference.43",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `code->table` or `code->tree` dereference when `code` param is NULL, but real callers in a decompression pipeline always pass a valid initialized huffman_code structure."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "add_new_filter",
+    "prop": "cdeque_push_back.pointer_dereference.25",
+    "verdict": "REALISTIC",
+    "reason": "Missing NULL check before dereferencing rar pointer in cdeque_push_back call."
+  },
+  {
+    "file": "archive_read_support_format_rar",
+    "fn": "skip_sfx",
+    "prop": "skip_sfx.pointer_arithmetic.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `p + 7 < q` or `p += 0x10` pointer arithmetic, but `__archive_read_ahead` returns a valid buffer with `bytes` length, and the loop guard `p + 7 < q` (where `q = p + bytes`) ensures"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "apply_filters",
+    "prop": "apply_filters.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set flt to NULL via cdeque_front when real callers maintain coherent filter queue state where successful CDE_OK return guarantees valid flt pointer."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "bid_sfx",
+    "prop": "bid_sfx.pointer_dereference.1",
+    "verdict": "REALISTIC",
+    "reason": "The pointer arithmetic `p + 8` and `buff + bytes_avail` can violate bounds when `bytes_avail` is small or `p` advances near the buffer end, causing out-of-bounds access before the loop guard checks it"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "bid_standard",
+    "prop": "memcmp.precondition.2",
+    "verdict": "UNREALISTIC",
+    "reason": "read_ahead returns false on failure so p would not be dereferenced; memcmp precondition violation is an artifact of CBMC not modeling read_ahead's success guarantee that p points to valid sizeof(rar5_"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "cdeque_front_fast",
+    "prop": "cdeque_front_fast.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `d` without NULL check but real callers in a deque implementation never pass NULL to accessor functions after proper initialization."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "cdeque_push_back",
+    "prop": "cdeque_push_back.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set d->arr to NULL in the harness, but real callers initialize the cdeque structure (including allocating arr) before use."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "cdeque_pop_front_fast",
+    "prop": "cdeque_pop_front_fast.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set d->arr to NULL in the harness, but real callers always initialize the cdeque structure with a valid array before calling pop operations."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "advance_multivolume",
+    "prop": "advance_multivolume.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "The pointer dereference of `rar` (returned by `get_context(a)`) fails only if `a` is NULL or malformed, but real callers in libarchive always pass a valid initialized `archive_read` structure."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "cdeque_pop_front",
+    "prop": "cdeque_pop_front_fast.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `d` as non-NULL (passed the `!d` check) but with uninitialized/garbage internal state that real callers never produce after proper `cdeque_init`."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "circular_memcpy",
+    "prop": "circular_memcpy.precondition_instance.2",
+    "verdict": "REALISTIC",
+    "reason": "The function performs memcpy with size `(end - start)` without validating that `end >= start`, allowing negative size to be cast to a huge size_t, causing buffer overflow."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "copy_string",
+    "prop": "copy_string.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged the window_buf dereference after the NULL check, but real callers ensure window_buf is allocated during initialization before copy_string is ever invoked in the decompression loop."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "dist_cache_touch",
+    "prop": "dist_cache_touch.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set idx to an out-of-bounds value when real callers constrain idx to valid dist_cache indices (sibling-field-indexing pattern)."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "cdeque_front",
+    "prop": "cdeque_front_fast.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "Function expects valid deque pointer but CBMC harness likely passed NULL which real callers never do"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "do_uncompress_file",
+    "prop": "do_uncompress_file.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferenced `flt` after `cdeque_front` returned non-CDE_OK, but the code explicitly checks the return value and returns ARCHIVE_FATAL before any use of `flt`."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "do_uncompress_block",
+    "prop": "do_uncompress_block.pointer_dereference.1",
+    "verdict": "UNCERTAIN",
+    "reason": "Failure at pointer_dereference.1 without seeing the actual dereference line or knowing which pointer (rar, rar->cstate.window_buf, hdr, p, or a) is NULL in CBMC's counterexample."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "get_context",
+    "prop": "get_context.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL or uninitialized archive_read pointer, but real callers always operate on properly initialized archive objects where format->data is set during format registration."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "decode_number",
+    "prop": "decode_number.array_bounds.1",
+    "verdict": "REALISTIC",
+    "reason": "The function indexes `table->decode_num[pos]` after clamping `pos >= table->size` to 0, but never validates that `table->size > 0`, allowing array access at index 0 when the table is empty."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "init_unpack",
+    "prop": "init_unpack.pointer_dereference.99",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged dereferencing `rar` at line 99 (first field access), but real callers in libarchive never pass NULL to init_unpack\u2014it's an internal helper operating on an already-allocated archive"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "parse_filter",
+    "prop": "parse_filter.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `ar` to NULL in the harness, but real callers always pass a valid archive_read pointer initialized by libarchive's archive creation functions."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "process_base_block",
+    "prop": "skip_unprocessed_bytes.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "skip_unprocessed_bytes dereferences `a` but CBMC harness likely passes NULL while real callers (archive_read functions) always provide valid archive_read pointer."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "parse_filter_data",
+    "prop": "read_bits_16.pointer_dereference.23",
+    "verdict": "UNCERTAIN",
+    "reason": "Depends on whether `read_bits_16` can be called with `rar` in a state where its internal pointer (likely `rar->cstate.window_buf` or similar) is NULL due to CBMC's harness not initializing RAR5 decomp"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "process_block",
+    "prop": "process_block.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "Dereferences `rar` (from `get_context(a)`) without NULL check, but real callers ensure `a->format->data` is initialized during format registration so `rar` is never NULL."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "process_head_file",
+    "prop": "init_window_mask.pointer_dereference.3",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `rar->cstate.window_buf` to NULL in harness, but real callers ensure solid files only occur after window initialization (checked by preceding conditional that returns ARCHIVE_FATAL if "
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "rar5_cleanup",
+    "prop": "clear_data_ready_stack.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "get_context(a) can return NULL in CBMC's harness but real callers only invoke rar5_cleanup after successful format detection where rar is guaranteed non-NULL."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "rar5_bid",
+    "prop": "memcmp.precondition.2",
+    "verdict": "UNREALISTIC",
+    "reason": "memcmp.precondition failure in bid_standard/bid_sfx likely stems from CBMC's unbounded harness passing an archive_read with uninitialized buffer state that real callers (archive_read_open) always prop"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "rar5_read_data",
+    "prop": "rar5_read_data.pointer_dereference.25",
+    "verdict": "UNREALISTIC",
+    "reason": "The pointer dereference at line 25 (checking `rar->file.dir > 0`) assumes `rar` could be NULL, but `get_context(a)` in real usage always returns a valid initialized context after successful format det"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "rar5_has_encrypted_entries",
+    "prop": "rar5_has_encrypted_entries.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "Function checks _a and _a->format for NULL before dereferencing, but CBMC likely models _a->format->data dereference as failing when real callers ensure format is fully initialized with non-NULL data "
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "rar5_read_data_skip",
+    "prop": "rar5_read_data_skip.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferenced `rar` (from `get_context(a)`) without a NULL check, but real callers in libarchive's read pipeline always operate on initialized archive contexts where `get_context` returns a"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "rar5_read_header",
+    "prop": "get_context.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "get_context dereferences `a->format->data` without NULL check, but real callers always register the format first, ensuring non-NULL context."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "read_bits_16",
+    "prop": "read_bits_16.pointer_dereference.23",
+    "verdict": "REALISTIC",
+    "reason": "The function checks `in_addr >= cur_block_size` but then accesses `p[in_addr]`, `p[in_addr + 1]`, and `p[in_addr + 2]` without verifying that `in_addr + 2 < cur_block_size`, allowing out-of-bounds rea"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "read_bits_32",
+    "prop": "read_bits_32.pointer_dereference.23",
+    "verdict": "REALISTIC",
+    "reason": "The function checks only `in_addr >= cur_block_size` but then accesses `p[in_addr + 4]`, allowing out-of-bounds reads when `in_addr` is within 4 bytes of the block boundary."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "read_consume_bits",
+    "prop": "read_bits_16.pointer_dereference.23",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set the `p` parameter to NULL in its harness, but real callers in RAR5 decompression always pass a valid buffer pointer when calling read_consume_bits."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "read_filter_data",
+    "prop": "circular_memcpy.precondition_instance.1",
+    "verdict": "REALISTIC",
+    "reason": "circular_memcpy precondition failure likely indicates offset+4 exceeds window_mask bounds without validation, allowing caller-controlled offset to trigger out-of-bounds access."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "run_arm_filter",
+    "prop": "circular_memcpy.precondition_instance.1",
+    "verdict": "UNCERTAIN",
+    "reason": "Depends on whether flt->block_start + flt->block_length can exceed window bounds or if circular_memcpy's precondition validates the offset+length range against window_mask properly."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "read_var",
+    "prop": "read_var.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `*pvalue = result` or `*pvalue_len = ...` when pvalue/pvalue_len are NULL, but the code explicitly checks `if(pvalue)` and `if(pvalue_len)` before dereferencing\u2014real callers pass N"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "run_delta_filter",
+    "prop": "run_delta_filter.pointer_dereference.25",
+    "verdict": "REALISTIC",
+    "reason": "The function dereferences `rar->cstate.filtered_buf[dest_pos]` without any bounds check on `dest_pos`, which is computed from caller-controlled `flt->block_length` and `flt->channels`, allowing potent"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "run_filter",
+    "prop": "run_filter.pointer_dereference.51",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely passed NULL for the `flt` parameter at line 51 (flt->block_length dereference), but real callers in the RAR5 decompression pipeline always pass a valid filter_info pointer obtained from pa"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "run_e8e9_filter",
+    "prop": "circular_memcpy.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "circular_memcpy precondition failure likely stems from CBMC setting flt->block_start or flt->block_length to values that violate the function's preconditions, which real callers (RAR5 decompression pi"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "scan_for_signature",
+    "prop": "memcmp.precondition.1",
+    "verdict": "UNREALISTIC",
+    "reason": "read_ahead returns false on failure but CBMC likely models p as potentially uninitialized when read_ahead succeeds with chunk_size < sizeof(signature), which real callers never produce since chunk_siz"
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "skip_base_block",
+    "prop": "get_context.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `get_context(a)` returning NULL when real callers ensure `a` is a valid initialized archive_read with non-NULL context."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "verify_checksums",
+    "prop": "verify_checksums.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `a` via `get_context(a)` and `&a->archive` without NULL check, but real callers in libarchive never pass NULL archive_read pointers."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "skip_unprocessed_bytes",
+    "prop": "get_context.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "get_context returns rar5* from archive_read's format_data field; CBMC harness likely leaves format_data NULL but real callers always initialize it during archive_open before calling any format functio"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_cleanup",
+    "prop": "archive_read_format_zip_cleanup.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format` to NULL in the harness, but real callers in libarchive's cleanup path always ensure `a->format` is valid before invoking format-specific cleanup functions."
+  },
+  {
+    "file": "archive_read_support_format_rar5",
+    "fn": "try_skip_sfx",
+    "prop": "try_skip_sfx.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged the dereference of `p` (e.g., `p[0]`, `p[1]`) after `__archive_read_ahead` returns non-NULL, but real callers of `__archive_read_ahead` guarantee that a non-NULL return provides at"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_has_encrypted_entries",
+    "prop": "archive_read_format_zip_has_encrypted_entries.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "Function checks _a, _a->format, and zip for NULL before dereferencing; CBMC likely explored impossible path or harness passed NULL _a when real callers never do."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_options",
+    "prop": "archive_read_format_zip_options.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` without NULL checks, but real callers in libarchive always initialize format->data before invoking format-specific option handlers."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_read_data_skip_seekable",
+    "prop": "archive_read_format_zip_read_data_skip_seekable.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences `a->format->data` without NULL checks, but real callers in libarchive's read pipeline always initialize format->data during format detection before invoking format-specific functions"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_read_data_skip_streamable",
+    "prop": "archive_read_format_zip_read_data_skip_streamable.pointer_arithmetic.1",
+    "verdict": "REALISTIC",
+    "reason": "The pointer arithmetic `p <= buff + bytes_avail - 16` can underflow when bytes_avail < 16, but the check `if (bytes_avail < 16)` returns early, so the loop condition `while (p <= buff + bytes_avail - "
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_read_data",
+    "prop": "archive_read_format_zip_read_data.pointer_dereference.43",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` to NULL in the harness, but real callers always initialize the format data structure before invoking read operations."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_seekable_bid",
+    "prop": "archive_read_format_zip_seekable_bid.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely sets `a->format->data` (zip) to NULL, but real callers in libarchive's format-registration flow always allocate and initialize this before bid functions are invoked."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "archive_read_format_zip_streamable_bid",
+    "prop": "archive_read_format_zip_streamable_bid.pointer_dereference.1",
+    "verdict": "UNREALISTIC",
+    "reason": "__archive_read_ahead returns NULL only when insufficient data is available, but CBMC likely dereferences p after the NULL-check return without modeling that the function actually returns -1 on that pa"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "cmp_node",
+    "prop": "cmp_node.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness passed NULL archive_rb_node pointer but real callers (red-black tree operations) never invoke comparator with NULL nodes."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "consume_end_of_file_marker",
+    "prop": "consume_end_of_file_marker.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely sets zip->entry to NULL when real callers always populate it before calling this function (early return if ZIP_LENGTH_AT_END unset implies entry must exist)."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "check_authentication_code",
+    "prop": "check_authentication_code.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "The function checks `_p == NULL` before calling `__archive_read_ahead`, and only uses `_p` (as `p`) when non-NULL; CBMC likely explored an impossible path or the dereference at line 7 (inside `archive"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "init_WinZip_AES_decryption",
+    "prop": "init_WinZip_AES_decryption.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `zip->entry->aes_extra.strength` dereference at line 37 (the switch statement), but real callers ensure `zip` and `zip->entry` are properly initialized before invoking this functio"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "expose_parent_dirs",
+    "prop": "expose_parent_dirs.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged dereference of `zip` parameter without NULL check, but real callers in archive_read_support_format_zip.c always pass valid zip context pointer from initialized archive state."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "ppmd_read",
+    "prop": "ppmd_read.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `a->format->data` without NULL checks, but real callers initialize the archive_read structure properly before invoking format-specific read functions."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "init_traditional_PKWARE_decryption",
+    "prop": "init_traditional_PKWARE_decryption.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->format->data` (zip) to NULL in the harness, but real callers always initialize the format structure before invoking format-specific functions like this decryption initializer."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "read_decryption_header",
+    "prop": "read_decryption_header.pointer_dereference.13",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a` or `a->format` or `a->format->data` to NULL in the harness, but real callers always pass a valid initialized archive_read structure with format data populated."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "rsrc_basename",
+    "prop": "rsrc_basename.pointer.1",
+    "verdict": "REALISTIC",
+    "reason": "The pointer arithmetic `name_length - (s - name)` can underflow when `s` advances beyond `name + name_length`, causing memchr to be called with a huge length value and potentially reading out of bound"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "rsrc_cmp_node",
+    "prop": "rsrc_cmp_node.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences n1/n2 without NULL checks, but red-black tree comparison functions are only called by the tree implementation with valid node pointers, never NULL from real callers."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "rsrc_cmp_key",
+    "prop": "rsrc_cmp_key.pointer_dereference.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for the `key` parameter or creates a `zip_entry` with uninitialized `rsrcname.s`, but real callers using the rb-tree API always provide valid search keys and properly i"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zip_alloc_decryption_buffer",
+    "prop": "zip_alloc_decryption_buffer.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `a->format->data` dereference at line with `(struct zip *)(a->format->data)`, but real callers in libarchive always initialize `a->format` before invoking format-specific functions"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zip_get_local_file_header_size",
+    "prop": "memcmp.precondition.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC's memcmp precondition fails because __archive_read_ahead can return NULL (checked) but CBMC doesn't model that the NULL-check guarantees p is valid for the subsequent memcmp after p+=extra."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zip_read_data_deflate",
+    "prop": "zip_read_data_deflate.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely dereferenced `zip->entry` without checking NULL, but real callers ensure `zip->entry` is populated before invoking `zip_read_data_deflate` (sibling-field pattern where `entry` and other zi"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zip_read_data_none",
+    "prop": "zip_read_data_none.pointer_dereference.31",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of `a->format->data` (line casting to `zip`) or `zip->entry`, but real callers in libarchive always initialize format->data during archive_read_support_format_zip() a"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zip_read_data_zipx_ppmd",
+    "prop": "zip_read_data_zipx_ppmd.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of `zip` (line `struct zip* zip = (struct zip *)(a->format->data);`) but real callers in libarchive's read pipeline always ensure `a` and `a->format->data` are initia"
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zipx_ppmd8_init",
+    "prop": "zipx_ppmd8_init.pointer_dereference.57",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged a dereference of the `zip` parameter at line 57 (around `zip->ppmd8_valid`), but real callers in libarchive's ZIP format reader never pass NULL for the `zip` context structure."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zip_read_data_zipx_zstd",
+    "prop": "zip_read_data_zipx_zstd.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `zip` (from `a->format->data`) as potentially NULL, but real callers in libarchive's read pipeline always initialize format->data before invoking format-specific read functions."
+  },
+  {
+    "file": "archive_read_support_format_zip",
+    "fn": "zipx_zstd_init",
+    "prop": "zipx_zstd_init.precondition_instance.2",
+    "verdict": "REALISTIC",
+    "reason": "ZSTD_createDStream() can return NULL on allocation failure, but the code dereferences zip->zstdstream in ZSTD_initDStream() without checking for NULL first."
+  },
+  {
+    "file": "archive_string",
+    "fn": "add_sconv_object",
+    "prop": "add_sconv_object.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC harness likely passes NULL for parameter 'a' but real callers always pass a valid archive pointer from initialized archive objects."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_array_append",
+    "prop": "archive_string_append.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "Function is a trivial wrapper that dereferences `as` parameter without NULL check, but real callers never pass NULL for the archive_string pointer."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_append",
+    "prop": "archive_string_append.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `as->length` and `as->s` without NULL check on `as`, but real callers never pass NULL for the archive_string parameter."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_strappend_char",
+    "prop": "archive_string_append.pointer_dereference.41",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `as` parameter in `archive_string_append` call without NULL check, but real callers in libarchive never pass NULL to this utility function."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_append_from_wcs",
+    "prop": "archive_string_append_from_wcs.pointer_dereference.35",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences parameter `as` or `w` without NULL check, but real callers of this public API wrapper never pass NULL for the archive_string pointer."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_concat",
+    "prop": "archive_string_append.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged src-NULL deref (src->s, src->length) but real callers never pass NULL for src parameter in this library pattern."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_conversion_free",
+    "prop": "archive_string_conversion_free.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences parameter 'a' (a->sconv) without NULL check, but real callers in libarchive always pass valid archive pointers, never NULL."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_append_unicode",
+    "prop": "archive_string_append_unicode.pointer_arithmetic.29",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer arithmetic on `as->s` after `archive_string_ensure` returns non-NULL but CBMC's harness left `as->s` uninitialized or set `as->buffer_length` incoherently with the actual b"
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_ensure",
+    "prop": "archive_string_ensure.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `as->s` and `as->buffer_length` without NULL check on `as`, but real callers in libarchive never pass NULL for the archive_string parameter."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_string_free",
+    "prop": "archive_string_free.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `as` parameter without NULL check, but real callers never pass NULL to a string-free operation on a valid archive_string structure."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_wstrappend_wchar",
+    "prop": "archive_wstring_append.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `as` (via archive_wstring_append) without NULL check, but real callers never pass NULL to append operations on initialized archive_wstring structures."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_wstring_append",
+    "prop": "archive_wstring_append.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences `as->length` and `as->s` without NULL check on `as`, but real callers never pass NULL for the archive_wstring parameter."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_wstring_append_from_mbs",
+    "prop": "archive_wstring_append_from_mbs.pointer_dereference.23",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences `dest` parameter without NULL check, but real callers in libarchive consistently pass valid archive_wstring pointers, making this a handle-NULL deref artifact of CBMC's unbounded"
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_strncat",
+    "prop": "archive_string_append.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged NULL-deref on `as` parameter but real callers in libarchive always pass valid archive_string pointers, not NULL."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_strncat_l",
+    "prop": "archive_strncat_l.pointer_dereference.53",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC dereferences sc->converter or sc->utftmp without NULL-check on sc, but the code explicitly checks `if (sc == NULL)` at line 38 and returns early, so real callers reaching line 47+ always have non"
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_wstring_concat",
+    "prop": "archive_wstring_append.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set src to NULL or left src->s/src->length uninitialized, but real callers pass valid initialized archive_wstring structs with coherent s/length fields."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_wstring_free",
+    "prop": "archive_wstring_free.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "Handle-NULL deref: function dereferences struct parameter `as` without NULL check, but real callers never pass NULL to a free function operating on an owned string object."
+  },
+  {
+    "file": "archive_string",
+    "fn": "archive_wstrncat",
+    "prop": "archive_wstring_append.pointer_dereference.37",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set parameter `p` to NULL, but real callers of archive_wstrncat never pass NULL for the wchar_t pointer to concatenate."
+  },
+  {
+    "file": "archive_string",
+    "fn": "best_effort_strncat_in_locale",
+    "prop": "archive_string_append.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC's `archive_string_append.precondition_instance.1` likely fires on the `archive_string_append(as, _p, length)` call where `as` is NULL, but real callers always pass a valid initialized `archive_st"
+  },
+  {
+    "file": "archive_string",
+    "fn": "best_effort_strncat_from_utf16",
+    "prop": "best_effort_strncat_from_utf16.pointer_dereference.23",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer dereference on `as` or `_p` parameters, but real callers in libarchive never pass NULL for these struct/buffer pointers in active conversion paths."
+  },
+  {
+    "file": "archive_string",
+    "fn": "find_sconv_object",
+    "prop": "find_sconv_object.pointer_dereference.19",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely set `a->sconv` to a non-NULL pointer with uninitialized `from_charset` or `to_charset` fields, but real callers maintain coherent sconv list structures where these string pointers are alwa"
+  },
+  {
+    "file": "archive_string",
+    "fn": "best_effort_strncat_to_utf16",
+    "prop": "best_effort_strncat_to_utf16.pointer_arithmetic.5",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged pointer arithmetic on `utf16` or `as16->s`, but `archive_string_ensure` guarantees sufficient buffer allocation for `(length + 1) * 2` bytes beyond `as16->length`, making the loop'"
+  },
+  {
+    "file": "archive_string",
+    "fn": "free_sconv_object",
+    "prop": "free_sconv_object.precondition_instance.2",
+    "verdict": "UNREALISTIC",
+    "reason": "Function dereferences struct parameter `sc` without NULL check, but this is an internal cleanup helper where real callers never pass NULL (typical handle-NULL deref pattern in bounded verification)."
+  },
+  {
+    "file": "archive_string",
+    "fn": "iconv_strncat_in_locale",
+    "prop": "iconv_strncat_in_locale.pointer_dereference.197",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged dereference of `sc` parameter without NULL check, but real callers in libarchive always pass valid initialized `archive_string_conv` structures from controlled allocation sites."
+  },
+  {
+    "file": "archive_string",
+    "fn": "get_sconv_object",
+    "prop": "get_sconv_object.pointer_dereference.7",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely models `a` as NULL then dereferences `a->current_codepage` at line 17, but the function explicitly checks `if (a == NULL)` at line 15 and uses a different code path, making this an artifac"
+  },
+  {
+    "file": "archive_string",
+    "fn": "strncat_from_utf8_to_utf8",
+    "prop": "archive_string_append.precondition_instance.1",
+    "verdict": "UNREALISTIC",
+    "reason": "CBMC likely flagged `archive_string_append(as, src, e - src)` with `e > src` but `as` being NULL/invalid, which real callers prevent by passing a valid initialized archive_string struct."
+  },
+  {
+    "file": "archive_string",
+    "fn": "strncat_from_utf8_libarchive2",
+    "prop": "strncat_from_utf8_libarchive2.pointer_arithmetic.5",
+    "verdict": "REALISTIC",
+    "reason": "The pointer arithmetic `p >= end` check uses `end = as->s + as->buffer_length - MB_CUR_MAX - 1` but then writes up to MB_CUR_MAX bytes via wcrtomb/wctomb without verifying the write stays within bound"
+  }
+]

@@ -97,6 +97,28 @@ If a property is genuinely too rich for a single C boolean expression
 WEAKEST formal expression that captures the SAFETY portion (e.g.
 result != NULL, stackpos in range) and put the rest in the JSON
 "reasoning" field — never mix prose into precondition / postcondition.
+
+OPTIONAL PRE-CLAUSE SPLIT (bug-hunt mode):
+The JSON object may include two extra fields, "pre_validity" and
+"pre_protocol", that split the precondition into:
+
+  * pre_validity — caller's obligation. Memory-safety clauses the
+    callee body literally requires for every execution: valid(p),
+    valid_range(buf, 0, n), !null(p), in_bounds(arr, i), no_overflow(),
+    sizeof bounds, pointer != NULL, index < length, size <= constant.
+    These are ASSERTED at every call site in bug-hunt mode — a caller
+    that violates them is reported as a real bug.
+
+  * pre_protocol — caller cooperation. Higher-level invariants the
+    callee body assumes but cannot enforce: locked(L), state machine
+    equalities (obj->state == READY), reference counts, attached /
+    initialized / open flags, ghost predicates with no memory-safety
+    bite. These are ASSUMED, not asserted.
+
+When in doubt, classify as validity (asserting too much is debuggable;
+assuming too much hides bugs). Either field may be empty/absent — in
+that case the harness falls back to classifying the flat precondition
+heuristically.
 """
 
 # System prompt variants. The strict prompt swaps the DSL grammar but

@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Optional
 
 from bmc_agent.config import Config
-from bmc_agent.dsl_to_cbmc import postcond_to_assert, precond_to_assume
+from bmc_agent.dsl_to_cbmc import (
+    postcond_to_assert,
+    precond_to_assert,
+    precond_to_assume,
+)
 from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
 from bmc_agent.spec import Spec
 
@@ -57,6 +61,16 @@ def _extract_type_declarations(source_text: str, parsed_file: Optional["ParsedCF
 # 3=system, 4=extern). Whole line is removed.
 _CPP_LINEMARKER_RE = re.compile(r'^\s*#\s+\d+\s+"[^"]*"(?:\s+[0-9 ]+)?\s*$', re.MULTILINE)
 
+# Same shape, but anchored only at line start — strips the directive prefix
+# even when downstream code is concatenated on the same line (no trailing
+# newline before the next token). Observed on Linux-kernel preprocessed
+# .i files where lines like ``# 232 "/path/compiler.h"static inline ...``
+# appear; the strict end-of-line variant above can't touch these, so the
+# directive survives and CBMC parses ``"path"static`` as a syntax error.
+# We strip just the prefix (``# N "filename" [flags]``) and leave the
+# trailing code in place.
+_CPP_LINEMARKER_PREFIX_RE = re.compile(r'^\s*#\s+\d+\s+"[^"]*"(?:\s+[0-9 ]+)?', re.MULTILINE)
+
 
 def _strip_cpp_linemarkers(text: str) -> str:
     """Remove cpp ``# N "filename" [flags]`` line directives left over from
@@ -69,9 +83,13 @@ def _strip_cpp_linemarkers(text: str) -> str:
     pulled in via system ``#include``s).
 
     Replace each matched line with an empty line so downstream byte/line
-    counts stay aligned with whatever was before the strip.
+    counts stay aligned with whatever was before the strip. Then run a
+    second pass that also handles directives concatenated with code on
+    the same line — see _CPP_LINEMARKER_PREFIX_RE.
     """
-    return _CPP_LINEMARKER_RE.sub("", text)
+    text = _CPP_LINEMARKER_RE.sub("", text)
+    text = _CPP_LINEMARKER_PREFIX_RE.sub("", text)
+    return text
 
 
 def _find_decl_preamble(source_text: str, def_start: int) -> int:
@@ -469,12 +487,24 @@ def _generate_stub(
     callee_spec: Optional[Spec],
     parsed_file: ParsedCFile,
     extern_sigs: Optional[dict] = None,
+    spec_mode: str = "functional",
+    callee_relaxations: Optional[list[str]] = None,
 ) -> str:
     """Generate a C stub function for a callee.
 
     *extern_sigs* is an optional dict mapping callee names to FunctionSignature
     objects sourced from other parsed files (multi-file mode).  When the callee
     is not in *parsed_file.functions* we check here before giving up.
+
+    *spec_mode* selects how the callee's PRE is enforced inside the stub:
+
+    - ``"functional"`` (default): assume the full PRE inside the stub
+      body. This is the historical behaviour.
+    - ``"bug-hunt"``: split the PRE into validity (caller's obligation,
+      asserted at the top of the stub so CBMC reports the violation at
+      the caller's call site) and protocol (assumed). This exposes the
+      "caller-contract slip" failure mode documented in
+      findings/methodology_insight_2026-05-22.md.
     """
     sig = parsed_file.functions.get(callee_name)
     if sig is None and extern_sigs:
@@ -499,14 +529,56 @@ def _generate_stub(
         f"{ret_type} {stub_name}({params_str}) {{",
     ]
 
-    # Assert callee precondition (to catch violations)
+    # Apply any callee-spec relaxations the feedback loop has learned
+    # for THIS callee (bug-hunt mode FP corrections). The caller of
+    # _generate_stub passes the per-callee drop list; we replace the
+    # working ``callee_spec`` with a copy whose PRE has those clauses
+    # removed. The original spec object isn't mutated — callers may
+    # share it across multiple FUTs.
+    if callee_relaxations and callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
+        from bmc_agent.spec import Spec as _Spec, drop_clauses as _drop
+        callee_spec = _Spec(
+            function_name=callee_spec.function_name,
+            precondition=_drop(callee_spec.precondition, callee_relaxations),
+            postcondition=callee_spec.postcondition,
+            pre_validity=_drop(callee_spec.pre_validity, callee_relaxations),
+            pre_protocol=_drop(callee_spec.pre_protocol, callee_relaxations),
+            callee_specs=callee_spec.callee_specs,
+            loop_invariants=callee_spec.loop_invariants,
+            status=callee_spec.status,
+            spec_disagreement=callee_spec.spec_disagreement,
+        )
+
     if callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
         param_names = [pname for _, pname in params]
-        assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
-        if assume_stmts:
-            lines.append("    /* Assert callee precondition */")
-            for stmt in assume_stmts:
-                lines.append(f"    {stmt}")
+        if spec_mode == "bug-hunt":
+            pre_validity, pre_protocol = callee_spec.split_precondition()
+            assert_stmts = (
+                precond_to_assert(pre_validity, param_names)
+                if pre_validity.strip()
+                else []
+            )
+            assume_stmts = (
+                precond_to_assume(pre_protocol, param_names)
+                if pre_protocol.strip()
+                else []
+            )
+            if assert_stmts:
+                lines.append(
+                    "    /* bug-hunt: assert validity clauses (caller obligation) */"
+                )
+                for stmt in assert_stmts:
+                    lines.append(f"    {stmt}")
+            if assume_stmts:
+                lines.append("    /* bug-hunt: assume protocol clauses */")
+                for stmt in assume_stmts:
+                    lines.append(f"    {stmt}")
+        else:
+            assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
+            if assume_stmts:
+                lines.append("    /* Assume callee precondition */")
+                for stmt in assume_stmts:
+                    lines.append(f"    {stmt}")
 
     if ret_type.strip() == "void":
         lines.append("    /* void return — nothing to havoc */")
@@ -1103,23 +1175,53 @@ def _kernel_api_return_contract(name: str, ret_type: str) -> list[str]:
     false positives.
     """
     rt = (ret_type or "").strip().rstrip("*").strip()
+    # Include unsigned long / size_t for the copy_from_user / copy_to_user
+    # family, which return a bytes-not-copied count (unsigned). Without
+    # this, project-local wrappers like ``neuron_copy_from_user`` get
+    # NO contract and return unconstrained nondet, which then violates
+    # the caller's LLM-emitted POST that assumes "0 or negative" (kernel
+    # driver convention). See findings/empirical_validity_protocol_2026-05-22.md.
     if rt not in (
         "int", "signed int", "long", "signed long",
         "ssize_t", "int32_t", "int64_t",
+        "unsigned long", "size_t",
     ):
         return []
     matched = False
     for prefix in _KERNEL_INT_API_PREFIXES:
-        if name == prefix or name.startswith(prefix):
-            # Require that the next character (if any) be ``_`` so we
-            # match family members like ``usb_control_msg_send`` but
-            # don't match unrelated names like ``usb_control_msgxyz``.
-            tail = name[len(prefix):]
-            if tail == "" or tail.startswith("_"):
-                matched = True
-                break
+        # Forward match: ``name`` is exactly ``prefix`` or
+        # ``prefix_<family-member-suffix>``.
+        if name == prefix or (
+            name.startswith(prefix)
+            and (name[len(prefix):] == "" or name[len(prefix):].startswith("_"))
+        ):
+            matched = True
+            break
+        # Suffix match: project-local wrappers ``neuron_copy_from_user``,
+        # ``__copy_to_user``, etc. inherit the contract of the wrapped
+        # API. Require a leading ``_`` so we don't catch unrelated names
+        # like ``mycopy_to_user`` whose semantics we don't know.
+        if name.endswith("_" + prefix):
+            matched = True
+            break
     if not matched:
         return []
+    # For SIGNED return types the constraint ``result <= 0 &&
+    # result >= -4095`` cleanly encodes "0 or -ERRNO".
+    # For UNSIGNED return types (size_t / unsigned long — used by
+    # copy_from_user / copy_to_user), the literal ``-4095`` is
+    # interpreted as the unsigned bit-pattern ``ULONG_MAX - 4094``;
+    # then ``result <= 0 && result >= ULONG_MAX-4094`` is
+    # UNSATISFIABLE, which turns the stub into
+    # ``__CPROVER_assume(false)`` — silently pruning all callers
+    # (and hiding real bugs downstream). Cast through signed so the
+    # negative-ERRNO range is interpretable for either signedness.
+    is_unsigned = rt in ("unsigned long", "size_t")
+    if is_unsigned:
+        return [
+            "__CPROVER_assume(result == 0 || "
+            "((signed long)result <= -1 && (signed long)result >= -4095));",
+        ]
     return [
         "__CPROVER_assume(result <= 0 && result >= -4095);",
     ]
@@ -1172,11 +1274,34 @@ def _builtin_stub_return_contract(
         "malloc", "xmlMalloc", "xmlMallocAtomic", "OPENSSL_malloc",
         "OPENSSL_zalloc", "g_malloc", "g_malloc0",
         "CRYPTO_malloc", "CRYPTO_zalloc",
+        # Linux kernel allocator family. All take (size, ...) as the
+        # first arg and return a buffer of ``size`` writable bytes
+        # (or NULL on OOM). The ``_noprof`` suffix is the
+        # mem-alloc-profiling-disabled variant introduced in recent
+        # kernels. Without these entries the harness sees kmalloc'd
+        # buffers as unconstrained nondet pointers, which trips
+        # bug-hunt's caller-contract R_OK assertions on the
+        # destination of copy_from_user even when the real code is
+        # correct (see findings/empirical_validity_protocol_2026-05-22.md
+        # — the last harness-modelling artefact).
+        "kmalloc", "kmalloc_noprof", "__kmalloc_noprof",
+        "kzalloc", "kzalloc_noprof",
+        "vmalloc", "vmalloc_noprof", "vzalloc", "vzalloc_noprof",
+        "devm_kmalloc", "devm_kzalloc",
     }
-    calloc_like = {"calloc", "g_malloc_n", "g_malloc0_n"}
+    calloc_like = {
+        "calloc", "g_malloc_n", "g_malloc0_n",
+        # Kernel (n, size) allocators.
+        "kcalloc", "kcalloc_noprof",
+        "kmalloc_array", "kmalloc_array_noprof",
+        "kvmalloc_array", "kvmalloc_array_noprof",
+        "vmalloc_array_noprof", "vzalloc_array_noprof",
+        "devm_kcalloc",
+    }
     realloc_like = {
         "realloc", "xmlRealloc", "OPENSSL_realloc",
         "g_realloc", "CRYPTO_realloc",
+        "krealloc", "krealloc_noprof",
     }
     strdup_like = {
         "strdup", "xmlStrdup", "xmlCharStrdup",
@@ -1414,13 +1539,20 @@ def _infer_extern_return_contract(
 
     # Case "non-positive, possibly with macros": all observed literals
     # are 0 or negative → result <= 0
+    #
+    # Add a lower bound matching the kernel-ERRNO range (-4095). Without
+    # the lower bound, CBMC is free to pick LONG_MIN-sized values whose
+    # int truncation flips POSITIVE on assignment to ``int ret`` —
+    # silently breaking FUT POSTs of the shape ``ret == 0 || ret < 0``.
+    # The Linux convention is -ERRNO ∈ [-4095, -1], so the bound is
+    # both sound and matches every real callee in the inferred family.
     if not has_positive:
         if has_zero and has_negative:
-            return ["__CPROVER_assume(result <= 0);"]
+            return ["__CPROVER_assume(result <= 0 && result >= -4095);"]
         if has_zero and not has_negative:
             return ["__CPROVER_assume(result == 0);"]
         if has_negative and not has_zero:
-            return ["__CPROVER_assume(result < 0);"]
+            return ["__CPROVER_assume(result < 0 && result >= -4095);"]
 
     # Case "small fixed set including positives": e.g. {-1, 0, 1} comparators.
     if has_positive and len(constants) <= 4 and not saw_negative_macro:
@@ -2396,7 +2528,16 @@ def _generate_nd_decls(
                 )
                 # Emit a stack-allocated instance (CBMC fills it with
                 # nondet); we then constrain individual fields below.
-                lines.append(f"    {base_type} {obj_name};")
+                # Strip a leading ``const`` from the backing-storage
+                # declaration: ``const struct X _obj; ... _obj.field =
+                # backing;`` is illegal (assignment to const). The
+                # pointer type below keeps its const qualifier so the
+                # parameter signature matches; mutable-to-const
+                # conversion at the &_obj initialiser is legal.
+                base_for_decl = re.sub(
+                    r"^\s*const\s+", "", base_type
+                ).strip()
+                lines.append(f"    {base_for_decl} {obj_name};")
                 lines.append(f"    {ptype_stripped} {pname} = &{obj_name};")
                 for ftype, fname in fields:
                     lines.extend(
@@ -2482,6 +2623,32 @@ class HarnessGenerator:
     def __init__(self, config: Config) -> None:
         self.config = config
 
+    def _callee_relaxations(self, callee_name: str) -> list[str]:
+        """Read persisted ``callee_relaxations`` for *callee_name* from
+        the feedback-loop store. Failure (no file yet, store schema
+        mismatch, etc.) is silent — the relaxations are an OPTIMIZATION,
+        not a correctness invariant. The first-run case is always
+        "no relaxations recorded" → empty list → original PRE used.
+        """
+        try:
+            from bmc_agent.feedback_loop import LearnedConstraintsStore
+            store = LearnedConstraintsStore(self.config.artifact_dir)
+            return store.callee_relaxations(callee_name)
+        except Exception:
+            return []
+
+    def _function_post_relaxations(self, func_name: str) -> list[str]:
+        """Read persisted ``function_post_relaxations`` for *func_name*.
+        Symmetric to ``_callee_relaxations`` but applied to the FUT's
+        own postcondition before it becomes an ``assert(...)`` in main().
+        """
+        try:
+            from bmc_agent.feedback_loop import LearnedConstraintsStore
+            store = LearnedConstraintsStore(self.config.artifact_dir)
+            return store.function_post_relaxations(func_name)
+        except Exception:
+            return []
+
     def generate_reachability_harness(
         self,
         caller: "FunctionInfo",
@@ -2538,7 +2705,13 @@ class HarnessGenerator:
                 stubs_to_substitute.add(cname)
             else:
                 callee_spec = (all_specs or {}).get(cname)
-                stub_src = _generate_stub(cname, callee_spec, parsed_file)
+                stub_src = _generate_stub(
+                    cname,
+                    callee_spec,
+                    parsed_file,
+                    spec_mode=getattr(self.config, "spec_mode", "functional"),
+                    callee_relaxations=self._callee_relaxations(cname),
+                )
                 stubs_to_substitute.add(cname)
             stub_sections.append(stub_src)
 
@@ -2804,7 +2977,13 @@ class HarnessGenerator:
         stub_sections: list[str] = []
         for cname in sorted(external_callees):
             callee_spec = (all_specs or {}).get(cname)
-            stub_src = _generate_stub(cname, callee_spec, parsed_file)
+            stub_src = _generate_stub(
+                cname,
+                callee_spec,
+                parsed_file,
+                spec_mode=getattr(self.config, "spec_mode", "functional"),
+                callee_relaxations=self._callee_relaxations(cname),
+            )
             stub_sections.append(stub_src)
 
         # --- 4. Build real function definitions for local closure ---
@@ -3291,7 +3470,14 @@ class HarnessGenerator:
         stub_sections: list[str] = []
         for callee_name in sorted(all_stub_callees):
             callee_spec = spec.callee_specs.get(callee_name)
-            stub_src = _generate_stub(callee_name, callee_spec, parsed_file, extern_sigs)
+            stub_src = _generate_stub(
+                callee_name,
+                callee_spec,
+                parsed_file,
+                extern_sigs,
+                spec_mode=getattr(self.config, "spec_mode", "functional"),
+                callee_relaxations=self._callee_relaxations(callee_name),
+            )
             stub_sections.append(stub_src)
 
         # --- 3a. Emit inlined-callee bodies verbatim ---
@@ -3397,6 +3583,12 @@ class HarnessGenerator:
         # postcondition assertion compiles (the original functions are not
         # defined in the harness, only their stubs are).
         postcond_for_assert = spec.postcondition
+        # Apply persisted POST relaxations BEFORE callee->stub rewriting
+        # so the drop comparison sees the same shape the LLM emitted.
+        post_relax = self._function_post_relaxations(fn_name)
+        if post_relax:
+            from bmc_agent.spec import drop_clauses as _drop_post
+            postcond_for_assert = _drop_post(postcond_for_assert, post_relax)
         for _callee in sorted(defined_callees):
             postcond_for_assert = re.sub(
                 rf'\b{re.escape(_callee)}\s*\(',
@@ -3452,6 +3644,41 @@ class HarnessGenerator:
                 "#define NULL ((void *)0)\n"
                 "#endif\n"
                 "\n"
+                "/* Common kernel macros referenced by LLM-emitted specs.\n"
+                " * These are normally provided by ``<linux/kernel.h>``,\n"
+                " * ``<asm/page.h>``, ``<linux/errno.h>``, etc. The harness\n"
+                " * doesn't pull those in, so the LLM's spec atoms that\n"
+                " * mention them by symbol (``valid_range(buf, 0,\n"
+                " * PAGE_SIZE)``, ``result != -EFAULT``, ...) would fail\n"
+                " * to compile. Provide weak defaults so the harness\n"
+                " * compiles and the spec atom translates to a usable\n"
+                " * constraint.\n"
+                " */\n"
+                "#ifndef PAGE_SIZE\n"
+                "#define PAGE_SIZE 4096\n"
+                "#endif\n"
+                "#ifndef PAGE_SHIFT\n"
+                "#define PAGE_SHIFT 12\n"
+                "#endif\n"
+                "#ifndef EFAULT\n"
+                "#define EFAULT 14\n"
+                "#endif\n"
+                "#ifndef EINVAL\n"
+                "#define EINVAL 22\n"
+                "#endif\n"
+                "#ifndef ENOMEM\n"
+                "#define ENOMEM 12\n"
+                "#endif\n"
+                "#ifndef EAGAIN\n"
+                "#define EAGAIN 11\n"
+                "#endif\n"
+                "#ifndef EIO\n"
+                "#define EIO 5\n"
+                "#endif\n"
+                "#ifndef ENODEV\n"
+                "#define ENODEV 19\n"
+                "#endif\n"
+                "\n"
                 "/* Kernel-intrinsic stubs.\n"
                 " *\n"
                 " * Kernel TUs reference a long tail of kernel-internal helpers\n"
@@ -3492,6 +3719,14 @@ class HarnessGenerator:
                 "void clear_bit(unsigned long nr, volatile unsigned long *addr);\n"
                 "int test_and_set_bit(unsigned long nr, volatile unsigned long *addr);\n"
                 "int test_and_clear_bit(unsigned long nr, volatile unsigned long *addr);\n"
+                # cdev/inode helpers from <linux/cdev.h> / <linux/fs.h>.
+                # ``iminor`` extracts the minor part of an inode's
+                # device number; called by char-device handlers'
+                # ``open`` callbacks. Without this stub, ncdev_open
+                # (and many other driver open functions) fail with
+                # ``function 'iminor' is not declared``.
+                "unsigned int iminor(const struct inode *inode);\n"
+                "unsigned int imajor(const struct inode *inode);\n"
                 # NOTE: get_device/put_device/device_init_wakeup come
                 # from <linux/device.h> with struct device* signatures;
                 # do not stub them here, the preprocessed kernel headers
@@ -3826,7 +4061,20 @@ class HarnessGenerator:
             body_lines.append(f"    {fn_name}({call_args});")
             result_line_present = False
         else:
-            body_lines.append(f"    {ret_type} result = {fn_name}({call_args});")
+            # Strip storage-class / function-specifier qualifiers
+            # (``static``, ``extern``, ``inline``) from the result-var
+            # type. The parser preserves them as part of return_type so
+            # the harness's function-pointer typedefs etc. match the
+            # original, but a function-scope ``static`` on a local var
+            # requires a constant initializer — using ``static
+            # unsigned long result = parseoct(p, n);`` triggers a CBMC
+            # CONVERSION ERROR.
+            result_ret = re.sub(
+                r"^\s*(?:static|extern|inline|register)\s+",
+                "",
+                ret_type,
+            ).strip()
+            body_lines.append(f"    {result_ret} result = {fn_name}({call_args});")
             result_line_present = True
 
         # Step 3.5: when the postcondition will dereference `result` (e.g.

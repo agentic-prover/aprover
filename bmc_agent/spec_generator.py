@@ -22,7 +22,7 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from bmc_agent.artifacts import ArtifactStore
 from bmc_agent.config import Config
@@ -352,11 +352,62 @@ def _relax_postcondition_for_error_paths(post: str, body: str, func_name: str) -
     return softened
 
 
+class _ParsedSpecBase(NamedTuple):
+    precondition: str
+    postcondition: str
+    pre_validity: str = ""
+    pre_protocol: str = ""
+
+
+class ParsedSpec(_ParsedSpecBase):
+    """Result of parsing the LLM's JSON spec response.
+
+    ``precondition`` / ``postcondition`` are the legacy flat fields (still
+    populated for back-compat). ``pre_validity`` / ``pre_protocol`` are
+    optional structured pre-clause splits the LLM may emit alongside the
+    flat ``precondition`` — used by bug-hunt spec mode to assert the
+    validity clauses at the caller call site. Both default to ``""`` so
+    the downstream ``Spec.split_precondition`` falls back to the
+    classifier.
+
+    Back-compat: equality with a plain ``(pre, post)`` 2-tuple still
+    holds when the structured fields are empty. Phase 2 of the
+    validity/protocol split would otherwise have broken ~15 existing
+    parser tests that assert ``out == ("true", "result >= 0")`` etc.
+    """
+
+    def __eq__(self, other: object) -> bool:  # noqa: D401
+        if isinstance(other, tuple) and not isinstance(other, _ParsedSpecBase):
+            if len(other) == 2 and not self.pre_validity and not self.pre_protocol:
+                return (self.precondition, self.postcondition) == other
+        return super().__eq__(other)
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __iter__(self):
+        # Back-compat: when the structured split fields are empty,
+        # iteration / unpacking yields just (precondition, postcondition)
+        # so existing call sites can keep doing ``pre, post = result``.
+        # When either split field is non-empty, all four elements are
+        # yielded so the structured fields aren't silently dropped.
+        if not self.pre_validity and not self.pre_protocol:
+            yield self.precondition
+            yield self.postcondition
+            return
+        yield from super().__iter__()
+
+    # NamedTuple subclasses inherit __hash__ from tuple, but redefining
+    # __eq__ in CPython implicitly sets __hash__ to None unless we
+    # restore it explicitly.
+    __hash__ = _ParsedSpecBase.__hash__
+
+
 def _parse_llm_spec_response(
     response: str,
     func_name: str,
     simple_specs: bool = False,
-) -> Optional[tuple[str, str]]:
+) -> Optional[ParsedSpec]:
     """
     Parse LLM JSON response into (precondition, postcondition).
 
@@ -442,7 +493,19 @@ def _parse_llm_spec_response(
             else:
                 post = f"({post}) && ({functional})"
         if pre and post:
-            return pre, post
+            # Phase-2 structured split: when the LLM emits pre_validity /
+            # pre_protocol alongside the flat precondition, surface them
+            # so bug-hunt mode can assert validity at the call site. Both
+            # default to "" — Spec.split_precondition then falls back to
+            # the classifier in spec.py.
+            pre_validity = (data.get("pre_validity") or "").strip()
+            pre_protocol = (data.get("pre_protocol") or "").strip()
+            return ParsedSpec(
+                precondition=pre,
+                postcondition=post,
+                pre_validity=pre_validity,
+                pre_protocol=pre_protocol,
+            )
 
     return None
 
@@ -631,7 +694,7 @@ class SpecGenerator:
         self,
         user_prompt: str,
         func: "FunctionInfo",
-    ) -> Optional[tuple[str, str]]:
+    ) -> Optional[ParsedSpec]:
         """Run a spec-gen prompt, then re-prompt once if the first response is
         a vacuous ``true`` / ``true`` spec on a non-trivial function body.
 
@@ -658,7 +721,7 @@ class SpecGenerator:
         first = _parse_llm_spec_response(response, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         if first is None:
             return None
-        pre, post = first
+        pre, post = first.precondition, first.postcondition
 
         body = getattr(func, "body", "") or ""
         # "Trivial" = a one-liner with no inner block: short AND no control flow.
@@ -733,7 +796,7 @@ class SpecGenerator:
                 func.name,
             )
             return first
-        pre2, post2 = second
+        pre2, post2 = second.precondition, second.postcondition
         # Accept the critique result only if it's strictly richer (at least one
         # clause is non-trivial). If the model insists on true/true, take that
         # as evidence that the function genuinely has no useful invariant
@@ -1078,12 +1141,14 @@ class SpecGenerator:
         try:
             result = self._complete_with_vacuous_critique(user_prompt, func)
             if result is not None:
-                pre, post = result
+                pre, post = result.precondition, result.postcondition
                 post = _relax_postcondition_for_error_paths(post, func.body, func.name)
                 return Spec(
                     function_name=func.name,
                     precondition=pre,
                     postcondition=post,
+                    pre_validity=result.pre_validity,
+                    pre_protocol=result.pre_protocol,
                     status=SpecStatus.GENERATED,
                 )
             else:
@@ -1135,12 +1200,14 @@ class SpecGenerator:
         try:
             result = self._complete_with_vacuous_critique(user_prompt, func)
             if result is not None:
-                pre, post = result
+                pre, post = result.precondition, result.postcondition
                 post = _relax_postcondition_for_error_paths(post, func.body, func.name)
                 return Spec(
                     function_name=func.name,
                     precondition=pre,
                     postcondition=post,
+                    pre_validity=result.pre_validity,
+                    pre_protocol=result.pre_protocol,
                     status=SpecStatus.GENERATED,
                 )
             else:
@@ -1179,11 +1246,13 @@ class SpecGenerator:
             )
             result = _parse_llm_spec_response(response, callee_name, simple_specs=getattr(self.config, 'simple_specs', False))
             if result is not None:
-                pre, post = result
+                pre, post = result.precondition, result.postcondition
                 return Spec(
                     function_name=callee_name,
                     precondition=pre,
                     postcondition=post,
+                    pre_validity=result.pre_validity,
+                    pre_protocol=result.pre_protocol,
                     status=SpecStatus.PENDING,
                 )
             else:
@@ -1267,11 +1336,11 @@ class SpecGenerator:
         # because the caller-side prompt returned a default. This is the
         # cheapest spec-ensemble win: dual-spec already issues two LLM calls,
         # we just stop preferring the first one unconditionally.
-        def _is_vacuous(r: tuple[str, str] | None) -> bool:
+        def _is_vacuous(r: Optional[ParsedSpec]) -> bool:
             if r is None:
                 return True
-            pre_s = (r[0] or "").strip()
-            post_s = (r[1] or "").strip()
+            pre_s = (r.precondition or "").strip()
+            post_s = (r.postcondition or "").strip()
             return pre_s in ("true", "") and post_s in ("true", "")
 
         if result_a is None:
@@ -1284,7 +1353,7 @@ class SpecGenerator:
             chosen = result_b
         else:
             chosen = result_a
-        pre, post = chosen
+        pre, post = chosen.precondition, chosen.postcondition
         post = _relax_postcondition_for_error_paths(post, func.body, func.name)
 
         # Check disagreement if both succeeded
@@ -1292,8 +1361,8 @@ class SpecGenerator:
         if result_a and result_b:
             try:
                 disagree_prompt = SPEC_DISAGREEMENT_PROMPT.format(
-                    pre_a=result_a[0], post_a=result_a[1],
-                    pre_b=result_b[0], post_b=result_b[1],
+                    pre_a=result_a.precondition, post_a=result_a.postcondition,
+                    pre_b=result_b.precondition, post_b=result_b.postcondition,
                 )
                 disagree_response = self.llm.complete(
                     self._spec_system_prompt, disagree_prompt, role="spec_gen",
@@ -1313,6 +1382,8 @@ class SpecGenerator:
             function_name=func.name,
             precondition=pre,
             postcondition=post,
+            pre_validity=chosen.pre_validity,
+            pre_protocol=chosen.pre_protocol,
             status=SpecStatus.GENERATED,
             spec_disagreement=disagree,
         )

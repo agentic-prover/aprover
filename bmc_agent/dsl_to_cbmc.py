@@ -69,6 +69,58 @@ _CAST_PREFIX_RE = re.compile(
 )
 
 
+def _match_call(atom: str, name: str) -> Optional[tuple[int, int, list[str]]]:
+    """Locate a call ``name(arg1, arg2, ...)`` inside *atom* with full
+    paren-balanced argument extraction.
+
+    Returns ``(start, end, args)`` where:
+      - ``start`` is the offset of the first character of ``name``
+        (preserves ``re.Match.start()`` semantics consulted by callers
+        for negation detection / vacuous-self-comparison filtering).
+      - ``end`` is one past the closing ``)``.
+      - ``args`` is the list of top-level comma-separated arguments,
+        each stripped of leading/trailing whitespace.
+
+    Returns ``None`` if the name isn't found or the parens are
+    unbalanced.
+
+    Why: the historical ``[^)]+`` regex pattern stops at the FIRST
+    ``)``, which for an argument containing a C cast like
+    ``valid((struct ncdev*)x)`` is the closing paren of the cast
+    token, not of the outer call. The translator then emits the
+    malformed C ``((struct ncdev* != NULL`` and breaks the harness
+    compile. Same hazard affects nested ``sizeof(struct foo)`` inside
+    args. Balanced scanning fixes both.
+    """
+    if not atom or not name:
+        return None
+    # Find ``\bname\s*(``.
+    pat = re.compile(rf"\b{re.escape(name)}\s*\(")
+    m = pat.search(atom)
+    if m is None:
+        return None
+    start = m.start()
+    i = m.end()  # one past the '('
+    depth = 1
+    args_start = i
+    args: list[str] = []
+    while i < len(atom):
+        ch = atom[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                args.append(atom[args_start:i].strip())
+                return (start, i + 1, args)
+        elif ch == "," and depth == 1:
+            args.append(atom[args_start:i].strip())
+            args_start = i + 1
+        i += 1
+    # Unbalanced — name( found but no matching ).
+    return None
+
+
 def _normalize_casts(s: str) -> str:
     """Remove C-style casts from *s* for span-equality comparison."""
     prev = None
@@ -148,7 +200,7 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     # for *single-clause* atoms after the && split above; escape any
     # nested comment markers carried in by upstream sanitization so the
     # outer ``/* … */`` wrapper doesn't break C parsing.
-    if _LOCKED_RE.search(atom):
+    if _match_call(atom, "locked") is not None:
         return f"/* ghost: {_escape_for_c_comment(atom)} — skipped */"
 
     # Split on top-level || SECOND — before individual predicate matching.
@@ -165,38 +217,52 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
             return wrap(" || ".join(f"({e})" for e in exprs))
 
     # valid_string(ptr)  → ptr != NULL (string length bound is set up in harness)
-    m = _VALID_STRING_RE.search(atom)
-    if m:
-        ptr = m.group(1).strip()
+    mm = _match_call(atom, "valid_string")
+    if mm is not None and len(mm[2]) >= 1:
+        ptr = mm[2][0]
         return wrap(f"{ptr} != NULL")
 
-    # valid_range(ptr, lo, hi)  → ptr != NULL && lo >= 0 && hi >= lo
-    m = _VALID_RANGE_RE.search(atom)
-    if m:
-        ptr = m.group(1).strip()
-        lo = m.group(2).strip()
-        hi = m.group(3).strip()
-        return wrap(f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}")
+    # valid_range(ptr, lo, hi):
+    #   * assume context — weak shape ``ptr != NULL && lo >= 0 && hi >= lo``.
+    #     The harness already gives ``ptr`` an unbounded backing buffer, so the
+    #     extra structural sanity is what callers downstream need. A stricter
+    #     ``__CPROVER_r_ok`` shape over-constrains the input space and prunes
+    #     genuine bugs.
+    #   * assert context — emit a real bounds check
+    #     ``ptr != NULL && lo >= 0 && hi >= lo && __CPROVER_r_ok(ptr,
+    #     hi * sizeof(*ptr))``. Under bug-hunt the assert sits at the top
+    #     of the callee stub; the caller's actual allocation must cover
+    #     ``hi`` elements. Without the r_ok term, the caller-contract slip
+    #     for valid_range never surfaces — the assert is satisfied by any
+    #     non-NULL pointer regardless of allocated size.
+    mm = _match_call(atom, "valid_range")
+    if mm is not None and len(mm[2]) == 3:
+        ptr, lo, hi = mm[2]
+        base = f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}"
+        if context == "assert":
+            base += f" && __CPROVER_r_ok({ptr}, ({hi}) * sizeof(*{ptr}))"
+        return wrap(base)
 
     # valid(ptr)  → ptr != NULL
-    m = _VALID_RE.search(atom)
-    if m:
-        ptr = m.group(1).strip()
+    mm = _match_call(atom, "valid")
+    if mm is not None and len(mm[2]) >= 1:
+        ptr = mm[2][0]
         return wrap(f"{ptr} != NULL")
 
     # owns(ptr) or owns(scope, ptr)  → ptr != NULL
-    # The two-group regex always populates group 2 with the actual
-    # pointer (single-arg form: group 1 is None; two-arg form: group 1
-    # is the scope we discard).
-    m = _OWNS_RE.search(atom)
-    if m:
-        ptr = m.group(2).strip()
+    # Single-arg form: ``args[0]`` is the pointer.
+    # Two-arg form: ``args[0]`` is the scope (discarded), ``args[1]`` is
+    # the actual pointer.
+    mm = _match_call(atom, "owns")
+    if mm is not None and len(mm[2]) >= 1:
+        ptr = mm[2][-1]
         return wrap(f"{ptr} != NULL")
 
     # null(ptr)  → ptr == NULL  (but !null(ptr) → ptr != NULL)
-    m = _NULL_RE.search(atom)
-    if m:
-        ptr = m.group(1).strip()
+    mm = _match_call(atom, "null")
+    if mm is not None and len(mm[2]) >= 1:
+        ptr = mm[2][0]
+        match_start = mm[0]
         # ----- Pathological-LLM-spec filter -----
         # Drop the self-tautology shape ``X != null(X)`` / ``X == null(X)``
         # where the same expression appears on both sides. This is a
@@ -204,38 +270,27 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         # ``hid->dev != null(hid->dev)``) which has no semantic
         # meaning and, worse, translates to ``X == NULL`` over a
         # struct-by-value member, breaking CBMC's type-check.
-        # Look at the atom's text BEFORE the ``null(...)`` match: if
-        # it contains the same expression as ``ptr`` joined to it
-        # via ``==`` or ``!=``, the predicate is vacuous.
-        prefix = atom[: m.start()].rstrip()
+        prefix = atom[:match_start].rstrip()
         for op in ("!=", "=="):
             sep_idx = prefix.rfind(op)
             if sep_idx != -1:
                 lhs = prefix[:sep_idx].strip()
-                # Normalise (strip outer parens) and compare.
                 if _strip_outer_parens(lhs).strip() == ptr:
                     return f"/* condition (vacuous self-comparison dropped): {atom} */"
         # ----- End filter -----
-        # Detect negation. The historic check inspected only the
-        # immediate previous char for ``!``; broaden it to recognise
-        # the ``X != null(...)`` shape (where ``!=`` precedes the
-        # match, possibly with whitespace).
         negated = False
-        if m.start() > 0:
-            prev = atom[m.start() - 1]
-            if prev == "!":
-                negated = True
+        if match_start > 0 and atom[match_start - 1] == "!":
+            negated = True
         if not negated:
-            prev_chunk = atom[: m.start()].rstrip()
+            prev_chunk = atom[:match_start].rstrip()
             if prev_chunk.endswith("!="):
                 negated = True
         return wrap(f"{ptr} != NULL" if negated else f"{ptr} == NULL")
 
     # in_bounds(arr, idx)
-    m = _IN_BOUNDS_RE.search(atom)
-    if m:
-        arr = m.group(1).strip()
-        idx = m.group(2).strip()
+    mm = _match_call(atom, "in_bounds")
+    if mm is not None and len(mm[2]) == 2:
+        arr, idx = mm[2]
         return wrap(f"{idx} >= 0 && {idx} < (int)(sizeof({arr})/sizeof({arr}[0]))")
 
     # Only wrap in assert/assume if the entire atom looks like valid C.
@@ -340,34 +395,34 @@ def _atom_to_expr(atom: str) -> Optional[str]:
             return None
         return " && ".join(f"({e})" for e in sub_exprs) if len(sub_exprs) > 1 else sub_exprs[0]
 
-    m = _VALID_STRING_RE.search(atom)
-    if m:
-        return f"{m.group(1).strip()} != NULL"
+    mm = _match_call(atom, "valid_string")
+    if mm is not None and len(mm[2]) >= 1:
+        return f"{mm[2][0]} != NULL"
 
-    m = _VALID_RANGE_RE.search(atom)
-    if m:
-        ptr = m.group(1).strip()
-        lo = m.group(2).strip()
-        hi = m.group(3).strip()
+    mm = _match_call(atom, "valid_range")
+    if mm is not None and len(mm[2]) == 3:
+        ptr, lo, hi = mm[2]
         return f"{ptr} != NULL && {lo} >= 0 && {hi} >= {lo}"
 
-    m = _VALID_RE.search(atom)
-    if m:
-        return f"{m.group(1).strip()} != NULL"
+    mm = _match_call(atom, "valid")
+    if mm is not None and len(mm[2]) >= 1:
+        return f"{mm[2][0]} != NULL"
 
-    m = _OWNS_RE.search(atom)
-    if m:
-        # owns(ptr) or owns(scope, ptr) — group 2 is the pointer.
-        return f"{m.group(2).strip()} != NULL"
+    mm = _match_call(atom, "owns")
+    if mm is not None and len(mm[2]) >= 1:
+        # Single-arg → args[0]; two-arg ``owns(scope, ptr)`` → args[1].
+        return f"{mm[2][-1]} != NULL"
 
-    m = _NULL_RE.search(atom)
-    if m:
-        negated = m.start() > 0 and atom[m.start() - 1] == "!"
-        return f"{m.group(1).strip()} != NULL" if negated else f"{m.group(1).strip()} == NULL"
+    mm = _match_call(atom, "null")
+    if mm is not None and len(mm[2]) >= 1:
+        match_start = mm[0]
+        ptr = mm[2][0]
+        negated = match_start > 0 and atom[match_start - 1] == "!"
+        return f"{ptr} != NULL" if negated else f"{ptr} == NULL"
 
-    m = _IN_BOUNDS_RE.search(atom)
-    if m:
-        arr, idx = m.group(1).strip(), m.group(2).strip()
+    mm = _match_call(atom, "in_bounds")
+    if mm is not None and len(mm[2]) == 2:
+        arr, idx = mm[2]
         return f"{idx} >= 0 && {idx} < (int)(sizeof({arr})/sizeof({arr}[0]))"
 
     # Bare-comparison fallback: only accept if the full atom (modulo
@@ -443,14 +498,36 @@ def precond_to_assume(precondition: str, params: list[str]) -> list[str]:
     precondition:
         The precondition string (DSL or natural language).
     params:
-        Parameter names of the function (used for context; not strictly needed
-        for the translation but kept for future use).
+        Parameter names of the function. Used to filter out atoms that
+        reference identifiers outside the harness's lexical scope (e.g.
+        LLM-emitted clauses mentioning function-body locals like
+        ``arg``, ``buffer``, or loop-quantifier variables like ``i``).
+        Atoms with unbound identifiers are dropped to comments so the
+        harness compiles.
 
     Returns
     -------
     A list of C statement strings.
     """
-    return _filter_tautological(_condition_to_stmts(precondition, context="assume"))
+    return _filter_tautological(
+        _condition_to_stmts(precondition, context="assume", params=params)
+    )
+
+
+def precond_to_assert(precondition: str, params: list[str]) -> list[str]:
+    """Convert a precondition string to a list of ``assert(...)`` C
+    statements.
+
+    Used in bug-hunt mode at the top of a callee stub: the assert fires
+    when the caller's actual argument expressions (bound to the stub's
+    formal parameters) violate the validity clauses. CBMC reports the
+    failure at the caller's call site, which is exactly the
+    "caller-contract slip" we want to surface (see
+    findings/methodology_insight_2026-05-22.md).
+    """
+    return _filter_tautological(
+        _condition_to_stmts(precondition, context="assert", params=params)
+    )
 
 
 def postcond_to_assert(
@@ -476,7 +553,9 @@ def postcond_to_assert(
     """
     # Replace \result with the actual return variable name
     post = re.sub(r"\\result\b", return_var, postcondition)
-    return _filter_tautological(_condition_to_stmts(post, context="assert"))
+    return _filter_tautological(
+        _condition_to_stmts(post, context="assert", params=params)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +809,96 @@ def _sanitize_condition(condition: str) -> str:
     return condition.strip()
 
 
-def _condition_to_stmts(condition: str, context: str) -> list[str]:
+# Identifiers that are always considered "in scope" regardless of the
+# function's parameter list — C keywords, common stdlib/kernel types
+# and macros, CBMC intrinsics, and harness-emitted locals.
+_ALWAYS_BOUND_IDENTIFIERS = frozenset({
+    # Stdlib / language
+    "NULL", "true", "false", "sizeof", "typeof",
+    "struct", "union", "enum", "typedef",
+    "int", "long", "short", "char", "unsigned", "signed", "void",
+    "const", "volatile", "static", "extern", "inline", "register", "restrict",
+    "if", "else", "for", "while", "do", "return", "goto", "switch", "case", "default", "break", "continue",
+    # CBMC intrinsics + C assert() wrapper that translate_atom emits.
+    "__CPROVER_assume", "__CPROVER_assert", "__CPROVER_r_ok",
+    "__CPROVER_w_ok", "__CPROVER_rw_ok",
+    "assert", "abort", "exit",
+    # POSIX/stdint typedefs
+    "size_t", "ssize_t", "ptrdiff_t", "uintptr_t", "intptr_t",
+    "int8_t", "int16_t", "int32_t", "int64_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "off_t", "loff_t", "time_t",
+    # Kernel primitive typedefs
+    "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64",
+    "__u8", "__u16", "__u32", "__u64", "__s8", "__s16", "__s32", "__s64",
+    "bool", "pid_t", "dev_t", "gfp_t", "umode_t",
+    # Kernel constants we define in the harness preamble
+    "PAGE_SIZE", "PAGE_SHIFT",
+    "EFAULT", "EINVAL", "ENOMEM", "EAGAIN", "EIO", "ENODEV",
+    "EPERM", "EBUSY", "ENOTSUPP", "ETIMEDOUT", "EOPNOTSUPP",
+    # Harness-emitted locals
+    "result",
+})
+
+# Match a bare identifier — must NOT be preceded by ``.`` or ``->`` (those
+# are field accesses where the trailing name is a struct field, not a
+# top-level binding).
+_BARE_IDENT_RE = re.compile(r"(?<![\w.])(?<!->)([A-Za-z_]\w*)")
+
+# Type tags inside C casts and struct declarators ``(struct NAME *)x``
+# / ``(union NAME)x`` / ``(enum NAME)x``. The trailing NAME is a type,
+# not a binding — strip BOTH the keyword AND the type name from the
+# scan buffer so the unbound-identifier filter doesn't see the type
+# name as a binding.
+_TYPE_TAG_PREFIX_RE = re.compile(r"\b(?:struct|union|enum)\s+[A-Za-z_]\w*")
+
+
+def _atom_has_unbound_ident(stmt: str, bound: set[str]) -> Optional[str]:
+    """If *stmt* references a bare identifier outside *bound*, return
+    that identifier. Otherwise return None.
+
+    "Bare" means not preceded by ``.`` or ``->`` — i.e., a top-level
+    name binding rather than a struct field access. Field accesses
+    are skipped because ``p->field`` is always valid when ``p`` is in
+    scope (the field name comes from the struct's type definition).
+
+    Used by ``_condition_to_stmts`` to drop atoms that the LLM emitted
+    against function-body locals (``arg``, ``param``, ``buffer``) or
+    forall-quantifier bound variables (``i``) — these aren't in the
+    harness's scope and would cause CONVERSION ERROR if asserted.
+    """
+    # Skip ``/* … */`` comments; they're already-dropped clauses.
+    stripped = stmt.strip()
+    if stripped.startswith("/*") and stripped.endswith("*/"):
+        return None
+    # Strip embedded ``/* … */`` comments from the scan buffer — they
+    # carry the LLM's natural-language commentary that the upstream
+    # sanitiser commented out, and would otherwise trip the identifier
+    # filter on every English word inside the comment. The COMMENT
+    # itself was a deliberate "give up on translating this fragment"
+    # signal; we should not let it cause the surrounding live C to
+    # also be dropped.
+    scan = re.sub(r"/\*.*?\*/", "", stmt, flags=re.DOTALL)
+    # Strip ``struct NAME`` / ``union NAME`` / ``enum NAME`` so type
+    # tags inside C casts (``(struct ncdev*)p``) don't get flagged as
+    # bindings. Without this, every cast-shaped clause would fail the
+    # filter on the type tag.
+    scan = _TYPE_TAG_PREFIX_RE.sub("", scan)
+    for m in _BARE_IDENT_RE.finditer(scan):
+        ident = m.group(1)
+        if ident in bound or ident in _ALWAYS_BOUND_IDENTIFIERS:
+            continue
+        # Underscore-prefixed locals emitted by the harness generator
+        # (``_caller_result``, ``_buf_buf``, etc.).
+        if ident.startswith("_"):
+            continue
+        return ident
+    return None
+
+
+def _condition_to_stmts(
+    condition: str, context: str, params: Optional[list[str]] = None
+) -> list[str]:
     """
     Split a condition string and translate each clause.
 
@@ -740,6 +908,9 @@ def _condition_to_stmts(condition: str, context: str) -> list[str]:
     3.  Split on sentence boundaries (AND, newlines, semicolons).
     4.  For each clause, call ``translate_atom``.
     5.  Collect resulting statements.
+    6.  Drop translated atoms that reference identifiers outside the
+        harness's lexical scope (the function's parameters plus the
+        always-bound common set).
     """
     if not condition or condition.strip().lower() in ("true", "1"):
         return ["/* precondition: true — no assumptions needed */"]
@@ -761,19 +932,49 @@ def _condition_to_stmts(condition: str, context: str) -> list[str]:
     # the PHY state is unchanged") must NOT split, otherwise the
     # surrounding C expression's parens get torn apart and downstream
     # translation drops half the postcondition silently.
-    parts = re.split(r"\s+AND\s+|\n|;", condition)
+    # Split on natural-language separators (AND, newlines, semicolons)
+    # AND on the C-like top-level ``&&`` connector so each conjunct can
+    # be filtered independently. Without the ``&&`` split, an unbound
+    # identifier in one conjunct would drop the entire PRE (observed:
+    # ``valid(devnode) && ... && neuron_dev_class != NULL`` lost ALL
+    # validity clauses to a single unbound-ident hit on
+    # ``neuron_dev_class``).
+    coarse_parts = re.split(r"\s+AND\s+|\n|;", condition)
+    parts: list[str] = []
+    for cp in coarse_parts:
+        cp = cp.strip()
+        if not cp:
+            continue
+        # Split each coarse part on top-level ``&&``.
+        for sub in _top_level_split(cp, "&&"):
+            sub = sub.strip()
+            if sub:
+                parts.append(sub)
+
+    bound = set(params or [])
     stmts: list[str] = []
     for part in parts:
-        part = part.strip()
-        if not part:
-            continue
         # Strip outer parentheses
         part = _strip_outer_parens(part)
         if not part:
             continue
         stmt = translate_atom(part, context=context)
-        if stmt:
-            stmts.append(stmt)
+        if not stmt:
+            continue
+        # Drop atoms referencing identifiers outside the harness's scope.
+        # Common cases: LLM-emitted clauses that mention function-body
+        # locals (``arg``, ``buffer``), loop-quantifier bound variables
+        # (``i``), or kernel constants we don't have a preamble define
+        # for. Asserting/assuming these would fail compilation with a
+        # "failed to find symbol" CONVERSION ERROR.
+        unbound = _atom_has_unbound_ident(stmt, bound)
+        if unbound is not None:
+            stmts.append(
+                f"/* dropped (references unbound identifier '{unbound}'): "
+                f"{_escape_for_c_comment(part)[:120]} */"
+            )
+            continue
+        stmts.append(stmt)
     return stmts if stmts else [f"/* condition: {condition} */"]
 
 

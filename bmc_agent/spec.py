@@ -40,6 +40,12 @@ class Spec:
     loop_invariants: list[str] = field(default_factory=list)
     status: SpecStatus = SpecStatus.PENDING
     spec_disagreement: bool = False
+    # PRE split: validity = caller's obligation (asserted at call sites);
+    # protocol = higher-level invariant (assumed for callee verification).
+    # Both default to "" — when empty, classify_precondition() splits the
+    # flat ``precondition`` field on demand. See plan_validity_protocol_split.
+    pre_validity: str = ""
+    pre_protocol: str = ""
 
     def to_dict(self, _seen: frozenset | None = None) -> dict:
         # Guard against circular callee_specs (e.g. mutually recursive fns).
@@ -58,6 +64,8 @@ class Spec:
             "loop_invariants": self.loop_invariants,
             "status": self.status.value,
             "spec_disagreement": self.spec_disagreement,
+            "pre_validity": self.pre_validity,
+            "pre_protocol": self.pre_protocol,
         }
 
     @classmethod
@@ -73,7 +81,280 @@ class Spec:
             loop_invariants=d.get("loop_invariants", []),
             status=SpecStatus(d.get("status", SpecStatus.PENDING.value)),
             spec_disagreement=d.get("spec_disagreement", False),
+            pre_validity=d.get("pre_validity", ""),
+            pre_protocol=d.get("pre_protocol", ""),
         )
+
+    def split_precondition(self) -> tuple[str, str]:
+        """Return ``(pre_validity, pre_protocol)``.
+
+        Uses the structured fields when both are populated (or when
+        either is non-empty — indicating the LLM/parser supplied a
+        split). Falls back to ``classify_precondition`` on the flat
+        ``precondition`` otherwise. An empty ``precondition`` yields
+        ``("", "")``.
+        """
+        if self.pre_validity or self.pre_protocol:
+            return self.pre_validity, self.pre_protocol
+        if not self.precondition.strip():
+            return "", ""
+        return classify_precondition(self.precondition)
+
+
+# ---------------------------------------------------------------------------
+# Validity / protocol clause classifier
+# ---------------------------------------------------------------------------
+#
+# Splits a flat PRE clause-by-clause into:
+#   - validity  : caller's obligation (asserted at call sites in bug-hunt
+#                 mode). Memory-safety primitives the callee body literally
+#                 requires: valid(), valid_range(), in_bounds(), !null(),
+#                 no_overflow(), owns(), valid_string(), valid_user_pointer(),
+#                 and bare comparisons of pointer/index/size-shaped values.
+#   - protocol  : caller cooperation invariants the callee body assumes
+#                 but cannot enforce: locked(), npid_is_attached(), state
+#                 equalities on initialised objects, ref-count predicates,
+#                 etc.
+#
+# Default policy when in doubt: classify as **validity**. Asserting too
+# much surfaces as new FPs (visible, fixable); assuming too much hides
+# bugs (the failure mode we are explicitly fixing — see
+# findings/methodology_insight_2026-05-22.md).
+
+_VALIDITY_HEAD_PATTERNS = (
+    r"\bvalid\s*\(",
+    r"\bvalid_range\s*\(",
+    r"\bvalid_string\s*\(",
+    r"\bvalid_user_pointer\s*\(",
+    r"\bin_bounds\s*\(",
+    r"\bno_overflow\s*\(",
+    r"\bowns\s*\(",
+    r"\bnull\s*\(",
+    r"\b__CPROVER_r_ok\s*\(",
+    r"\b__CPROVER_w_ok\s*\(",
+    r"\b__CPROVER_rw_ok\s*\(",
+    r"\bsizeof\s*\(",
+)
+
+_PROTOCOL_HEAD_PATTERNS = (
+    r"\blocked\s*\(",
+    r"\bnpid_is_attached\s*\(",
+    r"\biminor\s*\(",
+)
+
+# Tokens whose presence inside a comparison clause hints at protocol
+# state rather than raw memory-safety bounds. The intent is intentionally
+# loose — these names show up in object-state predicates, not in
+# pointer/size bookkeeping.
+_PROTOCOL_NAME_HINTS = (
+    "initialized",
+    "initialised",
+    "state",
+    "ready",
+    "ref_count",
+    "refcount",
+    "open",
+    "closed",
+    "active",
+    "attached",
+    "registered",
+    "mounted",
+    "kind",
+)
+
+_VALIDITY_HEAD_RE = re.compile("|".join(_VALIDITY_HEAD_PATTERNS))
+_PROTOCOL_HEAD_RE = re.compile("|".join(_PROTOCOL_HEAD_PATTERNS))
+
+
+def _split_top_level_and(text: str) -> list[str]:
+    """Split *text* on top-level ``&&`` / ``AND`` / ``and`` connectors,
+    respecting parens and brackets so we don't tear apart sub-expressions
+    like ``f(a, b && c)``.
+    """
+    parts: list[str] = []
+    depth = 0
+    i = 0
+    last = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "([{":
+            depth += 1
+            i += 1
+            continue
+        if ch in ")]}":
+            depth -= 1
+            i += 1
+            continue
+        if depth == 0:
+            # "&&"
+            if ch == "&" and i + 1 < n and text[i + 1] == "&":
+                parts.append(text[last:i].strip())
+                i += 2
+                last = i
+                continue
+            # " AND " / " and " (case-insensitive word match)
+            if ch in (" ", "\t", "\n"):
+                rest = text[i:i + 5].lower()
+                if rest.startswith(" and "):
+                    parts.append(text[last:i].strip())
+                    i += 5
+                    last = i
+                    continue
+        i += 1
+    tail = text[last:].strip()
+    if tail:
+        parts.append(tail)
+    # Strip a single layer of matching outer parens off each clause.
+    cleaned: list[str] = []
+    for p in parts:
+        p = p.strip().rstrip(",").strip()
+        while p.startswith("(") and p.endswith(")"):
+            inner = p[1:-1]
+            depth = 0
+            balanced = True
+            for ch in inner:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                if depth < 0:
+                    balanced = False
+                    break
+            if balanced and depth == 0:
+                p = inner.strip()
+            else:
+                break
+        if p:
+            cleaned.append(p)
+    return cleaned
+
+
+def _classify_clause(clause: str) -> str:
+    """Return ``"validity"`` or ``"protocol"`` for a single clause.
+
+    Conservative default: ``"validity"`` when unsure. Asserting a
+    spurious clause as caller obligation surfaces as a new (debuggable)
+    FP; assuming a clause that should be discharged hides bugs.
+    """
+    c = clause.strip()
+    if not c:
+        return "validity"
+    # 1. Negation: classify by the head predicate underneath.
+    if c.startswith("!"):
+        return _classify_clause(c[1:].lstrip())
+    # 2. Strong-protocol heads.
+    if _PROTOCOL_HEAD_RE.search(c):
+        return "protocol"
+    # 3. Strong-validity heads.
+    if _VALIDITY_HEAD_RE.search(c):
+        return "validity"
+    # 4. Bare comparisons: hint via field/identifier names. Anything
+    #    smelling like a state machine, lifecycle flag, or membership
+    #    predicate goes to protocol; otherwise validity.
+    low = c.lower()
+    for hint in _PROTOCOL_NAME_HINTS:
+        # Match as a sub-token (word-ish boundary) to avoid catching
+        # things like ``start_addr`` matching ``state``.
+        if re.search(rf"(?<![A-Za-z0-9_]){re.escape(hint)}(?![A-Za-z0-9_])", low):
+            return "protocol"
+    # 5. Default: validity.
+    return "validity"
+
+
+def drop_clauses(precondition: str, drop: list[str]) -> str:
+    """Return *precondition* with each clause in *drop* removed.
+
+    Used by harness_generator to apply persisted
+    ``callee_relaxations`` (from the feedback loop) before
+    translating a callee's PRE into asserts/assumes.
+
+    Matching is whitespace-insensitive on the full clause string;
+    we don't try to canonicalise C-expression syntax beyond
+    that. A drop entry that doesn't match any clause is a no-op
+    rather than an error — over time the relaxation list can
+    accumulate entries that no longer apply because the LLM
+    re-generated a structurally different spec.
+    """
+    if not precondition or not drop:
+        return precondition
+
+    def _norm(s: str) -> str:
+        # Strip matching outer parens (any number of layers) the same
+        # way ``_split_top_level_and`` does. Without this, a drop entry
+        # ``(x == 0)`` won't match a clause emitted as ``x == 0`` — and
+        # vice versa. The whitespace strip then makes the match insens-
+        # itive to formatting differences.
+        s = s.strip()
+        while s.startswith("(") and s.endswith(")"):
+            inner = s[1:-1]
+            depth = 0
+            balanced = True
+            for ch in inner:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                if depth < 0:
+                    balanced = False
+                    break
+            if balanced and depth == 0:
+                s = inner.strip()
+            else:
+                break
+        return re.sub(r"\s+", "", s)
+
+    drop_norms = {_norm(c) for c in drop if c.strip()}
+    if not drop_norms:
+        return precondition
+    # Strip leading "requires" / "pre" so we operate on the clause list.
+    prefix_m = re.match(
+        r"^(requires?|precondition\s*:?|pre\s*:?)\s+",
+        precondition.strip(),
+        flags=re.IGNORECASE,
+    )
+    body = precondition.strip()
+    prefix = ""
+    if prefix_m:
+        prefix = prefix_m.group(0)
+        body = body[prefix_m.end():]
+    clauses = _split_top_level_and(body)
+    kept = [c for c in clauses if _norm(c) not in drop_norms]
+    if not kept:
+        return ""
+    return prefix + " && ".join(
+        f"({c})" if (" && " in c or " || " in c) else c for c in kept
+    )
+
+
+def classify_precondition(precondition: str) -> tuple[str, str]:
+    """Split *precondition* into ``(validity_text, protocol_text)``.
+
+    Both returned strings use ``&&`` as the connector so they parse back
+    through ``precond_to_assume`` / ``precond_to_assert`` unchanged.
+    Returns ``("", "")`` for an empty / trivially-true precondition.
+    """
+    s = (precondition or "").strip()
+    if not s or s.lower() in ("true", "1"):
+        return "", ""
+    # Strip a leading ``requires`` / ``pre`` / ``precondition:`` keyword
+    # so the classifier sees just the clause list.
+    s = re.sub(
+        r"^(requires?|precondition\s*:?|pre\s*:?)\s+",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+    clauses = _split_top_level_and(s)
+    if not clauses:
+        return "", ""
+    validity: list[str] = []
+    protocol: list[str] = []
+    for c in clauses:
+        target = _classify_clause(c)
+        (validity if target == "validity" else protocol).append(c)
+    join = lambda parts: " && ".join(f"({p})" if (" && " in p or " || " in p) else p for p in parts)
+    return join(validity), join(protocol)
 
 
 # ---------------------------------------------------------------------------

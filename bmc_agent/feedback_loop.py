@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -86,6 +87,22 @@ class RemediationScope(str, Enum):
     CODE_CHANGE = "code-change"
     FUNCTION_SPEC = "function-spec"
     PROJECT_INVARIANT = "project-invariant"
+    # Bug-hunt mode (validity/protocol split) emits ``assert(PRE)`` at
+    # the top of each callee stub. When the LLM-emitted PRE includes an
+    # over-tight clause the caller doesn't actually maintain, CBMC
+    # reports ``<callee>_stub.assertion.<N>`` FAILUREs. The fix is to
+    # drop the offending clause from the *callee's* spec — not the
+    # FUT's. This scope attaches the relaxation to ``callee`` instead
+    # of ``func`` so future runs regenerate the callee stub with the
+    # relaxed PRE.
+    CALLEE_SPEC_RELAX = "callee-spec-relax"
+    # Symmetric to CALLEE_SPEC_RELAX but for the FUT's own
+    # postcondition. Triggered when CBMC reports the FUT's post
+    # assertion violated by a path that real callers can also hit
+    # (i.e., the LLM-emitted POST is over-tight, not the implementation
+    # being buggy). Drops the offending POST clause from the FUT's
+    # spec on the next harness emission.
+    FUNCTION_POST_RELAX = "function-post-relax"
     NONE = "none"
 
 
@@ -98,6 +115,10 @@ class Remediation:
     code_change: str = ""          # human-readable description for the developer
     rationale: str = ""            # why this fix is sound / appropriate
     confidence: str = "low"        # "high" | "medium" | "low"
+    # For CALLEE_SPEC_RELAX: the callee whose spec needs the relaxation.
+    # The clause field holds the over-tight PRE atom to drop from the
+    # callee's precondition on the next run.
+    callee: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -106,7 +127,39 @@ class Remediation:
             "code_change": self.code_change,
             "rationale": self.rationale,
             "confidence": self.confidence,
+            "callee": self.callee,
         }
+
+
+# ---------------------------------------------------------------------------
+# Stub-precondition assertion detection
+# ---------------------------------------------------------------------------
+
+# CBMC names stub-PRE assertions as ``<callee>_stub.assertion.<N>``
+# when bug-hunt mode emits ``assert(...)`` at the top of a callee
+# stub (see harness_generator._generate_stub). Pull the callee name so
+# downstream code can attach the realism rejection to the callee's
+# spec instead of the FUT's.
+_STUB_ASSERTION_RE = re.compile(
+    r"^(?P<callee>[A-Za-z_]\w*)_stub\.assertion\.\d+$"
+)
+
+
+def extract_stub_callee(property_name: str) -> Optional[str]:
+    """Return the callee name when *property_name* looks like a
+    bug-hunt-mode stub-precondition assertion, else None.
+
+    Examples
+    --------
+    >>> extract_stub_callee("ncdev_bar_read_stub.assertion.3")
+    'ncdev_bar_read'
+    >>> extract_stub_callee("main.pointer_dereference.1") is None
+    True
+    """
+    if not property_name:
+        return None
+    m = _STUB_ASSERTION_RE.match(property_name.strip())
+    return m.group("callee") if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +205,12 @@ key_concern: {key_concern}
 === EXISTING PROJECT INVARIANTS (already learned) ===
 {existing_project_clauses}
 
+=== STUB CALLEE (if violation is a callee-stub PRE assertion) ===
+{stub_callee}
+
 ---
 
-Three remediation paths — pick exactly ONE:
+Four remediation paths — pick exactly ONE:
 
   (a) scope="code-change"
         bmc-agent itself is missing a structural capability that would
@@ -181,6 +237,29 @@ Three remediation paths — pick exactly ONE:
         REQUIRED: `clause` field is a global C boolean expression
         (no function-local variables; e.g. `xmlMalloc != NULL`).
 
+  (d) scope="callee-spec-relax"
+        ONLY applicable when ``stub_callee`` is set below (bug-hunt
+        mode flagged the FUT for violating its callee's PRE). The
+        offending clause is an OVER-TIGHT precondition the callee's
+        spec asserts but real callers cannot guarantee — e.g.
+        ``valid(user_va)`` when the callee uses ``copy_to_user`` which
+        handles NULL gracefully. The fix is to drop that single clause
+        from the **callee's** spec (``stub_callee``), not the FUT's.
+        REQUIRED: `clause` is the precise atom to drop from
+        ``stub_callee``'s precondition (the DSL form, e.g.
+        ``valid(user_va)``, ``data_count > 0``).
+
+  (e) scope="function-post-relax"
+        ONLY applicable when the violated property is the FUT's own
+        postcondition assertion (CBMC names it ``main.assertion.<N>``).
+        The offending POST clause is over-tight: real callers can hit
+        the witness state, but the LLM-emitted post excludes it (e.g.,
+        ``result == 0 || result < 0`` when real semantics allow small
+        positive returns from ``copy_from_user``). The fix is to drop
+        that clause from the **FUT's** postcondition.
+        REQUIRED: `clause` is the precise atom to drop from this
+        function's postcondition (DSL form).
+
 If you can't safely propose any of these, return scope="none".
 
 Soundness requirement: the clause MUST be true in every real execution
@@ -190,8 +269,8 @@ clause) over scope="project-invariant" (project-wide, highest risk).
 
 Respond with ONLY valid JSON:
 {{
-  "scope": "code-change" | "function-spec" | "project-invariant" | "none",
-  "clause": "<C boolean expression — for function-spec or project-invariant>",
+  "scope": "code-change" | "function-spec" | "project-invariant" | "callee-spec-relax" | "function-post-relax" | "none",
+  "clause": "<C boolean expression — for function-spec / project-invariant / callee-spec-relax / function-post-relax>",
   "code_change": "<short description of the bmc-agent change — for code-change>",
   "rationale": "<one paragraph: why is this sound? What real invariant does it encode?>",
   "confidence": "high" | "medium" | "low"
@@ -232,6 +311,13 @@ def learn_from_rejection(
         f"  {k} = {v}"
         for k, v in (counterexample.variable_assignments or {}).items()
     )[:3000] or "  (no witness variables)"
+
+    # When bug-hunt mode flagged a callee-stub PRE assertion, surface
+    # the callee name to the LLM. The "callee-spec-relax" path only
+    # makes sense in that case.
+    stub_callee = extract_stub_callee(counterexample.failing_property or "")
+    stub_callee_text = stub_callee or "(not applicable — violation is in the FUT body, not a callee stub)"
+
     prompt = _DISTILL_PROMPT.format(
         verdict=realism.verdict.value.upper(),
         function_name=func.name,
@@ -243,6 +329,7 @@ def learn_from_rejection(
         existing_project_clauses=(
             "\n".join(f"  {c}" for c in existing_project_clauses) or "  (none)"
         ),
+        stub_callee=stub_callee_text,
     )
 
     try:
@@ -266,11 +353,19 @@ def learn_from_rejection(
         return Remediation(scope=RemediationScope.NONE,
                            rationale=f"LLM call failed: {exc}")
 
-    return _parse_remediation(raw, func.name)
+    return _parse_remediation(raw, func.name, stub_callee=stub_callee or "")
 
 
-def _parse_remediation(raw: str, func_name: str) -> Remediation:
-    """Parse the LLM's distill response."""
+def _parse_remediation(
+    raw: str, func_name: str, stub_callee: str = ""
+) -> Remediation:
+    """Parse the LLM's distill response.
+
+    *stub_callee*, when non-empty, indicates the counterexample was a
+    bug-hunt-mode callee-stub PRE assertion. The "callee-spec-relax"
+    scope is only honoured when this is set — picking that scope
+    without a callee is a model error that we down-grade to NONE.
+    """
     text = raw.strip()
     # Strip markdown fence
     if text.startswith("```"):
@@ -309,15 +404,28 @@ def _parse_remediation(raw: str, func_name: str) -> Remediation:
         "code-change": RemediationScope.CODE_CHANGE,
         "function-spec": RemediationScope.FUNCTION_SPEC,
         "project-invariant": RemediationScope.PROJECT_INVARIANT,
+        "callee-spec-relax": RemediationScope.CALLEE_SPEC_RELAX,
+        "function-post-relax": RemediationScope.FUNCTION_POST_RELAX,
         "none": RemediationScope.NONE,
     }
     scope = scope_map.get(scope_str, RemediationScope.NONE)
+    # Reject callee-spec-relax when there's no callee to attach it to:
+    # this protects against the model picking the new scope when the
+    # violation is in the FUT body proper.
+    if scope == RemediationScope.CALLEE_SPEC_RELAX and not stub_callee:
+        logger.warning(
+            "Feedback: model picked callee-spec-relax for '%s' but the "
+            "violation isn't a stub-PRE assertion — downgrading to NONE",
+            func_name,
+        )
+        scope = RemediationScope.NONE
     return Remediation(
         scope=scope,
         clause=str(data.get("clause", "")).strip(),
         code_change=str(data.get("code_change", "")).strip(),
         rationale=str(data.get("rationale", "")).strip(),
         confidence=str(data.get("confidence", "low")).lower().strip(),
+        callee=stub_callee if scope == RemediationScope.CALLEE_SPEC_RELAX else "",
     )
 
 
@@ -372,6 +480,14 @@ class LearnedConstraintsStore:
             "function_clauses": {},
             "project_clauses": [],
             "code_change_todos": [],
+            # Bug-hunt mode: clauses to DROP from a callee's PRE on the
+            # next run (over-tight LLM-emitted clauses the caller doesn't
+            # actually maintain).
+            "callee_relaxations": {},
+            # FUT POST relaxations: clauses to DROP from a function's
+            # postcondition on the next run (over-tight LLM-emitted
+            # POST clauses that real implementations don't satisfy).
+            "function_post_relaxations": {},
         }
 
     def project_clauses(self) -> list[str]:
@@ -379,6 +495,23 @@ class LearnedConstraintsStore:
 
     def function_clauses(self, func_name: str) -> list[str]:
         return list(self._data.get("function_clauses", {}).get(func_name, []))
+
+    def callee_relaxations(self, callee_name: str) -> list[str]:
+        """Return the list of PRE clauses to DROP from *callee_name*'s
+        spec on the next harness emission (bug-hunt mode feedback).
+        """
+        return list(
+            self._data.get("callee_relaxations", {}).get(callee_name, [])
+        )
+
+    def function_post_relaxations(self, func_name: str) -> list[str]:
+        """Return the list of POST clauses to DROP from *func_name*'s
+        postcondition on the next harness emission (symmetric to
+        callee_relaxations, but for the FUT POST side).
+        """
+        return list(
+            self._data.get("function_post_relaxations", {}).get(func_name, [])
+        )
 
     def record(self, func_name: str, r: Remediation,
                source_property: str = "") -> bool:
@@ -409,6 +542,30 @@ class LearnedConstraintsStore:
                 slot.append(r.clause)
                 changed = True
                 logger.info("Learned project invariant: %s", r.clause[:100])
+        elif r.scope == RemediationScope.CALLEE_SPEC_RELAX and r.clause and r.callee:
+            slot = (
+                self._data.setdefault("callee_relaxations", {})
+                .setdefault(r.callee, [])
+            )
+            if r.clause not in slot:
+                slot.append(r.clause)
+                changed = True
+                logger.info(
+                    "Learned callee-spec relaxation for '%s' (drop clause): %s",
+                    r.callee, r.clause[:100],
+                )
+        elif r.scope == RemediationScope.FUNCTION_POST_RELAX and r.clause:
+            slot = (
+                self._data.setdefault("function_post_relaxations", {})
+                .setdefault(func_name, [])
+            )
+            if r.clause not in slot:
+                slot.append(r.clause)
+                changed = True
+                logger.info(
+                    "Learned function-post relaxation for '%s' (drop clause): %s",
+                    func_name, r.clause[:100],
+                )
         elif r.scope == RemediationScope.CODE_CHANGE and r.code_change:
             slot = self._data.setdefault("code_change_todos", [])
             entry = {

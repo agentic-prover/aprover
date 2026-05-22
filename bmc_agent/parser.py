@@ -912,6 +912,16 @@ def _extract_param_ts(param_node, src_bytes: bytes) -> tuple[str, str]:
     """
     full_text = _slice_bytes(src_bytes, param_node).strip()
     parts = full_text.rsplit(None, 1)
+    # Handle ``void*param`` / ``int**pp`` / etc. — no whitespace between
+    # the pointer stars and the identifier. ``rsplit(None, 1)`` then
+    # returns a single element and the name is lost. Detect and split.
+    if len(parts) == 1:
+        m = re.match(
+            r"^(.+?)\s*(\*+)([A-Za-z_]\w*)\s*$",
+            full_text,
+        )
+        if m:
+            parts = [m.group(1).strip() + m.group(2), m.group(3)]
     if len(parts) == 2:
         last = parts[1]
         # Strip leading pointer stars from the name; they belong on the

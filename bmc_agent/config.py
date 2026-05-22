@@ -141,6 +141,20 @@ class Config:
     # Off by default to preserve VibeOS-era behaviour.
     strict_dsl: bool = False
 
+    # Spec mode: controls how the callee PRE is enforced inside its
+    # generated stub.
+    #   - "functional" (default, back-compat): the full PRE is assumed
+    #     inside the stub. Hides "caller-contract slip" bugs where the
+    #     caller passes args that violate the callee's stated PRE.
+    #   - "bug-hunt": the PRE is split into validity / protocol via the
+    #     spec.classify_precondition heuristic (or the LLM-supplied
+    #     split if present). Validity clauses are ASSERTED at the top of
+    #     the stub — CBMC reports them as failures at the caller's call
+    #     site, exposing caller contract violations. Protocol clauses
+    #     are still ASSUMED.
+    # See findings/PLAN_validity_protocol_split.md.
+    spec_mode: str = "functional"
+
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
     # Required for wire-format parsers (protobuf upb varints, length-prefixed
@@ -383,6 +397,7 @@ class Config:
             inline_pure_callees=os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES", "true").lower() != "false",
             inline_pure_callees_max_loc=int(os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES_MAX_LOC", "30")),
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
+            spec_mode=os.environ.get("BMC_AGENT_SPEC_MODE", "functional").lower(),
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",
             infer_field_validity=os.environ.get("BMC_AGENT_INFER_FIELD_VALIDITY", "false").lower() == "true",
             infer_struct_field_validity=os.environ.get("BMC_AGENT_INFER_STRUCT_FIELD_VALIDITY", "false").lower() == "true",
