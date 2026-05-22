@@ -1,0 +1,200 @@
+                    INFO     Checking function '__uint32_identity' (driver      
+                             'libarchive_b_start_lite/xxhash')                  
+                    INFO     Checking function '__bswap_64' (driver             
+                             'libarchive_b_start_lite/xxhash')                  
+                    INFO     Checking function '__bswap_16' (driver             
+                             'libarchive_b_start_lite/xxhash')                  
+                    DEBUG    Harness saved to:                                  
+                             /tmp/libarchive_lite/libarchive_b_start_lite/xxhash
+                             /__bswap_32/harness.c                              
+                    DEBUG    Harness saved to:                                  
+                             /tmp/libarchive_lite/libarchive_b_start_lite/xxhash
+                             /__uint16_identity/harness.c                       
+                    DEBUG    Harness saved to:                                  
+                             /tmp/libarchive_lite/libarchive_b_start_lite/xxhash
+                             /__uint64_identity/harness.c                       
+                    DEBUG    Harness saved to:                                  
+                             /tmp/libarchive_lite/libarchive_b_start_lite/xxhash
+                             /__bswap_16/harness.c                              
+                    DEBUG    Harness saved to:                                  
+                             /tmp/libarchive_lite/libarchive_b_start_lite/xxhash
+                             /__uint32_identity/harness.c                       
+                    DEBUG    Harness saved to:                                  
+                             /tmp/libarchive_lite/libarchive_b_start_lite/xxhash
+                             /__bswap_64/harness.c                              
+                    WARNING  CBMC error for '__bswap_64': cbmc exited with code 
+                             6                                                  
+                    WARNING  CBMC error for '__bswap_16': cbmc exited with code 
+                             6                                                  
+                    WARNING  CBMC error for '__uint64_identity': cbmc exited    
+                             with code 6                                        
+                    WARNING  CBMC error for '__uint16_identity': cbmc exited    
+                             with code 6                                        
+                    WARNING  CBMC error for '__bswap_32': cbmc exited with code 
+                             6                                                  
+                    WARNING  CBMC error for '__uint32_identity': cbmc exited    
+                             with code 6                                        
+                    INFO     Phase 2 complete: 6 verdicts                       
+                    INFO     --- Phase 3: Validating counterexamples ---        
+                    DEBUG    '__bswap_64' has error but no counterexamples      
+                             (skipping): cbmc exited with code 6                
+                    DEBUG    '__uint16_identity' has error but no               
+                             counterexamples (skipping): cbmc exited with code 6
+                    DEBUG    '__bswap_16' has error but no counterexamples      
+                             (skipping): cbmc exited with code 6                
+                    DEBUG    '__uint32_identity' has error but no               
+                             counterexamples (skipping): cbmc exited with code 6
+                    DEBUG    '__bswap_32' has error but no counterexamples      
+                             (skipping): cbmc exited with code 6                
+                    DEBUG    '__uint64_identity' has error but no               
+                             counterexamples (skipping): cbmc exited with code 6
+                    WARNING  Coverage diagnostics: 6/6 CBMC runs failed before  
+                             any verdict was produced.                          
+                    WARNING    >=50%% of functions failed at parse/convert. The 
+                             '0 real bugs found' summary below is uninformative 
+                             — treat this run as BLOCKED, not as a clean verify.
+                    INFO     === AMC Pipeline END: 0 real bug(s), 0 latent, 8   
+                             unresolved ===                                     
+                    INFO     Finished xxhash.c: 0 bug(s) confirmed              
+                    INFO     === run_directory DONE: 124 files, 12 total bug(s) 
+                             ===                                                
+
+=== Summary ===
+Files processed: 124
+Total bugs confirmed: 12
+  archive_acl.c: 0 bug(s)
+  archive_blake2s_ref.c: 0 bug(s)
+  archive_blake2sp_ref.c: 0 bug(s)
+  archive_check_magic.c: 0 bug(s)
+  archive_cmdline.c: 0 bug(s)
+  archive_cryptor.c: 0 bug(s)
+  archive_digest.c: 0 bug(s)
+  archive_entry.c: 0 bug(s)
+  archive_entry_copy_bhfi.c: 0 bug(s)
+  archive_entry_copy_stat.c: 0 bug(s)
+  archive_entry_link_resolver.c: 0 bug(s)
+  archive_entry_sparse.c: 0 bug(s)
+  archive_entry_stat.c: 0 bug(s)
+  archive_entry_strmode.c: 0 bug(s)
+  archive_entry_xattr.c: 0 bug(s)
+  archive_hmac.c: 0 bug(s)
+  archive_match.c: 0 bug(s)
+  archive_options.c: 0 bug(s)
+  archive_pack_dev.c: 0 bug(s)
+  archive_parse_date.c: 0 bug(s)
+  archive_pathmatch.c: 0 bug(s)
+  archive_ppmd7.c: 0 bug(s)
+  archive_ppmd8.c: 0 bug(s)
+  archive_random.c: 0 bug(s)
+  archive_rb.c: 12 bug(s)
+    [MEMORY_SAFETY] __archive_rb_tree_insert_node — __archive_rb_tree_insert_node.pointer_dereference.7
+    [MEMORY_SAFETY] __archive_rb_tree_find_node — __archive_rb_tree_find_node.pointer_dereference.7
+    [MEMORY_SAFETY] __archive_rb_tree_find_node_leq — __archive_rb_tree_find_node_leq.pointer_dereference.7
+    [MEMORY_SAFETY] __archive_rb_tree_prune_blackred_branch — __archive_rb_tree_prune_blackred_branch.array_bounds.1
+    [MEMORY_SAFETY] __archive_rb_tree_prune_blackred_branch — __archive_rb_tree_prune_blackred_branch.pointer_dereference.13
+    [MEMORY_SAFETY] __archive_rb_tree_iterate — __archive_rb_tree_iterate.array_bounds.2
+    [MEMORY_SAFETY] __archive_rb_tree_iterate — __archive_rb_tree_iterate.pointer_dereference.25
+    [MEMORY_SAFETY] __archive_rb_tree_remove_node — __archive_rb_tree_prune_node.pointer_dereference.7
+    [MEMORY_SAFETY] __archive_rb_tree_remove_node — __archive_rb_tree_prune_node.array_bounds.1
+    [MEMORY_SAFETY] __archive_rb_tree_find_node_geq — __archive_rb_tree_find_node_geq.pointer_dereference.7
+    [MEMORY_SAFETY] __archive_rb_tree_reparent_nodes — __archive_rb_tree_reparent_nodes.array_bounds.1
+    [MEMORY_SAFETY] __archive_rb_tree_reparent_nodes — __archive_rb_tree_reparent_nodes.pointer_dereference.13
+  archive_read.c: 0 bug(s)
+  archive_read_add_passphrase.c: 0 bug(s)
+  archive_read_append_filter.c: 0 bug(s)
+  archive_read_data_into_fd.c: 0 bug(s)
+  archive_read_disk_entry_from_file.c: 0 bug(s)
+  archive_read_disk_posix.c: 0 bug(s)
+  archive_read_disk_set_standard_lookup.c: 0 bug(s)
+  archive_read_extract.c: 0 bug(s)
+  archive_read_extract2.c: 0 bug(s)
+  archive_read_open_fd.c: 0 bug(s)
+  archive_read_open_file.c: 0 bug(s)
+  archive_read_open_filename.c: 0 bug(s)
+  archive_read_open_memory.c: 0 bug(s)
+  archive_read_set_format.c: 0 bug(s)
+  archive_read_set_options.c: 0 bug(s)
+  archive_read_support_filter_all.c: 0 bug(s)
+  archive_read_support_filter_by_code.c: 0 bug(s)
+  archive_read_support_filter_bzip2.c: 0 bug(s)
+  archive_read_support_filter_compress.c: 0 bug(s)
+  archive_read_support_filter_grzip.c: 0 bug(s)
+  archive_read_support_filter_gzip.c: 0 bug(s)
+  archive_read_support_filter_lrzip.c: 0 bug(s)
+  archive_read_support_filter_lz4.c: 0 bug(s)
+  archive_read_support_filter_lzop.c: 0 bug(s)
+  archive_read_support_filter_none.c: 0 bug(s)
+  archive_read_support_filter_program.c: 0 bug(s)
+  archive_read_support_filter_rpm.c: 0 bug(s)
+  archive_read_support_filter_uu.c: 0 bug(s)
+  archive_read_support_filter_xz.c: 0 bug(s)
+  archive_read_support_filter_zstd.c: 0 bug(s)
+  archive_read_support_format_7zip.c: 0 bug(s)
+  archive_read_support_format_all.c: 0 bug(s)
+  archive_read_support_format_ar.c: 0 bug(s)
+  archive_read_support_format_by_code.c: 0 bug(s)
+  archive_read_support_format_cab.c: 0 bug(s)
+  archive_read_support_format_cpio.c: 0 bug(s)
+  archive_read_support_format_empty.c: 0 bug(s)
+  archive_read_support_format_iso9660.c: 0 bug(s)
+  archive_read_support_format_lha.c: 0 bug(s)
+  archive_read_support_format_mtree.c: 0 bug(s)
+  archive_read_support_format_rar.c: 0 bug(s)
+  archive_read_support_format_rar5.c: 0 bug(s)
+  archive_read_support_format_raw.c: 0 bug(s)
+  archive_read_support_format_tar.c: 0 bug(s)
+  archive_read_support_format_warc.c: 0 bug(s)
+  archive_read_support_format_xar.c: 0 bug(s)
+  archive_read_support_format_zip.c: 0 bug(s)
+  archive_string.c: 0 bug(s)
+  archive_string_sprintf.c: 0 bug(s)
+  archive_time.c: 0 bug(s)
+  archive_util.c: 0 bug(s)
+  archive_version_details.c: 0 bug(s)
+  archive_virtual.c: 0 bug(s)
+  archive_write.c: 0 bug(s)
+  archive_write_add_filter.c: 0 bug(s)
+  archive_write_add_filter_b64encode.c: 0 bug(s)
+  archive_write_add_filter_by_name.c: 0 bug(s)
+  archive_write_add_filter_bzip2.c: 0 bug(s)
+  archive_write_add_filter_compress.c: 0 bug(s)
+  archive_write_add_filter_grzip.c: 0 bug(s)
+  archive_write_add_filter_gzip.c: 0 bug(s)
+  archive_write_add_filter_lrzip.c: 0 bug(s)
+  archive_write_add_filter_lz4.c: 0 bug(s)
+  archive_write_add_filter_lzop.c: 0 bug(s)
+  archive_write_add_filter_none.c: 0 bug(s)
+  archive_write_add_filter_program.c: 0 bug(s)
+  archive_write_add_filter_uuencode.c: 0 bug(s)
+  archive_write_add_filter_xz.c: 0 bug(s)
+  archive_write_add_filter_zstd.c: 0 bug(s)
+  archive_write_disk_posix.c: 0 bug(s)
+  archive_write_disk_set_standard_lookup.c: 0 bug(s)
+  archive_write_open_fd.c: 0 bug(s)
+  archive_write_open_file.c: 0 bug(s)
+  archive_write_open_filename.c: 0 bug(s)
+  archive_write_open_memory.c: 0 bug(s)
+  archive_write_set_format.c: 0 bug(s)
+  archive_write_set_format_7zip.c: 0 bug(s)
+  archive_write_set_format_ar.c: 0 bug(s)
+  archive_write_set_format_by_name.c: 0 bug(s)
+  archive_write_set_format_cpio.c: 0 bug(s)
+  archive_write_set_format_cpio_binary.c: 0 bug(s)
+  archive_write_set_format_cpio_newc.c: 0 bug(s)
+  archive_write_set_format_cpio_odc.c: 0 bug(s)
+  archive_write_set_format_filter_by_ext.c: 0 bug(s)
+  archive_write_set_format_gnutar.c: 0 bug(s)
+  archive_write_set_format_iso9660.c: 0 bug(s)
+  archive_write_set_format_mtree.c: 0 bug(s)
+  archive_write_set_format_pax.c: 0 bug(s)
+  archive_write_set_format_raw.c: 0 bug(s)
+  archive_write_set_format_shar.c: 0 bug(s)
+  archive_write_set_format_ustar.c: 0 bug(s)
+  archive_write_set_format_v7tar.c: 0 bug(s)
+  archive_write_set_format_warc.c: 0 bug(s)
+  archive_write_set_format_xar.c: 0 bug(s)
+  archive_write_set_format_zip.c: 0 bug(s)
+  archive_write_set_options.c: 0 bug(s)
+  archive_write_set_passphrase.c: 0 bug(s)
+  filter_fork_posix.c: 0 bug(s)
+  xxhash.c: 0 bug(s)

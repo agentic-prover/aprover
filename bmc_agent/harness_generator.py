@@ -5211,6 +5211,19 @@ def _strip_stdlib_decls(text: str, *, kernel_mode: bool = False) -> str:
     # Match function declarations at brace depth 0: lines/blocks ending in ';'
     # that look like "... funcname ( ... );"
     _DECL_PAT = re.compile(r'\b(\w+)\s*\(')
+
+    # Cascade: derive the set of already-stripped typedefs from the markers
+    # the typedef pass left behind (``/* typedef X removed */``). Any forward
+    # declaration that references one of these names points at a type that no
+    # longer exists, so CBMC will fail to parse it (e.g. ``extern wint_t btowc
+    # (int);`` after ``wint_t`` is gone). Strip those declarations too,
+    # regardless of whether the function name is in _SYSTEM_FUNCTION_NAMES.
+    # Without this, the harness keeps hundreds of <wchar.h>/<inttypes.h>
+    # declarations referencing ``wint_t``/``__gwchar_t``/etc. — observed as
+    # ~100% CBMC parse-error rate across libarchive.
+    _STRIPPED_TYPEDEF_MARKER = re.compile(r'/\*\s*typedef\s+(\w+)\s+removed[^*]*\*/')
+    cascade_stripped: set[str] = set(_STRIPPED_TYPEDEF_MARKER.findall(text))
+
     result: list[str] = []
     i = 0
     n = len(text)
@@ -5272,8 +5285,21 @@ def _strip_stdlib_decls(text: str, *, kernel_mode: bool = False) -> str:
         # must not be treated as a declaration of ``read``.
         stmt_code = _strip_c_comments_and_strings(stmt)
         m = _DECL_PAT.search(stmt_code)
-        if m and m.group(1) in _SYSTEM_FUNCTION_NAMES and '{' not in stmt_code:
+        is_decl = m and '{' not in stmt_code
+        # Primary rule: named-list match.
+        if is_decl and m.group(1) in _SYSTEM_FUNCTION_NAMES:
             result.append(f'/* {m.group(1)} decl removed */')
+        # Cascade rule: declaration references a typedef that was already
+        # stripped. Only applies to ``extern`` declarations (forward decls
+        # with no body) so we don't accidentally drop function definitions.
+        elif (
+            is_decl
+            and cascade_stripped
+            and 'extern' in stmt_code.split('(', 1)[0]
+            and (set(re.findall(r'\b\w+\b', stmt_code)) & cascade_stripped)
+        ):
+            referenced = sorted(set(re.findall(r'\b\w+\b', stmt_code)) & cascade_stripped)[0]
+            result.append(f'/* {m.group(1)} decl removed: references stripped {referenced} */')
         else:
             result.append(stmt)
         i = j + 1
