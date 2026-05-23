@@ -579,11 +579,36 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         exclude_patterns=exclude,
     )
 
+    # Filter out reports the realism check downgraded to "unlikely" —
+    # these are findings where the realism LLM judged the witness
+    # UNREALISTIC (e.g. it violated an active stub contract). The
+    # bug-reporter still PERSISTS the report (the audit trail lives in
+    # bug_report.json) but the verify-dir summary should not present
+    # them as confirmed bugs, otherwise the "Total bugs confirmed"
+    # number is misleading. Mirrors the suppression logic that
+    # ``_cmd_verify`` already has.
+    def _is_unlikely(report) -> bool:
+        return (getattr(report, "confidence", "") or "").lower() == "unlikely"
+
+    filtered_results: dict = {}
+    suppressed_total = 0
+    for fname, bugs in results.items():
+        kept = [b for b in bugs if not _is_unlikely(b)]
+        filtered_results[fname] = kept
+        suppressed_total += len(bugs) - len(kept)
+
     print(f"\n=== Summary ===")
-    total = sum(len(v) for v in results.values())
+    total = sum(len(v) for v in filtered_results.values())
     print(f"Files processed: {len(results)}")
     print(f"Total bugs confirmed: {total}")
-    for fname, bugs in sorted(results.items()):
+    if suppressed_total > 0:
+        print(
+            f"(suppressed {suppressed_total} finding(s) downgraded by realism "
+            f"check to 'unlikely' — see per-file bug_report.json for the audit trail)"
+        )
+    for fname, bugs in sorted(filtered_results.items()):
+        if not bugs:
+            continue
         print(f"  {fname}: {len(bugs)} bug(s)")
         for report in bugs:
             print(f"    [{report.bug_type.upper()}] {report.function_name} — {report.violated_property}")
