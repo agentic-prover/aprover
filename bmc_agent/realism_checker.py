@@ -377,8 +377,16 @@ class RealismChecker:
             # then fell back to prose-keyword recovery and picked the wrong
             # verdict. Bump to 4096; with thinking enabled the SDK auto-expands
             # to thinking_budget + 1024, so we override that calculation here.
+            # Phase 4b: prepend learned skepticism hints to the system
+            # prompt when the autonomous loop has accumulated them from
+            # prior rounds. Empty string by default; never overrides
+            # the static prompt's decision rules, only adds context.
+            extra = (getattr(self.config, "realism_extra_skepticism", "") or "").strip()
+            sys_prompt = (
+                f"{extra}\n\n---\n\n{SPEC_SYSTEM_PROMPT}" if extra else SPEC_SYSTEM_PROMPT
+            )
             raw = self.llm.complete(
-                SPEC_SYSTEM_PROMPT,
+                sys_prompt,
                 prompt,
                 max_tokens=4096 + (4000 if use_thinking else 0),
                 thinking=use_thinking,

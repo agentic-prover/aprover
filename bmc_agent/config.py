@@ -393,6 +393,16 @@ class Config:
     # land. 0 disables auto-retry entirely.
     auto_retry_max_rounds: int = 2
 
+    # Phase 4b — extra skepticism context for the realism checker.
+    # Populated by ``bmc_agent.realism_hint_injector.collect_hints``
+    # after each autonomous round when an FP pattern (UNINIT_VTABLE,
+    # UNINIT_CONTAINER, …) recurred above the threshold. The realism
+    # checker prepends this to its system prompt for the *next* round,
+    # so the LLM applies stronger skepticism to recurring FP classes
+    # without us editing the static prompt template. Empty string
+    # means no learned hints — the realism prompt runs unchanged.
+    realism_extra_skepticism: str = ""
+
     # Phase 3 — self-patch agent mode. One of:
     #   "deny"  (default) — the self-patch agent is OFF. CBMC errors
     #                        with no registered retry action just stay
