@@ -5043,6 +5043,17 @@ def _strip_glibc_internal_struct_bodies(
     """
     if kernel_mode:
         return text
+
+    # Cascade: scan for ``/* typedef X removed */`` markers and build the
+    # set of names whose definitions are gone. A struct/union body whose
+    # FIELDS reference any of those names is broken (the fields' types
+    # don't resolve), so we strip the body to a forward declaration too.
+    # Without this, libarchive's cab.c was blocked at 61/61 functions
+    # because zlib's ``struct gzFile_s { off64_t pos; }`` (pulled in
+    # transitively) referenced the stripped ``off64_t`` typedef.
+    _STRIPPED_TYPEDEF_MARKER = re.compile(r'/\*\s*typedef\s+(\w+)\s+removed[^*]*\*/')
+    cascade_stripped: set[str] = set(_STRIPPED_TYPEDEF_MARKER.findall(text))
+
     # Strip struct definitions whose names match either:
     #   * A glibc-internal prefix (_IO_, __, _G_), OR
     #   * A known POSIX/glibc struct that CBMC's built-in libc
@@ -5182,9 +5193,38 @@ def _strip_glibc_internal_struct_bodies(
                 result.append(text[i])
                 i += 1
                 continue
-            # We have ``struct NAME {``. Only strip if the name matches
-            # a glibc-internal pattern or a known POSIX/glibc struct.
-            if not _struct_name_is_glibc(name):
+            # We have ``struct NAME {``. Strip the body if either:
+            #   (a) the name matches a glibc-internal pattern or a known
+            #       POSIX/glibc struct (the primary rule), OR
+            #   (b) the body references at least one typedef that the
+            #       typedef-strip pass already removed — the body is
+            #       otherwise unparseable. Cascade rule, added 2026-05-23
+            #       after libarchive cab.c was blocked by zlib's
+            #       ``struct gzFile_s { off64_t pos; }``.
+            should_strip = _struct_name_is_glibc(name)
+            if not should_strip and cascade_stripped:
+                # Peek at the body: scan from ``k`` (the ``{``) to its
+                # matching ``}`` and check whether any token in the body
+                # is in cascade_stripped. We do this by finding the
+                # matching brace first.
+                _peek_m = k
+                _peek_depth = 0
+                while _peek_m < n:
+                    _c = text[_peek_m]
+                    if _c == '{':
+                        _peek_depth += 1
+                    elif _c == '}':
+                        _peek_depth -= 1
+                        if _peek_depth == 0:
+                            _peek_m += 1
+                            break
+                    _peek_m += 1
+                if _peek_depth == 0:
+                    _body = text[k:_peek_m]
+                    _body_tokens = set(re.findall(r'\b\w+\b', _body))
+                    if _body_tokens & cascade_stripped:
+                        should_strip = True
+            if not should_strip:
                 result.append(text[i])
                 i += 1
                 continue
