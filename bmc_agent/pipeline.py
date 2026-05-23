@@ -198,30 +198,46 @@ def _realism_verified():
     )
 
 
-def _dedup_counterexamples(cexs: list) -> list:
-    """Keep one counterexample per property type, preserving order.
+DEFAULT_DEDUP_PER_TYPE = 3
+
+
+def _dedup_counterexamples(cexs: list, max_per_type: int = DEFAULT_DEDUP_PER_TYPE) -> list:
+    """Keep up to ``max_per_type`` counterexamples per property type, in order.
 
     CBMC emits a separate property ID for every loop unrolling and every
     dereference site, so a single root bug can produce dozens of
-    pointer_arithmetic.N / overflow.N / unwind.N entries.  We keep only the
-    first representative per type.  'assertion' properties are kept in full
-    because each index corresponds to a distinct spec postcondition.
+    pointer_arithmetic.N / overflow.N / unwind.N entries.
+
+    Earlier behaviour kept exactly one representative per type — that
+    discarded deeper CEx indices (e.g. ``pointer_dereference.43``) when an
+    artifact-flavoured CEx happened to come first (e.g.
+    ``pointer_dereference.7`` on a nondet-pointer loop guard). Real bugs
+    behind the artifact were never inspected. The fix is to keep a small
+    window per type so the classifier+realism pair sees the deeper indices
+    too.
+
+    ``assertion`` properties are still kept in full because each index
+    corresponds to a distinct spec postcondition (one assertion per
+    postcondition).
+
+    Use ``max_per_type=1`` to recover the original behaviour.
     """
-    seen: set[str] = set()
+    counts: dict[str, int] = {}
     result = []
     for cex in cexs:
         parts = cex.failing_property.split(".")
-        # property type is the second-to-last segment (e.g. "pointer_arithmetic")
         prop_type = parts[-2] if len(parts) >= 2 else cex.failing_property
         if prop_type == "assertion":
             result.append(cex)
-        elif prop_type not in seen:
-            seen.add(prop_type)
+            continue
+        seen = counts.get(prop_type, 0)
+        if seen < max_per_type:
+            counts[prop_type] = seen + 1
             result.append(cex)
     if len(result) < len(cexs):
         logger.debug(
-            "Deduped %d counterexamples → %d (by property type)",
-            len(cexs), len(result),
+            "Deduped %d counterexamples → %d (up to %d per property type)",
+            len(cexs), len(result), max_per_type,
         )
     return result
 
@@ -454,7 +470,10 @@ class AMCPipeline:
             if spec is None:
                 continue
 
-            for cex in _dedup_counterexamples(verdict.counterexamples):
+            for cex in _dedup_counterexamples(
+                verdict.counterexamples,
+                max_per_type=self.config.dedup_max_per_type,
+            ):
                 logger.info(
                     "Validating counterexample for '%s' (property=%s)",
                     fn_name, cex.failing_property,
@@ -484,15 +503,22 @@ class AMCPipeline:
                     bug_key = (fn_name, _prop_type(cex.failing_property))
                     if bug_key in confirmed_real_bugs:
                         logger.debug(
-                            "Skipping duplicate real bug for '%s' (property type '%s' already confirmed)",
+                            "Skipping duplicate real bug for '%s' (property type '%s' already confirmed at non-downgraded confidence)",
                             fn_name, bug_key[1],
                         )
                     else:
-                        confirmed_real_bugs.add(bug_key)
                         logger.info("REAL BUG confirmed in '%s'", fn_name)
                         report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
+                        # Only mark this property type as "done" if the report
+                        # survived realism (confidence != "unlikely"). When
+                        # realism downgrades CEx_1 as an artifact, keep the
+                        # door open for CEx_2 / CEx_3 of the same property
+                        # type — the deeper indices often expose the real
+                        # bug behind the artifact.
+                        if getattr(report, "confidence", "") != "unlikely":
+                            confirmed_real_bugs.add(bug_key)
                 elif validation.is_latent_bug:
                     latent_key = (fn_name, _prop_type(cex.failing_property))
                     if latent_key in confirmed_latent:
@@ -586,7 +612,10 @@ class AMCPipeline:
                 spec = current_specs.get(fn_name)
                 if func is None or spec is None:
                     continue
-                for cex in _dedup_counterexamples(verdict.counterexamples):
+                for cex in _dedup_counterexamples(
+                    verdict.counterexamples,
+                    max_per_type=self.config.dedup_max_per_type,
+                ):
                     logger.info(
                         "Phase 3c: new counterexample for '%s' (property=%s)",
                         fn_name, cex.failing_property,
@@ -673,7 +702,10 @@ class AMCPipeline:
                 spec = current_specs.get(fn_name)
                 if func is None or spec is None:
                     continue
-                for cex in _dedup_counterexamples(verdict.counterexamples):
+                for cex in _dedup_counterexamples(
+                    verdict.counterexamples,
+                    max_per_type=self.config.dedup_max_per_type,
+                ):
                     logger.info(
                         "Recheck: validating counterexample for '%s' (property=%s)",
                         fn_name, cex.failing_property,

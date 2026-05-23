@@ -295,6 +295,12 @@ class Config:
     max_spec_retries: int = 3
     max_refinement_iters: int = 5
 
+    # CEx dedup window: how many counterexamples to keep per property type
+    # (e.g. how many distinct pointer_dereference.N CExs to forward to
+    # classification + realism check). 1 = original behaviour (drop deeper
+    # indices); 3 = default for surfacing artifact-masked real bugs.
+    dedup_max_per_type: int = 3
+
     # Batch processing
     batch_size: int = 10
 
@@ -540,6 +546,7 @@ class Config:
             artifact_dir=os.environ.get("BMC_AGENT_ARTIFACT_DIR", "artifacts"),
             max_spec_retries=int(os.environ.get("BMC_AGENT_MAX_SPEC_RETRIES", "3")),
             max_refinement_iters=int(os.environ.get("BMC_AGENT_MAX_REFINEMENT_ITERS", "5")),
+            dedup_max_per_type=int(os.environ.get("BMC_AGENT_DEDUP_MAX_PER_TYPE", "3")),
             batch_size=int(os.environ.get("BMC_AGENT_BATCH_SIZE", "10")),
             enable_dual_spec=os.environ.get("BMC_AGENT_ENABLE_DUAL_SPEC", "true").lower() != "false",
             enable_spec_quality=os.environ.get("BMC_AGENT_ENABLE_SPEC_QUALITY", "false").lower() == "true",
