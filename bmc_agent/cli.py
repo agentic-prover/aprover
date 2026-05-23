@@ -591,6 +591,64 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_self_patch_review(args: argparse.Namespace) -> int:
+    """Walk a sweep's proposed_patches/ dir and digest every staged proposal."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = _Path(args.proposals_dir)
+    if not root.exists():
+        print(f"path not found: {root}", file=__import__("sys").stderr)
+        return 2
+
+    meta_files = sorted(root.rglob("*.meta.json"))
+    if not meta_files:
+        print(f"No staged proposals found under {root}")
+        return 0
+
+    print(f"=== Staged self-patch proposals: {root} ===\n")
+    print(f"Found {len(meta_files)} proposal(s)\n")
+
+    for mf in meta_files:
+        try:
+            with mf.open() as f:
+                meta = _json.load(f)
+        except Exception as exc:
+            print(f"  ! failed to read {mf}: {exc}")
+            continue
+
+        diff_path = mf.with_suffix("").with_suffix(".diff")
+        test_path = mf.with_suffix("").with_suffix(".test.py")
+        # Above twice-stripped: e.g. ``foo.meta.json`` → ``foo``, suffix
+        # ``.diff`` produces ``foo.diff``.
+
+        round_dir = mf.parent.name
+        print(f"--- [{round_dir}] {mf.stem.replace('.meta', '')} ---")
+        print(f"  Status:           {meta.get('status')}")
+        print(f"  Error class:      {meta.get('error_class')}")
+        print(f"  Error target:     {meta.get('error_target') or '(none)'}")
+        print(f"  Files touched:    {meta.get('files_touched')}")
+        print(f"  Lines changed:    {meta.get('lines_changed')}")
+        rt_name = meta.get("regression_test_name", "(unknown)")
+        rt_path = meta.get("regression_test_path", "(unknown)")
+        print(f"  Regression test:  {rt_path}::{rt_name}")
+        rationale = (meta.get("rationale") or "").strip()
+        if rationale:
+            print(f"  Rationale:        {rationale}")
+        review = (meta.get("review_instructions") or "").strip()
+        if review:
+            print("  Manual apply:")
+            for line in review.splitlines():
+                print(f"    {line}")
+        if args.show_diff and diff_path.exists():
+            print(f"\n  Diff ({diff_path}):\n")
+            for line in diff_path.read_text().splitlines():
+                print(f"    {line}")
+        print()
+
+    return 0
+
+
 def _cmd_autonomous(args: argparse.Namespace) -> int:
     """Phase 2 of autonomous mode: round-based verify-dir with convergence.
 
@@ -1327,6 +1385,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_model_arg(au)
     au.set_defaults(func=_cmd_autonomous)
+
+    # --- self-patch-review ---
+    spr = subparsers.add_parser(
+        "self-patch-review",
+        help=(
+            "Walk a sweep's ``proposed_patches/`` directory and print "
+            "a digest of every staged self-patch proposal — error "
+            "class, rationale, files touched, manual-apply commands. "
+            "Use this after an autonomous run with --allow-self-patch=stage."
+        ),
+    )
+    spr.add_argument(
+        "--proposals-dir",
+        required=True,
+        metavar="DIR",
+        help=(
+            "Path to the proposed_patches directory (e.g. "
+            "<output>/<driver>/proposed_patches/)."
+        ),
+    )
+    spr.add_argument(
+        "--show-diff",
+        action="store_true",
+        default=False,
+        help="Print the full unified diff for each proposal (default: just the digest)",
+    )
+    spr.set_defaults(func=_cmd_self_patch_review)
 
     # --- eval ---
     ev = subparsers.add_parser(
