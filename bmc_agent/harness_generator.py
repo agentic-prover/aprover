@@ -2512,13 +2512,21 @@ def _generate_nd_decls(
                     lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
                 if pname in nonnull_params:
                     lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
-            elif star_count == 1 and _resolve_struct_name(base_type, struct_definitions):
-                # Single-pointer to a known struct — emit per-field
-                # initialisation instead of just leaving the struct
-                # nondet. Empirical pattern: opaque-struct pointer args
-                # (`Curl_URL *u`, `nghttp2_bufs *bufs`, `ASN1_STRING *s`)
-                # produced 100+ spurious CEs each because every field
+            elif star_count == 1 and _resolve_struct_name(base_type, struct_definitions) and struct_definitions.get(_resolve_struct_name(base_type, struct_definitions)):
+                # Single-pointer to a known struct WITH a visible body —
+                # emit per-field initialisation instead of just leaving the
+                # struct nondet. Empirical pattern: opaque-struct pointer
+                # args (`Curl_URL *u`, `nghttp2_bufs *bufs`, `ASN1_STRING
+                # *s`) produced 100+ spurious CEs each because every field
                 # access was unconstrained.
+                #
+                # The ``struct_definitions.get(tag)`` guard rejects opaque
+                # types whose body isn't in this TU — e.g. libarchive's
+                # ``struct archive_string_conv`` (defined in archive_string.c
+                # but only forward-declared in archive_acl.c). Stack-allocating
+                # such a struct produces ``incomplete type not permitted
+                # here`` at CBMC type-check. Falls through to the nondet-
+                # pointer default below, which is correct for opaque types.
                 struct_tag = _resolve_struct_name(base_type, struct_definitions)
                 fields = struct_definitions[struct_tag]
                 obj_name = f"_{pname}_obj"
@@ -2597,13 +2605,58 @@ def _generate_nd_decls(
                         f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */"
                     )
             elif "const" in ptype_stripped.lower():
-                lines.append(f"    {clean_base} {local_name};")
-                lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
+                # Same opaque-struct guard as the default branch below:
+                # ``const struct X *foo`` for opaque X otherwise produces
+                # ``const struct X _val;`` → incomplete type.
+                _base_strip_c = re.sub(r'\bconst\b', '', base_type).strip()
+                _is_opaque_c = False
+                if _base_strip_c.startswith('struct ') or _base_strip_c.startswith('union '):
+                    _kw_len_c = 7 if _base_strip_c.startswith('struct ') else 6
+                    _tag_c = _base_strip_c[_kw_len_c:].strip()
+                    if not struct_definitions or not struct_definitions.get(_tag_c):
+                        _is_opaque_c = True
+                if _is_opaque_c:
+                    lines.append(
+                        f"    /* opaque {_base_strip_c}: nondet pointer ({_tag_c} body not in TU) */"
+                    )
+                    lines.append(f"    {ptype_stripped} {pname};")
+                    if pname in nonnull_params:
+                        lines.append(
+                            f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */"
+                        )
+                else:
+                    lines.append(f"    {clean_base} {local_name};")
+                    lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
             else:
-                lines.append(f"    {base_type} {local_name};")
-                lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
-                if pname in nonnull_params:
-                    lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
+                # Opaque-struct guard: if base_type is a struct/union whose
+                # body isn't visible in this TU (only forward-declared),
+                # stack-allocating ``{base} {local};`` produces
+                # ``incomplete type not permitted here`` at CBMC type-check.
+                # Emit a nondet pointer instead — the function body will
+                # treat the pointee opaquely too, which is the right model
+                # for opaque types like libarchive's
+                # ``struct archive_string_conv``.
+                base_strip = re.sub(r'\bconst\b', '', base_type).strip()
+                is_opaque_struct = False
+                if base_strip.startswith('struct ') or base_strip.startswith('union '):
+                    kw_len = 7 if base_strip.startswith('struct ') else 6
+                    tag = base_strip[kw_len:].strip()
+                    if not struct_definitions or not struct_definitions.get(tag):
+                        is_opaque_struct = True
+                if is_opaque_struct:
+                    lines.append(
+                        f"    /* opaque {base_strip}: nondet pointer ({tag} body not in TU) */"
+                    )
+                    lines.append(f"    {ptype_stripped} {pname};")
+                    if pname in nonnull_params:
+                        lines.append(
+                            f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */"
+                        )
+                else:
+                    lines.append(f"    {base_type} {local_name};")
+                    lines.append(f"    {ptype_stripped} {pname} = &{local_name};")
+                    if pname in nonnull_params:
+                        lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")
         else:
             # Value parameter
             lines.append(f"    {ptype_stripped} {pname};")
@@ -4824,6 +4877,26 @@ _SYSTEM_TYPEDEF_NAMES: frozenset[str] = frozenset({
     "off_t", "ino_t", "dev_t", "blkcnt_t", "blksize_t",
     "rlim_t", "id_t", "suseconds_t", "useconds_t",
     "ssize_t", "socklen_t", "sa_family_t",
+    # BSD-historical <sys/types.h> aliases. libarchive's archive_platform.h
+    # (under HAVE_CONFIG_H) ships its own ``typedef int register_t;`` which
+    # collides with CBMC's built-in model that types ``register_t`` as
+    # ``signed long int`` on x86_64-linux, producing
+    # "type symbol 'register_t' defined twice". Same risk for the other
+    # legacy BSD-shape typedefs glibc <sys/types.h> exposes. Strip the
+    # libarchive variant and let CBMC's built-in width stand.
+    "register_t", "caddr_t", "daddr_t", "loff_t", "key_t",
+    "u_char", "u_short", "u_int", "u_long",
+    "quad_t", "u_quad_t",
+    # _LARGEFILE64_SOURCE typedefs (glibc, enabled transitively by
+    # HAVE_CONFIG_H on libarchive). When stripped via the typedef rule,
+    # the cascade-strip on _strip_stdlib_decls drops every <stdio.h>/
+    # <unistd.h>/<sys/types.h> 64-bit-LFS forward declaration that uses
+    # them (``ftello64``, ``lseek64``, ``truncate64``, ``fseeko64``,
+    # ``stat64``, ``readdir64``, …). Empirically these were the top two
+    # failure classes in the first libarchive sweep (3071 + 1318 of 4829
+    # CBMC errors).
+    "fpos64_t", "off64_t", "ino64_t", "blkcnt64_t", "fsblkcnt64_t",
+    "fsfilcnt64_t", "rlim64_t",
 })
 
 
@@ -4895,6 +4968,15 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
         # <sys/time.h> / <time.h>
         "timeval", "timespec", "itimerval", "itimerspec", "tm",
         "timezone", "tms", "utimbuf",
+        # <sys/timex.h> — body references ``__syscall_slong_t`` etc.
+        # which our typedef-strip removes; strip the whole body too.
+        "timex", "ntptimeval",
+        # <linux/stat.h> — Linux 4.11+ extended stat. Body references
+        # __u64/__u32 (kernel primitives, exempt) plus some __ types
+        # that get stripped; cheaper to strip the whole body. libarchive
+        # never uses these directly — they only arrive via header
+        # transitive includes.
+        "statx", "statx_timestamp",
         # <sys/types.h>, <sys/stat.h>
         "stat", "stat64",
         # <sys/socket.h>, <netinet/in.h>
@@ -4924,6 +5006,14 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
         "sched_param",
         # <stdio.h> generic
         "fpos_t",
+        # <pthread.h> — glibc defines these as unions on x86_64 with
+        # platform-dependent bodies; CBMC's libc model has its own.
+        "pthread_attr_t", "pthread_mutex_t", "pthread_mutexattr_t",
+        "pthread_cond_t", "pthread_condattr_t",
+        "pthread_rwlock_t", "pthread_rwlockattr_t",
+        "pthread_barrier_t", "pthread_barrierattr_t",
+        # <semaphore.h>
+        "sem_t",
     })
 
     def _struct_name_is_glibc(name: str) -> bool:
@@ -4963,13 +5053,22 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
             result.append(text[i:k])
             i = k
             continue
-        # Look for "struct" at the current position. Match only when
-        # the preceding character isn't an identifier char (so we don't
-        # match the middle of a longer word).
+        # Look for "struct" or "union" at the current position. Match
+        # only when the preceding character isn't an identifier char (so
+        # we don't match the middle of a longer word). glibc defines
+        # several POSIX types as ``union`` on x86_64 (``pthread_attr_t``,
+        # ``pthread_mutex_t``, ``sem_t``), which CBMC's built-in libc
+        # re-defines with its own body — same body-redefinition failure
+        # as the struct case, fixed the same way.
+        kw = None
         if text.startswith("struct", i) and (i == 0 or not text[i - 1].isalnum() and text[i - 1] != '_'):
-            # Find the struct name. There must be whitespace then an
+            kw = "struct"
+        elif text.startswith("union", i) and (i == 0 or not text[i - 1].isalnum() and text[i - 1] != '_'):
+            kw = "union"
+        if kw is not None:
+            # Find the type tag name. There must be whitespace then an
             # identifier.
-            j = i + len("struct")
+            j = i + len(kw)
             while j < n and text[j].isspace():
                 j += 1
             name_m = re.match(r"\w+", text[j:])
@@ -5041,9 +5140,12 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
                 tail += 1
             if tail < n:
                 tail += 1  # include the ``;``
-            # Replace the entire ``struct NAME { ... };`` with just a
+            # Replace the entire ``<kw> NAME { ... };`` with just a
             # forward declaration so pointer typechecking still works.
-            result.append(f"struct {name}; /* glibc-internal body stripped */")
+            # Body-redefinition vs CBMC's built-in libc is avoided either
+            # way — CBMC sees the harness's forward decl and is free to
+            # pin its own body.
+            result.append(f"{kw} {name}; /* glibc-internal body stripped */")
             i = tail
             continue
         result.append(text[i])

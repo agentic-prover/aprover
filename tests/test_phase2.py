@@ -605,9 +605,20 @@ def test_generate_nd_decls_struct_pointer_per_field_init():
     assert "_str_obj.len <= (long)(8)" in src
 
 
-def test_generate_nd_decls_unknown_struct_falls_back_to_default():
-    """If the struct definition is not in struct_definitions, fall
-    through to the existing single-pointer addr-of behaviour."""
+def test_generate_nd_decls_unknown_struct_emits_nondet_pointer():
+    """If the struct definition is not in struct_definitions, emit a
+    nondet pointer for the opaque type.
+
+    Earlier behaviour was to fall through to
+    ``struct Unknown _p_val; struct Unknown *p = &_p_val;`` — but CBMC
+    rejects that with ``incomplete type not permitted here`` when the
+    struct body isn't visible in the harness's TU (e.g. libarchive's
+    ``struct archive_string_conv`` parameters on archive_acl.c
+    functions, where the body is defined in a separate .c file).
+    The opaque-struct guard added 2026-05-23 emits a nondet pointer
+    instead, which CBMC treats as an unconstrained pointer-to-opaque
+    — the right model for opaque-handle APIs.
+    """
     from bmc_agent.parser import FunctionInfo, FunctionSignature
     from bmc_agent.harness_generator import _generate_nd_decls
 
@@ -623,8 +634,11 @@ def test_generate_nd_decls_unknown_struct_falls_back_to_default():
     src = "\n".join(out)
     # No per-field init.
     assert "_p_obj.p" not in src
-    # Default behaviour preserved: single local + addr-of.
-    assert "_p_val" in src or "&_p" in src
+    # No stack-allocated backing of the incomplete type.
+    assert "_p_val" not in src
+    # The parameter is still declared (as a nondet pointer).
+    assert "struct Unknown" in src
+    assert "p;" in src
 
 
 def test_generate_nd_decls_uint8_pointer_is_raw_bytes():
