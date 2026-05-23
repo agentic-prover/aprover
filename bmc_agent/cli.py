@@ -591,6 +591,327 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_autonomous(args: argparse.Namespace) -> int:
+    """Phase 2 of autonomous mode: round-based verify-dir with convergence.
+
+    Each round runs the full verify-dir pipeline with the autonomous-mode
+    defaults (lite_mode + realism + dynamic + Phase 2b auto-retry +
+    feedback loop). After each round, the loop computes a fingerprint
+    (coverage, total_bugs, total_errors, total_uncertain) and stops on:
+
+      * coverage ≥ ``--target-coverage`` (default 0.80)
+      * fingerprint matches a previous round (fixed point)
+      * ``--max-rounds`` reached (default 3)
+
+    Between rounds, knobs are adjusted based on the previous round's
+    output:
+
+      * Many UNCERTAIN realism verdicts → enable
+        ``enable_realism_thinking`` for the next round.
+      * Many post-retry CBMC errors that all share the same identifier
+        → promote into ``session_strip_typedefs`` for the next round
+        (already done in-round by Phase 2b, but persisted across rounds
+        here so round-2 starts with round-1's wins).
+
+    Per-round artifact: ``<output>/autonomous/round_<N>.json`` with the
+    summary, the strip-set deltas applied, and the convergence verdict.
+    """
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
+    import json as _json
+    import time as _time
+    from pathlib import Path as _Path
+
+    config = Config.from_env()
+    if args.output:
+        config.artifact_dir = args.output
+
+    # Apply the standard autonomous-mode defaults. The user can still
+    # override individual flags via the CLI; we only force the defaults
+    # when the corresponding flag wasn't passed.
+    config.lite_mode = True
+    config.enable_realism_check = True
+    config.enable_feedback_loop = True
+    if config.feedback_max_iters in (None, 3):
+        config.feedback_max_iters = 3
+    if getattr(args, "enable_dynamic_validation", False):
+        config.enable_dynamic_validation = True
+    if getattr(args, "real_libc", False):
+        config.cbmc_real_libc = True
+        config.preprocess = False
+    if getattr(args, "raw_bytes", False):
+        config.raw_bytes = True
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)
+    if getattr(args, "threat_model", None):
+        config.threat_model = args.threat_model
+    _apply_model_arg(config, args)
+
+    include_dirs = args.include_dir or []
+    if include_dirs:
+        config.include_dirs = include_dirs
+        if not config.cbmc_real_libc:
+            config.preprocess = True
+
+    domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if args.domain_knowledge else ""
+    exclude = args.exclude or []
+
+    max_rounds = int(args.max_rounds)
+    target_coverage = float(args.target_coverage)
+
+    print(f"=== AUTONOMOUS MODE ===")
+    print(f"Source dir:      {args.source_dir}")
+    print(f"Driver prefix:   {args.driver}")
+    print(f"Include dirs:    {include_dirs or '(none)'}")
+    print(f"Artifact dir:    {config.artifact_dir}")
+    print(f"Max rounds:      {max_rounds}")
+    print(f"Target coverage: {target_coverage:.0%}")
+    print(f"Defaults: lite_mode=True, realism=True, feedback_loop=True,")
+    print(f"          auto_retry_max_rounds={config.auto_retry_max_rounds}")
+    print()
+
+    autonomous_dir = _Path(config.artifact_dir) / "autonomous"
+    autonomous_dir.mkdir(parents=True, exist_ok=True)
+
+    round_summaries: list[dict] = []
+    seen_fingerprints: set[tuple] = set()
+
+    for round_idx in range(max_rounds):
+        print(f"\n===== AUTONOMOUS ROUND {round_idx + 1} / {max_rounds} =====")
+        t0 = _time.time()
+
+        # Snapshot the session-strip sets at the start of the round so we
+        # can report the round's deltas (Phase 2b mutates them in-place).
+        strip_typedefs_before = list(config.session_strip_typedefs)
+        strip_structs_before = list(config.session_strip_structs)
+        opaque_before = list(config.session_opaque_param_structs)
+
+        pipeline = AMCPipeline(config)
+        results = pipeline.run_directory(
+            source_dir=args.source_dir,
+            driver_name=args.driver,
+            include_dirs=include_dirs,
+            domain_knowledge=domain_knowledge,
+            exclude_patterns=exclude,
+        )
+        elapsed = _time.time() - t0
+
+        summary = _summarize_autonomous_round(
+            config=config,
+            args_driver=args.driver,
+            results=results,
+            elapsed_s=elapsed,
+            strip_typedefs_before=strip_typedefs_before,
+            strip_structs_before=strip_structs_before,
+            opaque_before=opaque_before,
+        )
+        summary["round"] = round_idx + 1
+        round_summaries.append(summary)
+
+        # Persist per-round artifact.
+        (autonomous_dir / f"round_{round_idx + 1}.json").write_text(
+            _json.dumps(summary, indent=2)
+        )
+
+        print(_format_round_summary(summary))
+
+        fingerprint = (
+            summary["total_files"],
+            summary["total_functions"],
+            summary["cbmc_verdicts"],
+            summary["cbmc_errors"],
+            summary["confirmed_bugs"],
+        )
+        if summary["coverage"] >= target_coverage:
+            print(
+                f"\n✓ Converged: coverage {summary['coverage']:.1%} ≥ target "
+                f"{target_coverage:.0%}"
+            )
+            break
+        if fingerprint in seen_fingerprints:
+            print(
+                f"\n✓ Converged: fixed-point fingerprint reached "
+                f"(no progress this round)"
+            )
+            break
+        seen_fingerprints.add(fingerprint)
+
+        # Knob adjustments for the next round.
+        next_knobs: list[str] = []
+        if summary["uncertain_count"] > max(1, summary["confirmed_bugs"]) * 0.5:
+            if not config.enable_realism_thinking:
+                config.enable_realism_thinking = True
+                next_knobs.append("enable_realism_thinking=True")
+        if next_knobs:
+            print(f"  Adjusting for round {round_idx + 2}: {', '.join(next_knobs)}")
+    else:
+        print(f"\n× Stopped: max rounds ({max_rounds}) reached without convergence")
+
+    # Cumulative summary.
+    summary_md = _format_autonomous_summary(round_summaries)
+    (autonomous_dir / "summary.md").write_text(summary_md)
+    print(f"\nAutonomous artifacts: {autonomous_dir}")
+
+    return 0
+
+
+def _summarize_autonomous_round(
+    config,
+    args_driver: str,
+    results: dict,
+    elapsed_s: float,
+    strip_typedefs_before: list,
+    strip_structs_before: list,
+    opaque_before: list,
+) -> dict:
+    """Build a one-round summary dict from the run_directory output.
+
+    Reads per-file coverage_diagnostics.json (written by Phase 2b) and
+    classification.json files (written by Phase 3) to compute aggregate
+    counts. Pure file-scan; never re-runs CBMC.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    artifact_dir = _Path(config.artifact_dir)
+    driver_root = artifact_dir / args_driver
+
+    total_runs = 0
+    total_verdicts = 0
+    total_errors = 0
+    files_with_verdicts = 0
+    files_all_errored = 0
+    for cov in driver_root.rglob("coverage_diagnostics.json"):
+        try:
+            with cov.open() as f:
+                d = _json.load(f)
+            runs = int(d.get("total_cbmc_runs", 0))
+            verd = int(d.get("produced_verdict", 0))
+            fail = int(d.get("failed_before_verdict", 0))
+            total_runs += runs
+            total_verdicts += verd
+            total_errors += fail
+            if runs and fail == runs:
+                files_all_errored += 1
+            elif runs:
+                files_with_verdicts += 1
+        except Exception:
+            pass
+
+    # Phase 3 outcomes.
+    outcome_counts: dict[str, int] = {}
+    realism_counts: dict[str, int] = {}
+    for cls in driver_root.rglob("classification.json"):
+        try:
+            with cls.open() as f:
+                cd = _json.load(f)
+            c = cd.get("classification") or {}
+            outcome_counts[c.get("outcome", "unknown")] = outcome_counts.get(c.get("outcome", "unknown"), 0) + 1
+        except Exception:
+            pass
+    for br in driver_root.rglob("bug_report.json"):
+        try:
+            with br.open() as f:
+                bd = _json.load(f)
+            rc = bd.get("realism_check") or {}
+            v = (rc.get("verdict") if isinstance(rc, dict) else None) or "n/a"
+            realism_counts[v] = realism_counts.get(v, 0) + 1
+        except Exception:
+            pass
+
+    confirmed_bugs = sum(len(b) for b in results.values())
+    coverage = (total_verdicts / total_runs) if total_runs else 0.0
+
+    return {
+        "elapsed_s": round(elapsed_s, 1),
+        "total_files": len(results),
+        "total_functions": total_runs,
+        "cbmc_verdicts": total_verdicts,
+        "cbmc_errors": total_errors,
+        "coverage": coverage,
+        "files_with_verdicts": files_with_verdicts,
+        "files_all_errored": files_all_errored,
+        "outcome_counts": outcome_counts,
+        "realism_counts": realism_counts,
+        "uncertain_count": int(realism_counts.get("UNCERTAIN", 0)),
+        "unrealistic_count": int(realism_counts.get("UNREALISTIC", 0)),
+        "realistic_count": int(realism_counts.get("REALISTIC", 0)),
+        "confirmed_bugs": confirmed_bugs,
+        "session_strip_typedefs_added": [
+            t for t in config.session_strip_typedefs
+            if t not in strip_typedefs_before
+        ],
+        "session_strip_structs_added": [
+            s for s in config.session_strip_structs
+            if s not in strip_structs_before
+        ],
+        "session_opaque_param_structs_added": [
+            o for o in config.session_opaque_param_structs
+            if o not in opaque_before
+        ],
+    }
+
+
+def _format_round_summary(s: dict) -> str:
+    """One-screen round summary for stdout."""
+    lines = []
+    lines.append(f"  Elapsed: {s['elapsed_s']:.1f}s")
+    lines.append(f"  Files: {s['total_files']} ({s['files_with_verdicts']} with verdicts, {s['files_all_errored']} all-errored)")
+    lines.append(f"  Functions: {s['total_functions']}")
+    lines.append(f"  CBMC verdicts: {s['cbmc_verdicts']}, errors: {s['cbmc_errors']}, coverage: {s['coverage']:.1%}")
+    lines.append(f"  Phase 3 outcomes: {s['outcome_counts']}")
+    lines.append(f"  Realism: REALISTIC={s['realistic_count']}, UNCERTAIN={s['uncertain_count']}, UNREALISTIC={s['unrealistic_count']}")
+    lines.append(f"  Confirmed bugs (post-realism): {s['confirmed_bugs']}")
+    if s.get("session_strip_typedefs_added"):
+        lines.append(f"  Auto-retry added typedefs: {s['session_strip_typedefs_added']}")
+    if s.get("session_strip_structs_added"):
+        lines.append(f"  Auto-retry added structs: {s['session_strip_structs_added']}")
+    if s.get("session_opaque_param_structs_added"):
+        lines.append(f"  Auto-retry forced opaque: {s['session_opaque_param_structs_added']}")
+    return "\n".join(lines)
+
+
+def _format_autonomous_summary(rounds: list[dict]) -> str:
+    """Markdown summary across all rounds, written to summary.md."""
+    lines = ["# Autonomous-mode sweep summary", ""]
+    lines.append(f"Rounds run: {len(rounds)}")
+    if not rounds:
+        return "\n".join(lines)
+    last = rounds[-1]
+    lines.append(f"Final coverage: {last['coverage']:.1%}")
+    lines.append(f"Final confirmed bugs: {last['confirmed_bugs']}")
+    lines.append("")
+    lines.append("| Round | Elapsed | Files | Functions | Verdicts | Errors | Coverage | Confirmed | UNCERTAIN |")
+    lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for r in rounds:
+        lines.append(
+            f"| {r['round']} | {r['elapsed_s']:.1f}s | {r['total_files']} | "
+            f"{r['total_functions']} | {r['cbmc_verdicts']} | {r['cbmc_errors']} | "
+            f"{r['coverage']:.1%} | {r['confirmed_bugs']} | {r['uncertain_count']} |"
+        )
+    lines.append("")
+    # Auto-retry promotion candidates: typedefs/structs added across rounds.
+    promoted_typedefs: list[str] = []
+    promoted_structs: list[str] = []
+    promoted_opaque: list[str] = []
+    for r in rounds:
+        promoted_typedefs.extend(r.get("session_strip_typedefs_added", []))
+        promoted_structs.extend(r.get("session_strip_structs_added", []))
+        promoted_opaque.extend(r.get("session_opaque_param_structs_added", []))
+    if promoted_typedefs or promoted_structs or promoted_opaque:
+        lines.append("## Auto-retry promotion candidates")
+        lines.append("")
+        lines.append("Review and consider adding to the static sets in `harness_generator.py`:")
+        lines.append("")
+        if promoted_typedefs:
+            lines.append("- Typedefs added to session strip set: " + ", ".join(sorted(set(promoted_typedefs))))
+        if promoted_structs:
+            lines.append("- Structs added to session strip set: " + ", ".join(sorted(set(promoted_structs))))
+        if promoted_opaque:
+            lines.append("- Structs forced opaque: " + ", ".join(sorted(set(promoted_opaque))))
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bmc-agent",
@@ -908,6 +1229,84 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)
+
+    # --- autonomous ---
+    au = subparsers.add_parser(
+        "autonomous",
+        help=(
+            "Run verify-dir in a round-based loop with auto-retry, "
+            "convergence detection, and per-round summaries. "
+            "Implements Phase 2 of PLAN_autonomous_mode.md."
+        ),
+    )
+    au.add_argument("--source-dir", required=True, help="Directory containing .c files")
+    au.add_argument("--driver", required=True, help="Driver name prefix")
+    au.add_argument("--output", default="artifacts", help="Artifact directory")
+    au.add_argument(
+        "--include-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Add an include directory for C preprocessing (repeatable)",
+    )
+    au.add_argument(
+        "--domain-knowledge",
+        default="",
+        metavar="TEXT_OR_FILE",
+        help="Domain knowledge string or path to a file",
+    )
+    au.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Glob pattern of filenames to skip (repeatable)",
+    )
+    au.add_argument(
+        "--max-rounds",
+        type=int,
+        default=3,
+        help="Maximum number of autonomous rounds before stopping (default: 3)",
+    )
+    au.add_argument(
+        "--target-coverage",
+        type=float,
+        default=0.80,
+        help="Stop early when per-file CBMC coverage reaches this fraction (default: 0.80)",
+    )
+    au.add_argument(
+        "--enable-dynamic-validation",
+        action="store_true",
+        default=False,
+        help="Phase 3: compile + run a GCC harness to confirm bugs at runtime",
+    )
+    au.add_argument(
+        "--real-libc",
+        action="store_true",
+        default=False,
+        help="Real-libc mode: harness #includes the source .c file and lets CBMC do all preprocessing via -I",
+    )
+    au.add_argument(
+        "--raw-bytes",
+        action="store_true",
+        default=False,
+        help="Treat single char* / const char* params as raw byte buffers (no NUL termination)",
+    )
+    au.add_argument(
+        "-D", "--define",
+        action="append",
+        default=[],
+        dest="defines",
+        help="Pass a preprocessor define to CBMC (repeatable). NAME or NAME=VALUE.",
+    )
+    au.add_argument(
+        "--threat-model",
+        choices=["security", "safety", "functional"],
+        default="security",
+        help="Threat model: shapes CBMC baseline flags and realism context (default: security)",
+    )
+    _add_model_arg(au)
+    au.set_defaults(func=_cmd_autonomous)
 
     # --- eval ---
     ev = subparsers.add_parser(
