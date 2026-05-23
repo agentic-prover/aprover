@@ -784,16 +784,44 @@ A finding is UNREALISTIC when:
    mathematically impossible from the real callee (e.g. size_t returning negative).
 4. The violation requires multiple simultaneous hardware/callee failures that cannot
    co-occur in any real execution scenario.
-5. **STUB-CALLEE DISCONNECT** — the counterexample witness requires a callee listed
-   in "ACTIVE STUB CONTRACTS" above to return a value that VIOLATES its documented
-   contract (e.g. `__archive_read_ahead` returning non-NULL with an invalid pointer,
-   or `archive_entry_pathname` returning a non-NULL pointer to invalid memory, or
-   `archive_read_next_header` returning a value outside the documented ARCHIVE_*
-   status-code set). No real implementation of the library produces those
-   outputs, so the violation is unreachable from any real caller. The witness fields
-   to look for: an "unknown"-name pointer assigned from a stubbed callee's return,
-   or a numeric return value outside the contract's stated range. This is one of the
-   most common FP classes in lite-mode and you MUST check it explicitly.
+5. **STUB-CALLEE DISCONNECT** — the counterexample witness requires a callee
+   listed in "ACTIVE STUB CONTRACTS" above to return a value that VIOLATES its
+   documented contract. This is a NARROW rule with strict requirements:
+
+   To return UNREALISTIC under this rule, you MUST be able to:
+
+   * **Name the specific callee** from the ACTIVE STUB CONTRACTS list whose
+     return the witness depends on. Project structs (like libarchive's `cab`,
+     `cfdata`, `lzx_stream`) are NOT external callees — their fields being
+     nondet/NULL is a CALLER-CONTRACT or HARNESS issue, not a stub-callee
+     disconnect.
+   * **Quote the specific contract clause that's violated**. Examples of
+     legitimate violations: ``__archive_read_ahead`` returning non-NULL with
+     `*bytes < n`; ``archive_entry_pathname`` returning a non-NULL pointer that
+     CBMC reports as ``unknown`` provenance; ``archive_read_next_header``
+     returning ``result == 42`` (outside the ARCHIVE_* enum).
+   * **Verify the violation is necessary for the bug**: if the witness has a
+     callee return value that's WITHIN the contract AND the bug fires anyway,
+     it's a real bug; the contract isn't the issue.
+
+   **Do NOT return UNREALISTIC under this rule when**:
+
+   * The CEx involves a nondet field of a PROJECT struct (e.g.
+     `cfdata->memimage = NULL`, `lzx_stream->ds = NULL`). These are caller-
+     contract issues — covered separately by rule #2 — and frequently
+     correspond to real defensive-coding gaps documented in upstream CVE
+     fixes.
+   * The CEx pointer-arithmetic / dereference happens BEFORE any stubbed
+     callee returns (e.g. `cfdata->memimage + offset` where memimage was
+     never written by a stubbed callee).
+   * You cannot name the specific callee and quote the specific clause.
+
+   Empirically (2026-05-23 cab.c sweep), being too liberal with this rule
+   downgrades real defensive-coding bugs (PR #2900 ``cab_checksum_finish``
+   NULL-deref, PR #2919 ``lzx_decode`` OOB write, PR ``cab reader: Fix use
+   of uninitialized values from Huffman table``). Use it ONLY when you can
+   point at a specific external-callee contract clause that the witness
+   forces a violation of.
 
 A finding is REALISTIC when:
 1. The triggering input class could plausibly arise from environment, user, network, or
