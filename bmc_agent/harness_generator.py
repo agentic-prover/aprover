@@ -5322,8 +5322,48 @@ def _strip_glibc_internal_typedefs(
             result.append(text[i:])
             break
         typedef_text = text[m.start():j + 1]
-        name_m = re.search(r'\b(\w+)\s*;$', typedef_text)
-        target = name_m.group(1) if name_m else None
+        # Three name-extraction forms, tried in order:
+        #   1. ``typedef … NAME;`` — simple typedef ending at name.
+        #   2. ``typedef … NAME(<params>);`` — function-type typedef
+        #      whose name precedes the parameter list. Without this
+        #      branch, the regex picks up the last parameter name
+        #      (e.g. ``__w`` in
+        #      ``typedef int cookie_seek_function_t (void *, __off64_t *, int __w);``)
+        #      or returns None, so the typedef escapes both the
+        #      primary strip rule and the cascade — leaving an orphan
+        #      reference to the just-stripped ``__off64_t`` that CBMC
+        #      then rejects with ``syntax error before 'off64_t'``.
+        #      Observed on libarchive's cab.c: 61/61 functions blocked
+        #      until this fix landed.
+        #   3. ``typedef <ret> (*NAME)(<params>);`` — function-POINTER
+        #      typedef, name in parens before the parameter list.
+        target = None
+        # Form 1: simple typedef ``typedef … NAME;`` — name is the last
+        # word before the trailing semicolon. Covers the common case
+        # ``typedef unsigned long size_t;``.
+        name_m = re.search(r'\b(\w+)\s*;\s*$', typedef_text)
+        if name_m is not None:
+            target = name_m.group(1)
+        # Form 2: function-pointer typedef ``typedef <ret> (*NAME)(<params>);``
+        # — the OUTERMOST ``(*NAME)`` is what we want; nested params with
+        # function-pointer types could also match ``(*X)`` patterns, so we
+        # only treat it as form 2 if the OPENING paren of the outer
+        # ``(*NAME)`` appears BEFORE any other ``(``. Otherwise we may
+        # have a function-type typedef with function-pointer params.
+        if target is None:
+            outer_fp = re.match(r'\s*typedef\s+[\w\s\*]+?\(\s*\*\s*(\w+)\s*\)\s*\(', typedef_text)
+            if outer_fp is not None:
+                target = outer_fp.group(1)
+        # Form 3: function-type typedef ``typedef <ret> NAME(<params>);``.
+        # Name is the identifier immediately preceding the parameter
+        # list. Detected by the LAST ``\w+`` token that precedes a ``(``
+        # at the typedef's top level (not inside nested params).
+        if target is None:
+            # Look for the IDENTIFIER followed by ``(`` with the rest
+            # being a balanced parenthesised expression + final ``;``.
+            ft = re.match(r'\s*typedef\s+.*?\b(\w+)\s*\(', typedef_text)
+            if ft is not None:
+                target = ft.group(1)
 
         # Primary strip rule (libc-conflict mitigation only):
         #   * Name starts with ``__`` — glibc internal that conflicts
