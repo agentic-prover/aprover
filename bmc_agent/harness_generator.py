@@ -408,6 +408,7 @@ def _should_inline_callee(
     callee_name: str,
     parsed_file: "ParsedCFile",
     max_loc: int = 30,
+    size_helper_max_loc: int = 200,
 ) -> tuple[bool, str]:
     """Decide whether *callee_name* should be inlined (real body
     embedded in the harness) instead of stubbed.
@@ -416,7 +417,10 @@ def _should_inline_callee(
     rule rejects, the caller falls back to the existing stub path, so
     rejection cannot regress correctness.
 
-    Eligibility (ALL must hold):
+    Two eligibility tiers:
+
+    **Tier 1 — Small pure helper** (the original rule). Strict but cheap:
+
       - callee body is defined in the parsed file (not extern);
       - signature is ``static`` (file-local linkage);
       - body is at most ``max_loc`` non-empty, non-comment lines;
@@ -426,12 +430,32 @@ def _should_inline_callee(
       - body does not dispatch through a function pointer
         (``(*foo)(...)`` patterns).
 
-    Rationale: the disqualifiers exactly cover the cases where
-    inlining (a) explodes CBMC state (loops, allocators, recursion),
-    or (b) requires extra reasoning the rule set can't do safely
-    (function-pointer dispatch). What's left is small pure helpers —
-    predicates, getters, accessors — which is exactly where stub
-    disconnect drives FPs (jv_get_kind, xmlIsBlank_ch, BUF_ERROR, …).
+    Targets the "stub disconnect" FP class on small helpers
+    (jv_get_kind, xmlIsBlank_ch, BUF_ERROR, …).
+
+    **Tier 2 — Size-calculator helper** (added 2026-05-23 after the
+    archive_acl_text_len compositional-bug analysis):
+
+      - callee is ``static`` and defined in this TU;
+      - return type contains ``size_t`` / ``ssize_t`` (the canonical
+        size-calc signature);
+      - body has ≤ ``size_helper_max_loc`` LoC (default 200, much
+        higher than tier 1's 30) to accommodate the typical iterate-
+        and-accumulate pattern;
+      - body has at most ONE loop (typical size-calc walks one
+        collection once);
+      - other disqualifiers (allocators, recursion, fn-pointer
+        dispatch) still apply.
+
+    Rationale: compositional bugs in the form "helper computes wrong
+    size → caller allocates undersize buffer → caller over-writes"
+    require the helper's body to run during caller verification. The
+    canonical instance is libarchive's d45b5b4b (archive_acl_text_len
+    undercount → archive_acl_to_text_l/w OOB write). Tier 1's "no
+    loops" rule blocked these because the helper iterates over the
+    collection it's sizing. Tier 2 carves out the specific shape
+    (size_t / ssize_t return + at most one loop) where inlining is
+    both useful and tractable for CBMC.
     """
     cfi = parsed_file.get_function_info(callee_name)
     if cfi is None:
@@ -457,12 +481,29 @@ def _should_inline_callee(
         return False, "callee body is empty"
     body_clean = _strip_c_comments(body)
     nonempty = [ln for ln in body_clean.splitlines() if ln.strip()]
-    if len(nonempty) > max_loc:
-        return False, f"body has {len(nonempty)} LoC (cap {max_loc})"
-    # Loop detection. ``\b(for|while|do)\s*[({]`` covers C control-flow
-    # keywords; ``do { … } while`` is caught by the ``do`` match.
-    if re.search(r"\b(for|while|do)\s*[({]", body_clean):
-        return False, "body contains a loop"
+
+    # Detect size-calc shape: static + return type contains size_t/ssize_t.
+    ret_type = (cfi.signature.return_type or "").strip().lower()
+    is_size_helper = ("size_t" in ret_type) or ("ssize_t" in ret_type)
+
+    # Pick the effective LoC cap based on tier.
+    effective_max_loc = size_helper_max_loc if is_size_helper else max_loc
+    if len(nonempty) > effective_max_loc:
+        return False, f"body has {len(nonempty)} LoC (cap {effective_max_loc})"
+
+    # Loop count. Tier 1 (pure helper) rejects ALL loops. Tier 2
+    # (size helper) allows at most ONE loop — the typical
+    # iterate-and-accumulate pass.
+    loop_matches = re.findall(r"\b(for|while|do)\s*[({]", body_clean)
+    if is_size_helper:
+        # Size helpers commonly have 1 outer iteration + 1 inner string-
+        # length / digit-count loop. Cap at 3 to accommodate nested or
+        # sibling loops without opening the door to arbitrary loop nests.
+        if len(loop_matches) > 3:
+            return False, f"size-helper body has {len(loop_matches)} loops (cap 3)"
+    else:
+        if loop_matches:
+            return False, "body contains a loop"
     # goto-based loops: a backward goto would also form a loop, but in
     # practice the linux-kernel-style ``goto out;`` pattern is forward.
     # We conservatively reject any goto at all, since CBMC unwind
