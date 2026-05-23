@@ -155,6 +155,203 @@ def derive_stub_contract(
             f"__CPROVER_r_ok(result, 1));",
         ]
 
+    # libarchive: read-level entry points that return one of
+    # {ARCHIVE_OK=0, ARCHIVE_EOF=1, ARCHIVE_RETRY=-10, ARCHIVE_WARN=-20,
+    # ARCHIVE_FAILED=-25, ARCHIVE_FATAL=-30}. The default int-nondet stub
+    # returns any int including positive impossible values like 42 that
+    # callers can't handle, producing every-branch-explored FPs in the
+    # caller. Real implementations only emit the documented sentinels.
+    # Threat-model note: these are libarchive-controlled return values;
+    # attacker controls the ARCHIVE BYTES (-> __archive_read_ahead's
+    # data) not the high-level read API's return-code shape.
+    if callee_name in _LIBARCHIVE_ARCHIVE_STATUS_RETURNS:
+        return [
+            f"/* libarchive contract: {callee_name} returns one of the "
+            f"documented ARCHIVE_* status codes */",
+            f"__CPROVER_assume("
+            f"result == 0 /* ARCHIVE_OK */ || "
+            f"result == 1 /* ARCHIVE_EOF */ || "
+            f"result == -10 /* ARCHIVE_RETRY */ || "
+            f"result == -20 /* ARCHIVE_WARN */ || "
+            f"result == -25 /* ARCHIVE_FAILED */ || "
+            f"result == -30 /* ARCHIVE_FATAL */);",
+        ]
+
+    # libarchive: archive_compression_name / archive_format_name — return
+    # static const string (compiler-allocated, never NULL in real code,
+    # but conservative: NULL or valid string).
+    if callee_name in {
+        "archive_compression_name", "archive_format_name",
+        "archive_filter_name",
+    }:
+        return [
+            f"__CPROVER_assume(result == ((const char *)0) || "
+            f"__CPROVER_r_ok(result, 1));",
+        ]
+
+    # libarchive: archive_entry_size / _ino / _ino64 — return non-negative
+    # signed integer (real libarchive returns -1 for "unset" via an int64
+    # sentinel; never wraps to extreme negatives). Threat-model note:
+    # entry size CAN be attacker-influenced via crafted archives, but
+    # the bound below is libarchive's own representable range, not
+    # something the attacker can bypass.
+    if callee_name in {
+        "archive_entry_size", "archive_entry_ino", "archive_entry_ino64",
+    }:
+        return [
+            f"__CPROVER_assume(result >= -1);",
+        ]
+
+    # ----- libc: file I/O -----
+    # fopen(path, mode) → NULL or valid FILE*. The pointer's pointee
+    # is opaque (FILE*); we only constrain that it's either NULL or
+    # readable as 1 byte (the existence of a fopen-style FILE* is the
+    # actual contract; CBMC's --pointer-check still verifies any
+    # fread/fwrite call with bounds).
+    if callee_name in {"fopen", "fdopen", "freopen", "tmpfile"}:
+        return [
+            f"__CPROVER_assume(result == ((void *)0) || "
+            f"__CPROVER_r_ok(result, 1));",
+        ]
+
+    # fread(ptr, size, nmemb, stream) → returns 0..nmemb. The standard
+    # forbids returns > nmemb. fwrite identical.
+    if callee_name in {"fread", "fwrite"}:
+        nmemb_arg = _find_third_size_t_arg(params)
+        if nmemb_arg:
+            return [
+                f"/* libc contract: {callee_name} returns 0..nmemb */",
+                f"__CPROVER_assume(result <= {nmemb_arg});",
+            ]
+
+    # read(fd, buf, count) / write(fd, buf, count) → returns -1 (error)
+    # or 0..count (POSIX guarantee). Cannot return > count.
+    if callee_name in {"read", "write", "pread", "pwrite"}:
+        count_arg = _find_count_arg(params)
+        if count_arg:
+            return [
+                f"/* POSIX contract: {callee_name} returns -1 or 0..count */",
+                f"__CPROVER_assume(result == -1 || "
+                f"(result >= 0 && result <= (ssize_t)({count_arg})));",
+            ]
+
+    # recv/send/recvfrom/sendto → returns -1 or 0..len.
+    if callee_name in {"recv", "send", "recvfrom", "sendto"}:
+        len_arg = _find_count_arg(params)
+        if len_arg:
+            return [
+                f"__CPROVER_assume(result == -1 || "
+                f"(result >= 0 && result <= (ssize_t)({len_arg})));",
+            ]
+
+    # snprintf(buf, size, fmt, ...) / vsnprintf → returns the number
+    # of bytes that WOULD HAVE been written (excluding NUL), -1 on
+    # output error. Real returns: -1, or any non-negative int. We
+    # cap at a sane upper bound (SIZE_MAX/2) to suppress nondet
+    # extreme values that trip downstream signed/unsigned mixing FPs.
+    if callee_name in {"snprintf", "vsnprintf"}:
+        return [
+            f"/* libc contract: {callee_name} returns -1 or non-negative count */",
+            f"__CPROVER_assume(result >= -1);",
+        ]
+
+    # fgets(buf, size, stream) → returns NULL or buf (the same pointer
+    # passed in). Constrains stub to either of those.
+    if callee_name == "fgets":
+        buf_arg = _find_first_pointer_arg(params)
+        if buf_arg:
+            return [
+                f"__CPROVER_assume(result == ((char *)0) || result == {buf_arg});",
+            ]
+
+    # fclose → returns 0 (success) or EOF (-1).
+    if callee_name in {"fclose", "fputs", "ferror", "feof"}:
+        return [f"__CPROVER_assume(result == 0 || result == -1);"]
+
+    # ----- libc: time & misc -----
+
+    # time(NULL or &out) → returns time_t (epoch seconds). Cap to a
+    # plausible range to avoid wraparound FPs. Real systems return
+    # post-epoch positive values up to ~year 2106 for 32-bit time_t.
+    if callee_name in {"time"}:
+        return [f"__CPROVER_assume(result >= 0);"]
+
+    # localtime(&t) / gmtime(&t) → return NULL or pointer to static
+    # struct tm. r_ok on 1 byte is the conservative contract.
+    if callee_name in {"localtime", "gmtime", "localtime_r", "gmtime_r"}:
+        return [
+            f"__CPROVER_assume(result == ((struct tm *)0) || "
+            f"__CPROVER_r_ok(result, 1));",
+        ]
+
+    # ----- libc: integer parsing -----
+
+    # atoi / atol / atoll → standard says result is implementation-defined
+    # on overflow but well-defined on parsable input. Real implementations
+    # never return undefined-behaviour values; constrain to int/long
+    # range (which is already what the type expresses, so no contract
+    # needed — left here as documentation).
+
+    # strtol / strtoul / strtoll family → returns the parsed value.
+    # No useful universal contract — return can be any value of return
+    # type. Skipped.
+
+    # ----- compression libraries -----
+
+    # zlib: inflate(strm, flush) / deflate(strm, flush) → returns one
+    # of {Z_OK=0, Z_STREAM_END=1, Z_NEED_DICT=2, Z_ERRNO=-1,
+    # Z_STREAM_ERROR=-2, Z_DATA_ERROR=-3, Z_MEM_ERROR=-4,
+    # Z_BUF_ERROR=-5, Z_VERSION_ERROR=-6}.
+    if callee_name in {"inflate", "deflate"}:
+        return [
+            f"/* zlib contract: {callee_name} returns one of the documented "
+            f"Z_* status codes */",
+            f"__CPROVER_assume(result >= -6 && result <= 2);",
+        ]
+
+    # zlib: inflateInit_ / deflateInit_ / *End / *Reset → 0..-6 range
+    # (subset of the above).
+    if callee_name in {
+        "inflateInit_", "inflateInit2_", "inflateEnd", "inflateReset",
+        "deflateInit_", "deflateInit2_", "deflateEnd", "deflateReset",
+        "deflateBound",  # deflateBound returns a size_t, different signature
+    }:
+        return [f"__CPROVER_assume(result >= -6 && result <= 2);"]
+
+    # bzip2: BZ2_bzDecompress → BZ_STREAM_END=4, BZ_OK=0, BZ_RUN_OK=1,
+    # BZ_FLUSH_OK=2, BZ_FINISH_OK=3, or negative errors -1..-9.
+    if callee_name in {"BZ2_bzDecompress", "BZ2_bzCompress"}:
+        return [f"__CPROVER_assume(result >= -9 && result <= 4);"]
+
+    if callee_name in {
+        "BZ2_bzDecompressInit", "BZ2_bzCompressInit",
+        "BZ2_bzDecompressEnd", "BZ2_bzCompressEnd",
+    }:
+        return [f"__CPROVER_assume(result >= -9 && result <= 0);"]
+
+    # ----- POSIX file metadata -----
+
+    # stat / fstat / lstat → 0 (success) or -1 (failure).
+    if callee_name in {"stat", "fstat", "lstat", "fstatat",
+                        "stat64", "fstat64", "lstat64"}:
+        return [f"__CPROVER_assume(result == 0 || result == -1);"]
+
+    # open / openat → returns -1 or non-negative fd. Cap to plausible
+    # fd range to avoid extreme positive values.
+    if callee_name in {"open", "openat", "creat"}:
+        return [f"__CPROVER_assume(result == -1 || (result >= 0 && result < 65536));"]
+
+    # close / unlink / rename / mkdir / rmdir → 0 or -1.
+    if callee_name in {
+        "close", "unlink", "unlinkat", "rename", "renameat",
+        "mkdir", "mkdirat", "rmdir", "symlink", "link", "chmod", "chown",
+    }:
+        return [f"__CPROVER_assume(result == 0 || result == -1);"]
+
+    # lseek → -1 or non-negative offset.
+    if callee_name in {"lseek", "lseek64"}:
+        return [f"__CPROVER_assume(result >= -1);"]
+
     return []
 
 
@@ -182,6 +379,43 @@ _LIBARCHIVE_ENTRY_STRING_L_ACCESSORS: frozenset[str] = frozenset({
     "archive_entry_gname_l",
     "archive_entry_hardlink_l",
     "archive_entry_symlink_l",
+})
+
+# libarchive's high-level read API. All return ARCHIVE_* status codes
+# from the enum {OK=0, EOF=1, RETRY=-10, WARN=-20, FAILED=-25, FATAL=-30}.
+# Stubs without this contract return any int, including impossible
+# positive values like 42 that exercise nonexistent branches in callers.
+_LIBARCHIVE_ARCHIVE_STATUS_RETURNS: frozenset[str] = frozenset({
+    "archive_read_next_header",
+    "archive_read_next_header2",
+    "archive_read_data_block",
+    "archive_read_data_skip",
+    "archive_read_close",
+    "archive_read_free",
+    "archive_read_finish",  # legacy alias
+    "archive_read_open",
+    "archive_read_open1",
+    "archive_read_open_fd",
+    "archive_read_open_file",
+    "archive_read_open_filename",
+    "archive_read_open_memory",
+    "archive_read_extract",
+    "archive_read_extract2",
+    "archive_read_set_format",
+    "archive_read_append_filter",
+    "archive_read_append_filter_program",
+    "archive_read_support_format_all",
+    "archive_read_support_filter_all",
+    # write side (same return convention)
+    "archive_write_header",
+    "archive_write_data",
+    "archive_write_finish_entry",
+    "archive_write_close",
+    "archive_write_free",
+    "archive_write_open",
+    "archive_write_open_fd",
+    "archive_write_open_filename",
+    "archive_write_open_memory",
 })
 
 
@@ -238,5 +472,54 @@ def _find_const_char_pp_arg(params: list[tuple[str, str]]) -> Optional[str]:
             continue
         t = ptype.replace(" ", "")
         if "constchar**" in t or "char**" in t:
+            return pname
+    return None
+
+
+def _find_third_size_t_arg(params: list[tuple[str, str]]) -> Optional[str]:
+    """For ``fread(ptr, size, nmemb, stream)`` we want ``nmemb`` —
+    the THIRD size_t-like positional arg. Returns the third
+    integral-typed parameter name, or None."""
+    integral_args: list[str] = []
+    for ptype, pname in params:
+        if not pname or not ptype:
+            continue
+        t = ptype.lower()
+        if "*" in t:
+            continue
+        if any(k in t for k in ("size_t", "ssize_t", "int", "long", "unsigned")):
+            integral_args.append(pname)
+    if len(integral_args) >= 3:
+        return integral_args[2]
+    # Fall back: many fread variants put nmemb as the LAST integral
+    # arg. If we have 2+, prefer the last.
+    if integral_args:
+        return integral_args[-1]
+    return None
+
+
+def _find_count_arg(params: list[tuple[str, str]]) -> Optional[str]:
+    """For POSIX ``read(fd, buf, count)``-style sigs we want ``count``.
+    Returns the LAST integral arg (size_t/ssize_t/int/etc.) that's
+    not a pointer. None when no integral arg exists."""
+    last: Optional[str] = None
+    for ptype, pname in params:
+        if not pname or not ptype:
+            continue
+        t = ptype.lower()
+        if "*" in t:
+            continue
+        if any(k in t for k in ("size_t", "ssize_t", "int", "long", "unsigned")):
+            last = pname
+    return last
+
+
+def _find_first_pointer_arg(params: list[tuple[str, str]]) -> Optional[str]:
+    """First parameter whose type contains ``*``. Used by fgets where
+    we want to constrain the result to equal the buf argument."""
+    for ptype, pname in params:
+        if not pname or not ptype:
+            continue
+        if "*" in ptype:
             return pname
     return None

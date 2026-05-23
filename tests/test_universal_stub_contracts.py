@@ -133,6 +133,102 @@ def test_libc_already_covered_by_builtin_table_returns_empty():
 # ---------------------------------------------------------------------------
 
 
+def test_archive_read_next_header_status_codes():
+    lines = derive_stub_contract(
+        "archive_read_next_header", "int",
+        [("struct archive *", "a"), ("struct archive_entry **", "e")],
+    )
+    body = "\n".join(lines)
+    assert "ARCHIVE_OK" in body
+    assert "ARCHIVE_EOF" in body
+    assert "ARCHIVE_FATAL" in body
+    # All return values in the assume must be in the documented set.
+    assert "result == 0" in body and "result == 1" in body
+    assert "result == -30" in body
+
+
+def test_archive_write_header_uses_status_contract():
+    lines = derive_stub_contract(
+        "archive_write_header", "int",
+        [("struct archive *", "a"), ("struct archive_entry *", "e")],
+    )
+    body = "\n".join(lines)
+    assert "ARCHIVE_OK" in body or "result == 0" in body
+
+
+def test_fread_returns_at_most_nmemb():
+    lines = derive_stub_contract(
+        "fread", "size_t",
+        [("void *", "ptr"), ("size_t", "size"), ("size_t", "nmemb"), ("FILE *", "stream")],
+    )
+    body = "\n".join(lines)
+    assert "result <= nmemb" in body
+
+
+def test_read_posix_contract():
+    lines = derive_stub_contract(
+        "read", "ssize_t",
+        [("int", "fd"), ("void *", "buf"), ("size_t", "count")],
+    )
+    body = "\n".join(lines)
+    assert "result == -1" in body
+    assert "result <= (ssize_t)(count)" in body
+
+
+def test_fopen_pointer_contract():
+    lines = derive_stub_contract(
+        "fopen", "FILE *",
+        [("const char *", "path"), ("const char *", "mode")],
+    )
+    body = "\n".join(lines)
+    assert "result == ((void *)0) || __CPROVER_r_ok(result, 1)" in body
+
+
+def test_inflate_z_status_range():
+    lines = derive_stub_contract(
+        "inflate", "int",
+        [("z_stream *", "strm"), ("int", "flush")],
+    )
+    body = "\n".join(lines)
+    # Z_VERSION_ERROR = -6 to Z_STREAM_END = 1; we use 2 as buffer (NEED_DICT).
+    assert "result >= -6" in body
+    assert "result <= 2" in body
+
+
+def test_stat_returns_0_or_minus_1():
+    for name in ("stat", "fstat", "lstat", "open", "close", "unlink", "chmod"):
+        lines = derive_stub_contract(name, "int", [("const char *", "p")])
+        body = "\n".join(lines)
+        assert lines, f"{name} should have a contract"
+        assert "result == -1" in body or "result == 0" in body
+
+
+def test_open_bounded_fd_range():
+    lines = derive_stub_contract(
+        "open", "int", [("const char *", "p"), ("int", "flags")],
+    )
+    body = "\n".join(lines)
+    assert "result < 65536" in body or "result == -1" in body
+
+
+def test_archive_entry_size_non_negative():
+    lines = derive_stub_contract(
+        "archive_entry_size", "int64_t",
+        [("struct archive_entry *", "e")],
+    )
+    body = "\n".join(lines)
+    assert "result >= -1" in body
+
+
+def test_fgets_returns_null_or_buf():
+    lines = derive_stub_contract(
+        "fgets", "char *",
+        [("char *", "buf"), ("int", "n"), ("FILE *", "stream")],
+    )
+    body = "\n".join(lines)
+    assert "result == buf" in body
+
+
 def test_no_contract_constrains_an_input_param_via_assume():
     """Property test: scan every line emitted for every known callee.
     Any ``__CPROVER_assume(...)`` MUST mention either ``result`` or an
