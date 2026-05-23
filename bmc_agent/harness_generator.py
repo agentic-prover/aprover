@@ -510,6 +510,26 @@ def _generate_stub(
     if sig is None and extern_sigs:
         sig = extern_sigs.get(callee_name)
     if sig is None:
+        # Last-resort lookup: the universal stub-contract registry
+        # carries canonical (return_type, params) for well-known OSS
+        # primitives whose body isn't in any parsed TU. Synthesise a
+        # FunctionSignature so the rest of this function can produce
+        # a real stub with the registry's postconditions, instead of
+        # falling through to a generic void havoc.
+        try:
+            from bmc_agent.universal_stub_contracts import canonical_signature
+            from bmc_agent.parser import FunctionSignature
+            canon = canonical_signature(callee_name)
+            if canon is not None:
+                _ret_t, _params = canon
+                sig = FunctionSignature(
+                    name=callee_name,
+                    return_type=_ret_t,
+                    parameters=list(_params),
+                )
+        except Exception:
+            sig = None
+    if sig is None:
         # Unknown external — emit a fully-generic havoc stub.
         # We don't know the signature, so we use a conservative
         # void-returning stub that at least prevents a compile error.
@@ -3539,6 +3559,23 @@ class HarnessGenerator:
         extern_callees = set()
         if extern_sigs:
             extern_callees = (func.callees - local_callees) & set(extern_sigs.keys())
+        # "registry" callees: not in local OR extern_sigs, but in the
+        # universal-stub-contract registry. These are typically OSS
+        # primitives (``__archive_read_ahead``, ``archive_entry_pathname``,
+        # …) whose body lives in a separate .c file we don't have parsed
+        # in single-file sweeps. Without a stub the call goes through to
+        # CBMC's unresolved-extern handler (pure nondet), which produces
+        # the stub-callee-disconnect FP class observed on cpio.c. With a
+        # stub built from the registry's canonical signature, the
+        # ``_builtin_stub_return_contract``/``universal_stub_contracts``
+        # postconditions kick in and the FPs disappear.
+        try:
+            from bmc_agent.universal_stub_contracts import known_callees as _known_stub_callees
+            registry_callees = (
+                (func.callees - local_callees - extern_callees) & _known_stub_callees()
+            )
+        except Exception:
+            registry_callees = set()
 
         # --- 2a. Partition local callees: inline-eligible vs stub ---
         # Eligible callees are small, pure, file-local helpers (predicates /
@@ -3554,7 +3591,7 @@ class HarnessGenerator:
                 if ok:
                     inline_local_callees.add(cname)
         stubbed_local_callees = local_callees - inline_local_callees
-        all_stub_callees = stubbed_local_callees | extern_callees
+        all_stub_callees = stubbed_local_callees | extern_callees | registry_callees
 
         # --- 3. Generate stubs for each callee that wasn't inlined ---
         stub_sections: list[str] = []

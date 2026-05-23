@@ -75,7 +75,107 @@ Two-axis taxonomy of stub-callee FPs this targets:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from bmc_agent.parser import FunctionSignature
+
+
+# Canonical signatures for registered externs whose body isn't in any
+# parsed TU. Used by harness_generator when ``func.callees`` mentions
+# one of these names but the call-graph builder has no
+# ``FunctionSignature`` for it (the common case for single-file sweeps
+# on libraries like libarchive where ``__archive_read_ahead`` is only
+# declared in a header). Each entry maps name → (return_type, params)
+# where params is a list of (type_str, name_str) pairs.
+_CANONICAL_SIGS: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    # libarchive read-stream API
+    "__archive_read_ahead": (
+        "const void *",
+        [("struct archive_read *", "a"), ("size_t", "min"), ("ssize_t *", "bytes")],
+    ),
+    "__archive_read_consume": (
+        "int64_t",
+        [("struct archive_read *", "a"), ("int64_t", "request")],
+    ),
+    "__archive_read_filter_ahead": (
+        "const void *",
+        [("struct archive_read_filter *", "f"), ("size_t", "min"), ("ssize_t *", "bytes")],
+    ),
+    "__archive_read_filter_consume": (
+        "int64_t",
+        [("struct archive_read_filter *", "f"), ("int64_t", "request")],
+    ),
+    # libarchive entry accessors (NUL or NUL-terminated string)
+    "archive_entry_pathname": (
+        "const char *",
+        [("struct archive_entry *", "entry")],
+    ),
+    "archive_entry_uname": (
+        "const char *",
+        [("struct archive_entry *", "entry")],
+    ),
+    "archive_entry_gname": (
+        "const char *",
+        [("struct archive_entry *", "entry")],
+    ),
+    "archive_entry_hardlink": (
+        "const char *",
+        [("struct archive_entry *", "entry")],
+    ),
+    "archive_entry_symlink": (
+        "const char *",
+        [("struct archive_entry *", "entry")],
+    ),
+    "archive_entry_sourcepath": (
+        "const char *",
+        [("struct archive_entry *", "entry")],
+    ),
+    # libarchive read-API status returns
+    "archive_read_next_header": (
+        "int",
+        [("struct archive *", "a"), ("struct archive_entry **", "entry")],
+    ),
+    "archive_read_next_header2": (
+        "int",
+        [("struct archive *", "a"), ("struct archive_entry *", "entry")],
+    ),
+    # libarchive entry getters
+    "archive_entry_size": (
+        "int64_t",
+        [("struct archive_entry *", "entry")],
+    ),
+    "archive_compression_name": (
+        "const char *",
+        [("struct archive *", "a")],
+    ),
+    "archive_format_name": (
+        "const char *",
+        [("struct archive *", "a")],
+    ),
+    "archive_string_conversion_charset_name": (
+        "const char *",
+        [("struct archive_string_conv *", "sc")],
+    ),
+}
+
+
+def canonical_signature(callee_name: str) -> Optional[tuple[str, list[tuple[str, str]]]]:
+    """Return the canonical ``(return_type, params)`` for a registered
+    callee whose body isn't available in any parsed TU, or None when
+    the name isn't in the registry.
+
+    Used by harness_generator.py to manufacture a FunctionSignature for
+    stub generation when the parser hasn't seen the callee's body or
+    declaration.
+    """
+    return _CANONICAL_SIGS.get(callee_name)
+
+
+def known_callees() -> frozenset[str]:
+    """Names every caller-side hook (harness_generator) can ask
+    "should I generate a stub for this even if I have no signature?"."""
+    return frozenset(_CANONICAL_SIGS.keys())
 
 
 def derive_stub_contract(
