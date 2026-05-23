@@ -4986,6 +4986,43 @@ _SYSTEM_TYPEDEF_NAMES: frozenset[str] = frozenset({
 })
 
 
+# Subset of ``_SYSTEM_TYPEDEF_NAMES`` whose definitions CBMC's built-in
+# libc model supplies after the source-side strip. Project structs whose
+# fields use ONLY these typedefs still resolve correctly after the
+# strip, so the cascade rule in ``_strip_glibc_internal_struct_bodies``
+# must NOT fire on them — otherwise it incorrectly strips legitimate
+# project structs (libarchive's ``struct archive_string {char *s;
+# size_t length; ...}`` was being stripped because ``size_t`` is in the
+# cascade set, which then left dependent structs with by-value fields
+# of an incomplete type — the 2026-05-23 cab.c sweep #3 regression).
+#
+# The typedefs NOT in this set (off64_t, register_t, fpos64_t, the
+# ``__``-prefix glibc internals) have no CBMC built-in model; struct
+# fields using them DO break after the strip and the cascade SHOULD
+# fire.
+_SYSTEM_TYPEDEF_NAMES_CBMC_PROVIDES: frozenset[str] = frozenset({
+    # C11 <stddef.h>
+    "max_align_t", "size_t", "ptrdiff_t", "wchar_t",
+    # C99 <wchar.h>
+    "wint_t", "wctrans_t", "wctype_t",
+    # C99 <stdint.h>
+    "int8_t", "int16_t", "int32_t", "int64_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "int_least8_t", "int_least16_t", "int_least32_t", "int_least64_t",
+    "uint_least8_t", "uint_least16_t", "uint_least32_t", "uint_least64_t",
+    "int_fast8_t", "int_fast16_t", "int_fast32_t", "int_fast64_t",
+    "uint_fast8_t", "uint_fast16_t", "uint_fast32_t", "uint_fast64_t",
+    "intmax_t", "uintmax_t", "intptr_t", "uintptr_t",
+    "u_int8_t", "u_int16_t", "u_int32_t", "u_int64_t",
+    # POSIX <sys/types.h> that CBMC's model handles
+    "fpos_t", "clock_t", "time_t",
+    "pid_t", "uid_t", "gid_t", "mode_t", "nlink_t",
+    "off_t", "ino_t", "dev_t", "blkcnt_t", "blksize_t",
+    "rlim_t", "id_t", "suseconds_t", "useconds_t",
+    "ssize_t", "socklen_t", "sa_family_t",
+})
+
+
 # Linux-kernel UAPI typedefs to preserve through the ``__``-prefix
 # strip. Despite the leading ``__`` (the convention the generic strip
 # rule uses to identify glibc internals like ``__fpos_t``), these are
@@ -5045,14 +5082,32 @@ def _strip_glibc_internal_struct_bodies(
         return text
 
     # Cascade: scan for ``/* typedef X removed */`` markers and build the
-    # set of names whose definitions are gone. A struct/union body whose
-    # FIELDS reference any of those names is broken (the fields' types
+    # set of names whose definitions are gone AND whose definitions CBMC
+    # won't re-supply via its own libc model. A struct/union body whose
+    # FIELDS reference any of those names is broken (the field types
     # don't resolve), so we strip the body to a forward declaration too.
-    # Without this, libarchive's cab.c was blocked at 61/61 functions
-    # because zlib's ``struct gzFile_s { off64_t pos; }`` (pulled in
-    # transitively) referenced the stripped ``off64_t`` typedef.
+    #
+    # CRITICAL SCOPE LIMIT (added 2026-05-23 after libarchive cab.c
+    # regression): C-standard typedefs that ``_SYSTEM_TYPEDEF_NAMES``
+    # strips (``size_t``, ``ssize_t``, ``wchar_t``, ``intN_t``, …) ARE
+    # supplied by CBMC's built-in stddef/stdint headers. Struct fields
+    # using them still resolve correctly after the strip. Cascading on
+    # those would incorrectly strip project structs like libarchive's
+    # ``struct archive_string { char *s; size_t length; ...}`` and
+    # leave dependent structs (``struct archive_mstring { struct
+    # archive_string aes_mbs; ...}``) with by-value fields of an
+    # incomplete type. So we exclude the C-standard set from the
+    # cascade and only fire it on the glibc-extension typedefs that
+    # CBMC has no model for (``off64_t``, ``register_t``, the
+    # ``__``-prefix internals).
     _STRIPPED_TYPEDEF_MARKER = re.compile(r'/\*\s*typedef\s+(\w+)\s+removed[^*]*\*/')
-    cascade_stripped: set[str] = set(_STRIPPED_TYPEDEF_MARKER.findall(text))
+    _cascade_raw: set[str] = set(_STRIPPED_TYPEDEF_MARKER.findall(text))
+    cascade_stripped: set[str] = {
+        n for n in _cascade_raw
+        # Exclude C-standard typedefs that CBMC re-supplies; cascading
+        # on these false-positives project structs.
+        if n not in _SYSTEM_TYPEDEF_NAMES_CBMC_PROVIDES
+    }
 
     # Strip struct definitions whose names match either:
     #   * A glibc-internal prefix (_IO_, __, _G_), OR
