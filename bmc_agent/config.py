@@ -354,6 +354,45 @@ class Config:
     # spec_gen prompts. Off by default to preserve existing behaviour.
     lite_mode: bool = False
 
+    # ------------------------------------------------------------------
+    # Autonomous mode — session-mutable strip sets (Phase 1).
+    # ------------------------------------------------------------------
+    # The auto-retry layer (bmc_agent.auto_retry_registry) populates these
+    # at runtime when a CBMC error has a known structural recovery (e.g.
+    # "type symbol 'foo_t' defined twice" → add foo_t here so the next
+    # harness regen strips the harness's variant).
+    #
+    # They extend the static sets in harness_generator without requiring
+    # a code change. Successful entries are candidates for promotion into
+    # ``_SYSTEM_TYPEDEF_NAMES`` / ``_GLIBC_KNOWN_STRUCTS`` after human
+    # review (auto_retries.json log).
+    #
+    # All three default to empty list so behaviour is unchanged unless
+    # the autonomous loop populates them.
+
+    # Typedef names to strip in addition to ``_SYSTEM_TYPEDEF_NAMES``.
+    # Driven by RetryAction.ADD_TYPEDEF_TO_STRIP.
+    session_strip_typedefs: list[str] = field(default_factory=list)
+
+    # Struct/union tag names to strip body for in addition to
+    # ``_GLIBC_KNOWN_STRUCTS``. Driven by RetryAction.ADD_STRUCT_TO_STRIP.
+    session_strip_structs: list[str] = field(default_factory=list)
+
+    # Struct tag names whose params should be emitted as nondet pointers
+    # (no stack-allocated backing) regardless of whether their body is
+    # present in struct_definitions. Driven by RetryAction.FORCE_OPAQUE_PARAM.
+    session_opaque_param_structs: list[str] = field(default_factory=list)
+
+    # Max number of CBMC-error retry rounds the autonomous-mode Phase 2b
+    # loop will run before giving up. Each round can resolve many
+    # functions if they share an error identifier — empirically on
+    # libarchive, ~4612 of 4829 errors were "syntax error before '<id>'"
+    # for a tiny set of typedefs (off64_t, fpos64_t, btowc, ...), so the
+    # first round usually unblocks the bulk of the sweep. Round 2 catches
+    # second-order errors that surface only after the first round's fixes
+    # land. 0 disables auto-retry entirely.
+    auto_retry_max_rounds: int = 2
+
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly.
 

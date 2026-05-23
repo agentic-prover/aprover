@@ -2255,6 +2255,7 @@ def _generate_nd_decls(
     infer_array_param_bounds_max: int = 64,
     scale_down: bool = False,
     scale_down_size: int = 4,
+    force_opaque_structs: Optional[set] = None,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -2615,6 +2616,13 @@ def _generate_nd_decls(
                     _tag_c = _base_strip_c[_kw_len_c:].strip()
                     if not struct_definitions or not struct_definitions.get(_tag_c):
                         _is_opaque_c = True
+                    elif force_opaque_structs and _tag_c in force_opaque_structs:
+                        # Autonomous-mode override: even if the struct is in
+                        # struct_definitions, the retry registry told us
+                        # to treat it as opaque (probably because a prior
+                        # CBMC run on this function hit
+                        # ``incomplete type not permitted here``).
+                        _is_opaque_c = True
                 if _is_opaque_c:
                     lines.append(
                         f"    /* opaque {_base_strip_c}: nondet pointer ({_tag_c} body not in TU) */"
@@ -2642,6 +2650,10 @@ def _generate_nd_decls(
                     kw_len = 7 if base_strip.startswith('struct ') else 6
                     tag = base_strip[kw_len:].strip()
                     if not struct_definitions or not struct_definitions.get(tag):
+                        is_opaque_struct = True
+                    elif force_opaque_structs and tag in force_opaque_structs:
+                        # Autonomous-mode override (see ``const`` branch
+                        # above for rationale).
                         is_opaque_struct = True
                 if is_opaque_struct:
                     lines.append(
@@ -2796,6 +2808,7 @@ class HarnessGenerator:
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
             scale_down=getattr(self.config, "scale_down", False),
             scale_down_size=getattr(self.config, "scale_down_size", 4),
+            force_opaque_structs=set(getattr(self.config, "session_opaque_param_structs", None) or []) or None,
         )
 
         # --- 6. Precondition assumptions ---
@@ -3278,13 +3291,17 @@ class HarnessGenerator:
         # --- 8. Strip inline ASM and bare-metal header stubs ---
         # Bare-metal sources (e.g. VibeOS) contain ARM64 asm blocks and expanded
         # libc stubs (signal(), setjmp(), ...) that won't compile on x86.
+        _session_typedefs = set(getattr(self.config, "session_strip_typedefs", None) or [])
+        _session_structs = set(getattr(self.config, "session_strip_structs", None) or [])
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_struct_bodies(
                 _strip_glibc_internal_typedefs(
                     _strip_static_inline_defs(
                         _strip_inline_asm(_strip_gcc_addr_space_quals(type_decls))
-                    )
-                )
+                    ),
+                    extra_strip=_session_typedefs or None,
+                ),
+                extra_strip=_session_structs or None,
             )
         )
         func_def   = _strip_inline_asm(func_def)
@@ -3487,10 +3504,17 @@ class HarnessGenerator:
         # treats unresolved calls as nondet, which is exactly what
         # a stub provides.
         _intermediate = _strip_static_inline_defs(_intermediate)
+        _session_typedefs2 = set(getattr(self.config, "session_strip_typedefs", None) or [])
+        _session_structs2 = set(getattr(self.config, "session_strip_structs", None) or [])
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_struct_bodies(
-                _strip_glibc_internal_typedefs(_intermediate, kernel_mode=_preprocessed),
+                _strip_glibc_internal_typedefs(
+                    _intermediate,
+                    kernel_mode=_preprocessed,
+                    extra_strip=_session_typedefs2 or None,
+                ),
                 kernel_mode=_preprocessed,
+                extra_strip=_session_structs2 or None,
             ),
             kernel_mode=_preprocessed,
         )
@@ -3618,6 +3642,7 @@ class HarnessGenerator:
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
             scale_down=getattr(self.config, "scale_down", False),
             scale_down_size=getattr(self.config, "scale_down_size", 4),
+            force_opaque_structs=set(getattr(self.config, "session_opaque_param_structs", None) or []) or None,
         )
 
         # --- 6. Precondition assumptions ---
@@ -4029,6 +4054,7 @@ class HarnessGenerator:
             infer_array_param_bounds_max=getattr(self.config, "infer_array_param_bounds_max", 64),
             scale_down=getattr(self.config, "scale_down", False),
             scale_down_size=getattr(self.config, "scale_down_size", 4),
+            force_opaque_structs=set(getattr(self.config, "session_opaque_param_structs", None) or []) or None,
         )
 
         # Precondition assume + postcondition assert via existing DSL.
@@ -4929,7 +4955,12 @@ _KERNEL_PRIMITIVE_PAT = re.compile(
 )
 
 
-def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False) -> str:
+def _strip_glibc_internal_struct_bodies(
+    text: str,
+    *,
+    kernel_mode: bool = False,
+    extra_strip: Optional[set[str]] = None,
+) -> str:
     """Strip the BODY of glibc-internal struct definitions while keeping
     the forward declaration intact.
 
@@ -5019,7 +5050,11 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
     def _struct_name_is_glibc(name: str) -> bool:
         if _GLIBC_STRUCT_NAME.fullmatch(name):
             return True
-        return name in _GLIBC_KNOWN_STRUCTS
+        if name in _GLIBC_KNOWN_STRUCTS:
+            return True
+        if extra_strip is not None and name in extra_strip:
+            return True
+        return False
     result: list[str] = []
     i = 0
     n = len(text)
@@ -5153,7 +5188,12 @@ def _strip_glibc_internal_struct_bodies(text: str, *, kernel_mode: bool = False)
     return ''.join(result)
 
 
-def _strip_glibc_internal_typedefs(text: str, *, kernel_mode: bool = False) -> str:
+def _strip_glibc_internal_typedefs(
+    text: str,
+    *,
+    kernel_mode: bool = False,
+    extra_strip: Optional[set[str]] = None,
+) -> str:
     """
     Remove typedef declarations that define names starting with '__' OR that
     define known C-standard / POSIX types (see _SYSTEM_TYPEDEF_NAMES).
@@ -5242,6 +5282,7 @@ def _strip_glibc_internal_typedefs(text: str, *, kernel_mode: bool = False) -> s
         if not kernel_mode and target and (
             (target.startswith('__') and not _KERNEL_PRIMITIVE_PAT.match(target))
             or target in _SYSTEM_TYPEDEF_NAMES
+            or (extra_strip is not None and target in extra_strip)
         ):
             strip = True
             reason = "removed"

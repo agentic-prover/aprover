@@ -396,6 +396,26 @@ class AMCPipeline:
         logger.info("Phase 2 complete: %d verdicts", len(verdicts))
 
         # ------------------------------------------------------------------
+        # Phase 2b: Autonomous-mode CBMC-error auto-retry (Phase 1 of the
+        # autonomous plan; see PLAN_autonomous_mode.md). For every function
+        # whose CBMC run errored with a *known* structural failure mode
+        # (parse_syntax_before_id, convert_type_redefinition, …), classify
+        # the error, apply a runtime workaround (extend the session-strip
+        # set or force-opaque a struct tag), and re-run CBMC for that
+        # function. Bounded retry (default 2 attempts per function) so a
+        # pathological error doesn't loop. Successful retries replace the
+        # original verdict; failed retries leave the error in place for
+        # Phase 3 to surface.
+        verdicts = self._auto_retry_cbmc_errors(
+            verdicts=verdicts,
+            funcs=all_funcs,
+            specs=specs,
+            parsed_file=parsed,
+            driver_name=driver_name,
+            flag_selections=flag_selections,
+        )
+
+        # ------------------------------------------------------------------
         # Phase 3: Validate counterexamples, refine, report bugs
         # ------------------------------------------------------------------
         logger.info("--- Phase 3: Validating counterexamples ---")
@@ -859,6 +879,185 @@ class AMCPipeline:
 
         realism_arg = realism if self.config.enable_realism_check else None
         return self.reporter.create_report(validation, func, realism_check=realism_arg)
+
+    def _auto_retry_cbmc_errors(
+        self,
+        verdicts: dict,
+        funcs: dict,
+        specs: dict,
+        parsed_file,
+        driver_name: str,
+        flag_selections: Optional[dict] = None,
+    ) -> dict:
+        """Phase 1 of autonomous mode: classify CBMC errors and re-run with
+        a structural workaround applied.
+
+        For each function whose Phase 2 verdict is an error (no
+        counterexamples, only an ``error`` field), classify the error via
+        :mod:`bmc_agent.cbmc_error_classifier`, plan a recovery action via
+        :mod:`bmc_agent.auto_retry_registry`, apply it (mutate
+        ``config.session_strip_typedefs`` / ``session_strip_structs`` /
+        ``session_opaque_param_structs``), and call ``bmc_engine.check_function``
+        again. If the retry produces a real verdict (verified or with CEx),
+        replace the original verdict.
+
+        Bounded by ``config.auto_retry_max_rounds`` (default 2) globally —
+        each round can resolve multiple functions if they share an error
+        identifier (e.g. all 1318 functions with ``syntax error before
+        'off64_t'`` get fixed by a single ADD_TYPEDEF_TO_STRIP entry).
+
+        Writes ``auto_retries.json`` to the driver artifact directory with
+        a per-attempt audit log: function, attempt #, error class, action,
+        target, outcome (resolved / still_errored / no_action). Used by
+        the autonomous outer loop (Phase 2 of the plan) to promote
+        successful entries into the static strip sets after human review.
+        """
+        from bmc_agent.cbmc_error_classifier import (
+            CbmcErrorClass,
+            CbmcErrorDiagnosis,
+            classify,
+        )
+        from bmc_agent.auto_retry_registry import RetryAction, plan_retry
+
+        max_rounds = int(getattr(self.config, "auto_retry_max_rounds", 2))
+        if max_rounds <= 0:
+            return verdicts
+
+        retry_log: list[dict] = []
+        verdicts = dict(verdicts)  # mutable copy
+
+        for round_idx in range(max_rounds):
+            errored = {
+                fn: v for fn, v in verdicts.items()
+                if (v.error and not v.counterexamples)
+            }
+            if not errored:
+                break
+
+            # Classify + plan, deduplicated by (action, target). Multiple
+            # functions hitting the same root cause (e.g. all referencing
+            # the same stripped typedef) share one config mutation.
+            plans_by_key: dict[tuple, list[str]] = {}
+            for fn_name, verdict in errored.items():
+                cbmc_res = verdict.cbmc_result
+                if cbmc_res is None:
+                    continue
+                payload = {
+                    "error": getattr(cbmc_res, "error", verdict.error),
+                    "raw_output": getattr(cbmc_res, "raw_output", "") or "",
+                    "verified": getattr(cbmc_res, "verified", None),
+                }
+                diag = classify(payload)
+                plan = plan_retry(diag)
+                key = (plan.action, plan.target)
+                plans_by_key.setdefault(key, []).append(fn_name)
+                retry_log.append({
+                    "round": round_idx,
+                    "function": fn_name,
+                    "error_class": diag.error_class.value,
+                    "action": plan.action.value,
+                    "target": plan.target,
+                    "reason": plan.reason,
+                })
+
+            # Apply each distinct plan to the config session sets.
+            actionable_keys = [
+                (a, t) for (a, t) in plans_by_key
+                if a != RetryAction.NO_ACTION and t
+            ]
+            if not actionable_keys:
+                logger.info(
+                    "Phase 2b auto-retry round %d: no actionable plans "
+                    "(%d errors, all NO_ACTION) — giving up",
+                    round_idx, len(errored),
+                )
+                break
+
+            applied_summary = []
+            for (action, target) in actionable_keys:
+                if action == RetryAction.ADD_TYPEDEF_TO_STRIP:
+                    if target not in self.config.session_strip_typedefs:
+                        self.config.session_strip_typedefs.append(target)
+                        applied_summary.append(f"strip typedef '{target}'")
+                elif action == RetryAction.ADD_STRUCT_TO_STRIP:
+                    if target not in self.config.session_strip_structs:
+                        self.config.session_strip_structs.append(target)
+                        applied_summary.append(f"strip struct '{target}'")
+                elif action == RetryAction.FORCE_OPAQUE_PARAM:
+                    if target not in self.config.session_opaque_param_structs:
+                        self.config.session_opaque_param_structs.append(target)
+                        applied_summary.append(f"force-opaque struct '{target}'")
+
+            logger.info(
+                "Phase 2b auto-retry round %d: %d errors, %d distinct fixes "
+                "applied: %s",
+                round_idx,
+                len(errored),
+                len(actionable_keys),
+                "; ".join(applied_summary) or "(none)",
+            )
+
+            # Re-run CBMC for every errored function (the session sets are
+            # now mutated; harness regen will pick them up).
+            for fn_name in list(errored.keys()):
+                func = funcs.get(fn_name)
+                spec = specs.get(fn_name)
+                if func is None or spec is None:
+                    continue
+                flag_sel = (flag_selections or {}).get(fn_name) if flag_selections else None
+                try:
+                    new_verdict = self.bmc_engine.check_function(
+                        func=func,
+                        spec=spec,
+                        parsed_file=parsed_file,
+                        driver_name=driver_name,
+                        all_funcs=funcs,
+                        flag_selection=flag_sel,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Phase 2b auto-retry: check_function('%s') raised %s; "
+                        "leaving original verdict",
+                        fn_name, exc,
+                    )
+                    continue
+                verdicts[fn_name] = new_verdict
+                # Tag the log entry with the outcome.
+                for entry in retry_log:
+                    if entry["round"] == round_idx and entry["function"] == fn_name:
+                        if new_verdict.error and not new_verdict.counterexamples:
+                            entry["outcome"] = "still_errored"
+                        else:
+                            entry["outcome"] = "resolved"
+                        break
+
+        if retry_log:
+            self._persist_auto_retries(driver_name, retry_log)
+            resolved = sum(
+                1 for e in retry_log if e.get("outcome") == "resolved"
+            )
+            logger.info(
+                "Phase 2b auto-retry: total %d retry attempts across %d rounds; "
+                "%d resolved",
+                len(retry_log),
+                max_rounds,
+                resolved,
+            )
+
+        return verdicts
+
+    def _persist_auto_retries(self, driver_name: str, log_entries: list[dict]) -> None:
+        """Write the auto-retry audit log to ``<artifact_dir>/<driver>/auto_retries.json``."""
+        import json as _json
+        from pathlib import Path
+        driver_dir = Path(self.config.artifact_dir) / driver_name
+        try:
+            driver_dir.mkdir(parents=True, exist_ok=True)
+            (driver_dir / "auto_retries.json").write_text(
+                _json.dumps(log_entries, indent=2)
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist auto_retries.json: %s", exc)
 
     def _emit_coverage_diagnostics(self, driver_name: str) -> None:
         """Aggregate CBMC parse/conversion errors and surface them.
