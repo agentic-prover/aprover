@@ -438,6 +438,19 @@ class RealismChecker:
                 failure_line = None
         source_file_context = _format_source_file_context(parsed_file, mark_line=failure_line)
 
+        # Active stub contracts — list every callee in func.callees that
+        # the harness generated a contracted stub for, with a plain-English
+        # summary of the contract. This is the SAME library-level knowledge
+        # a human triager uses to spot stub-callee-disconnect FPs. The
+        # realism prompt's new decision rule (UNREALISTIC #5) tells the
+        # LLM to compare the counterexample witness against these contracts
+        # and reject violations as unreachable.
+        try:
+            from bmc_agent.universal_stub_contracts import format_active_contracts
+            active_stub_contracts = format_active_contracts(getattr(func, "callees", set())) or "(no registered contracts apply to this function's callees)"
+        except Exception:
+            active_stub_contracts = "(stub-contract list unavailable)"
+
         tm = getattr(self.config, "threat_model", "security")
         return REALISM_CHECK_PROMPT.format(
             threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
@@ -456,6 +469,7 @@ class RealismChecker:
             call_site_analysis=call_site_analysis,
             global_context=global_context,
             source_file_context=source_file_context,
+            active_stub_contracts=active_stub_contracts,
         )
 
 

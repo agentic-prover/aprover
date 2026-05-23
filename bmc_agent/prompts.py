@@ -725,6 +725,20 @@ GLOBAL VARIABLE CONTEXT — where key globals used by this function are assigned
 {global_context}
 
 ---
+ACTIVE STUB CONTRACTS — library-level guarantees that real callees honor.
+
+The harness replaces calls to external functions with stubs. Each stub was
+generated WITH the documented library contract for that function — meaning
+the stub's nondet output is CONSTRAINED to obey what real callees actually
+return. If the counterexample witness state requires any of these
+contracts to be VIOLATED, the violation is unreachable from any real
+caller — because no real implementation of the library produces that
+output. Treat it as a stub-callee-disconnect FP and return UNREALISTIC.
+
+Contracts active for callees of {function_name}:
+{active_stub_contracts}
+
+---
 FULL SOURCE FILE CONTEXT — every function in the same .c file is available below.
 You MUST cross-reference any function you cite in your reasoning against this
 context. If your call chain depends on a function NOT defined below, you cannot
@@ -770,6 +784,16 @@ A finding is UNREALISTIC when:
    mathematically impossible from the real callee (e.g. size_t returning negative).
 4. The violation requires multiple simultaneous hardware/callee failures that cannot
    co-occur in any real execution scenario.
+5. **STUB-CALLEE DISCONNECT** — the counterexample witness requires a callee listed
+   in "ACTIVE STUB CONTRACTS" above to return a value that VIOLATES its documented
+   contract (e.g. `__archive_read_ahead` returning non-NULL with an invalid pointer,
+   or `archive_entry_pathname` returning a non-NULL pointer to invalid memory, or
+   `archive_read_next_header` returning a value outside the documented ARCHIVE_*
+   status-code set). No real implementation of the library produces those
+   outputs, so the violation is unreachable from any real caller. The witness fields
+   to look for: an "unknown"-name pointer assigned from a stubbed callee's return,
+   or a numeric return value outside the contract's stated range. This is one of the
+   most common FP classes in lite-mode and you MUST check it explicitly.
 
 A finding is REALISTIC when:
 1. The triggering input class could plausibly arise from environment, user, network, or

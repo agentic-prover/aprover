@@ -178,6 +178,105 @@ def known_callees() -> frozenset[str]:
     return frozenset(_CANONICAL_SIGS.keys())
 
 
+# Human-readable summary of each registered contract. Plain English so
+# the realism-check LLM can use it without parsing C / __CPROVER_assume
+# syntax. Each entry: one line describing what the real callee
+# guarantees its caller.
+_CONTRACT_SUMMARIES: dict[str, str] = {
+    "__archive_read_ahead":
+        "returns NULL or a non-NULL pointer with `*bytes >= requested_size` AND "
+        "valid memory for `*bytes` bytes at the returned pointer",
+    "__archive_read_consume":
+        "returns >= 0 on success or -1 on error (never wildly positive)",
+    "__archive_read_filter_ahead":
+        "returns NULL or a non-NULL pointer with `*bytes >= requested_size` AND "
+        "valid memory for `*bytes` bytes at the returned pointer",
+    "__archive_read_filter_consume":
+        "returns >= 0 on success or -1 on error",
+    "archive_read_next_header":
+        "returns one of {ARCHIVE_OK=0, ARCHIVE_EOF=1, ARCHIVE_RETRY=-10, "
+        "ARCHIVE_WARN=-20, ARCHIVE_FAILED=-25, ARCHIVE_FATAL=-30} — never any other value",
+    "archive_read_next_header2": "(same as archive_read_next_header)",
+    "archive_entry_pathname":
+        "returns NULL or a valid pointer to a NUL-terminated string (never an "
+        "invalid pointer)",
+    "archive_entry_uname": "(same NUL-or-string contract as archive_entry_pathname)",
+    "archive_entry_gname": "(same NUL-or-string contract as archive_entry_pathname)",
+    "archive_entry_hardlink": "(same NUL-or-string contract as archive_entry_pathname)",
+    "archive_entry_symlink": "(same NUL-or-string contract as archive_entry_pathname)",
+    "archive_entry_sourcepath": "(same NUL-or-string contract as archive_entry_pathname)",
+    "archive_entry_size":
+        "returns -1 (unset) or a non-negative int64_t file size",
+    "archive_compression_name":
+        "returns NULL or a valid pointer to a NUL-terminated string",
+    "archive_format_name":
+        "returns NULL or a valid pointer to a NUL-terminated string",
+    "archive_string_conversion_charset_name":
+        "returns NULL or a valid pointer to a NUL-terminated string",
+}
+
+
+# Names covered by harness_generator's _builtin_stub_return_contract
+# table that the realism prompt should also know about. Pulled into a
+# data table here so the realism check has a single source of truth.
+_BUILTIN_TABLE_SUMMARIES: dict[str, str] = {
+    "malloc": "returns NULL or a valid pointer to `size` writable bytes",
+    "calloc": "returns NULL or a valid pointer to (n * size) zero-initialized writable bytes",
+    "realloc": "returns NULL or a valid pointer to `size` writable bytes",
+    "strdup": "returns NULL or a valid pointer to a NUL-terminated copy of the input string",
+    "strndup": "returns NULL or a valid pointer to a NUL-terminated string of length <= size",
+    "getenv": "returns NULL or a valid pointer to a NUL-terminated string",
+    "secure_getenv": "returns NULL or a valid pointer to a NUL-terminated string",
+    "strlen": "returns the string length (<= 1 MiB in this harness) — never a huge value",
+    "strnlen": "returns min(size, string length) — bounded",
+    "strcmp": "returns a small int in [-1048576, 1048576] — never huge",
+    "strncmp": "(same as strcmp)",
+    "memcmp": "(same as strcmp)",
+    "fopen": "returns NULL or a valid FILE*",
+    "fread": "returns 0..nmemb (never more than nmemb)",
+    "fwrite": "returns 0..nmemb (never more than nmemb)",
+    "read": "returns -1 (error) or 0..count (POSIX guarantee — never more than count)",
+    "write": "returns -1 (error) or 0..count",
+    "stat": "returns 0 (success) or -1 (failure)",
+    "fstat": "returns 0 (success) or -1 (failure)",
+    "lstat": "returns 0 (success) or -1 (failure)",
+    "open": "returns -1 or a valid fd in [0, 65535]",
+    "close": "returns 0 or -1",
+    "inflate": "returns a Z_* status code in [-6, 2] — never any other int",
+    "deflate": "returns a Z_* status code in [-6, 2] — never any other int",
+}
+
+
+def human_readable_contract(callee_name: str) -> Optional[str]:
+    """Return a one-line plain-English summary of the contract for
+    *callee_name*, or None when no contract is registered. Used to
+    feed the realism-check LLM the same library-level knowledge a
+    human triager would use to spot stub-callee-disconnect FPs.
+    """
+    s = _CONTRACT_SUMMARIES.get(callee_name)
+    if s is not None:
+        return s
+    return _BUILTIN_TABLE_SUMMARIES.get(callee_name)
+
+
+def format_active_contracts(callee_names: list[str] | set[str]) -> str:
+    """Format the contract summaries for a list of stubbed callees as a
+    bulleted block suitable for inclusion in an LLM prompt. Empty
+    string when no callees in the list have a registered contract.
+    """
+    lines: list[str] = []
+    seen: set[str] = set()
+    for name in sorted(set(callee_names)):
+        if name in seen:
+            continue
+        summary = human_readable_contract(name)
+        if summary is None:
+            continue
+        lines.append(f"* `{name}`: {summary}")
+        seen.add(name)
+    return "\n".join(lines)
+
+
 def derive_stub_contract(
     callee_name: str,
     ret_type: str,
