@@ -85,7 +85,13 @@ def _stub_spec(func_name: str) -> Spec:
     return spec
 
 
-def _permissive_spec(func_name: str, func_info=None, with_contracts: bool = False) -> Spec:
+def _permissive_spec(
+    func_name: str,
+    func_info=None,
+    with_contracts: bool = False,
+    struct_definitions: dict | None = None,
+    cbmc_unwind: int = 4,
+) -> Spec:
     """Permissive spec for bmc-agent-lite mode.
 
     Skips the LLM spec_gen call entirely. The harness generator still wires
@@ -109,7 +115,11 @@ def _permissive_spec(func_name: str, func_info=None, with_contracts: bool = Fals
     if with_contracts and func_info is not None:
         try:
             from bmc_agent.universal_contracts import derive_universal_precondition
-            derived = derive_universal_precondition(func_info)
+            derived = derive_universal_precondition(
+                func_info,
+                struct_definitions=struct_definitions,
+                cbmc_unwind=cbmc_unwind,
+            )
             if derived and derived != "true":
                 precondition = derived
         except Exception:
@@ -1036,7 +1046,11 @@ class SpecGenerator:
             if bool(getattr(self.config, "lite_mode", False)):
                 with_contracts = bool(getattr(self.config, "lite_with_contracts", True))
                 return fn_name, _permissive_spec(
-                    fn_name, func_info=func_info, with_contracts=with_contracts,
+                    fn_name,
+                    func_info=func_info,
+                    with_contracts=with_contracts,
+                    struct_definitions=getattr(parsed, "struct_definitions", None),
+                    cbmc_unwind=int(getattr(self.config, "cbmc_unwind", 4)),
                 )
 
             struct_context = self._extract_struct_context(func_info, parsed)
