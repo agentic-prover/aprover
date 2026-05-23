@@ -3958,13 +3958,23 @@ class HarnessGenerator:
                 harness_body_lines.append(f"    {sub_line}")
 
         # Step 3: call the function under test
+        # If any param is named ``result`` (e.g. libarchive's ``isint(start,
+        # end, int *result)``), the return-value variable can't also be
+        # named ``result`` — the param backing storage declared earlier
+        # already binds that name, and CBMC reports
+        # ``symbol 'main::1::result' redefined with a different type``.
+        # Detected on libarchive archive_acl.c::isint/isint_w/isint_w
+        # (2026-05-23 sweep).
+        _ret_var = "result"
+        if any(pn == _ret_var for _, pn in sig.parameters):
+            _ret_var = "_amc_ret"
         harness_body_lines.append("")
         harness_body_lines.append("    /* Step 3: call the function under test */")
         if ret_type == "void":
             harness_body_lines.append(f"    {fn_name}({call_args});")
         else:
-            harness_body_lines.append(f"    {ret_type} result = {fn_name}({call_args});")
-            harness_body_lines.append(f"    (void)result;  /* suppress unused-variable warning */")
+            harness_body_lines.append(f"    {ret_type} {_ret_var} = {fn_name}({call_args});")
+            harness_body_lines.append(f"    (void){_ret_var};  /* suppress unused-variable warning */")
 
         # Step 4: assert postcondition
         harness_body_lines.append("")
