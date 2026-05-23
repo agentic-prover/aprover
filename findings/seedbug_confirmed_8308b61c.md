@@ -89,3 +89,29 @@ verify-dir
   -D HAVE_CONFIG_H
 ```
 with `BMC_AGENT_DEDUP_MAX_PER_TYPE=3` (default after `b12ce08`).
+
+## Companion finding: same bug pattern, wide-char variant (next_field_w)
+
+The same N=3 validation sweep ALSO found:
+
+```
+Function: next_field_w  (wide-char counterpart to next_field)
+Property: next_field_w.pointer_dereference.47
+Confidence: confirmed_system_entry
+Realism verdict: realistic    ← strongest signal (not just "uncertain")
+Call chain: archive_acl_from_text_w → next_field_w
+```
+
+next_field_w has the **identical** OOB pattern: the wide loop exits
+with `*l == 0` (or `*wp` runs to end of buffer), then `*sep = **wp`
+dereferences one past the end.
+
+**Upstream commit 8308b61c only patched next_field (char version),
+NOT next_field_w (wchar_t version).** This appears to be a latent
+bug — the same vulnerability exists in the wide-char ACL parser
+path used for non-ASCII PAX SCHILY.acl.* attributes. Not yet fixed
+upstream as of `67830f7b9c27080c0170bcd71d94fb42316c47dd`.
+
+This is the kind of "compositional gap" finding bmc-agent-lite was
+designed to surface: the upstream fix addressed one code path but
+the equivalent pattern in the wide-char path was missed.
