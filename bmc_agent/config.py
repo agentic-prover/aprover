@@ -393,6 +393,24 @@ class Config:
     # land. 0 disables auto-retry entirely.
     auto_retry_max_rounds: int = 2
 
+    # Phase 3 — self-patch agent mode. One of:
+    #   "deny"  (default) — the self-patch agent is OFF. CBMC errors
+    #                        with no registered retry action just stay
+    #                        errored. Safe-by-default; no LLM is asked
+    #                        to edit bmc-agent source.
+    #   "stage" — when Phase 1 returns NO_ACTION, the agent proposes
+    #             a patch to harness_generator.py / preprocessor.py
+    #             plus a regression test, runs all safety gates
+    #             (allow-list, scope cap, fail-before / pass-after),
+    #             and on success writes the diff + test source to
+    #             ``<output>/proposed_patches/round_<N>/``. Working
+    #             tree is left clean; operator reviews and applies.
+    #   "auto"  — same as stage, plus apply via ``git apply`` and
+    #             commit. Reserved for trusted-target sweeps; the
+    #             operator opts in explicitly.
+    # See ``bmc_agent.self_patch_agent`` for the safety-gate logic.
+    allow_self_patch: str = "deny"
+
     def resolved_api_key(self) -> str:
         """Return the effective API key, reading from env if not set directly.
 

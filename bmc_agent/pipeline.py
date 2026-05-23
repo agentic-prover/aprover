@@ -966,6 +966,25 @@ class AMCPipeline:
                 if a != RetryAction.NO_ACTION and t
             ]
             if not actionable_keys:
+                # Phase 3 escalation: if every plan in this round was
+                # NO_ACTION (typically because the CBMC error class is
+                # not yet in the static taxonomy) AND the operator has
+                # opted into self-patch via ``config.allow_self_patch``,
+                # invoke the agent to propose a structural fix.
+                # ``deny`` (default) skips the call entirely — no LLM
+                # is asked to edit bmc-agent source.
+                self_patch_log = self._maybe_invoke_self_patch(
+                    errored=errored,
+                    funcs=funcs,
+                    parsed_file=parsed_file,
+                    driver_name=driver_name,
+                    round_idx=round_idx,
+                )
+                if self_patch_log:
+                    retry_log.append({
+                        "round": round_idx,
+                        "self_patch": self_patch_log,
+                    })
                 logger.info(
                     "Phase 2b auto-retry round %d: no actionable plans "
                     "(%d errors, all NO_ACTION) — giving up",
@@ -1045,6 +1064,138 @@ class AMCPipeline:
             )
 
         return verdicts
+
+    def _maybe_invoke_self_patch(
+        self,
+        errored: dict,
+        funcs: dict,
+        parsed_file,
+        driver_name: str,
+        round_idx: int,
+    ) -> list[dict]:
+        """Phase 3 entry point: when Phase 2b ran out of actionable
+        plans for a round, ask the self-patch agent (if enabled) to
+        propose a structural fix for *one* UNKNOWN-class error.
+
+        Returns an audit log of the proposals attempted in this round.
+        Each entry: ``{function, error_class, status, rejection_reason,
+        rationale, artifact_path}``. Empty list when ``allow_self_patch
+        == 'deny'`` (the default) — no LLM call is made.
+
+        Only one proposal per round to bound LLM cost. The retry loop
+        will pick up the next round naturally if the patch was applied.
+        """
+        from bmc_agent.self_patch_agent import (
+            PatchMode, ProposalStatus, SelfPatchAgent, _resolve_mode,
+        )
+        from bmc_agent.cbmc_error_classifier import classify
+
+        mode = _resolve_mode(self.config)
+        if mode == PatchMode.DENY:
+            return []
+
+        # Pick one errored function (the first whose diagnosis was
+        # UNKNOWN this round, so the agent has the most novel target).
+        target_fn: str | None = None
+        target_diag = None
+        target_verdict = None
+        for fn_name, verdict in errored.items():
+            cbmc_res = verdict.cbmc_result
+            if cbmc_res is None:
+                continue
+            payload = {
+                "error": getattr(cbmc_res, "error", verdict.error),
+                "raw_output": getattr(cbmc_res, "raw_output", "") or "",
+                "verified": getattr(cbmc_res, "verified", None),
+            }
+            diag = classify(payload)
+            if not diag.actionable:
+                continue
+            target_fn = fn_name
+            target_diag = diag
+            target_verdict = verdict
+            break
+
+        if target_fn is None or target_diag is None:
+            return []
+
+        from bmc_agent.llm import LLMClient
+        from pathlib import Path
+        agent = SelfPatchAgent(
+            llm=LLMClient(self.config),
+            repo_root=Path(__file__).resolve().parent.parent,
+            config=self.config,
+        )
+
+        # Pull the generator excerpt: read the function in
+        # harness_generator.py whose name appears in the diagnosis's
+        # raw_message context, or the full type-strip section as a
+        # default. Cheap heuristic — could be smarter.
+        gen_excerpt = self._read_strip_section_excerpt()
+
+        proposal = agent.propose(
+            diagnosis=target_diag,
+            function_name=target_fn,
+            harness_path=str(getattr(target_verdict, "harness_path", "")),
+            generator_excerpt=gen_excerpt,
+            known_actions=self._summarize_known_retry_actions(),
+        )
+
+        if proposal.status == ProposalStatus.PROPOSED:
+            proposal = agent.validate(proposal)
+        if proposal.status == ProposalStatus.PROPOSED:
+            output_root = Path(self.config.artifact_dir) / driver_name
+            proposal = agent.stage_or_apply(
+                proposal, output_root=output_root, round_idx=round_idx,
+            )
+
+        return [{
+            "function": target_fn,
+            "error_class": proposal.error_class,
+            "error_target": proposal.error_target,
+            "status": proposal.status.value,
+            "rejection_reason": proposal.rejection_reason,
+            "rationale": proposal.rationale[:400],
+            "files_touched": proposal.files_touched,
+            "lines_changed": proposal.lines_changed,
+        }]
+
+    def _read_strip_section_excerpt(self) -> str:
+        """Return a focused excerpt of ``harness_generator.py`` for the
+        agent prompt. The strip-section is where most new structural
+        bugs need addressing.
+        """
+        from pathlib import Path as _P
+        try:
+            src = (_P(__file__).resolve().parent / "harness_generator.py").read_text()
+        except Exception:
+            return ""
+        # Grab the SYSTEM_TYPEDEF_NAMES and GLIBC_KNOWN_STRUCTS regions
+        # — these are where ~95% of new structural fixes belong.
+        marker_a = src.find("_SYSTEM_TYPEDEF_NAMES")
+        marker_b = src.find("_GLIBC_KNOWN_STRUCTS")
+        if marker_a == -1 or marker_b == -1:
+            return src[:6000]
+        excerpt_a = src[marker_a:src.find("})", marker_a) + 2]
+        excerpt_b = src[marker_b:src.find("})", marker_b) + 2]
+        return excerpt_a + "\n\n" + excerpt_b
+
+    def _summarize_known_retry_actions(self) -> str:
+        """Brief description of the Phase 1 retry registry so the agent
+        doesn't propose duplicates.
+        """
+        return (
+            "* ADD_TYPEDEF_TO_STRIP — extends _SYSTEM_TYPEDEF_NAMES at\n"
+            "  runtime. Use this when a typedef is conflict-redefining\n"
+            "  or referenced but undefined.\n"
+            "* ADD_STRUCT_TO_STRIP — extends _GLIBC_KNOWN_STRUCTS. Use\n"
+            "  when a struct/union body redefines CBMC's built-in libc.\n"
+            "* FORCE_OPAQUE_PARAM — emits nondet pointer for params of\n"
+            "  the named struct tag. Use for 'incomplete type not\n"
+            "  permitted here' on opaque-handle params.\n"
+            "If the bug doesn't fit one of these, you need a structural\n"
+            "patch — propose code changes."
+        )
 
     def _persist_auto_retries(self, driver_name: str, log_entries: list[dict]) -> None:
         """Write the auto-retry audit log to ``<artifact_dir>/<driver>/auto_retries.json``."""

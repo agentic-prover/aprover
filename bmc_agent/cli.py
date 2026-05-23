@@ -645,6 +645,8 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
         config.cbmc_defines = list(args.defines)
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
+    if getattr(args, "allow_self_patch", None):
+        config.allow_self_patch = args.allow_self_patch
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1304,6 +1306,24 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["security", "safety", "functional"],
         default="security",
         help="Threat model: shapes CBMC baseline flags and realism context (default: security)",
+    )
+    au.add_argument(
+        "--allow-self-patch",
+        choices=["deny", "stage", "auto"],
+        default="deny",
+        help=(
+            "Phase 3 (self-patch agent) mode. 'deny' (default): the "
+            "agent is off and CBMC errors with no registered retry "
+            "action stay errored. 'stage': when Phase 2b exhausts its "
+            "actionable plans, the agent asks an LLM to propose a "
+            "patch to bmc_agent/harness_generator.py (or preprocessor.py) "
+            "plus a regression test; on passing all safety gates the "
+            "diff is written to <output>/<driver>/proposed_patches/ "
+            "for operator review (working tree stays clean). 'auto': "
+            "same as stage plus git-apply + commit (only after every "
+            "gate passes). See bmc_agent/self_patch_agent.py for the "
+            "gate logic."
+        ),
     )
     _add_model_arg(au)
     au.set_defaults(func=_cmd_autonomous)
