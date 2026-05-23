@@ -81,6 +81,22 @@ class ParsedCFile:
     # helpers from ``linux/*.h``; without filtering, the pipeline tries
     # to spec all of them).
     primary_source: Optional[str] = None
+    # Functions whose ADDRESS is taken inside another function's body
+    # (passed as a callback argument, stored in a struct field, etc.).
+    # Used by Phase 3's caller-feasibility check to handle vtable-
+    # dispatched functions: when the FUT has no direct callers (because
+    # it's only invoked via a function pointer), the address-takers
+    # serve as evidence of indirect reachability. Without this, Phase 3
+    # marks every libarchive format-reader / vtable-callback function
+    # as "unresolved", suppressing real bugs in those code paths.
+    #
+    # Keyed by function name; value is a set of caller-function names
+    # whose body contains the function's identifier in a non-call
+    # position (no immediately-following ``(``). Conservative — picks
+    # up some non-callback references too, but those are harmless for
+    # Phase 3's "is the function reachable from any in-tree usage"
+    # question.
+    address_taken_in: dict[str, set[str]] = field(default_factory=dict)
 
     def restrict_to_primary_source(self) -> int:
         """Drop functions whose body did NOT originate in
@@ -388,6 +404,8 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
 
     struct_definitions = _collect_struct_defs(root, src_bytes)
 
+    address_taken_in = _compute_address_takers(functions, function_bodies)
+
     return ParsedCFile(
         path=path,
         functions=functions,
@@ -397,6 +415,7 @@ def _parse_with_tree_sitter(src_bytes: bytes, source: str, path: str) -> ParsedC
         struct_definitions=struct_definitions,
         function_source_files=function_source_files,
         primary_source=primary_source,
+        address_taken_in=address_taken_in,
     )
 
 
@@ -1033,13 +1052,67 @@ def _parse_with_regex(source: str, path: str) -> ParsedCFile:
                 callees.add(callee)
         call_graph[fn_name] = callees
 
+    address_taken_in = _compute_address_takers(functions, function_bodies)
+
     return ParsedCFile(
         path=path,
         functions=functions,
         call_graph=call_graph,
         function_bodies=function_bodies,
         function_definitions=function_definitions,
+        address_taken_in=address_taken_in,
     )
+
+
+def _compute_address_takers(
+    functions: "dict[str, FunctionSignature]",
+    function_bodies: "dict[str, str]",
+) -> dict[str, set[str]]:
+    """For each function in *functions*, find which OTHER functions' bodies
+    contain its identifier in a non-call position.
+
+    Returns a dict ``address_taken_in[name] = {caller1, caller2, ...}``
+    where each entry means "caller's body mentions name without an
+    immediately-following ``(``".
+
+    Used by Phase 3's caller-feasibility check: a function whose
+    address is taken (passed to a registration function, stored in a
+    vtable struct field, used as a callback) is reachable through
+    that indirection even though direct-call search returns nothing.
+
+    Conservative — picks up some non-callback references too (e.g. a
+    function name appearing in a comment, in a #define expansion, or
+    cast to a pointer for diagnostic purposes). Those false-positives
+    are harmless for Phase 3's "is the function reachable at all"
+    question.
+
+    Cheap to compute: one body-scan per function, with the name set as
+    a precomputed regex alternation.
+    """
+    if not functions or not function_bodies:
+        return {}
+    fn_names = list(functions.keys())
+    if not fn_names:
+        return {}
+    # Build a regex that matches any function name followed by a
+    # non-call context (anything other than ``(``, possibly with
+    # whitespace).
+    name_alt = "|".join(re.escape(n) for n in fn_names)
+    # ``\b(NAME)\b(?!\s*\()`` — match the bare identifier, NOT followed
+    # by optional whitespace + ``(``.
+    pat = re.compile(rf"\b({name_alt})\b(?!\s*\()")
+    result: dict[str, set[str]] = {}
+    for caller_name, body in function_bodies.items():
+        if not body:
+            continue
+        for m in pat.finditer(body):
+            target = m.group(1)
+            if target == caller_name:
+                # Self-reference (recursion mark, etc.) — not an
+                # address-take we care about for cross-function flow.
+                continue
+            result.setdefault(target, set()).add(caller_name)
+    return result
 
 
 def _parse_params_regex(raw: str) -> list[tuple[str, str]]:

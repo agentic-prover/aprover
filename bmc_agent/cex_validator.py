@@ -358,30 +358,71 @@ class CExValidator:
             # (iq1_sort_helper, iq2_compare_func, iq3_compare_func)
             # that are exactly this FP class.
             if _is_address_taken(func_name, parsed_file):
-                logger.info(
-                    "'%s' has no direct callers but is taken by address "
-                    "(likely a library callback) — marking UNRESOLVED",
-                    func_name,
+                # Check whether the address is taken in an IN-PROJECT
+                # function (i.e. one we've parsed). If yes, that
+                # function is the indirect caller for vtable-dispatch
+                # patterns (libarchive format readers, plugin
+                # registries). We run the normal caller-feasibility
+                # flow on it as if it were a direct caller.
+                #
+                # Without this, libarchive's
+                # ``archive_read_format_cpio_read_header`` (taken in
+                # ``archive_read_support_format_cpio``) and every other
+                # format-reader callback was marked UNRESOLVED, hiding
+                # bugs in the format-parsing code paths where most
+                # real CVEs live.
+                #
+                # The legacy "qsort callback" case (no in-project
+                # address-taker — only appears in a preprocessed
+                # libc/glibc header) still falls through to UNRESOLVED.
+                indirect_callers_set: set[str] = set(
+                    getattr(parsed_file, "address_taken_in", {}).get(func_name, set())
                 )
-                return ValidationResult(
-                    function_name=func_name,
-                    counterexample=counterexample,
-                    caller_path=[func_name],
-                    system_entry_input=None,
-                    refinement_history=[],
-                    final_precondition=None,
-                    reasoning=(
-                        f"'{func_name}' has no direct callers but its "
-                        "address is taken (passed to a library function "
-                        "such as qsort/bsearch/pthread_create, or stored "
-                        "in a function-pointer table). The CEx assumed "
-                        "direct invocation with arbitrary nondet inputs; "
-                        "real invocation goes through the library function "
-                        "with a controlled contract that may exclude the "
-                        "violating state. Marking UNRESOLVED."
-                    ),
-                    outcome=CExOutcome.UNRESOLVED,
-                )
+                # Only consider in-project address-takers that have a
+                # FunctionInfo we can pass to the feasibility check.
+                indirect_callers: dict[str, FunctionInfo] = {}
+                if indirect_callers_set and all_funcs:
+                    for ic_name in indirect_callers_set:
+                        if ic_name in all_funcs:
+                            indirect_callers[ic_name] = all_funcs[ic_name]
+                if indirect_callers:
+                    logger.info(
+                        "'%s' has no direct callers but its address is "
+                        "taken in %d in-project function(s); treating "
+                        "as vtable-dispatched and using indirect callers "
+                        "for feasibility check: %s",
+                        func_name,
+                        len(indirect_callers),
+                        sorted(indirect_callers.keys())[:3],
+                    )
+                    # Re-bind ``callers`` to the indirect ones so the
+                    # normal flow below picks them up.
+                    callers = indirect_callers
+                else:
+                    logger.info(
+                        "'%s' has no direct callers but is taken by address "
+                        "outside the project (likely a libc callback like "
+                        "qsort/bsearch/pthread_create) — marking UNRESOLVED",
+                        func_name,
+                    )
+                    return ValidationResult(
+                        function_name=func_name,
+                        counterexample=counterexample,
+                        caller_path=[func_name],
+                        system_entry_input=None,
+                        refinement_history=[],
+                        final_precondition=None,
+                        reasoning=(
+                            f"'{func_name}' has no direct callers and its "
+                            "address is taken only outside the project "
+                            "(libc callback pattern). The CEx assumed direct "
+                            "invocation with arbitrary nondet inputs; real "
+                            "invocation goes through a library function with "
+                            "a controlled contract that may exclude the "
+                            "violating state. Marking UNRESOLVED."
+                        ),
+                        outcome=CExOutcome.UNRESOLVED,
+                    )
 
             has_cross_file_caller = bool(
                 cross_file_callers and func_name in cross_file_callers
