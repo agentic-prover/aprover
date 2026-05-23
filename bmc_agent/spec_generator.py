@@ -85,7 +85,7 @@ def _stub_spec(func_name: str) -> Spec:
     return spec
 
 
-def _permissive_spec(func_name: str) -> Spec:
+def _permissive_spec(func_name: str, func_info=None, with_contracts: bool = False) -> Spec:
     """Permissive spec for bmc-agent-lite mode.
 
     Skips the LLM spec_gen call entirely. The harness generator still wires
@@ -94,10 +94,31 @@ def _permissive_spec(func_name: str) -> Spec:
     (``--bounds-check``, ``--pointer-check``, ``--signed-overflow-check``)
     still fire. The LLM budget shifts to Phase 3 (realism + classifier),
     where it adds real value rather than parroting the function body.
+
+    When ``with_contracts=True`` and ``func_info`` is supplied, the
+    precondition is enriched with deterministic *universal contracts*
+    derived from parameter names + types — no LLM call. Today's
+    universal contracts only emit paired-pointer ordering
+    (``start <= end``, etc.); the existing
+    ``_detect_paired_pointers`` in ``harness_generator.py`` picks up
+    the clause and allocates a single shared backing buffer per pair,
+    eliminating the textbook caller-contract-slip FP class that
+    dominates lite-mode noise on userland libraries.
     """
+    precondition = "true"
+    if with_contracts and func_info is not None:
+        try:
+            from bmc_agent.universal_contracts import derive_universal_precondition
+            derived = derive_universal_precondition(func_info)
+            if derived and derived != "true":
+                precondition = derived
+        except Exception:
+            # Universal-contract derivation must never crash spec gen;
+            # fall back to the permissive default.
+            precondition = "true"
     spec = Spec(
         function_name=func_name,
-        precondition="true",
+        precondition=precondition,
         postcondition="true",
         status=SpecStatus.GENERATED,
     )
@@ -1007,8 +1028,16 @@ class SpecGenerator:
             # memory-safety bugs from the harness inputs, and the LLM budget
             # shifts to realism / classifier in Phase 3 where the LLM adds
             # net signal rather than parroting the function body.
+            # When ``lite_with_contracts`` is True (default), the spec is
+            # further enriched with deterministic universal contracts
+            # derived from parameter names (paired-pointer ordering, …) —
+            # still no LLM, but enough to suppress the dominant
+            # caller-contract-slip FP class on userland libraries.
             if bool(getattr(self.config, "lite_mode", False)):
-                return fn_name, _permissive_spec(fn_name)
+                with_contracts = bool(getattr(self.config, "lite_with_contracts", True))
+                return fn_name, _permissive_spec(
+                    fn_name, func_info=func_info, with_contracts=with_contracts,
+                )
 
             struct_context = self._extract_struct_context(func_info, parsed)
 

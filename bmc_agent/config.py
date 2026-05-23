@@ -354,6 +354,19 @@ class Config:
     # spec_gen prompts. Off by default to preserve existing behaviour.
     lite_mode: bool = False
 
+    # Universal contracts for lite-mode: when True (default), the
+    # permissive spec emitted in lite-mode is enriched with
+    # deterministic preconditions derived from parameter names alone
+    # (no LLM). Today's contracts emit paired-pointer ordering
+    # (``start <= end``, ``src <= dst``, etc.) for the canonical name
+    # pairs in ``bmc_agent.universal_contracts._PAIRED_POINTER_NAMES``.
+    # The existing ``_detect_paired_pointers`` in harness_generator
+    # picks up these clauses and allocates a single shared backing
+    # buffer per pair, eliminating the dominant caller-contract-slip
+    # FP class on userland libraries (libarchive ismode/isint/etc.).
+    # Disable to reproduce the pure pre=true behaviour for ablation.
+    lite_with_contracts: bool = True
+
     # ------------------------------------------------------------------
     # Autonomous mode — session-mutable strip sets (Phase 1).
     # ------------------------------------------------------------------
