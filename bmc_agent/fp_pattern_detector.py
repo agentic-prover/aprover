@@ -58,6 +58,16 @@ class FpPattern(str, Enum):
     detection: combination of integer-overflow CEx + system-entry
     caller chain through a known length-validating wrapper."""
 
+    UNRELATED_PAIRED_POINTERS = "unrelated_paired_pointers"
+    """CEx has two parameters whose names suggest a pointer pair
+    (``start``/``end``, ``begin``/``end``, ``first``/``last``,
+    ``src``/``dst``, ``head``/``tail``) but their backing arrays in
+    the witness are independent allocations. Every real caller passes
+    pointers into the SAME buffer (caller-contract), so the unrelated-
+    backing CEx is unreachable from any public API. Observed on
+    libarchive's ``ismode(const char *start, const char *end, …)``
+    family in the 2026-05-23 archive_acl calibration."""
+
     NO_PATTERN = "no_pattern"
     """No known FP pattern matched — finding looks like a candidate
     real bug or an unclassified FP class."""
@@ -215,12 +225,67 @@ def detect_pattern(
                 cited_functions=call_chain,
             )
 
+    # Pattern 3: unrelated paired pointers.
+    paired = _detect_paired_pointers(cex)
+    if paired:
+        return FpEvidence(
+            pattern=FpPattern.UNRELATED_PAIRED_POINTERS,
+            confidence=0.7,
+            cited_fields=paired,
+            cited_functions=call_chain,
+        )
+
     return FpEvidence(
         pattern=FpPattern.NO_PATTERN,
         confidence=0.0,
         cited_fields=[],
         cited_functions=call_chain,
     )
+
+
+# Pairs of parameter names that the harness almost certainly mis-models
+# when given independent nondet backings. Each entry: (a, b) such that
+# real callers always pass pointers into the SAME buffer.
+_PAIRED_POINTER_NAMES: frozenset[tuple[str, str]] = frozenset({
+    ("start", "end"),
+    ("begin", "end"),
+    ("first", "last"),
+    ("src", "dst"),
+    ("source", "destination"),
+    ("head", "tail"),
+    ("low", "high"),
+    ("from", "to"),
+})
+
+
+def _detect_paired_pointers(cex: dict) -> list[str]:
+    """Look for canonical paired-pointer parameter names where the
+    witness state shows independent backings (``_<a>_buf`` and
+    ``_<b>_buf`` distinct arrays). Returns the field-name list if a
+    pair is detected, empty list otherwise.
+
+    Pattern fingerprint in CBMC's variable_assignments:
+      ``start = _start_buf!0@1``
+      ``end   = _end_buf!0@1``  (different backing → unrelated)
+
+    Real callers would have:
+      ``start = _shared_buf!0@1``
+      ``end   = _shared_buf!N@1`` (offset into same backing).
+    """
+    if not cex:
+        return []
+    for a, b in _PAIRED_POINTER_NAMES:
+        if a in cex and b in cex:
+            va = str(cex[a])
+            vb = str(cex[b])
+            if "!" not in va or "!" not in vb:
+                continue
+            # Pointer base = everything before the ``!``.
+            base_a = va.split("!", 1)[0].strip()
+            base_b = vb.split("!", 1)[0].strip()
+            if base_a and base_b and base_a != base_b:
+                return [a, b]
+    return []
 
 
 def detect_pattern_from_paths(

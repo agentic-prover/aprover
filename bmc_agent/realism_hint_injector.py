@@ -73,6 +73,19 @@ _HINT_TEMPLATES: dict[FpPattern, str] = {
         "caller will have populated at least the type-tag / sentinel "
         "fields. Lean UNCERTAIN before voting REALISTIC."
     ),
+    FpPattern.UNRELATED_PAIRED_POINTERS: (
+        "Pattern observed in {count} prior finding(s) this sweep: the "
+        "function takes a canonical paired-pointer signature ("
+        "{fields} — typical pairs: start/end, begin/end, src/dst, "
+        "first/last). The counterexample witness places the two "
+        "pointers in UNRELATED backing buffers, but every real caller "
+        "passes pointers into the SAME buffer (start ≤ end, both "
+        "indexing one allocation). When the violation depends on the "
+        "two pointers being from different objects, it's a harness "
+        "artifact, not a reachable bug. Prefer UNREALISTIC unless the "
+        "caller-site analysis shows a path that genuinely passes "
+        "unrelated buffers (extremely rare in real C code)."
+    ),
 }
 
 

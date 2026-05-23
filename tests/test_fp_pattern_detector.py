@@ -106,6 +106,49 @@ def test_detect_uses_classification_fallback_when_bug_has_no_cex():
     assert ev.pattern == FpPattern.UNINIT_VTABLE
 
 
+def test_detect_unrelated_paired_pointers_start_end():
+    """Two pointer params named start/end pointing into different
+    backing buffers fire UNRELATED_PAIRED_POINTERS."""
+    ev = detect_pattern(_bug({
+        "start": "_start_buf!0@1",
+        "end": "_end_buf!0@1",
+        "_start_buf": "<array: 5 elements>",
+        "_end_buf": "<array: 5 elements>",
+    }))
+    assert ev.pattern == FpPattern.UNRELATED_PAIRED_POINTERS
+    assert "start" in ev.cited_fields
+    assert "end" in ev.cited_fields
+
+
+def test_detect_unrelated_paired_pointers_src_dst():
+    ev = detect_pattern(_bug({
+        "src": "_src_buf!0@1",
+        "dst": "_dst_buf!0@1",
+    }))
+    assert ev.pattern == FpPattern.UNRELATED_PAIRED_POINTERS
+
+
+def test_paired_pointers_same_backing_does_not_fire():
+    """When start/end point into the SAME backing (real-caller pattern),
+    no FP fires. CEx is plausibly real."""
+    ev = detect_pattern(_bug({
+        "start": "_shared_buf!0@1",
+        "end": "_shared_buf!4@1",
+        "len": "5",
+    }))
+    assert ev.pattern != FpPattern.UNRELATED_PAIRED_POINTERS
+
+
+def test_paired_pointers_only_one_present_does_not_fire():
+    """``start`` alone (without ``end``/``last``/etc.) is just a normal
+    pointer param — no pair to mismatch."""
+    ev = detect_pattern(_bug({
+        "start": "_start_buf!0@1",
+        "len": "5",
+    }))
+    assert ev.pattern != FpPattern.UNRELATED_PAIRED_POINTERS
+
+
 def test_call_chain_propagates_to_evidence():
     ev = detect_pattern(_bug(
         {"compare_key": "((signed int (*)(...))NULL)"},
