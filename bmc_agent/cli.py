@@ -802,6 +802,24 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
             if not config.enable_realism_thinking:
                 config.enable_realism_thinking = True
                 next_knobs.append("enable_realism_thinking=True")
+
+        # Phase 4b: scan the round's bug-report tree for recurring FP
+        # patterns and inject a constrained skepticism hint into the
+        # next round's realism prompt. No-op when no pattern crosses
+        # the threshold (the realism prompt runs unchanged).
+        from bmc_agent.realism_hint_injector import collect_hints, persist_hints
+        driver_root = _Path(config.artifact_dir) / args.driver
+        if driver_root.exists():
+            hint_bundle = collect_hints(driver_root)
+            persist_hints(hint_bundle, autonomous_dir, round_idx)
+            if hint_bundle.text:
+                config.realism_extra_skepticism = hint_bundle.text
+                patterns = ", ".join(
+                    f"{k}={v}" for k, v in hint_bundle.patterns_observed.items()
+                    if v
+                )
+                next_knobs.append(f"realism_extra_skepticism (patterns: {patterns})")
+
         if next_knobs:
             print(f"  Adjusting for round {round_idx + 2}: {', '.join(next_knobs)}")
     else:
