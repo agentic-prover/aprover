@@ -1738,9 +1738,19 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
                     "Realism check: parsed verdict %s from prose for '%s' "
                     "(JSON failed)", recovered.value, func_name,
                 )
+                # Set llm_confidence="medium" so the bug_reporter
+                # honours the downgrade. The default (empty string)
+                # would gate out the downgrade in the
+                # ``llm_confidence in ("high", "medium")`` check,
+                # silently preserving the finding as a confirmed bug
+                # even though the LLM clearly returned UNREALISTIC.
+                # Observed on cpio.c 2026-05-23 re-sweep: 5 UNREALISTIC
+                # verdicts parsed from prose, ALL preserved as
+                # confirmed bugs because of this gating issue.
                 return RealismCheckResult(
                     verdict=recovered,
                     reasoning=raw.strip()[:2000],
+                    llm_confidence="medium",
                 )
             logger.warning("Realism check: failed to parse JSON or recover verdict for '%s'", func_name)
             return RealismCheckResult(
