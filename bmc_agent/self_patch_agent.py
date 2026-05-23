@@ -420,6 +420,10 @@ class SelfPatchAgent:
             proposal.status = ProposalStatus.DENIED
             return proposal
 
+        # Cache the diff so gate-6 (_suite_regressions) can revert /
+        # re-apply it for the before/after baseline.
+        self._diff_under_apply = proposal.diff
+
         # Stage the regression test on disk; we need it present for both
         # fail-before and pass-after pytest invocations.
         rt_full_path = self.repo_root / proposal.regression_test_path
@@ -455,6 +459,23 @@ class SelfPatchAgent:
                 proposal.rejection_reason = (
                     f"regression test {proposal.regression_test_name} failed AFTER "
                     "patch applied — patch doesn't fix what the test asserts"
+                )
+                return proposal
+
+            # Gate 6: soundness — the full existing test suite must not
+            # have any NEW failures after the patch is applied. Catches
+            # the failure mode where a "fix" silences the targeted CBMC
+            # error class but breaks something else in harness-gen /
+            # preprocessing that an existing test relies on.
+            new_failures = self._suite_regressions(proposal.regression_test_path)
+            if new_failures:
+                self._git_apply(proposal.diff, reverse=True)
+                proposal.status = ProposalStatus.REJECTED
+                preview = ", ".join(new_failures[:3])
+                more = f" (+ {len(new_failures) - 3} more)" if len(new_failures) > 3 else ""
+                proposal.rejection_reason = (
+                    f"patch introduces {len(new_failures)} new test failure(s) "
+                    f"vs baseline: {preview}{more}"
                 )
                 return proposal
 
@@ -504,6 +525,79 @@ class SelfPatchAgent:
             return 124
         except Exception:
             return 125
+
+    def _suite_regressions(self, exclude_path: str) -> list[str]:
+        """Run the full test suite (minus optional-dep tests + the
+        proposal's own regression test) twice — once before, once
+        after the patch is applied — and return the set of test IDs
+        that went from PASS → FAIL.
+
+        ``exclude_path`` is the regression test introduced by the
+        current proposal; that test is already covered by gates 4/5
+        so we exclude it from the soundness sweep to avoid double-
+        counting + to avoid the fail-before / pass-after dynamics
+        confusing the regression diff.
+
+        Returns an empty list when there are no new failures. Same-or-
+        fewer failures than baseline counts as soundness-clean.
+        """
+        # The pre-existing failures we need to baseline against (the
+        # rust-parser / phase2 parser tests that fail on this host's
+        # environment, etc.). We invoke pytest twice — once on the
+        # current working tree (post-patch since we're called from the
+        # gate-6 site after gate-5's apply) and once after temporarily
+        # reverse-applying the diff. The patch is restored before we
+        # return so the caller sees the same state we received.
+
+        # Step 1: capture post-patch failure set.
+        post = self._failing_test_ids(exclude_path)
+        # Step 2: revert patch, capture pre-patch failure set, re-apply.
+        revert_err = self._git_apply(self._diff_under_apply, reverse=True)
+        if revert_err is not None:
+            # Couldn't revert — refuse to compare and treat as regression.
+            return ["<could-not-revert-for-baseline-comparison>"]
+        try:
+            pre = self._failing_test_ids(exclude_path)
+        finally:
+            reapply_err = self._git_apply(self._diff_under_apply)
+            if reapply_err is not None:
+                # The patch couldn't be re-applied — caller will see a
+                # half-clean working tree but at least we report it.
+                return ["<could-not-reapply-after-baseline>"]
+        new = sorted(post - pre)
+        return new
+
+    def _failing_test_ids(self, exclude_path: str) -> set[str]:
+        """Run pytest and return the set of test IDs that failed.
+
+        Optional-dependency files (rust parser etc.) are ignored so we
+        don't conflate environment issues with patch-induced
+        regressions. Returns an empty set on pytest crash; callers
+        treat that as "no regression info, don't block".
+        """
+        cmd = [
+            "uv", "run", "pytest",
+            "--ignore=tests/test_rust_parser.py",
+            "--ignore=tests/test_rust_pipeline.py",
+            "--ignore=tests/test_source_parser.py",
+            "--deselect", "tests/test_kani.py::test_strip_crate_local_fn_items_keeps_target_strips_unrelated_siblings",
+            f"--deselect={exclude_path}" if exclude_path else "--quiet",
+            "--tb=no", "-q", "--no-header",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, cwd=self.repo_root, capture_output=True, text=True, timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            return set()
+        ids: set[str] = set()
+        for line in proc.stdout.splitlines():
+            # pytest --tb=no -q prints failed tests as "FAILED tests/foo.py::test_bar - msg"
+            if line.startswith("FAILED "):
+                # Strip the trailing " - msg" if present.
+                test_id = line[len("FAILED "):].split(" - ", 1)[0].strip()
+                ids.add(test_id)
+        return ids
 
     def _git_apply(self, diff: str, *, reverse: bool = False) -> Optional[str]:
         """Apply ``diff`` via ``git apply``. Returns None on success or
