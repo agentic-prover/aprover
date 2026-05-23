@@ -594,6 +594,19 @@ def _generate_stub(
         builtin_contract = _builtin_stub_return_contract(
             callee_name, ret_type, params
         )
+        # Universal stub postconditions — additional OSS-primitive
+        # contracts not covered by the libc/kernel-allocator table
+        # above. These are POSTCONDITIONS only (model what real callees
+        # return); see bmc_agent/universal_stub_contracts.py for the
+        # soundness rule.
+        if not builtin_contract:
+            try:
+                from bmc_agent.universal_stub_contracts import derive_stub_contract
+                builtin_contract = derive_stub_contract(
+                    callee_name, ret_type, params,
+                )
+            except Exception:
+                builtin_contract = []
         # Kernel-API return-convention contracts. Kernel functions like
         # ``usb_control_msg``, ``usb_submit_urb``, etc. return ``0`` on
         # success or a negative ERRNO (-4095 … -1) on failure. CBMC's
