@@ -1,7 +1,7 @@
 # bmc-agent-sec confirmed finding: `next_field`
 
 **Status**: realism-confirmed (any CEx with `realism.verdict == realistic AND confidence != unlikely` makes the function confirmed).
-**Generated**: 2026-05-25T06:03:11.226503+00:00
+**Generated**: 2026-05-25T06:08:30.437829+00:00
 
 ## Target
 
@@ -17,7 +17,7 @@
 |---|---|
 | CBMC | counterexample found at property above |
 | Realism (LLM auditor, primary call) | **realistic** / confidence `high` |
-| Dynamic harness (GCC + signal handlers) | **inconclusive**, signal=`None` |
+| Dynamic harness (GCC + signal handlers) | **no_record**, signal=`none` |
 | Final tier | `confirmed_bmc` |
 
 ## Realism reasoning
@@ -119,7 +119,7 @@ To re-run the full sweep end-to-end (re-derives this finding from scratch):
 
 ## Honest caveats (read before upstream reporting)
 
-- **Dynamic outcome was `inconclusive`.** WEAK evidence: the dynamic harness did NOT reproduce the crash with the concrete CBMC witness. The realism LLM's vote is the only evidence.
+- **Dynamic outcome was `no_record`.** WEAK evidence: the dynamic harness did NOT reproduce the crash with the concrete CBMC witness. The realism LLM's vote is the only evidence.
 - The realism LLM's attacker scenario may hypothesize an upstream condition (e.g. "some bug elsewhere creates the dangling pointer state"). **Independent code-level verification of that condition is required before reporting upstream.**
 - Realism nondeterminism: the same CEx can flip between REALISTIC and UNREALISTIC across runs. Multiple per-CEx records in `bug_reports/` may show different verdicts; this report uses the strongest realistic record by mtime.
 - The harness is auto-generated and uses CBMC's nondeterministic-input model. Reading `harness.c` shows exactly what input states CBMC was free to explore — verify those states are actually reachable from the real public API before declaring a vulnerability.
