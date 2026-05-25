@@ -1,7 +1,7 @@
 # bmc-agent-sec confirmed finding: `next_field_w`
 
 **Status**: realism-confirmed (any CEx with `realism.verdict == realistic AND confidence != unlikely` makes the function confirmed).
-**Generated**: 2026-05-25T06:24:44.921126+00:00
+**Generated**: 2026-05-25T06:32:54.883103+00:00
 
 ## Target
 

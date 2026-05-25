@@ -1,7 +1,7 @@
 # bmc-agent-sec confirmed finding: `archive_acl_to_text_l`
 
 **Status**: realism-confirmed (any CEx with `realism.verdict == realistic AND confidence != unlikely` makes the function confirmed).
-**Generated**: 2026-05-25T06:24:44.896153+00:00
+**Generated**: 2026-05-25T06:32:54.857708+00:00
 
 ## Target
 

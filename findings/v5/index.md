@@ -1,10 +1,10 @@
 # bmc-agent-sec confirmed findings
 
-**Generated**: 2026-05-25T06:24:45.827147+00:00  
+**Generated**: 2026-05-25T06:32:55.824678+00:00  
 **Sweep output**: `/tmp/libarchive_auto_v5_1779685630`  
 **Driver**: `v5`
 
-## Summary (9 realism-endorsed function(s))
+## Summary (10 realism-endorsed function(s))
 
 A function is counted as confirmed if AT LEAST ONE of its CBMC counterexamples passed the realism check (verdict=realistic, confidence!=unlikely). Realism nondeterminism is real: see each report's per-CEx history for the audit trail.
 
@@ -16,9 +16,10 @@ A function is counted as confirmed if AT LEAST ONE of its CBMC counterexamples p
 | 4 | [`archive_acl_text_len`](archive_acl_text_len.md) | `archive_acl.c` | `archive_acl_text_len.overflow.12` | `confirmed_system_entry` | realistic / high | no_record |
 | 5 | [`archive_acl_to_text_l`](archive_acl_to_text_l.md) | `archive_acl.c` | `archive_acl_text_len.overflow.12` | `confirmed_system_entry` | realistic / high | no_record |
 | 6 | [`archive_acl_to_text_w`](archive_acl_to_text_w.md) | `archive_acl.c` | `archive_acl_to_text_w.pointer_dereference.77` | `confirmed_system_entry` | realistic / high | no_record |
-| 7 | [`archive_le32enc`](archive_le32enc.md) | `archive_read_support_format_7zip.c` | `archive_le32enc.pointer_dereference.1` | `confirmed_dynamic` | realistic / high | confirmed |
-| 8 | [`next_field`](next_field.md) | `archive_acl.c` | `next_field.pointer_arithmetic.11` | `confirmed_bmc` | realistic / high | no_record |
-| 9 | [`next_field_w`](next_field_w.md) | `archive_acl.c` | `next_field_w.pointer_arithmetic.11` | `confirmed_system_entry` | realistic / high | no_record |
+| 7 | [`archive_be32enc`](archive_be32enc.md) | `archive_read_support_format_7zip.c` | `archive_be32enc.pointer_dereference.1` | `confirmed_system_entry` | realistic / medium | inconclusive |
+| 8 | [`archive_le32enc`](archive_le32enc.md) | `archive_read_support_format_7zip.c` | `archive_le32enc.pointer_dereference.1` | `confirmed_dynamic` | realistic / high | confirmed |
+| 9 | [`next_field`](next_field.md) | `archive_acl.c` | `next_field.pointer_arithmetic.11` | `confirmed_bmc` | realistic / high | no_record |
+| 10 | [`next_field_w`](next_field_w.md) | `archive_acl.c` | `next_field_w.pointer_arithmetic.11` | `confirmed_system_entry` | realistic / high | no_record |
 
 ## Evidence breakdown
 
@@ -28,7 +29,7 @@ How strong is the runtime evidence behind each finding?
 |---|---|---|
 | `confirmed` | 1 | GCC+ASAN harness actually crashed at runtime — PoC-grade evidence |
 | `not_triggered` | 1 | Harness compiled and ran clean; the specific CBMC witness didn't reproduce. Bug may still be real with different inputs. |
-| `inconclusive` | 0 | Harness compile failed (e.g. private headers); no runtime signal either way. |
+| `inconclusive` | 1 | Harness compile failed (e.g. private headers); no runtime signal either way. |
 | `no_record` / `skipped` | 7 | Dynamic didn't run (disabled, or both static checks errored). |
 
 ## Per-finding scenarios
@@ -57,15 +58,19 @@ How strong is the runtime evidence behind each finding?
 
 > An attacker creates a malicious archive file (tar, zip, etc.) containing crafted ACL metadata. When libarchive parses this archive and calls `archive_acl_to_text_w()` to convert the ACL to text format
 
-**7. [`archive_le32enc`](archive_le32enc.md)** — `archive_read_support_format_7zip.c`
+**7. [`archive_be32enc`](archive_be32enc.md)** — `archive_read_support_format_7zip.c`
+
+> An attacker crafts a malformed 7-zip archive with manipulated metadata that causes the archive reader to attempt encoding data into an uninitialized or failed-allocation buffer pointer. When the reade
+
+**8. [`archive_le32enc`](archive_le32enc.md)** — `archive_read_support_format_7zip.c`
 
 > An attacker crafts a malformed 7-Zip archive that causes the libarchive parser to attempt encoding metadata (e.g., timestamps, file sizes) into a buffer whose pointer has been corrupted or improperly
 
-**8. [`next_field`](next_field.md)** — `archive_acl.c`
+**9. [`next_field`](next_field.md)** — `archive_acl.c`
 
 > An attacker crafts a malicious archive file with an ACL text field containing carefully placed separator characters (tabs, newlines, colons, commas) such that the cumulative pointer advances in next_f
 
-**9. [`next_field_w`](next_field_w.md)** — `archive_acl.c`
+**10. [`next_field_w`](next_field_w.md)** — `archive_acl.c`
 
 > An attacker crafts a malicious archive file (tar, zip, etc.) with an ACL entry containing a wide-character string like 'user:X:\b\b:rwx' where \b represents backspace characters (Unicode 0x08). When l
 
