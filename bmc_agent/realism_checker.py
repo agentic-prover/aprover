@@ -21,12 +21,17 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from bmc_agent.logger import get_logger
-from bmc_agent.prompts import REALISM_CHECK_PROMPT, SPEC_SYSTEM_PROMPT, THREAT_MODEL_CONTEXT
+from bmc_agent.prompts import (
+    ADJACENT_BUG_PROMPT,
+    REALISM_CHECK_PROMPT,
+    SPEC_SYSTEM_PROMPT,
+    THREAT_MODEL_CONTEXT,
+)
 
 if TYPE_CHECKING:
     from bmc_agent.cbmc import Counterexample
@@ -56,6 +61,7 @@ class RealismCheckResult:
     reasoning: str
     key_concern: str = ""      # populated when verdict is UNREALISTIC or UNCERTAIN
     llm_confidence: str = ""   # "high" | "medium" | "low" from the LLM
+    adjacent_bugs: list = field(default_factory=list)  # other bugs spotted nearby
 
     def to_dict(self) -> dict:
         return {
@@ -63,6 +69,7 @@ class RealismCheckResult:
             "reasoning": self.reasoning,
             "key_concern": self.key_concern,
             "llm_confidence": self.llm_confidence,
+            "adjacent_bugs": list(self.adjacent_bugs or []),
         }
 
 
@@ -107,6 +114,7 @@ class RealismChecker:
         parsed_file: "ParsedCFile",
         all_funcs: "dict[str, FunctionInfo]",
         spec: "Spec",
+        cbmc_harness_path: str = "",
     ) -> RealismCheckResult:
         """
         Audit a REAL_BUG finding for realistic exploitability.
@@ -367,6 +375,7 @@ class RealismChecker:
             validation_result=validation_result,
             parsed_file=parsed_file,
             all_funcs=all_funcs,
+            cbmc_harness_path=cbmc_harness_path,
         )
 
         try:
@@ -385,14 +394,151 @@ class RealismChecker:
             sys_prompt = (
                 f"{extra}\n\n---\n\n{SPEC_SYSTEM_PROMPT}" if extra else SPEC_SYSTEM_PROMPT
             )
+
+            # Adjacent-bug hint from a previous round, if any. The hint
+            # text is the LLM's prior attacker_scenario describing a
+            # suspected defect in THIS function. Prepend it to the
+            # primary prompt so this round's verdict can verify or
+            # refute the hypothesis directly against CBMC's CEx.
+            hints = getattr(self.config, "function_hints", {}) or {}
+            hint = (hints.get(func.name) or "").strip()
+            user_prompt = prompt
+            if hint:
+                user_prompt = (
+                    "PRIOR-ROUND HYPOTHESIS FROM ADJACENT-BUG DISCOVERY\n"
+                    "===================================================\n"
+                    f"{hint}\n\n"
+                    "This function is being re-verified because a previous\n"
+                    "round flagged it as potentially exploitable. CBMC has\n"
+                    "now produced a counterexample (see below). Treat the\n"
+                    "hypothesis above as ONE possibility — your job is still\n"
+                    "to decide if CBMC's counterexample is realistic. If the\n"
+                    "CEx matches the hypothesis, that's strong evidence for\n"
+                    "REALISTIC. If CBMC's CEx is a different (artifact) path\n"
+                    "but the hypothesis itself is exploitable, still vote\n"
+                    "REALISTIC and explain the gap in your reasoning.\n\n"
+                    "===================================================\n\n"
+                    + prompt
+                )
+
             raw = self.llm.complete(
                 sys_prompt,
-                prompt,
+                user_prompt,
                 max_tokens=4096 + (4000 if use_thinking else 0),
                 thinking=use_thinking,
                 thinking_budget=4000,
+                role="realism",
             )
-            return _parse_result(raw, func.name)
+            pass1 = _parse_result(raw, func.name)
+
+            # PASS 2 (disabled by default after the prompt simplification):
+            # the new Pass-1 prompt already gives the LLM full context plus
+            # a clear attacker-exploitability definition, so a second
+            # rule-based pass adds bias more than recall. Set
+            # enable_realism_pass2=True only for forensic debugging.
+            if (
+                pass1.verdict == RealismVerdict.UNREALISTIC
+                and getattr(self.config, "enable_realism_pass2", False)
+            ):
+                pass2_prompt = _build_pass2_prompt(
+                    func=func, counterexample=counterexample,
+                    parsed_file=parsed_file, pass1_result=pass1,
+                )
+                try:
+                    raw2 = self.llm.complete(
+                        sys_prompt, pass2_prompt,
+                        max_tokens=4096 + (4000 if use_thinking else 0),
+                        thinking=use_thinking,
+                        thinking_budget=4000,
+                        role="realism",
+                    )
+                    pass2 = _parse_result(raw2, func.name)
+                    if pass2.verdict != RealismVerdict.UNREALISTIC:
+                        logger.info(
+                            "Realism Pass 2 OVERRIDE for '%s': UNREALISTIC → %s",
+                            func.name, pass2.verdict.value,
+                        )
+                        pass2.reasoning = (
+                            "[pass2-override] " + (pass2.reasoning or "") +
+                            "\n\nPass 1 reasoning: " + (pass1.reasoning or "")[:500]
+                        )
+                        return pass2
+                    logger.info("Realism Pass 2 confirms UNREALISTIC for '%s'", func.name)
+                except LLMError as exc2:
+                    logger.warning(
+                        "Realism Pass 2 LLM failed for '%s': %s — keeping Pass 1",
+                        func.name, exc2,
+                    )
+
+            # ADJACENT-BUG DISCOVERY (independent second LLM call).
+            # Fires ONLY when the primary verdict rejected the CBMC
+            # counterexample (UNREALISTIC). The rationale: when the bug
+            # is already confirmed REALISTIC we already have a finding
+            # to act on — there's no need to spend a second LLM call
+            # hunting for adjacent ones. When the CEx is rejected,
+            # though, the function and its surroundings may still
+            # contain a different exploitable defect that CBMC's witness
+            # didn't capture; that's exactly the case worth probing.
+            # UNCERTAIN also skips the second call (cheap default).
+            if (
+                getattr(self.config, "enable_adjacent_bug_discovery", True)
+                and pass1.verdict == RealismVerdict.UNREALISTIC
+            ):
+                try:
+                    adj_prompt = self._build_adjacent_bug_prompt(
+                        func=func,
+                        counterexample=counterexample,
+                        validation_result=validation_result,
+                        parsed_file=parsed_file,
+                        all_funcs=all_funcs,
+                    )
+                    raw_adj = self.llm.complete(
+                        sys_prompt, adj_prompt,
+                        max_tokens=4096,
+                        thinking=False,
+                        role="realism",
+                    )
+                    adj_list = _parse_adjacent_bugs(raw_adj, func.name)
+                    if adj_list:
+                        logger.info(
+                            "Adjacent-bug pass found %d candidate(s) for '%s'",
+                            len(adj_list), func.name,
+                        )
+                        pass1.adjacent_bugs = adj_list
+                except LLMError as exc_adj:
+                    logger.warning(
+                        "Adjacent-bug LLM call failed for '%s': %s — skipping",
+                        func.name, exc_adj,
+                    )
+
+            # (A) ADAPTIVE HARNESS RETRY — track repeat rejections per function.
+            # When the LLM rejects this function's CBMC findings for the same
+            # reason ≥2 times in the current sweep, set a flag the harness
+            # generator reads next round so it widens cast-chain init for
+            # that function (more typed backings, deeper struct expansion).
+            if pass1.verdict == RealismVerdict.UNREALISTIC:
+                cls_text = (pass1.key_concern or pass1.reasoning or "")[:160].strip().lower()
+                if cls_text:
+                    history = getattr(self.config, "rejection_history", None)
+                    if history is None:
+                        history = {}
+                        self.config.rejection_history = history
+                    fn_hist = history.setdefault(func.name, {})
+                    fn_hist[cls_text] = fn_hist.get(cls_text, 0) + 1
+                    if fn_hist[cls_text] >= 2:
+                        widen = getattr(self.config, "harness_widen_targets", None)
+                        if widen is None:
+                            widen = set()
+                            self.config.harness_widen_targets = widen
+                        if func.name not in widen:
+                            widen.add(func.name)
+                            logger.info(
+                                "(A) Repeat-rejection on '%s' — flagging for "
+                                "wider cast-chain init in next harness pass",
+                                func.name,
+                            )
+
+            return pass1
         except LLMError as exc:
             logger.warning("Realism check LLM call failed for '%s': %s", func.name, exc)
             return RealismCheckResult(
@@ -411,6 +557,7 @@ class RealismChecker:
         validation_result: "ValidationResult",
         parsed_file: "ParsedCFile",
         all_funcs: "dict[str, FunctionInfo]",
+        cbmc_harness_path: str = "",
     ) -> str:
         sig = _format_signature(func)
         body = func.body or "(body not available)"
@@ -421,7 +568,7 @@ class RealismChecker:
             validation_result.caller_path, all_funcs, parsed_file
         )
         dynamic_result = _format_dynamic_result(validation_result)
-        harness_code = _format_harness_code(validation_result)
+        harness_code = _format_harness_code(validation_result, cbmc_harness_path)
 
         call_site_analysis = _format_call_site_analysis(
             func.name, validation_result.caller_path, all_funcs, parsed_file
@@ -470,6 +617,58 @@ class RealismChecker:
             global_context=global_context,
             source_file_context=source_file_context,
             active_stub_contracts=active_stub_contracts,
+        )
+
+    def _build_adjacent_bug_prompt(
+        self,
+        func: "FunctionInfo",
+        counterexample: "Counterexample",
+        validation_result: "ValidationResult",
+        parsed_file: "ParsedCFile",
+        all_funcs: "dict[str, FunctionInfo]",
+    ) -> str:
+        """Build the prompt for the second (independent) adjacent-bug LLM
+        call. Re-uses the same context blob the primary realism prompt
+        does, but asks a different question and returns a different JSON
+        shape. Kept separate so the primary verdict's reasoning budget
+        isn't diluted and the LLM isn't primed to suspect the primary
+        CBMC finding."""
+        sig = _format_signature(func)
+        body = func.body or "(body not available)"
+        violated = _format_failing_property_with_location(counterexample)
+        cex_state = _format_cex_state(counterexample)
+        call_chain_str = " → ".join(validation_result.caller_path) if validation_result.caller_path else func.name
+        caller_context = _format_caller_context(
+            validation_result.caller_path, all_funcs, parsed_file
+        )
+        call_site_analysis = _format_call_site_analysis(
+            func.name, validation_result.caller_path, all_funcs, parsed_file
+        )
+        failure_line = None
+        loc = getattr(counterexample, "failure_location", None) or {}
+        if isinstance(loc, dict):
+            try:
+                failure_line = int(loc.get("line", "")) if loc.get("line") else None
+            except (TypeError, ValueError):
+                failure_line = None
+        source_file_context = _format_source_file_context(parsed_file, mark_line=failure_line)
+        try:
+            from bmc_agent.universal_stub_contracts import format_active_contracts
+            active_stub_contracts = format_active_contracts(getattr(func, "callees", set())) or "(no registered contracts apply to this function's callees)"
+        except Exception:
+            active_stub_contracts = "(stub-contract list unavailable)"
+
+        return ADJACENT_BUG_PROMPT.format(
+            function_name=func.name,
+            function_signature=sig,
+            function_body=body[:8000],
+            violated_property=violated,
+            counterexample_state=cex_state,
+            call_chain=call_chain_str,
+            caller_context=caller_context,
+            call_site_analysis=call_site_analysis,
+            active_stub_contracts=active_stub_contracts,
+            source_file_context=source_file_context,
         )
 
 
@@ -620,6 +819,173 @@ def _format_call_site_analysis(
             "callable from external code. Inputs are unconstrained."
         )
     return "\n".join(parts) if parts else "(call-site analysis not available)"
+
+
+def _build_pass2_prompt(
+    func: "FunctionInfo",
+    counterexample: "Counterexample",
+    parsed_file: "ParsedCFile",
+    pass1_result: "RealismCheckResult",
+) -> str:
+    """Pass 2 realism prompt: forces exhaustive caller-enumeration.
+
+    Pass 1 rejected this finding as UNREALISTIC. The dominant Pass-1
+    failure mode is the existential-to-universal leap: the LLM finds
+    ONE caller path that enforces the relevant invariant and concludes
+    ALL paths do, without enumerating. Pass 2 forces explicit
+    enumeration of every caller and every path before accepting
+    UNREALISTIC.
+
+    Returns the user-side prompt (system prompt is unchanged).
+    """
+    pass1_reasoning = (pass1_result.reasoning or "")[:2000]
+    pass1_key_concern = (pass1_result.key_concern or "")[:600]
+    fn_name = func.name
+    # Try to enumerate callers from the parsed file's call graph
+    callers_in_file: list[str] = []
+    cg = getattr(parsed_file, "call_graph", {}) or {}
+    for caller_name, callees in cg.items():
+        if fn_name in callees:
+            callers_in_file.append(caller_name)
+    callers_str = (
+        ", ".join(sorted(set(callers_in_file))) if callers_in_file
+        else "(no direct callers found in this file — may be a vtable callback or external entry)"
+    )
+    # The same source file context is appended later; here we focus
+    # on the directive.
+    src = getattr(parsed_file, "preprocessed_source", None)
+    if not src:
+        try:
+            with open(getattr(parsed_file, "path", ""), "r", encoding="utf-8", errors="replace") as f:
+                src = f.read()
+        except Exception:
+            src = "(source unavailable)"
+    src_excerpt = src[:120000] if src else "(source unavailable)"
+
+    return f"""\
+PASS 2: EXHAUSTIVE CALLER-ENUMERATION CHECK
+
+Pass 1 of realism analysis rejected this finding as UNREALISTIC, with
+reasoning:
+
+  Pass-1 verdict:  {pass1_result.verdict.value}
+  Pass-1 key concern:  {pass1_key_concern}
+  Pass-1 reasoning excerpt:  {pass1_reasoning}
+
+A dominant Pass-1 failure mode is the EXISTENTIAL-TO-UNIVERSAL LEAP:
+Pass 1 finds ONE call site or one allocation path that enforces the
+relevant invariant, and concludes ALL paths do — without enumerating
+the others. Real seed bugs almost always exist because some specific
+path violates an invariant Pass 1 assumed was universal.
+
+YOUR TASK: rigorously verify Pass 1's UNREALISTIC verdict by EXPLICIT
+ENUMERATION. If you find ANY caller path that can produce the witness
+state, the verdict should be REALISTIC (or UNCERTAIN if uncertain).
+
+FUNCTION UNDER TEST: {fn_name}
+
+VIOLATED PROPERTY: {counterexample.failing_property}
+
+COUNTEREXAMPLE STATE (key witness assignments):
+{chr(10).join(f"  {k} = {v}" for k, v in list((counterexample.variable_assignments or {}).items())[:30])}
+
+DIRECT CALLERS in this file (from the parsed call graph):
+  {callers_str}
+
+FULL SOURCE FILE CONTEXT (for caller-path tracing):
+```c
+{src_excerpt}
+```
+
+ENUMERATION PROCEDURE (mandatory):
+
+Step 1. Find EVERY caller of `{fn_name}` in the source file above.
+        (Don't trust the call-graph extract above — it may be
+        incomplete. Search the source for all call sites.)
+
+Step 2. For EACH caller, identify the call sites within the caller's
+        body where `{fn_name}` is invoked, and the state of the
+        program at those call sites.
+
+Step 3. For each call site, ask: "Could the witness state
+        (specifically the values in COUNTEREXAMPLE STATE above) be
+        produced by THIS caller's execution before THIS call?" Pay
+        special attention to:
+        - SKIP / CANCEL / SHORT-CIRCUIT paths in the caller
+        - ERROR-RECOVERY paths where the caller didn't run the
+          "normal" initialization
+        - REPEATED-CALL / REINIT patterns where the function was
+          called once already
+        - Function-pointer / callback paths from outside this file
+
+Step 4. ENUMERATE PATHOLOGICAL-BUT-LEGAL PUBLIC-API USAGE SEQUENCES.
+        Many real bugs arise NOT from a single in-file caller path
+        but from how the public API can be (mis)used by external
+        code. For functions reachable via the public API (directly
+        OR through vtable dispatch / framework callbacks), ask:
+
+        - DOUBLE-INIT / DOUBLE-REGISTER: what if the public-API
+          entry that ultimately invokes `{fn_name}` is called more
+          than once? Does state from the first call persist into
+          the second? (Generic pattern: a "register" or "init"
+          public API documented as "call once" doesn't enforce
+          single-call. Second invocation can dispatch a cleanup
+          callback on stale or already-freed state, producing a
+          crash. Many real bug fixes add re-entry safety.)
+        - CALL-AFTER-FREE: what if the public-API entry is called
+          AFTER another that freed resources? Is `{fn_name}` invoked
+          with state that's already been cleaned up?
+        - INTERLEAVED CALLS: what if the public API is called in
+          an order the docs don't explicitly forbid but the
+          implementation doesn't handle (e.g. read_data before
+          read_header, free before complete)?
+        - ZERO-INIT: what if the public-API entry's normal init
+          path was skipped (early-return on malformed input,
+          allocation failure, etc.) and `{fn_name}` is invoked
+          on partially-initialized state?
+        - ATTACKER-CONTROLLED-INPUT: if `{fn_name}` processes any
+          external input (file bytes, network data, user-supplied
+          buffer), what minimal malformed input produces the
+          witness state? Most parsers / decoders / handlers
+          process untrusted input, and the witness usually maps
+          to "what input triggers this?".
+
+        These usage patterns are LEGAL for the user to attempt
+        (the public API doesn't reject them with hard assertions)
+        but may produce the witness state. If ANY pathological
+        sequence produces the witness state, vote REALISTIC.
+        Do NOT assume "the framework guarantees X is only called
+        once" — frameworks are robust to whatever public-API calls
+        users actually make, and "only called once" is rarely an
+        enforced invariant.
+
+Step 5. If ANY caller path or pathological public-API sequence can
+        produce the witness state → vote REALISTIC. If you can't
+        decide for some paths → vote UNCERTAIN. ONLY vote
+        UNREALISTIC if you've enumerated every caller path AND
+        every pathological-but-legal usage sequence and confirmed
+        NONE produce the state.
+
+Step 6. Write your enumeration explicitly in the reasoning. For
+        each caller you considered, state "Caller X: path Y,
+        witness producible?  Yes/No/Uncertain — because Z."
+        For pathological sequences, state "Pattern P: sequence
+        is/isn't producible because Q."
+
+Pass 1's reasoning is presumed WRONG if it lacks this explicit
+enumeration. Only confirm UNREALISTIC if your enumeration agrees
+with Pass 1's conclusion.
+
+Respond with ONLY valid JSON (same schema as Pass 1):
+{{
+  "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
+  "reasoning": "<step-by-step enumeration: list each caller and the path-state analysis>",
+  "source_line_guard": "<see REQ-1 in Pass-1 prompt — same rule>",
+  "public_api_call_chain": "<see REQ-2 in Pass-1 prompt — same rule>",
+  "key_concern": "<what would happen to a real user if this is a real bug — or why all paths are safe if not>",
+  "confidence": "high" | "medium" | "low"
+}}
+"""
 
 
 def _format_signature(func: "FunctionInfo") -> str:
@@ -1568,29 +1934,77 @@ def _format_source_file_context(parsed_file: "ParsedCFile", mark_line: int | Non
 
 
 def _format_dynamic_result(vr: "ValidationResult") -> str:
+    """Format the dynamic-validation outcome for the realism prompt with
+    EXPLICIT framing so the LLM can't hallucinate a different result.
+    Each line is unambiguous and tells the LLM how to weight the signal.
+    """
     dyn = getattr(vr, "dynamic_result", None)
     if dyn is None:
-        return "not run"
+        return (
+            "NOT RUN. The GCC+ASAN dynamic harness did not execute for this "
+            "finding. Reason on static evidence only; do NOT assume any "
+            "runtime crash occurred."
+        )
     outcome = dyn.outcome.value if hasattr(dyn.outcome, "value") else str(dyn.outcome)
-    parts = [outcome]
-    if dyn.signal_name:
-        parts.append(f"signal={dyn.signal_name}")
-    if dyn.reasoning:
-        parts.append(dyn.reasoning[:200])
-    return "; ".join(parts)
+    sig = dyn.signal_name or "none"
+    reasoning = (dyn.reasoning or "")[:200]
+    if outcome == "confirmed":
+        return (
+            f"CONFIRMED (signal={sig}). The dynamic harness executed and "
+            f"CRASHED at runtime with the witness values. This is STRONG "
+            f"evidence the bug is real. Reasoning: {reasoning}"
+        )
+    if outcome == "not_triggered":
+        return (
+            f"NOT_TRIGGERED (no crash; signal={sig}). The dynamic harness "
+            f"executed to completion with the CBMC witness values and did "
+            f"NOT crash. The specific witness state did not reproduce a "
+            f"fault on real libc. This is evidence against the CBMC witness "
+            f"being a real bug — though a different attacker input may still "
+            f"trigger the same bug class. Do NOT claim the harness "
+            f"'confirmed' or 'aborted' or 'SIGABRT'd' — it ran clean. "
+            f"Reasoning: {reasoning}"
+        )
+    if outcome == "inconclusive":
+        return (
+            f"INCONCLUSIVE (compile or run failed; signal={sig}). The "
+            f"dynamic harness could not be executed (linker error, timeout, "
+            f"missing symbol). No runtime evidence either way. "
+            f"Reasoning: {reasoning}"
+        )
+    if outcome == "skipped":
+        return (
+            f"SKIPPED. Dynamic validation was disabled or not applicable. "
+            f"No runtime evidence. Reasoning: {reasoning}"
+        )
+    return f"{outcome.upper()} (signal={sig}). {reasoning}"
 
 
-def _format_harness_code(vr: "ValidationResult") -> str:
-    # system_entry_input is the LLM-generated reproducer or None
+def _format_harness_code(vr: "ValidationResult", cbmc_harness_path: str = "") -> str:
+    """Return the harness source for the realism prompt.
+
+    Preference order:
+      1. CBMC harness file on disk (this is the harness whose state
+         produced the counterexample — the only one whose initial-state
+         setup can reveal harness-artifact FPs like uninitialized
+         pointers, freed-but-not-nulled fields, non-public-API state).
+      2. Dynamic harness source (smaller GCC+ASAN runtime check harness).
+      3. LLM-generated system-entry reproducer.
+
+    Cap at ~8000 chars so a typical 200-line CBMC harness fits whole.
+    """
+    if cbmc_harness_path:
+        try:
+            return open(cbmc_harness_path, "r").read()[:8000]
+        except OSError:
+            pass
     reproducer = vr.system_entry_input
-    # Dynamic harness source is stored on the DynamicValidationResult if available
     dyn = getattr(vr, "dynamic_result", None)
     harness_src = getattr(dyn, "harness_source", None) if dyn else None
-
     if harness_src:
-        return harness_src[:1500]
+        return harness_src[:8000]
     if reproducer:
-        return reproducer[:1500]
+        return reproducer[:8000]
     return "(harness code not available)"
 
 
@@ -1698,6 +2112,48 @@ def _recover_verdict_from_prose(text: str) -> "RealismVerdict | None":
 # ---------------------------------------------------------------------------
 
 
+def _parse_adjacent_bugs(raw: str, func_name: str) -> list[dict]:
+    """Parse the second LLM call's response, which is `{"adjacent_bugs": [...]}`.
+    Returns the normalized list (possibly empty). Tolerant of markdown fencing
+    and prose-wrapped JSON; never raises."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        inner: list[str] = []
+        in_fence = False
+        for line in lines:
+            if line.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence or not lines[0].startswith("```"):
+                inner.append(line)
+        text = "\n".join(inner).strip()
+    data = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        embedded = _extract_first_json_object(text)
+        if embedded is not None:
+            try:
+                data = json.loads(embedded)
+            except json.JSONDecodeError:
+                data = None
+    if not isinstance(data, dict):
+        return []
+    raw_list = data.get("adjacent_bugs") or []
+    out: list[dict] = []
+    if isinstance(raw_list, list):
+        for entry in raw_list:
+            if isinstance(entry, dict) and entry.get("attacker_scenario"):
+                out.append({
+                    "location": str(entry.get("location", "")).strip(),
+                    "bug_type": str(entry.get("bug_type", "")).strip(),
+                    "attacker_scenario": str(entry.get("attacker_scenario", "")).strip(),
+                    "confidence": str(entry.get("confidence", "")).strip(),
+                })
+    return out
+
+
 def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
     text = raw.strip()
     # Strip markdown code fences
@@ -1766,12 +2222,18 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
     }
     verdict = verdict_map.get(raw_verdict, RealismVerdict.UNCERTAIN)
     reasoning = str(data.get("reasoning", "")).strip()
-    key_concern = str(data.get("key_concern", "")).strip()
+    # Accept the new attacker-focused field `exploit_scenario` or the
+    # legacy `key_concern`; treat them as the same downstream concept.
+    key_concern = (
+        str(data.get("exploit_scenario", "")).strip()
+        or str(data.get("key_concern", "")).strip()
+    )
     llm_confidence = str(data.get("confidence", "")).strip()
 
-    # New evidence fields the prompt now requires for REALISTIC verdicts.
-    source_line_guard = str(data.get("source_line_guard", "")).strip()
-    public_api_call_chain = str(data.get("public_api_call_chain", "")).strip()
+    # Legacy evidence fields kept only so the auto-downgrade code (now a
+    # no-op) doesn't NameError on its references.
+    source_line_guard = ""
+    public_api_call_chain = ""
 
     # Consistency checks: this session's bounty runs surfaced two patterns
     # where the LLM's verdict field comes back REALISTIC but the verdict
@@ -1789,32 +2251,13 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
     # These are mandatory evidence per the prompt; an empty / "no guard
     # found" / "cannot construct" answer means the LLM didn't actually
     # demonstrate the bug is reachable from a real entry point.
-    if verdict == RealismVerdict.REALISTIC:
-        downgrade_reason = _detect_artifact_phrases(
-            reasoning + " " + key_concern
-            + " " + source_line_guard + " " + public_api_call_chain
-        )
-        if downgrade_reason:
-            logger.warning(
-                "Realism check: downgrading REALISTIC → UNREALISTIC for '%s' "
-                "(matched '%s' — likely CBMC modelling artifact)",
-                func_name, downgrade_reason,
-            )
-            verdict = RealismVerdict.UNREALISTIC
-            tag = f"[auto-downgraded: matched '{downgrade_reason}']"
-            key_concern = (tag + " " + key_concern) if key_concern else tag
-        elif _is_evidence_missing(source_line_guard, public_api_call_chain):
-            logger.warning(
-                "Realism check: downgrading REALISTIC → UNCERTAIN for '%s' "
-                "(missing source-line guard or public-API call chain)",
-                func_name,
-            )
-            verdict = RealismVerdict.UNCERTAIN
-            tag = (
-                "[auto-downgraded: REALISTIC verdict without REQ-1 "
-                "source-line guard analysis or REQ-2 public-API call chain]"
-            )
-            key_concern = (tag + " " + key_concern) if key_concern else tag
+    # Auto-downgrades disabled. The previous logic rejected REALISTIC
+    # verdicts when the LLM's reasoning contained phrases like "stub
+    # returns" or when the REQ-1/REQ-2 evidence fields were empty.
+    # With the simplified attacker-exploitability prompt those fields
+    # no longer exist, and the LLM reasons freely instead of completing
+    # rule-templated answers — so any phrase-matching downgrade is
+    # adding bias, not precision. Trust the LLM verdict.
 
     logger.info(
         "Realism check for '%s': verdict=%s confidence=%s",
@@ -1823,6 +2266,10 @@ def _parse_result(raw: str, func_name: str) -> RealismCheckResult:
     if verdict != RealismVerdict.REALISTIC and key_concern:
         logger.info("  Key concern: %s", key_concern[:150])
 
+    # adjacent_bugs is now populated by the separate ADJACENT_BUG_PROMPT
+    # call (see RealismChecker.check). The primary realism JSON shape no
+    # longer carries adjacent_bugs, so nothing to parse here — the caller
+    # assigns pass1.adjacent_bugs after the second LLM call returns.
     return RealismCheckResult(
         verdict=verdict,
         reasoning=reasoning,

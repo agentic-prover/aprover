@@ -783,7 +783,14 @@ CALLER CONTEXT — bodies of the immediate callers:
 ---
 DYNAMIC VALIDATION RESULT: {dynamic_result}
 
-HARNESS CODE (what was actually compiled and run):
+CBMC HARNESS — the actual harness whose initial state produced the counterexample.
+Audit it directly: this is the most reliable signal for harness-artifact FPs.
+Look for: pointers initialized to NULL/stack/uninitialized, struct fields set
+nondeterministically without honoring public-API invariants, freed-without-NULL
+state, integer fields set to extreme values that real public-API code would not
+produce. If the harness's initial state cannot be produced by any public-API
+sequence, the counterexample is a harness artifact regardless of how realistic
+the function-level pattern looks.
 {harness_code}
 
 ---
@@ -871,6 +878,41 @@ TURN 2 — REACHABILITY CHALLENGE
   reachable." Behavioral reasoning about parser/decoder patterns
   is valid security-audit reasoning.
 
+TURN 2.5 — HARNESS INITIAL-STATE AUDIT (NEW, REQUIRED)
+  Read the CBMC HARNESS section above carefully. The harness is the
+  code that set up the variables before {function_name} ran. Audit
+  its initial-state setup against the public-API invariants:
+
+  Q1: Does the harness call public-API functions to construct the
+      input struct(s), or does it use ``__VERIFIER_nondet_*`` /
+      direct field writes / arbitrary memory layouts?
+  Q2: For every struct field that appears in the counterexample
+      witness, ask: does a public-API call sequence ever produce
+      that field value? Specific FP patterns to catch:
+        - pointer field non-NULL but pointing at a stack address
+          ("&stack_buf") or freed memory — public APIs never leak
+          stack/freed pointers into struct fields
+        - "freed but not nulled" state — if the codebase's free
+          paths null the pointer immediately after free, this state
+          is unreachable
+        - integer field with an impossible value (negative length,
+          a length that violates a documented invariant like "always
+          ≥ N", an index outside the allocated bound)
+        - arbitrary 2-3 byte buffers ("char buf[2]") passed where
+          callers always pass full structs
+        - the harness skips initializing a field that public-API
+          construction always sets (e.g. magic number, type tag)
+  Q3: Is the trigger sequence (e.g. "free X then read X") something
+      a public API can produce, or only the harness's nondet writes?
+
+  If Q1 shows the harness shortcuts public-API construction AND Q2
+  surfaces any field whose witness value is unreachable from public-
+  API state, this is a HARNESS-ARTIFACT FP. Vote UNREALISTIC, citing
+  the specific harness line(s) and the public-API invariant that
+  rules out the witness state. This Turn catches the FP class that
+  Turn 3's stub-callee analysis misses: invalid INPUTS to the
+  function-under-test (vs. invalid OUTPUTS from its callees).
+
 TURN 3 — STUB-CALLEE CHALLENGE
   Now check for the CBMC harness artifact pattern: does the
   counterexample require any function in the codebase to return a
@@ -896,12 +938,16 @@ TURN 4 — BUG-CLASS REALISM (Q1/Q2)
 TURN 5 — FINAL VERDICT
   Combining turns 1-4:
   - REALISTIC if turn 2 reached BEHAVIORAL reachability (case a)
-    AND turn 4 Q1 passed AND turn 3 did NOT surface a stub
-    disconnect.
-  - UNREALISTIC if turn 2 reached STRUCTURAL unreachability
-    (case b), OR turn 3 surfaced a stub disconnect, OR turn 4
-    Q1 fails (the bug type is mathematically impossible with
-    realistic input).
+    AND turn 2.5 found no harness-artifact in the initial state
+    AND turn 3 did NOT surface a stub disconnect
+    AND turn 4 Q1 passed.
+  - UNREALISTIC if ANY of these holds:
+    * turn 2 reached STRUCTURAL unreachability (case b);
+    * turn 2.5 surfaced a harness-artifact in the initial state
+      (impossible struct field values for public-API construction);
+    * turn 3 surfaced a stub disconnect;
+    * turn 4 Q1 failed (the bug type is mathematically impossible
+      with realistic input).
   - UNCERTAIN if turn 2 was case (c) — genuinely missing info,
     not just "I haven't grep'd the whole codebase."
 
@@ -912,7 +958,8 @@ TURN 5 — FINAL VERDICT
 OUTPUT FORMAT — JSON, all turns visible
 {{
   "turn_1_first_read": "<pattern matched>",
-  "turn_2_reachability": "<public-API entry + byte trace, OR 'NOT REACHABLE — reason'>",
+  "turn_2_reachability": "<public-API entry + behavioral pattern (case a), structural unreachability (case b), or genuinely uncertain (case c)>",
+  "turn_2_5_harness_initial_state": "<Q1: harness uses public-API construction OR nondet/direct field writes? Q2: any field value in witness that public-API state cannot produce (cite specific harness line + public-API invariant)? Q3: trigger sequence achievable from public API?>",
   "turn_3_stub_disconnect": "<yes + specific clause violated, OR 'no disconnect'>",
   "turn_4_q1_q2": "<Q1 result + reason, Q2 result + reason>",
   "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",

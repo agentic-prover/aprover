@@ -306,6 +306,7 @@ class AMCPipeline:
         domain_knowledge: str = "",
         cross_file_callers: set[str] | None = None,
         cross_file_caller_contexts: dict[str, list[tuple[FunctionInfo, ParsedCFile]]] | None = None,
+        function_hints: dict[str, str] | None = None,
     ) -> list[BugReport]:
         """
         Run the full AMC pipeline.
@@ -354,6 +355,12 @@ class AMCPipeline:
         self.bmc_engine.backend = backend_for(detect_language(source_file), self.config)
 
         self.store.init_driver(driver_name)
+
+        # function_hints carry attacker-scenario text from the previous
+        # round's adjacent-bug discovery. Stash on config so downstream
+        # components (spec_gen, harness_generator, realism_checker) can
+        # opt-in to using them. Empty dict = no hints / normal sweep.
+        self.config.function_hints = dict(function_hints or {})
 
         specs = self.spec_gen.generate_specs(
             source_file=source_file,
@@ -507,10 +514,21 @@ class AMCPipeline:
                             fn_name, bug_key[1],
                         )
                     else:
-                        logger.info("REAL BUG confirmed in '%s'", fn_name)
-                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                        # Static classifier accepted this CEx as a real-bug
+                        # candidate. Realism runs INSIDE _make_report and may
+                        # downgrade to 'unlikely' — the actual confirmed
+                        # status is whatever survives that audit (visible in
+                        # report.confidence after _make_report returns).
+                        logger.info("Real-bug candidate (awaiting realism) in '%s'", fn_name)
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
+                        # Log post-realism outcome so the log shows what
+                        # actually survived the audit, not just the static tag.
+                        if getattr(report, "confidence", None) == "unlikely":
+                            logger.info("Realism downgraded '%s' → unlikely (not counted as confirmed)", fn_name)
+                        else:
+                            logger.info("Realism upheld '%s' as %s", fn_name, getattr(report, "confidence", "?"))
                         # Only mark this property type as "done" if the report
                         # survived realism (confidence != "unlikely"). When
                         # realism downgrades CEx_1 as an artifact, keep the
@@ -533,7 +551,7 @@ class AMCPipeline:
                             "reaches state, future-caller / cargo-fuzz risk",
                             fn_name,
                         )
-                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                        report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                         self.reporter.save_latent_report(report, driver_name)
                         latent_reports.append(report)
                 else:
@@ -641,7 +659,7 @@ class AMCPipeline:
                         else:
                             confirmed_real_bugs.add(bug_key)
                             logger.info("REAL BUG (Phase 3c) confirmed in '%s'", fn_name)
-                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                             self.reporter.save_report(report, driver_name)
                             bug_reports.append(report)
                     elif validation.is_latent_bug:
@@ -652,7 +670,7 @@ class AMCPipeline:
                                 "LATENT (Phase 3c) panic on pub API of '%s'",
                                 fn_name,
                             )
-                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                             self.reporter.save_latent_report(report, driver_name)
                             latent_reports.append(report)
                     else:
@@ -731,7 +749,7 @@ class AMCPipeline:
                         else:
                             confirmed_real_bugs.add(bug_key)
                             logger.info("REAL BUG (recheck) confirmed in '%s'", fn_name)
-                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                             self.reporter.save_report(report, driver_name)
                             bug_reports.append(report)
                             phase3b_bugs_by_fn.setdefault(fn_name, []).append(
@@ -744,7 +762,7 @@ class AMCPipeline:
                             logger.info(
                                 "LATENT (recheck) panic on pub API of '%s'", fn_name,
                             )
-                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs)
+                            report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                             self.reporter.save_latent_report(report, driver_name)
                             latent_reports.append(report)
 
@@ -833,6 +851,7 @@ class AMCPipeline:
         all_funcs: "dict[str, FunctionInfo]",
         driver_name: str,
         all_specs: "dict[str, Spec] | None" = None,
+        cbmc_harness_path: str = "",
     ) -> BugReport:
         """Run realism check then create and save a BugReport.
 
@@ -887,6 +906,7 @@ class AMCPipeline:
                 parsed_file=parsed,
                 all_funcs=all_funcs,
                 spec=spec,
+                cbmc_harness_path=cbmc_harness_path,
             )
         # Feedback loop: if realism rejected and the loop is enabled,
         # distill the rejection into a remediation (code-change TODO,
@@ -909,8 +929,91 @@ class AMCPipeline:
                     func.name, exc,
                 )
 
+        # Scenario-guided dynamic re-attempt.
+        # When realism says REALISTIC but the dynamic harness either didn't
+        # crash (`not_triggered`) or wasn't conclusive, ask the LLM to
+        # translate realism's attacker_scenario into a concrete C reproducer
+        # and re-run dynamic. If the new run crashes, attach the result so
+        # the finding tier is promoted to confirmed_dynamic.
+        try:
+            self._try_scenario_guided_dynamic(
+                validation, realism, func, parsed, all_funcs,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Scenario-guided dynamic re-attempt failed for '%s': %s",
+                func.name, exc,
+            )
+
         realism_arg = realism if self.config.enable_realism_check else None
         return self.reporter.create_report(validation, func, realism_check=realism_arg)
+
+    def _try_scenario_guided_dynamic(
+        self,
+        validation,
+        realism,
+        func,
+        parsed,
+        all_funcs,
+    ) -> None:
+        """If realism says REALISTIC but dynamic isn't `confirmed`, fire the
+        scenario_reproducer LLM to translate realism's attacker_scenario
+        into a concrete C reproducer, then ask DynamicValidator to
+        compile+run it. Mutates ``validation.dynamic_result`` in place when
+        the new run crashes. No-op otherwise.
+        """
+        from bmc_agent.realism_checker import RealismVerdict
+        from bmc_agent.dynamic_validator import DynamicOutcome
+
+        if not getattr(self.config, "enable_dynamic_validation", False):
+            return
+        if realism is None or realism.verdict != RealismVerdict.REALISTIC:
+            return
+        # If dynamic already confirmed, nothing to gain by retrying.
+        dyn = getattr(validation, "dynamic_result", None)
+        if dyn is not None and dyn.outcome == DynamicOutcome.CONFIRMED:
+            return
+        scenario = (getattr(realism, "key_concern", "") or "").strip()
+        if not scenario or scenario.startswith("["):
+            # "[" prefixes are internal tags like "[auto-downgraded]" — not
+            # real attacker scenarios.
+            return
+
+        # Get a DynamicValidator instance from the existing CExValidator
+        # (it already has one when --enable-dynamic-validation is on).
+        dyn_validator = getattr(self.validator, "_dynamic_validator", None)
+        if dyn_validator is None:
+            return
+
+        from bmc_agent.scenario_reproducer import generate_reproducer
+        reproducer = generate_reproducer(func, scenario, parsed, self.llm)
+        if reproducer is None:
+            return
+
+        logger.info(
+            "Scenario-guided dynamic: running LLM-derived reproducer for '%s' "
+            "(%d chars)", func.name, len(reproducer),
+        )
+        new_dyn = dyn_validator.validate(
+            entry_func=func,
+            counterexample=validation.counterexample,
+            parsed_file=parsed,
+            all_funcs=all_funcs,
+            caller_path=validation.caller_path,
+            system_entry_reproducer=reproducer,
+        )
+        if new_dyn.outcome == DynamicOutcome.CONFIRMED:
+            logger.info(
+                "Scenario-guided dynamic CONFIRMED '%s' (signal=%s)",
+                func.name, new_dyn.signal_name,
+            )
+            validation.dynamic_result = new_dyn
+        else:
+            logger.info(
+                "Scenario-guided dynamic for '%s' did not crash "
+                "(outcome=%s); leaving original dynamic_result", func.name,
+                new_dyn.outcome.value,
+            )
 
     def _auto_retry_cbmc_errors(
         self,
@@ -1501,7 +1604,7 @@ class AMCPipeline:
                 return validation, realism
             prev_ce_class = new_ce_class
 
-            new_validation = self.cex_validator.validate(
+            new_validation = self.validator.validate(
                 func=func, spec=spec, counterexample=new_ce,
                 all_funcs=all_funcs, all_specs=all_specs,
                 parsed_file=parsed, driver_name=driver_name,
@@ -1529,6 +1632,7 @@ class AMCPipeline:
                     func=func, counterexample=new_ce,
                     validation_result=new_validation, parsed_file=parsed,
                     all_funcs=all_funcs, spec=spec,
+                    cbmc_harness_path=getattr(new_verdict, "harness_path", ""),
                 )
 
             validation = new_validation
