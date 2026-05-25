@@ -683,11 +683,80 @@ Respond with ONLY valid JSON:
 """
 
 REALISM_CHECK_PROMPT = """\
-You are a formal verification expert auditing a potential bug report for realistic exploitability.
+A bounded-model-checker (CBMC) just flagged this code as containing a
+potential bug. **CBMC is wrong far more often than it is right.** Your
+job is the same job a careful security auditor or pen tester would do
+if they got this report: look at it critically, treat the bug claim
+as suspect, and identify whether it's a real exploitable bug or one
+of the many failure modes that produce false positives.
 
-A tool found a property violation in a C function. Your task: determine whether this violation
-represents a bug that could occur in the real program, or whether it is a verification artifact
-(false positive).
+DEFAULT POSITION: TREAT THE BUG CLAIM AS SUSPECT
+=================================================
+Start by assuming this is probably a false positive, because most
+CBMC findings on real-world C code are. The common false-positive
+patterns you should rule out FIRST:
+
+  1. **Unreachable-from-public-API state**: CBMC's harness uses
+     nondeterministic inputs, which gives it the ability to construct
+     struct states no real caller can produce. Before voting
+     REALISTIC, you must identify the SPECIFIC public-API call (and
+     the inputs to that call) that produces the state the
+     counterexample requires. If you can only say "an attacker could
+     somehow corrupt this field," it's not enough — name the API.
+
+  2. **Stub-callee disconnect**: CBMC replaces external calls with
+     stubs that return arbitrary values. If the bug requires the
+     stub to return something the real callee cannot return (e.g.
+     `malloc` returning a 2-byte buffer that the code expected to be
+     bigger; `archive_acl_text_len` returning 2 when its logic
+     guarantees >= 31), it is NOT a real bug.
+
+  3. **Witness-uses-uninitialized-state**: CBMC may exhibit a witness
+     where a pointer is non-NULL but points to deallocated memory, or
+     a field has a stack-address value. If no public-API sequence
+     produces that exact state (free-without-null, write-then-free
+     out of order, etc.), it is NOT a real bug — even if the function
+     under test lacks the guard that would prevent it.
+
+  4. **Direct-NULL / direct-misuse of trivial helpers**: Tiny utility
+     functions (byte encoders/decoders, format helpers) trivially
+     crash if you pass NULL or invalid args, but real callers never
+     do. The bug isn't in the helper — it's in whatever passes bad
+     args, which must itself be reachable from the public API.
+
+  5. **Theoretical overflow without practical input**: A `size_t`
+     overflow that requires combining inputs whose product exceeds
+     the address space is not exploitable in practice.
+
+For your verdict to be REALISTIC, you must be able to answer YES to
+ALL of these:
+
+  (a) Can you name a specific public-API call (from <archive.h> or
+      similar) that an attacker can make?
+  (b) Can you describe what bytes the attacker supplies (file bytes,
+      argument values) to that call?
+  (c) Walking from that API call through the codebase, can you
+      explain how those bytes turn into the counterexample's
+      precondition state?
+  (d) Does the bug class survive WITHIN the realistic input domain
+      (not just with CBMC's symbolic-extreme values)?
+
+If you can't answer ALL FOUR with concrete code-level evidence, vote
+UNREALISTIC. "It looks like a potentially exploitable pattern"
+without a reachable path is exactly the false-positive shape we are
+trying to avoid.
+
+UNCERTAIN is for cases where you can answer some but not all of
+(a)-(d), and where the gaps are because you genuinely don't have
+enough information (e.g. an external caller that isn't in this file
+might supply the input). UNCERTAIN is NOT a polite version of
+REALISTIC; it's a request for more context.
+
+ONE MORE THING: hardening-only findings (theoretical overflows,
+missing-guard claims for states no caller produces, "should defend
+against this even though it's not currently triggerable") are NOT
+real bugs for this assessment. They might be worth defensive
+hardening but they are not exploitable defects.
 
 ---
 FUNCTION UNDER TEST: {function_name}
@@ -752,140 +821,129 @@ return REALISTIC.
 {threat_model_context}
 
 ---
-ANALYSIS GUIDANCE
+YOUR TASK
+=========
+Audit this CBMC finding critically. Walk through the four-step test:
 
-CRITICAL DISTINCTION — witness vs. vulnerability class:
-A CBMC counterexample is just ONE witness path to a violation. The specific variable
-values in the counterexample may be a CBMC artifact (aliasing that is impossible in
-real C, an extreme symbolic value, etc.) while the UNDERLYING VULNERABILITY CLASS
-(null dereference, buffer overflow, integer overflow, use-after-free) is real and
-triggerable by different inputs.
+  Step 1 — Public-API entry point: which call from a public header
+  reaches `{function_name}` with attacker-controlled data? (If none,
+  vote UNREALISTIC.)
 
-Ask two separate questions:
-  Q1. Could ANY realistic input trigger this TYPE of violation in the real program?
-  Q2. Are the specific counterexample witness values achievable in real execution?
+  Step 2 — Input flow: what bytes does the attacker supply to that
+  API, and how do they flow into the counterexample's precondition
+  state? Trace it through the codebase. (If you can only handwave
+  "an attacker could craft a malicious archive," that's not specific
+  enough.)
 
-Decision rules:
-  • Q1=YES, Q2=YES → REALISTIC
-  • Q1=YES, Q2=NO  → UNCERTAIN (witness is a CBMC artifact, but bug class is real)
-  • Q1=NO,  Q2=any → UNREALISTIC
+  Step 3 — Stub-callee check: does the counterexample require any
+  function in the codebase to return a value its documented
+  contract forbids? (If yes, vote UNREALISTIC.)
 
-UNREALISTIC should only be returned when the violation TYPE is impossible in practice
-(e.g., pure loop-unwind bound with no real termination issue, violation that requires
-a mathematical impossibility, or call-site analysis proves all callers guard the path).
-Do NOT return UNREALISTIC merely because the specific witness values are unrealistic.
+  Step 4 — Bug class realism: with realistic input values (not
+  CBMC's symbolic SIZE_MAX / 18-exabyte / NULL-deeply-nested
+  witnesses), does the violation still occur? Or only with values
+  the real input encoding cannot produce?
 
-A finding is UNREALISTIC when:
-1. The violation is a loop-unwinding bound (*.unwind.*) AND the loop always terminates
-   in real execution for every realistic input — no real infinite-loop scenario exists.
-2. The counterexample requires a pointer argument to be NULL, but the call-site analysis
-   shows ALL real callers always pass a valid non-NULL pointer with no exception path.
-3. The violated postcondition only fails with callee stub return values that are
-   mathematically impossible from the real callee (e.g. size_t returning negative).
-4. The violation requires multiple simultaneous hardware/callee failures that cannot
-   co-occur in any real execution scenario.
-5. **STUB-CALLEE DISCONNECT** — the counterexample witness requires a callee
-   listed in "ACTIVE STUB CONTRACTS" above to return a value that VIOLATES its
-   documented contract. This is a NARROW rule with strict requirements:
+If steps 1-4 all pass with concrete code-level evidence, vote
+REALISTIC. If any fails, vote UNREALISTIC. If you genuinely lack
+information for one step, vote UNCERTAIN — but be precise about
+what information is missing.
 
-   To return UNREALISTIC under this rule, you MUST be able to:
-
-   * **Name the specific callee** from the ACTIVE STUB CONTRACTS list whose
-     return the witness depends on. Project structs (like libarchive's `cab`,
-     `cfdata`, `lzx_stream`) are NOT external callees — their fields being
-     nondet/NULL is a CALLER-CONTRACT or HARNESS issue, not a stub-callee
-     disconnect.
-   * **Quote the specific contract clause that's violated**. Examples of
-     legitimate violations: ``__archive_read_ahead`` returning non-NULL with
-     `*bytes < n`; ``archive_entry_pathname`` returning a non-NULL pointer that
-     CBMC reports as ``unknown`` provenance; ``archive_read_next_header``
-     returning ``result == 42`` (outside the ARCHIVE_* enum).
-   * **Verify the violation is necessary for the bug**: if the witness has a
-     callee return value that's WITHIN the contract AND the bug fires anyway,
-     it's a real bug; the contract isn't the issue.
-
-   **Do NOT return UNREALISTIC under this rule when**:
-
-   * The CEx involves a nondet field of a PROJECT struct (e.g.
-     `cfdata->memimage = NULL`, `lzx_stream->ds = NULL`). These are caller-
-     contract issues — covered separately by rule #2 — and frequently
-     correspond to real defensive-coding gaps documented in upstream CVE
-     fixes.
-   * The CEx pointer-arithmetic / dereference happens BEFORE any stubbed
-     callee returns (e.g. `cfdata->memimage + offset` where memimage was
-     never written by a stubbed callee).
-   * You cannot name the specific callee and quote the specific clause.
-
-   Empirically (2026-05-23 cab.c sweep), being too liberal with this rule
-   downgrades real defensive-coding bugs (PR #2900 ``cab_checksum_finish``
-   NULL-deref, PR #2919 ``lzx_decode`` OOB write, PR ``cab reader: Fix use
-   of uninitialized values from Huffman table``). Use it ONLY when you can
-   point at a specific external-callee contract clause that the witness
-   forces a violation of.
-
-A finding is REALISTIC when:
-1. The triggering input class could plausibly arise from environment, user, network, or
-   hardware (parsers, drivers, OS entry points, functions handling external data).
-2. The NULL or overflow occurs on a code path reachable with normal usage AND the
-   call-site analysis does not contradict it.
-3. The dynamic harness triggered the same fault (confirmed signal in dynamic result).
-4. The call chain goes through a system entry that receives untrusted/unvalidated input.
-5. The global context shows the variable CAN take the problematic value in practice.
-6. Even if this specific CBMC witness is an aliasing artifact or symbolic extreme —
-   if the same violation TYPE is reachable via other inputs, lean UNCERTAIN not UNREALISTIC.
-
-EVIDENCE REQUIREMENTS — these are MANDATORY before returning REALISTIC.
-Empirically, REALISTIC verdicts are wrong far more often than they're right
-unless the LLM (you) commits to specific evidence on the record:
-
-  REQ-1. Cite the specific source-line guard that would have to be
-         bypassed for the counterexample to reach the violation. Search
-         the FULL SOURCE FILE CONTEXT above (not just the function body
-         excerpt) for `if (ptr == NULL) return ...;`,
-         `if (len > MAX) return error;`, `DEBUGASSERT(...)`,
-         `__CPROVER_assume(...)`, or lazy-init patterns like
-         `if (x == NULL) {{ x = alloc(...); }}` BEFORE the violation
-         point. Quote the exact line(s) verbatim with line number and
-         explain how the witness bypasses them. If you searched the
-         full source file and found none, say "no guard found in this
-         file" explicitly — but only after a careful read.
-
-  REQ-2. Produce a concrete public-API calling sequence that reaches
-         the witness state. Start from a real entry point (a function
-         exported in the public header, or a syscall/network handler),
-         and show each call in the chain with the argument values that
-         lead to the violation. **CRITICAL**: for every function you
-         name in the chain, that function MUST appear in the FULL
-         SOURCE FILE CONTEXT above. If you reason about what
-         `someFunction()` does to global state, you MUST quote the
-         relevant lines from its body in the context. If a step in
-         your chain depends on a function NOT defined in the
-         context (e.g. you assume `helperX()` zeroes a field but its
-         body isn't shown), you cannot vote REALISTIC — vote UNCERTAIN
-         and note the missing context.
-
-  REQ-3. If the dynamic validation result is "not triggered" or the
-         witness involves a CBMC stub return value (`bsearch`,
-         `malloc`/`calloc`/family, `strdup`, project-specific allocator
-         indirections like `Curl_ccalloc` or `OPENSSL_zalloc`), default
-         to UNREALISTIC unless you can show the same fault triggered
-         dynamically. CBMC stubs return symbolic / unconstrained values
-         that don't match real libc / real allocator behavior.
-
-If you can't fulfill REQ-1 AND REQ-2 with concrete citations and a
-real call chain, the verdict is UNREALISTIC. Empty `key_concern` on a
-REALISTIC verdict is a contradiction — describe the specific exploit
-scenario.
+Don't accept "this pattern is generally a bug class" as evidence.
+Don't fill gaps with hypotheticals about other-bugs-elsewhere.
+Don't promote hardening-recommendations to exploitable-bug status.
 
 Respond with ONLY valid JSON:
 {{
   "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
-  "reasoning": "<step-by-step: first answer Q1 (can the violation TYPE occur?), then Q2 (is this witness realistic?), then for REALISTIC verdicts cite REQ-1 source-line guard analysis and REQ-2 public-API call chain>",
-  "source_line_guard": "<REQ-1: quote the specific guard or 'no guard found'. REALISTIC requires this is populated.>",
-  "public_api_call_chain": "<REQ-2: real entry point → ... → function under test with arguments. REALISTIC requires a concrete chain.>",
-  "key_concern": "<the specific scenario that makes this realistic/unrealistic — must be non-empty>",
+  "reasoning": "<your step-by-step walk through 1-4, citing specific line numbers, function names, and source-code evidence>",
+  "exploit_scenario": "<for REALISTIC: the specific public API call sequence + attacker bytes that triggers the bug. For UNREALISTIC: the specific reason from steps 1-4 above. For UNCERTAIN: the specific information you need>",
   "confidence": "high" | "medium" | "low"
 }}
+"""
+
+
+# Adjacent-bug discovery prompt. Fired as a SECOND, independent LLM call
+# after the primary realism check. Kept separate so the auditor's responsibility
+# split doesn't dilute the primary verdict's reasoning budget or prime the LLM
+# toward "wrong location" thinking on the main CBMC finding.
+ADJACENT_BUG_PROMPT = """\
+You are a senior C security auditor. Below is a function from a real C codebase,
+its callers, callees, struct definitions, and a CBMC counterexample for a
+property the bounded-model-checker flagged in this function.
+
+A separate realism check has already judged the CBMC counterexample itself.
+Your task is DIFFERENT: independently scan the FUNCTION UNDER TEST, its
+callers, callees, and the surrounding source for OTHER exploitable defects
+that the CBMC finding did NOT capture.
+
+A defect is exploitable if an attacker who controls external input (file
+bytes, network data, malformed archive, hostile API call sequence) can reach
+a state that crashes, corrupts memory, leaks data, or otherwise violates a
+safety/security property.
+
+EXAMPLES of patterns worth reporting:
+- Partial-init / error-rollback paths that leave a struct half-initialized,
+  so a later cleanup or use operates on inconsistent state.
+- Public-API call sequences (double-init, call-after-cleanup, out-of-order)
+  the implementation doesn't handle defensively.
+- Untrusted input fields controlling a size/index that bypasses a check.
+- A nearby function in the same file has the same vulnerability pattern.
+- Stub-callee contract holes (the function trusts a callee's return without
+  bounds-checking).
+
+Be precise: only list defects you can describe with concrete code evidence
+(specific function + approximate line + attacker scenario). Don't list
+hypotheticals. An empty list is honest if you see none.
+
+---
+FUNCTION UNDER TEST: {function_name}
+
+Signature:
+{function_signature}
+
+Body:
+{function_body}
+
+---
+VIOLATED PROPERTY (CBMC primary finding — for your reference only;
+NOT the bug you're hunting): {violated_property}
+
+COUNTEREXAMPLE STATE (CBMC primary finding):
+{counterexample_state}
+
+---
+CALL CHAIN: {call_chain}
+
+CALLER CONTEXT:
+{caller_context}
+
+CALL-SITE ANALYSIS:
+{call_site_analysis}
+
+ACTIVE STUB CONTRACTS:
+{active_stub_contracts}
+
+---
+FULL SOURCE FILE:
+```c
+{source_file_context}
+```
+
+---
+Respond with ONLY valid JSON:
+{{
+  "adjacent_bugs": [
+    {{
+      "location": "<function_name or function_name:line>",
+      "bug_type": "<NULL deref / OOB read / partial-init UAF / double-free / call-after-free / etc.>",
+      "attacker_scenario": "<one paragraph: what input or call sequence reaches it, citing specific lines>",
+      "confidence": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+If you see no adjacent bugs, respond with `{{"adjacent_bugs": []}}`.
 """
 
 REACHABILITY_PROMPT = """\
