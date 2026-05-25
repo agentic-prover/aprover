@@ -1,7 +1,7 @@
 # bmc-agent-sec confirmed finding: `append_entry`
 
 **Status**: realism-confirmed (any CEx with `realism.verdict == realistic AND confidence != unlikely` makes the function confirmed).
-**Generated**: 2026-05-25T05:56:49.159710+00:00
+**Generated**: 2026-05-25T06:03:11.202521+00:00
 
 ## Target
 
