@@ -821,51 +821,76 @@ return REALISTIC.
 {threat_model_context}
 
 ---
-YOUR TASK
-=========
-Audit this CBMC finding critically. Walk through the four-step test:
+YOUR TASK — SELF-DIALOGUE AUDIT
+================================
+A careful security auditor doesn't classify a finding in one shot.
+They reason adversarially across multiple internal turns, challenging
+their own first impression. Simulate that internal dialogue. For
+EACH of the five turns below, write the reasoning BEFORE moving to
+the next turn. Each turn's reasoning is input to the next.
 
-  Step 1 — Public-API entry point: which call from a public header
-  reaches `{function_name}` with attacker-controlled data? (If none,
-  vote UNREALISTIC.)
+TURN 1 — FIRST READ (no skepticism yet)
+  What is the bug class CBMC claims? What's the apparent failure
+  pattern? At first glance, does it look like a known-real bug
+  pattern (e.g. OOB read with attacker-controlled length, double
+  free, UAF, integer overflow propagating to allocation)? Just
+  pattern-match. Don't audit yet.
 
-  Step 2 — Input flow: what bytes does the attacker supply to that
-  API, and how do they flow into the counterexample's precondition
-  state? Trace it through the codebase. (If you can only handwave
-  "an attacker could craft a malicious archive," that's not specific
-  enough.)
+TURN 2 — REACHABILITY CHALLENGE
+  Now play the skeptic. Walk back from the counterexample's
+  precondition state to find a public-API entry point that creates
+  that state. Be SPECIFIC: name the entry function from a public
+  header, name the input bytes (file format, network packet,
+  argument value), and trace the data flow through the codebase
+  to the precondition. If you can only say "an attacker crafts a
+  malicious file," that's hand-waving — name the bytes and the
+  parse path. If you cannot complete this trace with code-level
+  citations, your answer to this turn is "NOT REACHABLE — <reason>".
 
-  Step 3 — Stub-callee check: does the counterexample require any
-  function in the codebase to return a value its documented
-  contract forbids? (If yes, vote UNREALISTIC.)
+TURN 3 — STUB-CALLEE CHALLENGE
+  Now check for the CBMC harness artifact pattern: does the
+  counterexample require any function in the codebase to return a
+  value its real implementation cannot return? Examples: malloc
+  returning a 2-byte buffer when the caller computed the size,
+  archive_acl_text_len returning a length its logic guarantees is
+  >= 31, a stub returning a stack address. If yes, that's a
+  CBMC-harness artifact — the real callee would never produce that
+  return.
 
-  Step 4 — Bug class realism: this is NOT a test that the EXACT
-  CBMC witness values are achievable — CBMC routinely picks
-  SIZE_MAX / 18-exabyte / near-MAX values that no real input has.
-  The right question is: is the VIOLATION TYPE (OOB read, NULL
-  deref, OOB write, UAF, etc.) triggerable by ANY plausible
-  attacker-supplied input that produces a value in the
-  bug-triggering RANGE? If a 32-bit field can hold values 0 to
-  0xFFFFFFFF and the bug fires for values > buffer_size, then the
-  bug is realistic even if CBMC's witness happens to use SIZE_MAX.
-  Only fail step 4 if the bug TYPE requires impossible state (e.g.
-  malloc returning negative size, free of stack address with no
-  upstream way to create that state).
+TURN 4 — BUG-CLASS REALISM (Q1/Q2)
+  CBMC routinely picks SIZE_MAX / 18-exabyte / near-MAX values
+  that no real input has. That alone does NOT mean the bug is
+  unreachable — the bug class is real if any plausible
+  attacker-supplied input in the bug-triggering RANGE produces
+  the violation. Q1: is the bug TYPE (OOB read, NULL deref, etc.)
+  reachable with realistic inputs? Q2: is the SPECIFIC CBMC
+  witness achievable? If Q1=yes and Q2=no, the bug is still real
+  (REALISTIC); the witness is just CBMC's artifact. If Q1=no
+  (e.g. the bug requires impossible state with no upstream path),
+  it's UNREALISTIC.
 
-If steps 1-4 all pass with concrete code-level evidence, vote
-REALISTIC. If any fails, vote UNREALISTIC. If you genuinely lack
-information for one step, vote UNCERTAIN — but be precise about
-what information is missing.
+TURN 5 — FINAL VERDICT
+  Combining turns 1-4: REALISTIC if turns 2 AND 4 passed AND turn
+  3 did not surface a stub-callee disconnect. UNREALISTIC if turn
+  2 found no reachability path, OR turn 3 surfaced a stub
+  disconnect, OR turn 4's Q1 fails. UNCERTAIN ONLY if you
+  genuinely lack information for turn 2 (e.g. external caller not
+  in this file might supply the input) — be precise about what
+  information you need; UNCERTAIN is NOT a polite REALISTIC.
 
-Don't accept "this pattern is generally a bug class" as evidence.
-Don't fill gaps with hypotheticals about other-bugs-elsewhere.
-Don't promote hardening-recommendations to exploitable-bug status.
+  HARDENING-ONLY findings (theoretical overflow, missing guard for
+  a state no caller produces) are NOT realistic. They might be
+  worth defensive hardening but they are not exploitable defects.
 
-Respond with ONLY valid JSON:
+OUTPUT FORMAT — JSON, all turns visible
 {{
+  "turn_1_first_read": "<pattern matched>",
+  "turn_2_reachability": "<public-API entry + byte trace, OR 'NOT REACHABLE — reason'>",
+  "turn_3_stub_disconnect": "<yes + specific clause violated, OR 'no disconnect'>",
+  "turn_4_q1_q2": "<Q1 result + reason, Q2 result + reason>",
   "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
-  "reasoning": "<your step-by-step walk through 1-4, citing specific line numbers, function names, and source-code evidence>",
-  "exploit_scenario": "<for REALISTIC: the specific public API call sequence + attacker bytes that triggers the bug. For UNREALISTIC: the specific reason from steps 1-4 above. For UNCERTAIN: the specific information you need>",
+  "reasoning": "<one-paragraph synthesis of turns 1-5>",
+  "exploit_scenario": "<for REALISTIC: the specific public-API call sequence + attacker bytes. For UNREALISTIC: which turn failed and why. For UNCERTAIN: what info you need>",
   "confidence": "high" | "medium" | "low"
 }}
 """
