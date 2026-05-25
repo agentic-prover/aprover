@@ -1,22 +1,20 @@
-# bmc-agent-sec confirmed finding: `append_entry_w`
+# v5 confirmed finding: `append_entry_w`
 
-**Status**: realism-confirmed (any CEx with `realism.verdict == realistic AND confidence != unlikely` makes the function confirmed).
-**Generated**: 2026-05-25T05:36:33.738064+00:00
-**Strongest record**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/bug_reports/append_entry_w.pointer_dereference.71.json`
+**Status**: realism-confirmed (`realism.verdict == realistic AND confidence != unlikely`).
+**Generated**: 2026-05-25T05:51:53.972098Z
+**Source**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/bug_reports/append_entry_w.pointer_dereference.71.json`
 
 ## Target
-
 - **File**: `libarchive/archive_acl.c`
 - **Function**: `append_entry_w`
 - **Violated property**: `append_entry_w.pointer_dereference.71`
 - **Call chain**: `archive_acl_to_text_w -> append_entry_w`
 
-## bmc-agent-sec layered verdict
-
+## bmc-agent-sec verdict
 | Layer | Result |
 |---|---|
 | CBMC | counterexample found |
-| Realism (LLM, primary call) | **realistic** / confidence `high` |
+| Realism (Sonnet 4.5, primary call) | **realistic** / confidence `high` |
 | Dynamic harness (GCC + signal handlers) | **no_record**, signal=`none` |
 | Final tier | `confirmed_system_entry` |
 
@@ -30,24 +28,37 @@ An attacker creates a malicious archive containing NFSv4 ACL entries with specif
 
 ## Per-CEx history
 
-The pipeline ran CBMC multiple times on this function (different failing properties, feedback-loop iterations). Each CEx has its own audit record under `bug_reports/`:
+The pipeline ran CBMC multiple times on this function (different failing properties, feedback-loop iterations). Each CEx has its own audit record:
 
-- `bug_reports/append_entry_w.pointer_dereference.71.json`
-- `bug_reports/unnamed_1779685657406.json`
+- (none)
 
 ## Reproduction
 
-- **CBMC harness**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/harness.c`
-- **Spec used**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/spec.json`
-- **CBMC raw output**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/cbmc_result.json`
-- **Classifier state**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/classification.json`
+- **CBMC harness**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/bug_reports/harness.c`
+- **Spec used**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/bug_reports/spec.json` (lite-mode, pre=post=true)
+- **CBMC raw output**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/bug_reports/cbmc_result.json`
+- **Classifier state**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/append_entry_w/bug_reports/classification.json`
 
+To re-run the full sweep:
 
-
-
+```
+. /tmp/.bmc_key && .venv/bin/python -m bmc_agent.cli verify-dir \
+  --source-dir /tmp/libarchive_auto_corpus \
+  --driver v5_rerun \
+  --output /tmp/libarchive_v5_rerun \
+  --include-dir /tmp/libarchive_bench/libarchive/build \
+  --include-dir /tmp/libarchive_bench/libarchive/libarchive \
+  --lite-mode \
+  --enable-realism-check --enable-realism-thinking \
+  --enable-dynamic-validation \
+  --enable-feedback-loop --feedback-max-iters 10 \
+  --enable-flag-selection \
+  --follow-adjacent-rounds 2 \
+  --exclude 'test_*' -D HAVE_CONFIG_H
+```
 
 ## Honest caveats (read before upstream reporting)
 
-- **Dynamic outcome was `no_record`.** WEAK evidence: the dynamic harness did NOT reproduce the crash with the concrete CBMC witness. The realism LLM's vote is the only evidence.
-- The realism LLM's attacker scenario may hypothesize an upstream condition (e.g. "some bug elsewhere creates the dangling pointer state"). **Independent code-level verification of that condition is required before reporting upstream.**
-- Realism nondeterminism: the same CEx can flip between REALISTIC and UNREALISTIC across runs. Multiple per-CEx records in `bug_reports/` may show different verdicts; this report uses the strongest realistic record by mtime.
+- Dynamic outcome was **no_record**. WEAK evidence: dynamic harness did not reproduce the crash; realism LLM verdict is the only evidence.
+- The realism LLM's attacker scenario may hypothesize an upstream condition (e.g. "some bug elsewhere creates the dangling state"). **Independent code-level verification of that condition is needed before reporting upstream.**
+- realism nondeterminism: the same CEx can flip between REALISTIC and UNREALISTIC across runs. Multiple per-CEx records in `bug_reports/` may show different verdicts — the latest one wins in this summary.
