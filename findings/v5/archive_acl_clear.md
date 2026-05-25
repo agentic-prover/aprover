@@ -1,21 +1,23 @@
-# v5 confirmed finding: `archive_acl_clear`
+# bmc-agent-sec confirmed finding: `archive_acl_clear`
 
-**Status**: realism-confirmed (`realism.verdict == realistic AND confidence != unlikely`).
-**Generated**: 2026-05-25T05:51:53.972222Z
-**Source**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/archive_acl_clear/bug_reports/archive_acl_clear.pointer_dereference.81.json`
+**Status**: realism-confirmed (any CEx with `realism.verdict == realistic AND confidence != unlikely` makes the function confirmed).
+**Generated**: 2026-05-25T05:56:49.165131+00:00
 
 ## Target
-- **File**: `libarchive/archive_acl.c`
-- **Function**: `archive_acl_clear`
-- **Violated property**: `archive_acl_clear.pointer_dereference.81`
-- **Call chain**: `archive_acl_copy -> archive_acl_clear`
 
-## bmc-agent-sec verdict
+- **Project**: libarchive (snapshot `67830f7b9c27080c0170bcd71d94fb42316c47dd`)
+- **Source file**: `libarchive/archive_acl.c`
+- **Function**: `archive_acl_clear` (lines 129-147)
+- **Violated property**: `archive_acl_clear.pointer_dereference.81` (CBMC-reported)
+- **Call chain established**: `archive_acl_copy -> archive_acl_clear`
+
+## bmc-agent-sec layered verdict
+
 | Layer | Result |
 |---|---|
-| CBMC | counterexample found |
-| Realism (Sonnet 4.5, primary call) | **realistic** / confidence `medium` |
-| Dynamic harness (GCC + signal handlers) | **no_record**, signal=`none` |
+| CBMC | counterexample found at property above |
+| Realism (LLM auditor, primary call) | **realistic** / confidence `medium` |
+| Dynamic harness (GCC + signal handlers) | **not_triggered**, signal=`None` |
 | Final tier | `confirmed_system_entry` |
 
 ## Realism reasoning
@@ -26,39 +28,105 @@ The violation occurs at line 3169 where `free(acl->acl_text_w)` is called. The C
 
 An attacker crafts a malicious archive file that triggers a specific sequence of ACL parsing operations. During processing, the library allocates `acl_text_w` through `archive_acl_to_text_w`, then encounters a parsing error or specially-crafted data that causes an early free of this memory without properly nulling the pointer (due to a bug in error handling). Subsequently, the archive format requires copying ACL data, triggering `archive_acl_copy`. When this calls `archive_acl_clear` on the destination ACL (which still contains the dangling pointer from the earlier corruption), it attempts to free already-freed memory, causing a double-free vulnerability exploitable for arbitrary code execution.
 
+## CBMC counterexample witness
+
+The variable assignments CBMC reports as triggering the violation. Read with the function source below to understand the attack state:
+
+```text
+  __CPROVER_alloca_object = NULL
+  __CPROVER_dead_object = NULL
+  __CPROVER_deallocated = {'name': 'unknown'}
+  __CPROVER_malloc_is_new_array = False
+  __CPROVER_max_malloc_size = 36028797018963968ul
+  __CPROVER_memory_leak = NULL
+  __CPROVER_new_object = NULL
+  __CPROVER_rounding_mode = 0
+  __acl_obj_acl_head_obj = <struct: 6 members>
+  __acl_obj_acl_head_obj.next = ((struct archive_acl_entry *)NULL)
+  __acl_obj_acl_p_obj = <struct: 6 members>
+  __acl_obj_acl_p_obj.next = ((struct archive_acl_entry *)NULL)
+  __acl_obj_acl_text_buf = <array: 5 elements>
+  __acl_obj_acl_text_buf[0l] = 0
+  __acl_obj_acl_text_buf[1l] = 0
+  __acl_obj_acl_text_buf[2l] = 0
+  __acl_obj_acl_text_buf[3l] = 0
+  __acl_obj_acl_text_buf[4l] = 0
+  __acl_obj_acl_text_len = 0u
+  _acl_obj = <struct: 10 members>
+  _acl_obj.acl_head = ((struct archive_acl_entry *)NULL)
+  _acl_obj.acl_p = __acl_obj_acl_p_obj!0@1
+  _acl_obj.acl_text = __acl_obj_acl_text_buf!0@1
+  acl = _acl_obj!0@1
+  ap = ((struct archive_acl_entry *)NULL)
+  ptr = {'name': 'unknown'}
+  return_value___VERIFIER_nondet___CPROVER_bool = True
+```
+
+## Function source (from the snapshot)
+
+```c
+void
+archive_acl_clear(struct archive_acl *acl)
+{
+	struct archive_acl_entry *ap;
+
+	while (acl->acl_head != NULL) {
+		ap = acl->acl_head->next;
+		archive_mstring_clean(&acl->acl_head->name);
+		free(acl->acl_head);
+		acl->acl_head = ap;
+	}
+	free(acl->acl_text_w);
+	acl->acl_text_w = NULL;
+	free(acl->acl_text);
+	acl->acl_text = NULL;
+	acl->acl_p = NULL;
+	acl->acl_types = 0;
+	acl->acl_state = 0; /* Not counting. */
+}
+```
+
 ## Per-CEx history
 
-The pipeline ran CBMC multiple times on this function (different failing properties, feedback-loop iterations). Each CEx has its own audit record:
+The pipeline ran CBMC multiple times on this function (different failing properties, feedback-loop iterations). Each CEx has its own audit record under `bug_reports/` in the sweep artifact tree:
 
-- (none)
+- `bug_reports/archive_acl_clear.pointer_dereference.81.json`
+- `bug_reports/archive_acl_clear.precondition_instance.2.json`
+- `bug_reports/unnamed_1779685656363.json`
+- `bug_reports/unnamed_1779686140106.json`
 
 ## Reproduction
 
-- **CBMC harness**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/archive_acl_clear/bug_reports/harness.c`
-- **Spec used**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/archive_acl_clear/bug_reports/spec.json` (lite-mode, pre=post=true)
-- **CBMC raw output**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/archive_acl_clear/bug_reports/cbmc_result.json`
-- **Classifier state**: `/tmp/libarchive_auto_v5_1779685630/v5/archive_acl/archive_acl_clear/bug_reports/classification.json`
+The harness CBMC verified is committed alongside this report as `harness.c`. To re-verify just this finding:
 
-To re-run the full sweep:
+```bash
+# 1. clone libarchive at the snapshot the sweep used
+cd /tmp && git clone https://github.com/libarchive/libarchive
+cd libarchive && git checkout 67830f7b9c27080c0170bcd71d94fb42316c47dd
+
+# 2. apply CBMC bounds + pointer + signed-overflow checks
+cbmc \
+    --bounds-check --pointer-check --div-by-zero-check \
+    --signed-overflow-check --unsigned-overflow-check --pointer-overflow-check \
+    --unwind 4 --timeout 60 \
+    -I /tmp/libarchive/libarchive -I /tmp/libarchive/libarchive/build \
+    -DHAVE_CONFIG_H \
+    --function main \
+    archive_acl_clear/harness.c
+# (paste the harness contents from the section below into harness.c first;
+#  it is also committed alongside this report as harness.c.)
 
 ```
-. /tmp/.bmc_key && .venv/bin/python -m bmc_agent.cli verify-dir \
-  --source-dir /tmp/libarchive_auto_corpus \
-  --driver v5_rerun \
-  --output /tmp/libarchive_v5_rerun \
-  --include-dir /tmp/libarchive_bench/libarchive/build \
-  --include-dir /tmp/libarchive_bench/libarchive/libarchive \
-  --lite-mode \
-  --enable-realism-check --enable-realism-thinking \
-  --enable-dynamic-validation \
-  --enable-feedback-loop --feedback-max-iters 10 \
-  --enable-flag-selection \
-  --follow-adjacent-rounds 2 \
-  --exclude 'test_*' -D HAVE_CONFIG_H
+
+To re-run the full sweep end-to-end (re-derives this finding from scratch):
+
+```bash
+(no command provided)
 ```
 
 ## Honest caveats (read before upstream reporting)
 
-- Dynamic outcome was **no_record**. WEAK evidence: dynamic harness did not reproduce the crash; realism LLM verdict is the only evidence.
-- The realism LLM's attacker scenario may hypothesize an upstream condition (e.g. "some bug elsewhere creates the dangling state"). **Independent code-level verification of that condition is needed before reporting upstream.**
-- realism nondeterminism: the same CEx can flip between REALISTIC and UNREALISTIC across runs. Multiple per-CEx records in `bug_reports/` may show different verdicts — the latest one wins in this summary.
+- **Dynamic outcome was `not_triggered`.** WEAK evidence: the dynamic harness did NOT reproduce the crash with the concrete CBMC witness. The realism LLM's vote is the only evidence.
+- The realism LLM's attacker scenario may hypothesize an upstream condition (e.g. "some bug elsewhere creates the dangling pointer state"). **Independent code-level verification of that condition is required before reporting upstream.**
+- Realism nondeterminism: the same CEx can flip between REALISTIC and UNREALISTIC across runs. Multiple per-CEx records in `bug_reports/` may show different verdicts; this report uses the strongest realistic record by mtime.
+- The harness is auto-generated and uses CBMC's nondeterministic-input model. Reading `harness.c` shows exactly what input states CBMC was free to explore — verify those states are actually reachable from the real public API before declaring a vulnerability.
