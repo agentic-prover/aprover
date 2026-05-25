@@ -837,15 +837,39 @@ TURN 1 — FIRST READ (no skepticism yet)
   pattern-match. Don't audit yet.
 
 TURN 2 — REACHABILITY CHALLENGE
-  Now play the skeptic. Walk back from the counterexample's
-  precondition state to find a public-API entry point that creates
-  that state. Be SPECIFIC: name the entry function from a public
-  header, name the input bytes (file format, network packet,
-  argument value), and trace the data flow through the codebase
-  to the precondition. If you can only say "an attacker crafts a
-  malicious file," that's hand-waving — name the bytes and the
-  parse path. If you cannot complete this trace with code-level
-  citations, your answer to this turn is "NOT REACHABLE — <reason>".
+  Now play the skeptic. Find a public-API entry point that an
+  attacker can call which (directly or transitively) invokes
+  `{function_name}`. You need to commit to one of three answers:
+
+  (a) BEHAVIORAL REACHABILITY (sufficient for REALISTIC):
+      You can identify a public-API entry that calls this function
+      with attacker-controllable input AND you can describe a
+      behavioral pattern in this function that misbehaves under
+      hostile inputs (missing guard, length-based parser without
+      bounds check, type confusion on attacker-typed field, etc).
+      You do NOT need to fully byte-trace from file-format bytes
+      to the counterexample's exact precondition values — that
+      level of trace is rarely possible without active code
+      search. Documented seed bugs (next_field-class OOB reads
+      on length-based parsers, off-by-one in size calculators
+      called from public format-text APIs) live here.
+
+  (b) STRUCTURAL UNREACHABILITY (forces UNREALISTIC):
+      The counterexample requires a struct state that NO
+      sequence of public-API calls can produce — for example,
+      a pointer that is freed-but-not-nulled when the only free
+      site in the codebase nulls immediately after. This is the
+      classic harness-artifact pattern.
+
+  (c) GENUINELY UNCERTAIN:
+      You can't tell whether (a) or (b) holds because the
+      reachability depends on a function whose body isn't in the
+      provided context, and the inference isn't obvious from
+      naming or comments. Vote UNCERTAIN, naming what's missing.
+
+  Don't conflate "I haven't traced every byte" with "not
+  reachable." Behavioral reasoning about parser/decoder patterns
+  is valid security-audit reasoning.
 
 TURN 3 — STUB-CALLEE CHALLENGE
   Now check for the CBMC harness artifact pattern: does the
@@ -870,13 +894,16 @@ TURN 4 — BUG-CLASS REALISM (Q1/Q2)
   it's UNREALISTIC.
 
 TURN 5 — FINAL VERDICT
-  Combining turns 1-4: REALISTIC if turns 2 AND 4 passed AND turn
-  3 did not surface a stub-callee disconnect. UNREALISTIC if turn
-  2 found no reachability path, OR turn 3 surfaced a stub
-  disconnect, OR turn 4's Q1 fails. UNCERTAIN ONLY if you
-  genuinely lack information for turn 2 (e.g. external caller not
-  in this file might supply the input) — be precise about what
-  information you need; UNCERTAIN is NOT a polite REALISTIC.
+  Combining turns 1-4:
+  - REALISTIC if turn 2 reached BEHAVIORAL reachability (case a)
+    AND turn 4 Q1 passed AND turn 3 did NOT surface a stub
+    disconnect.
+  - UNREALISTIC if turn 2 reached STRUCTURAL unreachability
+    (case b), OR turn 3 surfaced a stub disconnect, OR turn 4
+    Q1 fails (the bug type is mathematically impossible with
+    realistic input).
+  - UNCERTAIN if turn 2 was case (c) — genuinely missing info,
+    not just "I haven't grep'd the whole codebase."
 
   HARDENING-ONLY findings (theoretical overflow, missing guard for
   a state no caller produces) are NOT realistic. They might be
