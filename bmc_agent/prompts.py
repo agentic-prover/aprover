@@ -839,10 +839,18 @@ Audit this CBMC finding critically. Walk through the four-step test:
   function in the codebase to return a value its documented
   contract forbids? (If yes, vote UNREALISTIC.)
 
-  Step 4 — Bug class realism: with realistic input values (not
-  CBMC's symbolic SIZE_MAX / 18-exabyte / NULL-deeply-nested
-  witnesses), does the violation still occur? Or only with values
-  the real input encoding cannot produce?
+  Step 4 — Bug class realism: this is NOT a test that the EXACT
+  CBMC witness values are achievable — CBMC routinely picks
+  SIZE_MAX / 18-exabyte / near-MAX values that no real input has.
+  The right question is: is the VIOLATION TYPE (OOB read, NULL
+  deref, OOB write, UAF, etc.) triggerable by ANY plausible
+  attacker-supplied input that produces a value in the
+  bug-triggering RANGE? If a 32-bit field can hold values 0 to
+  0xFFFFFFFF and the bug fires for values > buffer_size, then the
+  bug is realistic even if CBMC's witness happens to use SIZE_MAX.
+  Only fail step 4 if the bug TYPE requires impossible state (e.g.
+  malloc returning negative size, free of stack address with no
+  upstream way to create that state).
 
 If steps 1-4 all pass with concrete code-level evidence, vote
 REALISTIC. If any fails, vote UNREALISTIC. If you genuinely lack
