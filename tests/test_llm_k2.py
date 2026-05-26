@@ -704,3 +704,119 @@ def test_llm_client_restores_settings_after_role_call(monkeypatch):
     assert config.llm_api_key == "k2-key"
     assert config.llm_base_url == "https://api.k2think.ai/v1"
     assert config.llm_provider == "openai"
+
+
+# ---------------------------------------------------------------------------
+# Additional per-role routing: disagreement_diagnose + DEFAULT alias
+# ---------------------------------------------------------------------------
+
+def test_disagreement_diagnose_role_env_var_picked_up(monkeypatch):
+    """The Phase 3d ``disagreement_diagnose`` role is routable via the
+    same BMC_AGENT_LLM_<ROLE>_* env-var convention as the other roles."""
+    for k in ("ANTHROPIC_API_KEY", "K2THINK_API_KEY",
+              "BMC_AGENT_HYBRID_SPEC_GEN_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_MODEL", "anthropic/claude-opus-4")
+    monkeypatch.setenv("BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_API_KEY", "diag-key")
+    monkeypatch.setenv("BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_PROVIDER", "openai")
+
+    from bmc_agent.config import Config
+    c = Config.from_env()
+    assert "disagreement_diagnose" in c.llm_role_overrides
+    s = c.role_settings("disagreement_diagnose")
+    assert s["model"] == "anthropic/claude-opus-4"
+    assert s["api_key"] == "diag-key"
+    assert s["base_url"] == "https://openrouter.ai/api/v1"
+    assert s["provider"] == "openai"
+    # Other roles unaffected
+    assert "realism" not in c.llm_role_overrides
+
+
+def test_disagreement_diagnose_falls_back_to_default_when_unset(monkeypatch):
+    """Without per-role override, disagreement_diagnose uses the global
+    default."""
+    for k in ("ANTHROPIC_API_KEY", "K2THINK_API_KEY",
+              "BMC_AGENT_HYBRID_SPEC_GEN_KEY",
+              "BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_MODEL",
+              "BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BMC_AGENT_LLM_DEFAULT_MODEL", "global-model")
+    monkeypatch.setenv("BMC_AGENT_LLM_DEFAULT_API_KEY", "global-key")
+
+    from bmc_agent.config import Config
+    c = Config.from_env()
+    s = c.role_settings("disagreement_diagnose")
+    assert s["model"] == "global-model"
+    assert s["api_key"] == "global-key"
+
+
+def test_default_env_var_alias_preferred_over_legacy(monkeypatch):
+    """When both BMC_AGENT_LLM_DEFAULT_* and the legacy BMC_AGENT_LLM_*
+    are set, DEFAULT wins (it's the clearer, newer name)."""
+    for k in ("ANTHROPIC_API_KEY", "K2THINK_API_KEY",
+              "BMC_AGENT_HYBRID_SPEC_GEN_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BMC_AGENT_LLM_MODEL", "legacy-model")
+    monkeypatch.setenv("BMC_AGENT_LLM_API_KEY", "legacy-key")
+    monkeypatch.setenv("BMC_AGENT_LLM_BASE_URL", "https://legacy.example/v1")
+    monkeypatch.setenv("BMC_AGENT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("BMC_AGENT_LLM_DEFAULT_MODEL", "new-model")
+    monkeypatch.setenv("BMC_AGENT_LLM_DEFAULT_API_KEY", "new-key")
+    monkeypatch.setenv("BMC_AGENT_LLM_DEFAULT_BASE_URL", "https://new.example/v1")
+    monkeypatch.setenv("BMC_AGENT_LLM_DEFAULT_PROVIDER", "anthropic")
+
+    from bmc_agent.config import Config
+    c = Config.from_env()
+    assert c.llm_model == "new-model"
+    assert c.llm_api_key == "new-key"
+    assert c.llm_base_url == "https://new.example/v1"
+    assert c.llm_provider == "anthropic"
+
+
+def test_legacy_env_var_still_works_when_default_unset(monkeypatch):
+    """Back-compat: BMC_AGENT_LLM_MODEL etc. still set the global
+    defaults when BMC_AGENT_LLM_DEFAULT_* isn't present."""
+    for k in ("ANTHROPIC_API_KEY", "K2THINK_API_KEY",
+              "BMC_AGENT_HYBRID_SPEC_GEN_KEY",
+              "BMC_AGENT_LLM_DEFAULT_MODEL",
+              "BMC_AGENT_LLM_DEFAULT_API_KEY",
+              "BMC_AGENT_LLM_DEFAULT_BASE_URL",
+              "BMC_AGENT_LLM_DEFAULT_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("BMC_AGENT_LLM_MODEL", "legacy-model")
+    monkeypatch.setenv("BMC_AGENT_LLM_API_KEY", "legacy-key")
+
+    from bmc_agent.config import Config
+    c = Config.from_env()
+    assert c.llm_model == "legacy-model"
+    assert c.llm_api_key == "legacy-key"
+
+
+def test_oracle_disagreement_diagnose_uses_disagreement_role(monkeypatch):
+    """Phase 3d's diagnose() calls llm.complete with
+    role='disagreement_diagnose' (was previously role='realism' — that
+    locked it to the realism model when users wanted a stronger one
+    for the more subtle diagnosis task)."""
+    from unittest.mock import MagicMock
+    from bmc_agent.oracle_disagreement import (
+        diagnose, DisagreementCase, DisagreementKind,
+    )
+    llm = MagicMock()
+    llm.complete.return_value = (
+        '{"verdict": "inconclusive", "rationale": "x", "confidence": "low"}'
+    )
+    case = DisagreementCase(
+        kind=DisagreementKind.BMC_FAIL_REALISM_REAL_DYN_NOT_TRIGGERED,
+        function_name="fn", violated_property="p.5",
+        bmc_verdict="fail", realism_verdict="realistic",
+        dyn_outcome="not_triggered",
+        realism_reasoning="x", reproducer_source="int main(){}",
+    )
+    diagnose(case, llm)
+    # The role kwarg passed to LLMClient.complete must be the new role
+    call = llm.complete.call_args
+    role = call.kwargs.get("role") if call.kwargs else None
+    assert role == "disagreement_diagnose", (
+        f"diagnose() should pass role='disagreement_diagnose', got {role!r}"
+    )

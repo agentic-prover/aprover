@@ -21,12 +21,26 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
        ``BMC_AGENT_HYBRID_SPEC_GEN_BASE_URL``.
 
     2. **Explicit per-role.** For each role X in {spec_gen, feedback_distill,
-       refinement, realism, classifier}, the env vars
+       refinement, realism, classifier, disagreement_diagnose}, the env vars
        ``BMC_AGENT_LLM_{X}_MODEL`` / ``_BASE_URL`` / ``_API_KEY`` / ``_PROVIDER``
        are picked up directly. Useful for non-hybrid custom routing.
 
+       The actual call sites use:
+         * ``spec_gen``               — Phase 1 caller-grounded spec drafting
+         * ``realism``                — Phase 3 CEx classification + tool-use
+                                         augmentation
+         * ``refinement``             — spec_refiner + LLM-fallback reachability
+         * ``feedback_distill``       — UNREALISTIC → learned-clause distillation
+         * ``disagreement_diagnose``  — Phase 3d three-oracle diagnosis
+         * ``classifier``             — declared but currently unused
+
     Empty result (no env vars set) leaves ``llm_role_overrides`` empty so the
     pipeline keeps its existing single-backend behaviour.
+
+    The global fallback (when a role has no per-role override) reads:
+        ``BMC_AGENT_LLM_DEFAULT_MODEL`` (preferred) →
+        ``BMC_AGENT_LLM_MODEL`` (legacy)
+    Same fallback ladder for ``API_KEY``, ``BASE_URL``, ``PROVIDER``.
     """
     overrides: dict[str, dict[str, str]] = {}
 
@@ -50,7 +64,20 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
             }
 
     # Explicit per-role overrides via BMC_AGENT_LLM_<ROLE>_* env vars.
-    for role in ("spec_gen", "feedback_distill", "refinement", "realism", "classifier"):
+    #
+    # Roles correspond to the ``role=...`` argument threaded through
+    # LLMClient.complete() at every call site. Adding a new role here
+    # just makes it env-overridable; the call site code uses whatever
+    # string it always uses. ``classifier`` is retained for back-compat
+    # though no current call site uses it.
+    for role in (
+        "spec_gen",
+        "feedback_distill",
+        "refinement",
+        "realism",
+        "classifier",
+        "disagreement_diagnose",
+    ):
         ru = role.upper()
         model = os.environ.get(f"BMC_AGENT_LLM_{ru}_MODEL", "")
         base = os.environ.get(f"BMC_AGENT_LLM_{ru}_BASE_URL", "")
@@ -548,17 +575,35 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        """Create a Config populated from environment variables where available."""
+        """Create a Config populated from environment variables where available.
+
+        Global LLM settings: ``BMC_AGENT_LLM_DEFAULT_*`` is the preferred
+        name (clearer alongside the per-role ``BMC_AGENT_LLM_<ROLE>_*``
+        env vars). ``BMC_AGENT_LLM_*`` is the legacy name and still works
+        as a fallback. Either form sets the global default that role
+        overrides build on.
+        """
         return cls(
-            llm_model=os.environ.get("BMC_AGENT_LLM_MODEL", "claude-sonnet-4-6"),
+            llm_model=(
+                os.environ.get("BMC_AGENT_LLM_DEFAULT_MODEL", "")
+                or os.environ.get("BMC_AGENT_LLM_MODEL", "")
+                or "claude-sonnet-4-6"
+            ),
             llm_api_key=(
-                os.environ.get("BMC_AGENT_LLM_API_KEY", "")
+                os.environ.get("BMC_AGENT_LLM_DEFAULT_API_KEY", "")
+                or os.environ.get("BMC_AGENT_LLM_API_KEY", "")
                 or os.environ.get("ANTHROPIC_API_KEY", "")
                 or os.environ.get("K2THINK_API_KEY", "")
             ),
-            llm_base_url=os.environ.get("BMC_AGENT_LLM_BASE_URL", ""),
+            llm_base_url=(
+                os.environ.get("BMC_AGENT_LLM_DEFAULT_BASE_URL", "")
+                or os.environ.get("BMC_AGENT_LLM_BASE_URL", "")
+            ),
             llm_request_timeout_s=float(os.environ.get("BMC_AGENT_LLM_TIMEOUT_S", "180.0")),
-            llm_provider=os.environ.get("BMC_AGENT_LLM_PROVIDER", ""),
+            llm_provider=(
+                os.environ.get("BMC_AGENT_LLM_DEFAULT_PROVIDER", "")
+                or os.environ.get("BMC_AGENT_LLM_PROVIDER", "")
+            ),
             claude_code_bin=os.environ.get("BMC_AGENT_CLAUDE_CODE_BIN", "claude"),
             claude_code_timeout_s=float(os.environ.get("BMC_AGENT_CLAUDE_CODE_TIMEOUT_S", "600.0")),
             lite_mode=os.environ.get("BMC_AGENT_LITE_MODE", "false").lower() == "true",

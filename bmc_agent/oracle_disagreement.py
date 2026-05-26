@@ -296,8 +296,15 @@ def diagnose(
         reproducer_source=(case.reproducer_source or "(no reproducer)")[:3000],
     )
     try:
+        # Dedicated role so users can route this specific call to a
+        # stronger model than the volume realism check — the
+        # disagreement diagnosis is the most subtle reasoning task in
+        # the pipeline (must distinguish spec-refine / harness-encoding
+        # / property-fp on a three-way oracle conflict). Configure via
+        # ``BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_*`` env vars; falls
+        # back to the global default when unset.
         response = llm.complete(
-            _SYSTEM_PROMPT, prompt, role="realism",
+            _SYSTEM_PROMPT, prompt, role="disagreement_diagnose",
         )
     except LLMError as exc:
         logger.warning(
