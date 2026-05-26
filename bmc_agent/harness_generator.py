@@ -3448,7 +3448,17 @@ class HarnessGenerator:
                     external_callees.add(callee)
 
         # --- 3. Build stubs for external callees ---
+        # Only externals we can build a real-signature stub for get
+        # substituted. The rest (variadic externs like ``archive_set_error``
+        # whose canonical signature we don't have) are left in place — CBMC
+        # treats undefined externs as nondet-return, which is the right
+        # semantics for "feasibility check" anyway. Substituting them to a
+        # zero-arg ``_stub`` (the historical fallback) produced
+        # ``wrong number of function arguments`` CBMC errors → exit code 6
+        # → entire feasibility check skipped, lifting the trust burden onto
+        # LLM-only reachability (which we've seen confabulate).
         stub_sections: list[str] = []
+        substituted_externals: set[str] = set()
         for cname in sorted(external_callees):
             callee_spec = (all_specs or {}).get(cname)
             stub_src = _generate_stub(
@@ -3456,24 +3466,31 @@ class HarnessGenerator:
                 callee_spec,
                 parsed_file,
             )
+            # _generate_stub emits a sentinel comment when it can't find a
+            # signature and falls through to ``void X_stub(void)``. Skip
+            # those — they'd cause arg-count mismatch with real callsites.
+            if stub_src.startswith("/* Auto-stub for unknown external:"):
+                continue
             stub_sections.append(stub_src)
+            substituted_externals.add(cname)
 
         # --- 4. Build real function definitions for local closure ---
-        # Substitute only external callee calls (local callees are real).
+        # Substitute only external callee calls we have real stubs for
+        # (local callees are real bodies — see step 5).
         local_func_defs: list[str] = []
         for cname in sorted(local_closure):
             cfi = parsed_file.get_function_info(cname)
             if cfi is None:
                 continue
-            cbody = _substitute_callee_calls(cfi.body, external_callees)
+            cbody = _substitute_callee_calls(cfi.body, substituted_externals)
             cparams = _params_str(cfi.signature.parameters)
             local_func_defs.append(
                 f"/* inlined local callee: {cname} */\n"
                 f"{cfi.signature.return_type} {cname}({cparams})\n{cbody}"
             )
 
-        # --- 5. Build func definition (substitute only external callee calls) ---
-        func_body = _substitute_callee_calls(func.body, external_callees)
+        # --- 5. Build func definition (substitute only stubable externals) ---
+        func_body = _substitute_callee_calls(func.body, substituted_externals)
         params_str = _params_str(sig.parameters)
         func_def = f"{sig.return_type} {fn_name}({params_str})\n{func_body}"
 

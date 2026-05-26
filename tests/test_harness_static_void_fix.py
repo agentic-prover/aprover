@@ -345,3 +345,148 @@ def test_emit_learned_clauses_no_filter_when_param_names_none(tmp_path):
         config, "any_fn", "project", param_names=None,
     )
     assert len(out) == 1
+
+
+# ---------------------------------------------------------------------------
+# Feasibility-harness variadic-stub skip
+# ---------------------------------------------------------------------------
+
+def test_feasibility_harness_skips_substitution_for_unknown_externals(tmp_path):
+    """An external callee whose signature isn't in parsed_file.functions /
+    extern_sigs / universal_stub_contracts (e.g., libarchive's variadic
+    ``archive_set_error``) makes ``_generate_stub`` fall through to the
+    zero-arg ``void X_stub(void)`` fallback. Substituting the call site
+    to ``X_stub(arg, arg, arg)`` then produces ``wrong number of function
+    arguments`` CBMC errors (exit code 6) and the entire feasibility
+    check is skipped.
+
+    Fix: the feasibility harness must SKIP substitution for any external
+    whose stub generation fell through to the unknown-fallback. The call
+    site stays as the original symbol; CBMC treats it as a nondet-return
+    unresolved external — the right semantics for feasibility anyway.
+    """
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from bmc_agent.cbmc import Counterexample
+
+    # A FUT that calls a known-variadic external (archive_set_error_like).
+    fut_body = (
+        "{\n"
+        "    if (a == 0) {\n"
+        "        archive_set_error_like(a, 1, \"two\", \"three\");\n"
+        "        return -1;\n"
+        "    }\n"
+        "    return 0;\n"
+        "}"
+    )
+    fut_sig = FunctionSignature(
+        name="my_fut", return_type="int",
+        parameters=[("int", "a")],
+    )
+    fut = FunctionInfo(
+        name="my_fut",
+        signature=fut_sig,
+        body=fut_body,
+        callees={"archive_set_error_like"},
+        source_file=str(tmp_path / "fake.c"),
+    )
+
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"my_fut": fut_sig},
+        function_bodies={"my_fut": fut.body},
+        call_graph={"my_fut": {"archive_set_error_like"}},
+    )
+
+    spec = Spec(
+        function_name="my_fut", precondition="true", postcondition="true",
+        status=SpecStatus.GENERATED,
+    )
+    cex = Counterexample(
+        failing_property="my_fut.assertion.1",
+        variable_assignments={"a": "0"},
+        trace=[],
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_feasibility_harness(
+        func=fut, spec=spec, counterexample=cex,
+        parsed_file=parsed, all_specs={},
+    )
+
+    # The broken-fallback stub must NOT be emitted, and the call site
+    # must NOT be substituted (no `_stub` suffix on the call).
+    assert "void archive_set_error_like_stub(void)" not in text, (
+        f"broken zero-arg stub emitted:\n{text[-2000:]}"
+    )
+    assert "archive_set_error_like_stub(" not in text, (
+        f"call site substituted to broken stub:\n{text[-2000:]}"
+    )
+    # And the original call should remain in the FUT body
+    assert "archive_set_error_like(" in text
+
+
+def test_feasibility_harness_still_stubs_known_registry_externals(tmp_path):
+    """Sanity: externals whose signature IS in universal_stub_contracts
+    (e.g. ``archive_entry_pathname``) DO still get stubbed and
+    substituted — the fix only skips the unknown-fallback case, not
+    every external."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.universal_stub_contracts import known_callees
+
+    registry_callee = "archive_entry_pathname"
+    assert registry_callee in known_callees(), "test assumption broken"
+
+    fut_sig = FunctionSignature(
+        name="caller", return_type="int", parameters=[("int", "x")],
+    )
+    fut_body = (
+        "{\n"
+        f"    const char *p = {registry_callee}(0);\n"
+        "    (void)p;\n"
+        "    return x;\n"
+        "}"
+    )
+    fut = FunctionInfo(
+        name="caller", signature=fut_sig,
+        body=fut_body,
+        callees={registry_callee},
+        source_file=str(tmp_path / "fake.c"),
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"caller": fut_sig},
+        function_bodies={"caller": fut_body},
+        call_graph={"caller": {registry_callee}},
+    )
+
+    spec = Spec(function_name="caller", precondition="true",
+                postcondition="true", status=SpecStatus.GENERATED)
+    cex = Counterexample(
+        failing_property="caller.assertion.1",
+        variable_assignments={"x": "0"},
+        trace=[],
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_feasibility_harness(
+        func=fut, spec=spec, counterexample=cex,
+        parsed_file=parsed, all_specs={},
+    )
+
+    assert f"/* Stub for callee: {registry_callee} */" in text, (
+        f"registry-known external not stubbed:\n{text[-2000:]}"
+    )
+    assert f"{registry_callee}_stub(" in text
