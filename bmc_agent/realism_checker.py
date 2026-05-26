@@ -503,6 +503,10 @@ class RealismChecker:
                 getattr(self.config, "enable_adjacent_bug_discovery", True)
                 and pass1.verdict == RealismVerdict.UNREALISTIC
             ):
+                # Delegate to AdjacentBugAgent — same realism role so
+                # users upgrading realism to a stronger backbone get
+                # adjacent-bug discovery upgraded automatically.
+                from bmc_agent.agents.adjacent_bug import AdjacentBugAgent
                 try:
                     adj_prompt = self._build_adjacent_bug_prompt(
                         func=func,
@@ -511,20 +515,27 @@ class RealismChecker:
                         parsed_file=parsed_file,
                         all_funcs=all_funcs,
                     )
-                    raw_adj = self.llm.complete(
-                        sys_prompt, adj_prompt,
-                        max_tokens=4096,
-                        thinking=False,
-                        role="realism",
+                    _adj_agent = AdjacentBugAgent(
+                        config=self.config, llm=self.llm,
+                        system_prompt=sys_prompt,
                     )
-                    adj_list = _parse_adjacent_bugs(raw_adj, func.name)
-                    if adj_list:
-                        logger.info(
-                            "Adjacent-bug pass found %d candidate(s) for '%s'",
-                            len(adj_list), func.name,
+                    _adj_result = _adj_agent.run(
+                        user_prompt=adj_prompt, func_name=func.name,
+                    )
+                    if _adj_result.ok:
+                        adj_list = _adj_result.output
+                        if adj_list:
+                            logger.info(
+                                "Adjacent-bug pass found %d candidate(s) for '%s'",
+                                len(adj_list), func.name,
+                            )
+                            pass1.adjacent_bugs = adj_list
+                    else:
+                        logger.warning(
+                            "Adjacent-bug LLM call failed for '%s': %s — skipping",
+                            func.name, (_adj_result.error or "")[:200],
                         )
-                        pass1.adjacent_bugs = adj_list
-                except LLMError as exc_adj:
+                except Exception as exc_adj:
                     logger.warning(
                         "Adjacent-bug LLM call failed for '%s': %s — skipping",
                         func.name, exc_adj,

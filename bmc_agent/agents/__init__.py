@@ -16,6 +16,7 @@ add tool registries, self-critique loops, and sub-agent composition
 without changing the BaseAgent contract.
 """
 
+from bmc_agent.agents.adjacent_bug import AdjacentBugAgent
 from bmc_agent.agents.base import AgentResult, BaseAgent
 from bmc_agent.agents.disagreement import DisagreementDiagnoseAgent
 from bmc_agent.agents.feedback_distill import FeedbackDistillAgent
@@ -24,6 +25,7 @@ from bmc_agent.agents.refinement import RefinementAgent
 from bmc_agent.agents.spec_gen import SpecGenAgent
 
 __all__ = [
+    "AdjacentBugAgent",
     "AgentResult",
     "BaseAgent",
     "DisagreementDiagnoseAgent",
