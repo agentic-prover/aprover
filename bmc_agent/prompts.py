@@ -929,6 +929,15 @@ TURN 2.5 — HARNESS INITIAL-STATE AUDIT (NEW, REQUIRED)
           callers always pass full structs
         - the harness skips initializing a field that public-API
           construction always sets (e.g. magic number, type tag)
+        - PAIRED FIELDS (count, array_pointer): when a struct has a
+          (count, pointer) pair and the witness has count > 0 with
+          pointer == NULL, look in the codebase for a sibling
+          add_*/append_*/*_init function that maintains the invariant
+          "set pointer before incrementing count". The libarchive
+          archive_match add_owner_id pattern (count incremented AFTER
+          realloc sets ids->ids) is the canonical example. Witness
+          state count>0+pointer==NULL is unreachable from public-API
+          construction → UNREALISTIC.
   Q3: Is the trigger sequence (e.g. "free X then read X") something
       a public API can produce, or only the harness's nondet writes?
 
