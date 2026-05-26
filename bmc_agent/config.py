@@ -163,6 +163,15 @@ class Config:
     # Set via ``--legacy-spec-gen`` on verify / verify-dir.
     use_legacy_spec_gen: bool = False
 
+    # Realism-feedback-driven in-sweep spec refinement. When True and
+    # realism rejects a CEx with verdict=UNREALISTIC plus a concrete
+    # key_concern, spec_refiner emits the targeted clause that would
+    # exclude the rejected CEx, re-runs BMC, and applies the soundness
+    # acceptance check (targeted CEx gone AND no previously-realistic
+    # CEx silently dropped). Opt-in via ``--enable-spec-refiner``;
+    # defaults off so existing pipeline behaviour is unchanged.
+    enable_spec_refiner: bool = False
+
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
     # Required for wire-format parsers (protobuf upb varints, length-prefixed

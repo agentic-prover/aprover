@@ -329,6 +329,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
         config.use_legacy_spec_gen = True
+    if getattr(args, "enable_spec_refiner", False):
+        config.enable_spec_refiner = True
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -598,6 +600,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
         config.use_legacy_spec_gen = True
+    if getattr(args, "enable_spec_refiner", False):
+        config.enable_spec_refiner = True
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1292,6 +1296,19 @@ def build_parser() -> argparse.ArgumentParser:
             "strictly better on internal functions."
         ),
     )
+    ver.add_argument(
+        "--enable-spec-refiner",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable realism-feedback-driven in-sweep spec refinement. When "
+            "realism rejects a CEx with verdict=UNREALISTIC + concrete "
+            "key_concern, spec_refiner asks the LLM for the precise clause "
+            "that would exclude the rejected CEx, re-runs BMC, and applies "
+            "the soundness acceptance check (targeted CEx gone AND no "
+            "previously-realistic CEx silently dropped). Opt-in."
+        ),
+    )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -1442,6 +1459,12 @@ def build_parser() -> argparse.ArgumentParser:
             "(caller-grounded, evidence-tagged). See `verify --help` for the "
             "full explanation. Use only for parity comparison."
         ),
+    )
+    vd.add_argument(
+        "--enable-spec-refiner",
+        action="store_true",
+        default=False,
+        help="See `verify --help` for the full explanation. Opt-in.",
     )
     vd.add_argument(
         "--follow-adjacent-rounds",
