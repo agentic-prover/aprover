@@ -98,27 +98,22 @@ WEAKEST formal expression that captures the SAFETY portion (e.g.
 result != NULL, stackpos in range) and put the rest in the JSON
 "reasoning" field — never mix prose into precondition / postcondition.
 
-OPTIONAL PRE-CLAUSE SPLIT (bug-hunt mode):
+OPTIONAL PRE-CLAUSE SPLIT (internal taxonomy):
 The JSON object may include two extra fields, "pre_validity" and
-"pre_protocol", that split the precondition into:
+"pre_protocol", that organise the precondition into:
 
-  * pre_validity — caller's obligation. Memory-safety clauses the
-    callee body literally requires for every execution: valid(p),
-    valid_range(buf, 0, n), !null(p), in_bounds(arr, i), no_overflow(),
-    sizeof bounds, pointer != NULL, index < length, size <= constant.
-    These are ASSERTED at every call site in bug-hunt mode — a caller
-    that violates them is reported as a real bug.
+  * pre_validity — caller-establishable memory-safety primitives:
+    valid(p), valid_range(buf, 0, n), !null(p), in_bounds(arr, i),
+    no_overflow(), sizeof bounds, pointer != NULL, index < length.
+  * pre_protocol — higher-level cooperation invariants: locked(L),
+    state machine equalities (obj->state == READY), reference counts,
+    attached / initialized flags.
 
-  * pre_protocol — caller cooperation. Higher-level invariants the
-    callee body assumes but cannot enforce: locked(L), state machine
-    equalities (obj->state == READY), reference counts, attached /
-    initialized / open flags, ghost predicates with no memory-safety
-    bite. These are ASSUMED, not asserted.
-
-When in doubt, classify as validity (asserting too much is debuggable;
-assuming too much hides bugs). Either field may be empty/absent — in
-that case the harness falls back to classifying the flat precondition
-heuristically.
+Both halves are ASSUMED uniformly in the harness; the split is only an
+internal organisation aid (it shapes evidence-tag trust scoring and
+gives the feedback loop a basis for which clauses to drop preferentially
+when an over-tight inferred clause causes spurious CExs). Either field
+may be empty/absent — the harness uses the flat precondition.
 """
 
 # System prompt variants. The strict prompt swaps the DSL grammar but
@@ -1093,6 +1088,7 @@ Function under spec:
 ```
 
 {fn_body_block}
+{field_accesses_block}
 {doc_annotations_block}
 {seed_clauses_block}
 {callers_block}
@@ -1151,6 +1147,23 @@ HARD RULES — your output will be rejected if any of these are violated:
      visible in the corpus. Emit pre/post as trivial ({{}}) with evidence
      ["signature_pattern"] (if seeds exist) or [] (if no signal at all);
      set uncertainty_notes="no caller evidence available".
+  6. FIELD-LEVEL GUARDS. For every entry in the "Field accesses to guard"
+     block, emit a corresponding `!null(<path>)` clause in pre_validity
+     unless one of the following holds:
+       * the access is marked `guarded` (body already NULL-checks before
+         dereferencing — read the body to confirm)
+       * the body proves at the access site that the field is non-NULL
+         via some other means (e.g., it was just assigned a non-NULL
+         allocation result)
+       * the field type is a primitive (not a pointer) — pointer guards
+         only apply to pointer-typed fields, which the body's deref tells
+         you about
+     Multi-hop chains: if `a->b->c` is accessed, you MUST emit guards
+     for every prefix that is itself a pointer: `!null(a->b)` AND
+     `!null(a->b->c)`. Use evidence tag `body:L<n>` from the hint plus
+     `caller_site_<idx>` if a caller establishes the same field.
+     Skipping field guards is the canonical cause of pointer_dereference
+     CEx storms — be exhaustive here.
 
 VALIDITY vs PROTOCOL — split your PRE clauses:
 
@@ -1185,6 +1198,7 @@ def render_caller_grounded_spec_prompt(
     address_taken_sites: list,
     doc_annotations: list,
     seed_clauses: list,
+    field_accesses: list,         # list[FieldAccessHint]
     callee_specs: dict,           # {name: Spec.to_dict()}
     n_callers_actual: int = 5,
 ) -> str:
@@ -1212,6 +1226,27 @@ def render_caller_grounded_spec_prompt(
         seed_clauses_block = "\n".join(lines) + "\n"
     else:
         seed_clauses_block = ""
+    if field_accesses:
+        # Dedup by path so the block isn't dominated by repeated accesses,
+        # but preserve the line offset of the FIRST occurrence so the LLM
+        # can cite body:L<n> in evidence tags.
+        seen: set[str] = set()
+        ordered: list = []
+        for h in field_accesses:
+            if h.path in seen:
+                continue
+            seen.add(h.path)
+            ordered.append(h)
+        lines = [
+            f"Field accesses to guard ({len(ordered)} unique chain(s) "
+            f"dereferenced through parameters; emit !null clauses for "
+            f"unguarded ones — see RULE 6):"
+        ]
+        for h in ordered:
+            lines.append(f"  - {h.render()}")
+        field_accesses_block = "\n".join(lines) + "\n"
+    else:
+        field_accesses_block = ""
     if callers:
         lines = [f"Observed call sites ({len(callers)} of {n_callers_actual} max):"]
         for i, c in enumerate(callers, start=1):
@@ -1246,6 +1281,7 @@ def render_caller_grounded_spec_prompt(
         n_callers=n_callers_actual,
         fn_signature=fn_signature,
         fn_body_block=fn_body_block,
+        field_accesses_block=field_accesses_block,
         doc_annotations_block=doc_annotations_block,
         seed_clauses_block=seed_clauses_block,
         callers_block=callers_block,

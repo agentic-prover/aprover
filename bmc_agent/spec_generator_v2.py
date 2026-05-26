@@ -425,6 +425,7 @@ class SpecGeneratorV2:
             address_taken_sites=bundle.address_taken_sites,
             doc_annotations=bundle.doc_annotations,
             seed_clauses=bundle.seed_clauses,
+            field_accesses=bundle.field_accesses,
             callee_specs=callee_specs_dict,
             n_callers_actual=self.k_callers,
         )

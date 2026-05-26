@@ -13,7 +13,9 @@ from bmc_agent.spec_evidence import (
     CallerEvidence,
     DocClause,
     EvidenceBundle,
+    FieldAccessHint,
     SeedClause,
+    extract_field_accesses,
     gather_evidence_bundle,
     harvest_address_taken_sites,
     harvest_callers,
@@ -315,3 +317,141 @@ def test_bundle_is_empty_reports_correctly(tmp_path):
         call_graph = {"orphan": set()}
     bundle = gather_evidence_bundle(fi, _P(), [], k_callers=5)
     assert bundle.is_empty()
+
+
+# ---------- extract_field_accesses (v2.1) -----------------------------------
+
+
+def test_field_extract_basic_param_field():
+    body = """{
+    struct match_list *m = p->inclusion_list;
+    return m->count;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    paths = {h.path for h in hits}
+    assert "p->inclusion_list" in paths
+    # m is a local, not a param → m->count should NOT be a hint
+    assert "m->count" not in paths
+
+
+def test_field_extract_multi_hop_emits_all_prefixes():
+    body = """{
+    return p->head->next->value;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    paths = {h.path for h in hits}
+    assert "p->head" in paths
+    assert "p->head->next" in paths
+    assert "p->head->next->value" in paths
+
+
+def test_field_extract_cast_alias_recognized():
+    """`a = (struct X *)_a;` should treat a->field as _a->field."""
+    body = """{
+    struct archive_match *a = (struct archive_match *)_a;
+    free(a->inclusion_unames);
+    free(a->exclusions);
+}"""
+    hits = extract_field_accesses(body, ["_a"])
+    paths = {h.path for h in hits}
+    assert "a->inclusion_unames" in paths
+    assert "a->exclusions" in paths
+
+
+def test_field_extract_skips_non_param_locals():
+    body = """{
+    struct foo *local = malloc(sizeof(*local));
+    local->field = 1;
+    return p->other;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    paths = {h.path for h in hits}
+    # local is malloc'd here, not a param alias — should not emit
+    assert "local->field" not in paths
+    assert "p->other" in paths
+
+
+def test_field_extract_guard_detection_simple():
+    body = """{
+    if (p->field == NULL)
+        return -1;
+    return p->field->value;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    field_hit = next(h for h in hits if h.path == "p->field" and h.line_offset >= 3)
+    # The deref on line 4 should be marked guarded by the if-check on line 2.
+    assert field_hit.guarded is True
+
+
+def test_field_extract_guard_via_truthy_check():
+    body = """{
+    if (p->field)
+        do_something(p->field->next);
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    # The p->field->next access happens AFTER the truthy check; should be guarded.
+    field_next = [h for h in hits if h.path == "p->field->next"]
+    assert field_next
+    assert field_next[0].guarded is True
+
+
+def test_field_extract_no_guard_when_no_check():
+    body = """{
+    return p->field->value;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    assert all(h.guarded is False for h in hits)
+
+
+def test_field_extract_strips_comments():
+    body = """{
+    /* p->commented_out should be ignored */
+    // p->line_commented either
+    return p->real_field;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    paths = {h.path for h in hits}
+    assert "p->real_field" in paths
+    assert "p->commented_out" not in paths
+    assert "p->line_commented" not in paths
+
+
+def test_field_extract_empty_body_empty_params():
+    assert extract_field_accesses("", ["p"]) == []
+    assert extract_field_accesses("{ return p->x; }", []) == []
+    assert extract_field_accesses("{ return p->x; }", ["q"]) == []  # not a param
+
+
+def test_field_extract_dedups_within_function():
+    """Same (path, line) shouldn't appear twice even if text matches twice."""
+    body = """{
+    if (p->x == p->x)  /* tautology — should still extract only once for this line */
+        return 0;
+}"""
+    hits = extract_field_accesses(body, ["p"])
+    # Two textual matches of p->x on the same line; should be deduped to 1.
+    on_line = [h for h in hits if h.path == "p->x" and h.line_offset == 1]
+    assert len(on_line) == 1
+
+
+def test_field_extract_bundle_includes_field_accesses():
+    """gather_evidence_bundle should populate bundle.field_accesses."""
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    sig = FunctionSignature(name="fn", return_type="int",
+                            parameters=[("struct foo *", "p")])
+    fi = FunctionInfo(
+        name="fn", signature=sig,
+        body="{ return p->field; }",
+        callees=set(), source_file="",
+    )
+    class _P:
+        path = "/tmp/_x.c"
+        function_definitions = {}
+        preprocessed_source = None
+        struct_definitions = {}
+        functions = {"fn": sig}
+        call_graph = {"fn": set()}
+    bundle = gather_evidence_bundle(fi, _P(), [], k_callers=3)
+    assert len(bundle.field_accesses) == 1
+    assert bundle.field_accesses[0].path == "p->field"
+    assert bundle.is_empty() is False  # field_accesses count as evidence

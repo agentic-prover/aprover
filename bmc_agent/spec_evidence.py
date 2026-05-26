@@ -75,6 +75,32 @@ class SeedClause:
 
 
 @dataclass
+class FieldAccessHint:
+    """A struct-field dereference observed in the function body.
+
+    `path` is the chain from the root parameter, e.g. ``a->inclusion_unames``
+    or ``a->inclusion_unames->next``. Multi-hop accesses imply EVERY prefix
+    must be non-NULL, so the prompt should request a clause for each
+    prefix length unless the body explicitly NULL-checks.
+
+    `guarded` is True when the body appears to NULL-check the access (e.g.,
+    `if (p->field != NULL) p->field->use()`). The detector is conservative
+    — it only marks True when an unambiguous syntactic guard precedes the
+    access in the same function. Unguarded accesses are the canonical
+    source of the pointer_dereference CEx storm.
+    """
+
+    path: str                       # e.g. "a->inclusion_unames"
+    root_param: str                 # the function parameter the chain starts from
+    line_offset: int                # 0-indexed line offset within the function body
+    guarded: bool = False           # body appears to NULL-check before access
+
+    def render(self) -> str:
+        guard = "  /* guarded */" if self.guarded else ""
+        return f"{self.path}{guard}  @body:L{self.line_offset + 1}"
+
+
+@dataclass
 class EvidenceBundle:
     """All evidence gathered for one function, ready to feed the LLM."""
 
@@ -83,6 +109,7 @@ class EvidenceBundle:
     address_taken_sites: list[CallerEvidence] = field(default_factory=list)
     doc_annotations: list[DocClause] = field(default_factory=list)
     seed_clauses: list[SeedClause] = field(default_factory=list)
+    field_accesses: list[FieldAccessHint] = field(default_factory=list)
 
     def is_empty(self) -> bool:
         return not (
@@ -90,6 +117,7 @@ class EvidenceBundle:
             or self.address_taken_sites
             or self.doc_annotations
             or self.seed_clauses
+            or self.field_accesses
         )
 
 
@@ -374,6 +402,137 @@ def harvest_address_taken_sites(
     return hits
 
 
+# ---------- field-access extraction (the v2.1 enhancement) ----------------
+
+# Strip block + line comments from C source. Cheap; doesn't handle nested
+# block comments (C has none) or comments inside string literals (rare in
+# parameter-dereference detection).
+_BLOCK_COMMENT_RX = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT_RX = re.compile(r"//[^\n]*")
+
+
+def _strip_comments(text: str) -> str:
+    return _LINE_COMMENT_RX.sub("", _BLOCK_COMMENT_RX.sub("", text))
+
+
+# `param = (cast)other_param;` — adds `param` to the alias set of other_param.
+# Common pattern in libarchive: `a = (struct archive_match *)_a;`
+_TYPE_CAST_ALIAS_RX = re.compile(
+    r"(?:\w[\w\s\*]*\s+)?(\w+)\s*=\s*\(\s*\w[\w\s\*]*\s*\)\s*(\w+)\s*;"
+)
+
+
+def _collect_param_aliases(body: str, param_names: set[str]) -> set[str]:
+    """Find local-variable aliases of parameters via type casts.
+
+    Returns the union of param_names and any local variable assigned a
+    cast of a parameter.
+    """
+    aliases = set(param_names)
+    for m in _TYPE_CAST_ALIAS_RX.finditer(body):
+        local, source = m.group(1), m.group(2)
+        if source in aliases and local != source:
+            aliases.add(local)
+    return aliases
+
+
+# Field-access pattern: identifier followed by one or more ->field steps.
+# Captures the full chain in a single match.
+_FIELD_CHAIN_RX = re.compile(r"\b(\w+)((?:\s*->\s*\w+)+)")
+
+
+def _detect_null_guard(body_above: str, full_path: str) -> bool:
+    """Conservative guard detector. True if the body above the access has
+    a clear NULL-check on the same full_path or a strict prefix of it.
+
+    Catches:
+        if (p->field == NULL) return ...;
+        if (p->field != NULL) ...
+        if (!p->field) return ...;
+        if (p->field) ... use p->field->next ...
+
+    Misses (false negatives — we'd emit a clause the LLM may then
+    discount based on body reading):
+        helper that null-checks via assert(p->field != NULL)
+        guard via early-return in a callee
+    """
+    # Build a regex for `path == NULL`, `path != NULL`, `!path`, `path)`-in-if
+    escaped = re.escape(full_path)
+    patterns = [
+        rf"{escaped}\s*==\s*NULL",
+        rf"{escaped}\s*!=\s*NULL",
+        rf"!\s*{escaped}\b",
+        rf"\bif\s*\([^)]*\b{escaped}\b[^)]*\)",
+    ]
+    for p in patterns:
+        if re.search(p, body_above):
+            return True
+    # Also check guards on a strict prefix of the path (e.g. checking
+    # `p->field` guards `p->field->subfield`).
+    parts = full_path.split("->")
+    for i in range(2, len(parts)):  # prefixes of length 2 .. n-1
+        prefix = "->".join(parts[:i])
+        for p in (rf"{re.escape(prefix)}\s*!=\s*NULL",
+                  rf"\bif\s*\([^)]*\b{re.escape(prefix)}\b[^)]*\)"):
+            if re.search(p, body_above):
+                return True
+    return False
+
+
+def extract_field_accesses(
+    body: str,
+    param_names: list[str] | set[str],
+) -> list[FieldAccessHint]:
+    """Find every struct-field dereference rooted at a parameter (or its
+    cast alias) in the function body. Emits one hint per distinct chain
+    prefix per accessing line.
+
+    Example: body containing ``a->inclusion_unames->next->name``
+        yields hints for:
+            a->inclusion_unames
+            a->inclusion_unames->next
+            a->inclusion_unames->next->name
+        (each must be non-NULL for the chain to be a valid dereference).
+
+    De-dups within the function: the same (path, line) pair is emitted
+    once even if it textually appears multiple times.
+    """
+    if not body:
+        return []
+    cleaned = _strip_comments(body)
+    aliases = _collect_param_aliases(cleaned, set(param_names))
+    if not aliases:
+        return []
+
+    lines = cleaned.split("\n")
+    hits: list[FieldAccessHint] = []
+    seen: set[tuple[str, int]] = set()
+    cumulative_above = ""
+    for i, line in enumerate(lines):
+        for m in _FIELD_CHAIN_RX.finditer(line):
+            root = m.group(1)
+            if root not in aliases:
+                continue
+            chain = m.group(2).replace(" ", "")
+            # Build prefixes: root->f1, root->f1->f2, ...
+            parts = chain.split("->")[1:]  # first element is empty before the leading ->
+            for k in range(1, len(parts) + 1):
+                path = root + "->" + "->".join(parts[:k])
+                key = (path, i)
+                if key in seen:
+                    continue
+                seen.add(key)
+                guarded = _detect_null_guard(cumulative_above, path)
+                hits.append(FieldAccessHint(
+                    path=path,
+                    root_param=root,
+                    line_offset=i,
+                    guarded=guarded,
+                ))
+        cumulative_above += line + "\n"
+    return hits
+
+
 # ---------- doc-annotation parsing ------------------------------------------
 
 # Recognises:
@@ -544,6 +703,7 @@ def gather_evidence_bundle(
         addr_sites = harvest_address_taken_sites(
             func_info.name, corpus_paths, k=3, context_radius=context_radius
         )
+    param_names = [n for _, n in func_info.signature.parameters if n]
     return EvidenceBundle(
         fn_name=func_info.name,
         callers=callers,
@@ -554,4 +714,5 @@ def gather_evidence_bundle(
             struct_definitions=struct_definitions,
             cbmc_unwind=cbmc_unwind,
         ),
+        field_accesses=extract_field_accesses(func_info.body, param_names),
     )
