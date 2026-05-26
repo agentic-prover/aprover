@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Optional
 from bmc_agent.logger import get_logger
 
 if TYPE_CHECKING:
+    from bmc_agent.config import Config
     from bmc_agent.llm import LLMClient
 
 logger = get_logger("oracle_disagreement")
@@ -325,6 +326,90 @@ def diagnose(
 # ---------------------------------------------------------------------------
 # Application (writes back to bug_report.json)
 # ---------------------------------------------------------------------------
+
+
+_CPROVER_ASSUME_WRAP_RE = re.compile(
+    r"^\s*__CPROVER_assume\s*\(\s*(?P<inner>.+?)\s*\)\s*;?\s*$",
+    re.DOTALL,
+)
+
+
+def _strip_cprover_assume_wrap(clause: str) -> str:
+    """Strip a leading ``__CPROVER_assume(...)`` wrapper if present.
+
+    The HARNESS_ENCODING diagnosis tends to return clauses already wrapped
+    in ``__CPROVER_assume(...)``, while the learned-constraints store
+    expects BARE clauses (its emit path wraps them at harness-gen time).
+    Strip exactly one level of wrapping so we don't end up with
+    ``__CPROVER_assume(__CPROVER_assume(...))`` after the emit pass.
+    """
+    if not clause:
+        return clause
+    m = _CPROVER_ASSUME_WRAP_RE.match(clause.strip())
+    if m is None:
+        return clause.strip()
+    return m.group("inner").strip()
+
+
+def persist_diagnosis_to_learned_constraints(
+    config: "Config",
+    function_name: str,
+    diagnosis: DiagnosisResult,
+    source_property: str = "",
+) -> bool:
+    """For actionable diagnoses (SPEC_REFINE / HARNESS_ENCODING), turn
+    the LLM-proposed clause into a ``Remediation`` and persist it
+    via ``LearnedConstraintsStore``. The harness-gen path's
+    ``_emit_learned_clauses`` will pick it up on the next BMC run
+    for this function.
+
+    Returns True when something was newly persisted (caller can use
+    this signal to add the function to the re-verification queue).
+    """
+    if diagnosis.verdict == DiagnosisVerdict.SPEC_REFINE:
+        clause = _strip_cprover_assume_wrap(diagnosis.suggested_clause)
+    elif diagnosis.verdict == DiagnosisVerdict.HARNESS_ENCODING:
+        clause = _strip_cprover_assume_wrap(diagnosis.suggested_encoding)
+    else:
+        return False
+    if not clause:
+        return False
+
+    # Skip the "feedback loop disabled" guard — Phase 3d's diagnoses
+    # are themselves part of the feedback loop, and the user opted in
+    # by enabling realism + dyn-val. Persistence is still confined to
+    # the project's artifact_dir.
+    try:
+        from bmc_agent.feedback_loop import (
+            LearnedConstraintsStore,
+            Remediation,
+            RemediationScope,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Phase 3d persist failed (feedback_loop import error): %s", exc,
+        )
+        return False
+
+    rem = Remediation(
+        scope=RemediationScope.FUNCTION_SPEC,
+        clause=clause,
+        rationale=(
+            f"Phase 3d oracle-disagreement diagnosis "
+            f"({diagnosis.verdict.value}, confidence={diagnosis.confidence}): "
+            f"{diagnosis.rationale[:300]}"
+        ),
+        confidence=diagnosis.confidence or "low",
+    )
+    try:
+        store = LearnedConstraintsStore(getattr(config, "artifact_dir", "."))
+        return store.record(function_name, rem, source_property=source_property)
+    except Exception as exc:
+        logger.warning(
+            "Phase 3d persist failed (store error) for '%s': %s",
+            function_name, exc,
+        )
+        return False
 
 
 def apply_diagnosis(report: dict, diagnosis: DiagnosisResult) -> dict:

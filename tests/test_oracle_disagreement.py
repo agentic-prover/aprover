@@ -379,12 +379,16 @@ def test_apply_diagnosis_inconclusive_attaches_no_change():
 
 def _make_pipeline(tmp_path, llm):
     """Build a minimal AMCPipeline whose only initialised pieces are the
-    fields _diagnose_oracle_disagreements touches: self.store, self.llm."""
+    fields _diagnose_oracle_disagreements touches: self.store, self.llm,
+    self.config (artifact_dir routes the learned-constraints store)."""
     from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.config import Config
     from bmc_agent.pipeline import AMCPipeline
+    art = str(tmp_path / "artifacts")
     p = object.__new__(AMCPipeline)
-    p.store = ArtifactStore(str(tmp_path / "artifacts"))
+    p.store = ArtifactStore(art)
     p.llm = llm
+    p.config = Config(llm_api_key="test", artifact_dir=art)
     return p
 
 
@@ -472,3 +476,194 @@ def test_pipeline_tolerates_unparseable_bug_report(tmp_path):
     fn_dir = p.store._fn_dir("drv", "fn")
     (fn_dir / "bug_report.json").write_text("{not valid json")
     p._diagnose_oracle_disagreements("drv", "fn")  # no exception
+
+
+# ---------------------------------------------------------------------------
+# Auto-application: persist diagnosis as learned constraint
+# ---------------------------------------------------------------------------
+
+def test_strip_cprover_assume_wrap_strips_outer_call():
+    from bmc_agent.oracle_disagreement import _strip_cprover_assume_wrap
+    assert _strip_cprover_assume_wrap("__CPROVER_assume(p != NULL);") == "p != NULL"
+    assert _strip_cprover_assume_wrap("__CPROVER_assume(p != NULL)") == "p != NULL"
+    assert _strip_cprover_assume_wrap("  __CPROVER_assume( p->magic == 0xCAD );  ") == "p->magic == 0xCAD"
+
+
+def test_strip_cprover_assume_wrap_passes_through_bare_clause():
+    from bmc_agent.oracle_disagreement import _strip_cprover_assume_wrap
+    assert _strip_cprover_assume_wrap("p != NULL") == "p != NULL"
+    assert _strip_cprover_assume_wrap("_a->magic == 0xCAD11C9") == "_a->magic == 0xCAD11C9"
+
+
+def test_strip_cprover_assume_wrap_empty_returns_empty():
+    from bmc_agent.oracle_disagreement import _strip_cprover_assume_wrap
+    assert _strip_cprover_assume_wrap("") == ""
+
+
+def test_persist_spec_refine_records_function_clause(tmp_path):
+    """SPEC_REFINE diagnosis → persists clause via LearnedConstraintsStore
+    in the function_clauses slot for the given function."""
+    from bmc_agent.config import Config
+    from bmc_agent.feedback_loop import LearnedConstraintsStore
+    from bmc_agent.oracle_disagreement import (
+        DiagnosisResult, DiagnosisVerdict,
+        persist_diagnosis_to_learned_constraints,
+    )
+    art = tmp_path / "art"
+    art.mkdir()
+    cfg = Config(llm_api_key="x", artifact_dir=str(art))
+    diag = DiagnosisResult(
+        verdict=DiagnosisVerdict.SPEC_REFINE,
+        suggested_clause="_a != NULL && _a->magic == 0xCAD11C9",
+        rationale="caller-contract slip",
+        confidence="high",
+    )
+    persisted = persist_diagnosis_to_learned_constraints(
+        cfg, "archive_match_include_uid", diag, source_property="p.5",
+    )
+    assert persisted is True
+    store = LearnedConstraintsStore(str(art))
+    clauses = store.function_clauses("archive_match_include_uid")
+    assert any("_a->magic" in c for c in clauses)
+
+
+def test_persist_harness_encoding_strips_wrap_and_records(tmp_path):
+    """HARNESS_ENCODING diagnosis often returns an already-wrapped
+    ``__CPROVER_assume(...)`` clause; persistence strips the wrap so the
+    harness emitter doesn't double-wrap on the next BMC run."""
+    from bmc_agent.config import Config
+    from bmc_agent.feedback_loop import LearnedConstraintsStore
+    from bmc_agent.oracle_disagreement import (
+        DiagnosisResult, DiagnosisVerdict,
+        persist_diagnosis_to_learned_constraints,
+    )
+    art = tmp_path / "art"
+    art.mkdir()
+    cfg = Config(llm_api_key="x", artifact_dir=str(art))
+    diag = DiagnosisResult(
+        verdict=DiagnosisVerdict.HARNESS_ENCODING,
+        suggested_encoding="__CPROVER_assume(buf->len < buf->cap);",
+        rationale="harness over-permits buf->len > cap",
+        confidence="medium",
+    )
+    persisted = persist_diagnosis_to_learned_constraints(cfg, "fn", diag)
+    assert persisted is True
+    clauses = LearnedConstraintsStore(str(art)).function_clauses("fn")
+    # Bare clause stored, no double __CPROVER_assume wrap
+    assert "buf->len < buf->cap" in clauses[0]
+    assert not clauses[0].startswith("__CPROVER_assume")
+
+
+def test_persist_property_fp_does_not_record():
+    """PROPERTY_FP diagnoses don't produce a learnable clause — they
+    just downgrade the finding. Persist call should be a no-op."""
+    from bmc_agent.config import Config
+    from bmc_agent.oracle_disagreement import (
+        DiagnosisResult, DiagnosisVerdict,
+        persist_diagnosis_to_learned_constraints,
+    )
+    cfg = Config(llm_api_key="x", artifact_dir="/tmp/_unused_should_not_create")
+    diag = DiagnosisResult(
+        verdict=DiagnosisVerdict.PROPERTY_FP,
+        rationale="over-cautious BMC check",
+        confidence="high",
+    )
+    assert persist_diagnosis_to_learned_constraints(cfg, "fn", diag) is False
+
+
+def test_persist_inconclusive_does_not_record():
+    from bmc_agent.config import Config
+    from bmc_agent.oracle_disagreement import (
+        DiagnosisResult, DiagnosisVerdict,
+        persist_diagnosis_to_learned_constraints,
+    )
+    cfg = Config(llm_api_key="x", artifact_dir="/tmp/_unused_inconclusive")
+    diag = DiagnosisResult(
+        verdict=DiagnosisVerdict.INCONCLUSIVE, rationale="?", confidence="low",
+    )
+    assert persist_diagnosis_to_learned_constraints(cfg, "fn", diag) is False
+
+
+def test_persist_empty_clause_does_not_record(tmp_path):
+    """A SPEC_REFINE verdict that didn't actually emit a clause (LLM
+    bug or malformed response) must not record an empty clause."""
+    from bmc_agent.config import Config
+    from bmc_agent.oracle_disagreement import (
+        DiagnosisResult, DiagnosisVerdict,
+        persist_diagnosis_to_learned_constraints,
+    )
+    cfg = Config(llm_api_key="x", artifact_dir=str(tmp_path))
+    diag = DiagnosisResult(
+        verdict=DiagnosisVerdict.SPEC_REFINE,
+        suggested_clause="", rationale="x", confidence="low",
+    )
+    assert persist_diagnosis_to_learned_constraints(cfg, "fn", diag) is False
+
+
+# ---------------------------------------------------------------------------
+# Pipeline integration: return-value drives self_recheck_queue
+# ---------------------------------------------------------------------------
+
+def test_pipeline_returns_true_when_spec_refine_persists(tmp_path):
+    """When the LLM emits SPEC_REFINE, the pipeline method should
+    persist the clause AND return True so the caller adds the function
+    to the re-verification queue."""
+    llm = MagicMock()
+    llm.complete.return_value = json.dumps({
+        "verdict": "spec_refine",
+        "rationale": "tight pre missing",
+        "suggested_clause": "_a != NULL && _a->magic == 0xCAD11C9",
+        "confidence": "high",
+    })
+
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.artifacts import ArtifactStore
+    art = tmp_path / "art"
+    cfg = Config(llm_api_key="x", artifact_dir=str(art))
+    p = object.__new__(AMCPipeline)
+    p.store = ArtifactStore(str(art))
+    p.llm = llm
+    p.config = cfg
+    fn_dir = p.store._fn_dir("drv", "fn")
+    _write_bug_report(
+        fn_dir, function_name="fn",
+        violated_property="fn.pointer_dereference.5",
+        confidence="confirmed_dynamic",
+        realism_check={"verdict": "realistic", "reasoning": "x"},
+        dynamic_outcome="not_triggered",
+    )
+    result = p._diagnose_oracle_disagreements("drv", "fn")
+    assert result is True  # signals "add to recheck queue"
+
+    # Persisted clause is in the store
+    from bmc_agent.feedback_loop import LearnedConstraintsStore
+    clauses = LearnedConstraintsStore(str(art)).function_clauses("fn")
+    assert any("_a->magic" in c for c in clauses)
+
+
+def test_pipeline_returns_false_when_property_fp(tmp_path):
+    """PROPERTY_FP downgrades the finding but does NOT need re-verify."""
+    llm = MagicMock()
+    llm.complete.return_value = json.dumps({
+        "verdict": "property_fp",
+        "rationale": "over-cautious",
+        "confidence": "high",
+    })
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.artifacts import ArtifactStore
+    art = tmp_path / "art"
+    cfg = Config(llm_api_key="x", artifact_dir=str(art))
+    p = object.__new__(AMCPipeline)
+    p.store = ArtifactStore(str(art))
+    p.llm = llm
+    p.config = cfg
+    fn_dir = p.store._fn_dir("drv", "fn")
+    _write_bug_report(
+        fn_dir, function_name="fn", confidence="confirmed_dynamic",
+        realism_check={"verdict": "realistic"},
+        dynamic_outcome="not_triggered",
+    )
+    result = p._diagnose_oracle_disagreements("drv", "fn")
+    assert result is False

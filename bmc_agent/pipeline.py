@@ -680,13 +680,21 @@ class AMCPipeline:
         # FAIL, realism says REALISTIC, and dyn-val says NOT_TRIGGERED,
         # the three oracles contradict — most often because the harness
         # admits a state real callers can't produce. Run a single LLM
-        # call to diagnose which oracle to trust; on PROPERTY_FP verdict
-        # auto-downgrade. SPEC_REFINE / HARNESS_ENCODING diagnoses are
-        # attached for review (not yet auto-applied).
+        # call to diagnose which oracle to trust:
+        #   * PROPERTY_FP        → downgrade confidence to 'unlikely'.
+        #   * SPEC_REFINE        → persist the suggested clause and
+        #                          enqueue for Phase 3c re-verification.
+        #   * HARNESS_ENCODING   → persist the suggested __CPROVER_assume
+        #                          (bare clause) and enqueue.
+        #   * INCONCLUSIVE       → attach for review only.
         # ------------------------------------------------------------------
         for fn_name in {r.function_name for r in bug_reports}:
             try:
-                self._diagnose_oracle_disagreements(driver_name, fn_name)
+                if self._diagnose_oracle_disagreements(driver_name, fn_name):
+                    # SPEC_REFINE / HARNESS_ENCODING persisted a clause
+                    # — Phase 3c picks it up via _emit_learned_clauses
+                    # and re-runs BMC under the tighter PRE.
+                    self_recheck_queue.add(fn_name)
             except Exception as exc:
                 logger.warning(
                     "Oracle-disagreement diagnosis failed for '%s': %s",
@@ -935,39 +943,52 @@ class AMCPipeline:
 
     def _diagnose_oracle_disagreements(
         self, driver_name: str, fn_name: str,
-    ) -> None:
+    ) -> bool:
         """Phase 3d: detect a three-oracle disagreement on this
         function's saved bug_report and run a single LLM diagnosis when
         one is found. The diagnosis is attached to bug_report.json under
-        ``oracle_disagreement_diagnosis`` and, when the verdict is
-        ``property_fp``, the finding is auto-downgraded to 'unlikely'.
+        ``oracle_disagreement_diagnosis``.
 
-        SPEC_REFINE / HARNESS_ENCODING diagnoses are attached for review
-        — auto-application would require re-running BMC and is left for
-        a follow-up commit.
+        Auto-application policy:
+
+        * PROPERTY_FP → downgrade confidence to ``unlikely``.
+        * SPEC_REFINE / HARNESS_ENCODING → persist the LLM-proposed
+          clause to ``learned_constraints.json`` (function_clauses
+          slot for ``fn_name``). The harness-gen path's
+          ``_emit_learned_clauses`` picks it up on the next BMC run.
+          Returns True so the caller adds ``fn_name`` to the
+          re-verification queue.
+        * INCONCLUSIVE → attach but no auto-action.
+
+        Returns True when the function should be re-verified under a
+        newly-persisted clause.
         """
         import json as _json
         from pathlib import Path
         from bmc_agent.oracle_disagreement import (
-            apply_diagnosis, detect_disagreement, diagnose,
+            DiagnosisVerdict,
+            apply_diagnosis,
+            detect_disagreement,
+            diagnose,
+            persist_diagnosis_to_learned_constraints,
         )
 
         fn_dir = Path(self.store._fn_dir(driver_name, fn_name))
         br_path = fn_dir / "bug_report.json"
         if not br_path.exists():
-            return
+            return False
 
         try:
             payload = _json.loads(br_path.read_text())
         except Exception:
-            return
+            return False
         report = payload.get("report") or {}
         if not isinstance(report, dict):
-            return
+            return False
 
         case = detect_disagreement(report)
         if case is None:
-            return
+            return False
 
         logger.info(
             "Oracle-disagreement detected for '%s' (%s): "
@@ -983,7 +1004,7 @@ class AMCPipeline:
                 "— leaving finding unchanged",
                 fn_name,
             )
-            return
+            return False
 
         report = apply_diagnosis(report, diagnosis)
         payload["report"] = report
@@ -994,6 +1015,28 @@ class AMCPipeline:
             "confidence=%s",
             fn_name, diagnosis.verdict.value, diagnosis.confidence,
         )
+
+        # Auto-apply for SPEC_REFINE / HARNESS_ENCODING — persist the
+        # LLM-proposed clause so Phase 3c re-runs BMC under the tighter
+        # spec. PROPERTY_FP and INCONCLUSIVE return False; the
+        # downgrade for PROPERTY_FP is enough action on its own.
+        if diagnosis.verdict in (
+            DiagnosisVerdict.SPEC_REFINE,
+            DiagnosisVerdict.HARNESS_ENCODING,
+        ):
+            persisted = persist_diagnosis_to_learned_constraints(
+                self.config,
+                fn_name,
+                diagnosis,
+                source_property=str(report.get("violated_property") or ""),
+            )
+            if persisted:
+                logger.info(
+                    "Phase 3d: persisted '%s' clause for '%s' — will re-verify",
+                    diagnosis.verdict.value, fn_name,
+                )
+                return True
+        return False
 
     def _synthesize_sibling_cex_summary(
         self, driver_name: str, fn_name: str,
