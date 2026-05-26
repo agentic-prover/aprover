@@ -2,7 +2,7 @@
 return contracts (instead of nondet pointers).
 
 Without these contracts, kmalloc'd buffers in kernel harnesses are
-unconstrained nondet pointers, which trips bug-hunt's caller-contract
+unconstrained nondet pointers, which produces spurious caller-contract
 R_OK assertions on legitimate caller code (see
 findings/empirical_validity_protocol_2026-05-22.md).
 """

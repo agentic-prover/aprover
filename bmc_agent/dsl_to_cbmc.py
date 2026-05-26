@@ -230,11 +230,10 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     #     genuine bugs.
     #   * assert context — emit a real bounds check
     #     ``ptr != NULL && lo >= 0 && hi >= lo && __CPROVER_r_ok(ptr,
-    #     hi * sizeof(*ptr))``. Under bug-hunt the assert sits at the top
-    #     of the callee stub; the caller's actual allocation must cover
-    #     ``hi`` elements. Without the r_ok term, the caller-contract slip
-    #     for valid_range never surfaces — the assert is satisfied by any
-    #     non-NULL pointer regardless of allocated size.
+    #     hi * sizeof(*ptr))``. Used when asserting a precondition
+    #     directly (e.g. FUT POST asserts via postcond_to_assert); the
+    #     r_ok term ensures the allocation actually covers the range,
+    #     not just that the pointer is non-NULL.
     mm = _match_call(atom, "valid_range")
     if mm is not None and len(mm[2]) == 3:
         ptr, lo, hi = mm[2]
@@ -511,22 +510,6 @@ def precond_to_assume(precondition: str, params: list[str]) -> list[str]:
     """
     return _filter_tautological(
         _condition_to_stmts(precondition, context="assume", params=params)
-    )
-
-
-def precond_to_assert(precondition: str, params: list[str]) -> list[str]:
-    """Convert a precondition string to a list of ``assert(...)`` C
-    statements.
-
-    Used in bug-hunt mode at the top of a callee stub: the assert fires
-    when the caller's actual argument expressions (bound to the stub's
-    formal parameters) violate the validity clauses. CBMC reports the
-    failure at the caller's call site, which is exactly the
-    "caller-contract slip" we want to surface (see
-    findings/methodology_insight_2026-05-22.md).
-    """
-    return _filter_tautological(
-        _condition_to_stmts(precondition, context="assert", params=params)
     )
 
 

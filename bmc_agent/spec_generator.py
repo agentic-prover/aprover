@@ -416,8 +416,8 @@ class ParsedSpec(_ParsedSpecBase):
     ``precondition`` / ``postcondition`` are the legacy flat fields (still
     populated for back-compat). ``pre_validity`` / ``pre_protocol`` are
     optional structured pre-clause splits the LLM may emit alongside the
-    flat ``precondition`` — used by bug-hunt spec mode to assert the
-    validity clauses at the caller call site. Both default to ``""`` so
+    flat ``precondition`` — used as internal organisation (v2's evidence
+    trust scoring + feedback loop drop-priority). Both default to ``""`` so
     the downstream ``Spec.split_precondition`` falls back to the
     classifier.
 
@@ -546,9 +546,10 @@ def _parse_llm_spec_response(
         if pre and post:
             # Phase-2 structured split: when the LLM emits pre_validity /
             # pre_protocol alongside the flat precondition, surface them
-            # so bug-hunt mode can assert validity at the call site. Both
-            # default to "" — Spec.split_precondition then falls back to
-            # the classifier in spec.py.
+            # for internal organisation (v2 evidence trust scoring +
+            # feedback-loop drop-priority). Both default to "" —
+            # Spec.split_precondition then falls back to the classifier
+            # in spec.py.
             pre_validity = (data.get("pre_validity") or "").strip()
             pre_protocol = (data.get("pre_protocol") or "").strip()
             return ParsedSpec(

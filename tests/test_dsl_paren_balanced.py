@@ -4,7 +4,7 @@ Regression: the old `[^)]+` regex pattern stopped at the FIRST `)`,
 which for atoms with C casts inside the argument captured the cast's
 inner close paren instead of the call's outer close paren. The
 translator then emitted malformed C that wouldn't compile. Observed
-on bug-hunt sweep of neuron_cdev.c: 62/118 functions failed to
+on sweep of neuron_cdev.c: 62/118 functions failed to
 compile due to this issue.
 """
 

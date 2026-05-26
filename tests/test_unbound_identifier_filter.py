@@ -8,7 +8,7 @@ to a comment so the harness still compiles.
 
 from __future__ import annotations
 
-from bmc_agent.dsl_to_cbmc import precond_to_assume, precond_to_assert
+from bmc_agent.dsl_to_cbmc import precond_to_assume
 
 
 def _bodies(stmts: list[str]) -> str:
@@ -73,13 +73,10 @@ def test_loop_quantifier_leak_dropped():
     assert "dropped" in body
 
 
-def test_assert_wrapper_does_not_trip_filter():
-    """``assert`` is the wrapper macro emitted by ``precond_to_assert``;
-    must not be flagged as an unbound identifier."""
-    out = precond_to_assert("valid(nd)", params=["nd"])
-    body = _bodies(out)
-    assert "assert(nd != NULL)" in body
-    assert "dropped" not in body
+# test_assert_wrapper_does_not_trip_filter: removed alongside
+# precond_to_assert (which the bug-hunt-mode deletion took with it).
+# The equivalent property for postcond_to_assert is covered by the
+# main path's own integration tests; no separate filter test needed.
 
 
 def test_filter_preserves_postcondition_result_var():

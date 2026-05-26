@@ -1,6 +1,6 @@
 """Tests for the FUNCTION_POST_RELAX remediation scope.
 
-Symmetric to CALLEE_SPEC_RELAX (which drops over-tight PRE clauses
+Drops over-tight POST clauses (analogous to the no-longer-extant CALLEE_SPEC_RELAX,
 from a callee's spec) but for the FUT's own postcondition. Triggered
 when CBMC reports ``main.assertion.<N>`` violations that trace to an
 over-tight LLM-emitted POST (e.g., ``result == 0 || result < 0`` when
@@ -30,15 +30,13 @@ def test_parse_function_post_relax_scope():
     r = _parse_remediation(raw, "ncdev_bar_rw")
     assert r.scope == RemediationScope.FUNCTION_POST_RELAX
     assert r.clause == "result == 0 || result < 0"
-    # Callee is empty for FUT-side scopes.
-    assert r.callee == ""
 
 
-def test_parse_function_post_relax_does_not_require_stub_callee():
-    """FUT-POST relaxations are about the FUT's own spec — the
-    parser must accept this scope without a stub_callee argument."""
+def test_parse_function_post_relax_basic():
+    """FUT-POST relaxations are about the FUT's own spec — parser must
+    accept this scope on its own without any callee-side argument."""
     raw = '{"scope": "function-post-relax", "clause": "result > 0"}'
-    r = _parse_remediation(raw, "fut", stub_callee="")
+    r = _parse_remediation(raw, "fut")
     assert r.scope == RemediationScope.FUNCTION_POST_RELAX
 
 

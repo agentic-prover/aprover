@@ -18,7 +18,6 @@ from typing import Optional
 from bmc_agent.config import Config
 from bmc_agent.dsl_to_cbmc import (
     postcond_to_assert,
-    precond_to_assert,
     precond_to_assume,
 )
 from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
@@ -528,8 +527,6 @@ def _generate_stub(
     callee_spec: Optional[Spec],
     parsed_file: ParsedCFile,
     extern_sigs: Optional[dict] = None,
-    spec_mode: str = "functional",
-    callee_relaxations: Optional[list[str]] = None,
 ) -> str:
     """Generate a C stub function for a callee.
 
@@ -537,15 +534,12 @@ def _generate_stub(
     objects sourced from other parsed files (multi-file mode).  When the callee
     is not in *parsed_file.functions* we check here before giving up.
 
-    *spec_mode* selects how the callee's PRE is enforced inside the stub:
-
-    - ``"functional"`` (default): assume the full PRE inside the stub
-      body. This is the historical behaviour.
-    - ``"bug-hunt"``: split the PRE into validity (caller's obligation,
-      asserted at the top of the stub so CBMC reports the violation at
-      the caller's call site) and protocol (assumed). This exposes the
-      "caller-contract slip" failure mode documented in
-      findings/methodology_insight_2026-05-22.md.
+    The callee's PRE (pre_validity + pre_protocol if split, else the flat
+    precondition) is assumed via ``__CPROVER_assume(...)`` inside the stub.
+    v2 spec-gen's caller-grounding makes the previous bug-hunt mode's
+    assert-validity-at-call-site mechanism obsolete: a caller-derived PRE
+    already excludes caller-contract-slip inputs at spec time, so there
+    is nothing for an assertion to fire on at verification time.
     """
     sig = parsed_file.functions.get(callee_name)
     if sig is None and extern_sigs:
@@ -590,56 +584,13 @@ def _generate_stub(
         f"{ret_type} {stub_name}({params_str}) {{",
     ]
 
-    # Apply any callee-spec relaxations the feedback loop has learned
-    # for THIS callee (bug-hunt mode FP corrections). The caller of
-    # _generate_stub passes the per-callee drop list; we replace the
-    # working ``callee_spec`` with a copy whose PRE has those clauses
-    # removed. The original spec object isn't mutated — callers may
-    # share it across multiple FUTs.
-    if callee_relaxations and callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
-        from bmc_agent.spec import Spec as _Spec, drop_clauses as _drop
-        callee_spec = _Spec(
-            function_name=callee_spec.function_name,
-            precondition=_drop(callee_spec.precondition, callee_relaxations),
-            postcondition=callee_spec.postcondition,
-            pre_validity=_drop(callee_spec.pre_validity, callee_relaxations),
-            pre_protocol=_drop(callee_spec.pre_protocol, callee_relaxations),
-            callee_specs=callee_spec.callee_specs,
-            loop_invariants=callee_spec.loop_invariants,
-            status=callee_spec.status,
-            spec_disagreement=callee_spec.spec_disagreement,
-        )
-
     if callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
         param_names = [pname for _, pname in params]
-        if spec_mode == "bug-hunt":
-            pre_validity, pre_protocol = callee_spec.split_precondition()
-            assert_stmts = (
-                precond_to_assert(pre_validity, param_names)
-                if pre_validity.strip()
-                else []
-            )
-            assume_stmts = (
-                precond_to_assume(pre_protocol, param_names)
-                if pre_protocol.strip()
-                else []
-            )
-            if assert_stmts:
-                lines.append(
-                    "    /* bug-hunt: assert validity clauses (caller obligation) */"
-                )
-                for stmt in assert_stmts:
-                    lines.append(f"    {stmt}")
-            if assume_stmts:
-                lines.append("    /* bug-hunt: assume protocol clauses */")
-                for stmt in assume_stmts:
-                    lines.append(f"    {stmt}")
-        else:
-            assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
-            if assume_stmts:
-                lines.append("    /* Assume callee precondition */")
-                for stmt in assume_stmts:
-                    lines.append(f"    {stmt}")
+        assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
+        if assume_stmts:
+            lines.append("    /* Assume callee precondition */")
+            for stmt in assume_stmts:
+                lines.append(f"    {stmt}")
 
     if ret_type.strip() == "void":
         lines.append("    /* void return — nothing to havoc */")
@@ -1353,11 +1304,10 @@ def _builtin_stub_return_contract(
         # (or NULL on OOM). The ``_noprof`` suffix is the
         # mem-alloc-profiling-disabled variant introduced in recent
         # kernels. Without these entries the harness sees kmalloc'd
-        # buffers as unconstrained nondet pointers, which trips
-        # bug-hunt's caller-contract R_OK assertions on the
-        # destination of copy_from_user even when the real code is
-        # correct (see findings/empirical_validity_protocol_2026-05-22.md
-        # — the last harness-modelling artefact).
+        # buffers as unconstrained nondet pointers, producing spurious
+        # R_OK assertion failures on the destination of copy_from_user
+        # even when the real code is correct (see findings/
+        # empirical_validity_protocol_2026-05-22.md).
         "kmalloc", "kmalloc_noprof", "__kmalloc_noprof",
         "kzalloc", "kzalloc_noprof",
         "vmalloc", "vmalloc_noprof", "vzalloc", "vzalloc_noprof",
@@ -3053,24 +3003,11 @@ class HarnessGenerator:
     def __init__(self, config: Config) -> None:
         self.config = config
 
-    def _callee_relaxations(self, callee_name: str) -> list[str]:
-        """Read persisted ``callee_relaxations`` for *callee_name* from
-        the feedback-loop store. Failure (no file yet, store schema
-        mismatch, etc.) is silent — the relaxations are an OPTIMIZATION,
-        not a correctness invariant. The first-run case is always
-        "no relaxations recorded" → empty list → original PRE used.
-        """
-        try:
-            from bmc_agent.feedback_loop import LearnedConstraintsStore
-            store = LearnedConstraintsStore(self.config.artifact_dir)
-            return store.callee_relaxations(callee_name)
-        except Exception:
-            return []
-
     def _function_post_relaxations(self, func_name: str) -> list[str]:
-        """Read persisted ``function_post_relaxations`` for *func_name*.
-        Symmetric to ``_callee_relaxations`` but applied to the FUT's
-        own postcondition before it becomes an ``assert(...)`` in main().
+        """Read persisted ``function_post_relaxations`` for *func_name* —
+        applied to the FUT's own postcondition before it becomes an
+        ``assert(...)`` in main(). Triggered by realism rejection of a
+        FUT-POST violation; orthogonal to caller-grounded spec gen.
         """
         try:
             from bmc_agent.feedback_loop import LearnedConstraintsStore
@@ -3139,8 +3076,6 @@ class HarnessGenerator:
                     cname,
                     callee_spec,
                     parsed_file,
-                    spec_mode=getattr(self.config, "spec_mode", "functional"),
-                    callee_relaxations=self._callee_relaxations(cname),
                 )
                 stubs_to_substitute.add(cname)
             stub_sections.append(stub_src)
@@ -3412,8 +3347,6 @@ class HarnessGenerator:
                 cname,
                 callee_spec,
                 parsed_file,
-                spec_mode=getattr(self.config, "spec_mode", "functional"),
-                callee_relaxations=self._callee_relaxations(cname),
             )
             stub_sections.append(stub_src)
 
@@ -3934,8 +3867,6 @@ class HarnessGenerator:
                 callee_spec,
                 parsed_file,
                 extern_sigs,
-                spec_mode=getattr(self.config, "spec_mode", "functional"),
-                callee_relaxations=self._callee_relaxations(callee_name),
             )
             stub_sections.append(stub_src)
 

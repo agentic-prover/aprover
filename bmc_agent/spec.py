@@ -56,7 +56,7 @@ class Spec:
     #   "external_boundary"   — boundary function; spec is trivial by design
     # Empty dict for v1-generated specs (back-compat). Consumed by the
     # feedback loop to drop low-trust clauses preferentially when a
-    # bug-hunt assertion fires spuriously.
+    # spec-derived constraint produces a spurious counterexample.
     evidence: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self, _seen: frozenset | None = None) -> dict:
@@ -111,7 +111,8 @@ class Spec:
         """Rough trust score (higher = more trusted).
 
         Used by feedback_loop to decide which clause to drop first when
-        a bug-hunt assertion fires spuriously. Scoring:
+        a spec-derived constraint produces a spurious counterexample.
+        Scoring:
 
           +3 canonical_contract           (hand-curated, authoritative)
           +2 caller_site_*                (independent evidence)
@@ -156,11 +157,11 @@ class Spec:
 # ---------------------------------------------------------------------------
 #
 # Splits a flat PRE clause-by-clause into:
-#   - validity  : caller's obligation (asserted at call sites in bug-hunt
-#                 mode). Memory-safety primitives the callee body literally
-#                 requires: valid(), valid_range(), in_bounds(), !null(),
-#                 no_overflow(), owns(), valid_string(), valid_user_pointer(),
-#                 and bare comparisons of pointer/index/size-shaped values.
+#   - validity  : caller's obligation — memory-safety primitives the
+#                 callee body literally requires: valid(), valid_range(),
+#                 in_bounds(), !null(), no_overflow(), owns(),
+#                 valid_string(), valid_user_pointer(), and bare
+#                 comparisons of pointer/index/size-shaped values.
 #   - protocol  : caller cooperation invariants the callee body assumes
 #                 but cannot enforce: locked(), npid_is_attached(), state
 #                 equalities on initialised objects, ref-count predicates,

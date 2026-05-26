@@ -193,7 +193,8 @@ def test_classify_strips_requires_keyword():
 def test_classify_ncdev_bar_read_caller_contract():
     """The motivating case: ``valid_range(reg_addresses, 0, data_count)``
     is a caller obligation. Classifier must put it in validity so the
-    bug-hunt mode asserts it at every call site."""
+    evidence trust scoring + feedback loop can target it for drop-priority
+    if it ever produces a spurious counterexample."""
     v, p = classify_precondition(
         "valid_range(reg_addresses, 0, data_count) && data_count <= 4"
     )

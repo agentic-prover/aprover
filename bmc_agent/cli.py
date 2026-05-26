@@ -305,14 +305,6 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.preprocess = False
     if getattr(args, "strict_dsl", False):
         config.strict_dsl = True
-    if getattr(args, "spec_mode", None):
-        if args.spec_mode == "both":
-            raise SystemExit(
-                "--spec-mode=both is not yet implemented in the prototype. "
-                "Run twice: once with --spec-mode=functional, once with "
-                "--spec-mode=bug-hunt, and compare verdicts."
-            )
-        config.spec_mode = args.spec_mode
     if getattr(args, "raw_bytes", False):
         config.raw_bytes = True
     if getattr(args, "defines", None):
@@ -1252,19 +1244,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Strict-formal Phase 1 prompts: pre/post must be a single C boolean expression (no natural language). Required for bounty/CVE work — prose-mixed specs translate to comments and produce vacuous verifications.",
-    )
-    ver.add_argument(
-        "--spec-mode",
-        choices=("functional", "bug-hunt", "both"),
-        default="functional",
-        help=(
-            "PRE enforcement mode in callee stubs. functional (default): "
-            "assume the full PRE — preserves existing behaviour. bug-hunt: "
-            "split the PRE into validity / protocol; assert validity at "
-            "the top of the stub so caller-contract violations surface at "
-            "the call site (see findings/methodology_insight_2026-05-22). "
-            "both: run each function twice and merge verdicts."
-        ),
     )
     ver.add_argument(
         "--raw-bytes",
