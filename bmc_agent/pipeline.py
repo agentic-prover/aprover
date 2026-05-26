@@ -676,6 +676,24 @@ class AMCPipeline:
                 )
 
         # ------------------------------------------------------------------
+        # Phase 3d: three-oracle disagreement diagnosis. When BMC says
+        # FAIL, realism says REALISTIC, and dyn-val says NOT_TRIGGERED,
+        # the three oracles contradict — most often because the harness
+        # admits a state real callers can't produce. Run a single LLM
+        # call to diagnose which oracle to trust; on PROPERTY_FP verdict
+        # auto-downgrade. SPEC_REFINE / HARNESS_ENCODING diagnoses are
+        # attached for review (not yet auto-applied).
+        # ------------------------------------------------------------------
+        for fn_name in {r.function_name for r in bug_reports}:
+            try:
+                self._diagnose_oracle_disagreements(driver_name, fn_name)
+            except Exception as exc:
+                logger.warning(
+                    "Oracle-disagreement diagnosis failed for '%s': %s",
+                    fn_name, exc,
+                )
+
+        # ------------------------------------------------------------------
         # Phase 3c: Re-run BMC on refined functions (CEGAR loop)
         # A spurious CEx may have masked a real bug lurking behind it.
         # After tightening the precondition, re-verify the function itself.
@@ -914,6 +932,68 @@ class AMCPipeline:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _diagnose_oracle_disagreements(
+        self, driver_name: str, fn_name: str,
+    ) -> None:
+        """Phase 3d: detect a three-oracle disagreement on this
+        function's saved bug_report and run a single LLM diagnosis when
+        one is found. The diagnosis is attached to bug_report.json under
+        ``oracle_disagreement_diagnosis`` and, when the verdict is
+        ``property_fp``, the finding is auto-downgraded to 'unlikely'.
+
+        SPEC_REFINE / HARNESS_ENCODING diagnoses are attached for review
+        — auto-application would require re-running BMC and is left for
+        a follow-up commit.
+        """
+        import json as _json
+        from pathlib import Path
+        from bmc_agent.oracle_disagreement import (
+            apply_diagnosis, detect_disagreement, diagnose,
+        )
+
+        fn_dir = Path(self.store._fn_dir(driver_name, fn_name))
+        br_path = fn_dir / "bug_report.json"
+        if not br_path.exists():
+            return
+
+        try:
+            payload = _json.loads(br_path.read_text())
+        except Exception:
+            return
+        report = payload.get("report") or {}
+        if not isinstance(report, dict):
+            return
+
+        case = detect_disagreement(report)
+        if case is None:
+            return
+
+        logger.info(
+            "Oracle-disagreement detected for '%s' (%s): "
+            "BMC fail + realism=%s + dyn=%s — diagnosing",
+            fn_name, case.kind.value,
+            case.realism_verdict, case.dyn_outcome,
+        )
+
+        diagnosis = diagnose(case, self.llm)
+        if diagnosis is None:
+            logger.info(
+                "Oracle-disagreement diagnosis for '%s' returned no result "
+                "— leaving finding unchanged",
+                fn_name,
+            )
+            return
+
+        report = apply_diagnosis(report, diagnosis)
+        payload["report"] = report
+        br_path.write_text(_json.dumps(payload, indent=2, default=str))
+
+        logger.info(
+            "Oracle-disagreement diagnosis for '%s': verdict=%s "
+            "confidence=%s",
+            fn_name, diagnosis.verdict.value, diagnosis.confidence,
+        )
 
     def _synthesize_sibling_cex_summary(
         self, driver_name: str, fn_name: str,
