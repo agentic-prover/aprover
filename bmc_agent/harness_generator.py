@@ -3555,9 +3555,30 @@ class HarnessGenerator:
                 if base_type.lower() in ("void", "const void"):
                     nondet_decls.append(f"    {ptype_s} {pname} = NULL;")
                 else:
-                    local_name = f"_{pname}_val"
-                    nondet_decls.append(f"    {base_type} {local_name};")
-                    nondet_decls.append(f"    {ptype_s} {pname} = &{local_name};")
+                    # Opaque-struct guard: stack-allocating ``{base} {local};``
+                    # produces ``incomplete type not permitted here`` at CBMC
+                    # type-check when the struct body isn't visible in this
+                    # TU (forward-decl only) — e.g. libarchive's opaque
+                    # ``struct archive_entry``. Match the main harness's
+                    # treatment: emit a nondet pointer and let CBMC model the
+                    # pointee opaquely.
+                    _base_strip = re.sub(r'\bconst\b', '', base_type).strip()
+                    _is_opaque = False
+                    if _base_strip.startswith('struct ') or _base_strip.startswith('union '):
+                        _kw_len = 7 if _base_strip.startswith('struct ') else 6
+                        _tag = _base_strip[_kw_len:].strip()
+                        _struct_defs = getattr(parsed_file, "struct_definitions", None) or {}
+                        if not _struct_defs.get(_tag):
+                            _is_opaque = True
+                    if _is_opaque:
+                        nondet_decls.append(
+                            f"    /* opaque {_base_strip}: nondet pointer (body not in TU) */"
+                        )
+                        nondet_decls.append(f"    {ptype_s} {pname};")
+                    else:
+                        local_name = f"_{pname}_val"
+                        nondet_decls.append(f"    {base_type} {local_name};")
+                        nondet_decls.append(f"    {ptype_s} {pname} = &{local_name};")
             else:
                 # Scalar without witness: uninitialized → nondet in CBMC
                 nondet_decls.append(f"    {ptype_s} {pname};")

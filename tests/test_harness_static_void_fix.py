@@ -606,3 +606,118 @@ def test_emit_learned_clauses_filters_pseudo_logic_in_project_scope(tmp_path):
     )
     assert all("exists" not in c for c in out)
     assert any("g_init" in c for c in out)
+
+
+# ---------------------------------------------------------------------------
+# Feasibility-harness opaque-struct guard
+# ---------------------------------------------------------------------------
+
+def test_feasibility_harness_opaque_struct_param_uses_nondet_pointer(tmp_path):
+    """When a function-under-test takes a pointer-to-opaque-struct
+    (forward-decl only; no body in struct_definitions), the
+    feasibility harness must NOT stack-allocate the pointee — that
+    triggers ``incomplete type not permitted here`` at CBMC type-check.
+    Mirror the main harness's treatment: declare only the pointer and
+    let CBMC nondet it. Regression for libarchive's
+    ``struct archive_entry *entry`` params on owner_excluded /
+    archive_match_owner_excluded / add_entry / etc."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from bmc_agent.cbmc import Counterexample
+
+    fut_sig = FunctionSignature(
+        name="caller", return_type="int",
+        parameters=[("struct opaque_t *", "p")],
+    )
+    fut = FunctionInfo(
+        name="caller", signature=fut_sig,
+        body="{\n    (void)p;\n    return 0;\n}",
+        callees=set(),
+        source_file=str(tmp_path / "fake.c"),
+    )
+    # NOTE: opaque_t intentionally not in struct_definitions
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"caller": fut_sig},
+        function_bodies={"caller": fut.body},
+        call_graph={"caller": set()},
+        struct_definitions={},  # opaque — no body
+    )
+
+    spec = Spec(function_name="caller", precondition="true",
+                postcondition="true", status=SpecStatus.GENERATED)
+    cex = Counterexample(
+        failing_property="caller.assertion.1",
+        variable_assignments={},
+        trace=[],
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_feasibility_harness(
+        func=fut, spec=spec, counterexample=cex,
+        parsed_file=parsed, all_specs={},
+    )
+
+    # Must NOT stack-allocate the opaque body
+    assert "struct opaque_t _p_val" not in text, (
+        "opaque struct was stack-allocated — CBMC would reject as "
+        f"incomplete type:\n{text[-1500:]}"
+    )
+    # Must declare the pointer with the opaque-marker comment
+    assert "/* opaque struct opaque_t: nondet pointer" in text
+
+
+def test_feasibility_harness_concrete_struct_still_stack_allocates(tmp_path):
+    """Sanity: concrete (non-opaque) struct params still get the
+    stack-allocated backing variable — the fix is targeted, not a
+    blanket disable."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from bmc_agent.cbmc import Counterexample
+
+    fut_sig = FunctionSignature(
+        name="caller", return_type="int",
+        parameters=[("struct concrete_t *", "p")],
+    )
+    fut = FunctionInfo(
+        name="caller", signature=fut_sig,
+        body="{\n    (void)p;\n    return 0;\n}",
+        callees=set(),
+        source_file=str(tmp_path / "fake.c"),
+    )
+    # concrete_t HAS a body in struct_definitions
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"caller": fut_sig},
+        function_bodies={"caller": fut.body},
+        call_graph={"caller": set()},
+        struct_definitions={"concrete_t": [("int", "x")]},
+    )
+
+    spec = Spec(function_name="caller", precondition="true",
+                postcondition="true", status=SpecStatus.GENERATED)
+    cex = Counterexample(
+        failing_property="caller.assertion.1",
+        variable_assignments={}, trace=[],
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_feasibility_harness(
+        func=fut, spec=spec, counterexample=cex,
+        parsed_file=parsed, all_specs={},
+    )
+
+    # Concrete struct still gets its stack backing
+    assert "struct concrete_t _p_val" in text
+    # And not flagged as opaque
+    assert "/* opaque" not in text
