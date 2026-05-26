@@ -282,52 +282,38 @@ def _extract_json(text: str) -> Optional[dict]:
 def diagnose(
     case: DisagreementCase,
     llm: "LLMClient",
+    config: "Optional[Config]" = None,
 ) -> Optional[DiagnosisResult]:
-    """Ask the LLM to diagnose a detected disagreement. Returns None
-    when the LLM call fails / produces an unparseable response — caller
-    treats that the same as INCONCLUSIVE (no action taken).
+    """Ask the LLM to diagnose a detected disagreement.
+
+    v2: delegates to ``DisagreementDiagnoseAgent`` (the C2 agent
+    abstraction). The function survives as a thin wrapper so existing
+    callers (pipeline, tests) keep working unchanged. Returns None when
+    the agent fails / produces an unparseable response — caller treats
+    that the same as INCONCLUSIVE (no action taken).
+
+    ``config`` is optional for back-compat with the old (case, llm)
+    signature; when omitted, the agent is built with a synthesized
+    Config that's adequate for stateless run() calls.
     """
-    from bmc_agent.llm import LLMError
+    # Lazy import — agents package imports oracle_disagreement, so a
+    # top-level import here would be circular.
+    from bmc_agent.agents.disagreement import DisagreementDiagnoseAgent
 
-    prompt = _DISAGREEMENT_PROMPT.format(
-        function_name=case.function_name or "(unknown)",
-        violated_property=case.violated_property or "(unknown)",
-        realism_reasoning=(case.realism_reasoning or "(none recorded)")[:1500],
-        reproducer_source=(case.reproducer_source or "(no reproducer)")[:3000],
-    )
-    try:
-        # Dedicated role so users can route this specific call to a
-        # stronger model than the volume realism check — the
-        # disagreement diagnosis is the most subtle reasoning task in
-        # the pipeline (must distinguish spec-refine / harness-encoding
-        # / property-fp on a three-way oracle conflict). Configure via
-        # ``BMC_AGENT_LLM_DISAGREEMENT_DIAGNOSE_*`` env vars; falls
-        # back to the global default when unset.
-        response = llm.complete(
-            _SYSTEM_PROMPT, prompt, role="disagreement_diagnose",
-        )
-    except LLMError as exc:
-        logger.warning(
-            "Oracle-disagreement diagnosis LLM call failed for '%s': %s",
-            case.function_name, exc,
-        )
-        return None
+    if config is None:
+        from bmc_agent.config import Config
+        config = Config(llm_api_key="agent-noconfig")
 
-    data = _extract_json(response or "")
-    if not data:
+    agent = DisagreementDiagnoseAgent(config=config, llm=llm)
+    result = agent.run(case=case)
+    if not result.ok:
+        if result.error:
+            logger.warning(
+                "Oracle-disagreement diagnosis failed for '%s': %s",
+                case.function_name, result.error[:200],
+            )
         return None
-    raw_verdict = str(data.get("verdict") or "").lower().strip()
-    try:
-        verdict = DiagnosisVerdict(raw_verdict)
-    except ValueError:
-        verdict = DiagnosisVerdict.INCONCLUSIVE
-    return DiagnosisResult(
-        verdict=verdict,
-        rationale=str(data.get("rationale") or "")[:2000],
-        suggested_clause=str(data.get("suggested_clause") or "")[:400],
-        suggested_encoding=str(data.get("suggested_encoding") or "")[:400],
-        confidence=str(data.get("confidence") or "").lower().strip(),
-    )
+    return result.output
 
 
 # ---------------------------------------------------------------------------
