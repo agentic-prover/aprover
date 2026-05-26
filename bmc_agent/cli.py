@@ -513,6 +513,60 @@ def _cmd_ablation_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_judge_dir(args: argparse.Namespace) -> int:
+    """Simple LLM-as-judge mode. No multi-stage pipeline."""
+    from pathlib import Path
+    from bmc_agent.config import Config
+    from bmc_agent.judge_pipeline import run_judge_pipeline
+
+    config = Config.from_env()
+    if getattr(args, "model", None):
+        config.llm_model = args.model
+    if getattr(args, "enable_flag_selection", False):
+        config.enable_flag_selection = True
+    if getattr(args, "enable_feedback_loop", False):
+        config.enable_feedback_loop = True
+    if getattr(args, "agentic_harness", False):
+        config.enable_agentic_harness = True
+    if getattr(args, "refine_rounds", None) is not None:
+        config.agentic_refine_rounds = int(args.refine_rounds)
+
+    summary = run_judge_pipeline(
+        config=config,
+        source_dir=Path(args.source_dir),
+        driver=args.driver,
+        output=Path(args.output),
+        exclude_patterns=list(getattr(args, "exclude", None) or []),
+        include_dirs=list(getattr(args, "include_dir", None) or []),
+        defines=list(getattr(args, "defines", None) or []),
+        cbmc_unwind=int(getattr(args, "cbmc_unwind", 4)),
+        cbmc_timeout=int(getattr(args, "cbmc_timeout", 60)),
+        max_functions=getattr(args, "max_functions", None),
+        only_files=getattr(args, "only_file", None),
+    )
+
+    # Top-line summary to stdout
+    total_real = 0
+    total_unreal = 0
+    total_uncertain = 0
+    total_adj = 0
+    for stem, pf in summary.get("per_file", {}).items():
+        v = pf.get("verdicts", {})
+        total_real += v.get("realistic", 0)
+        total_unreal += v.get("unrealistic", 0)
+        total_uncertain += v.get("uncertain", 0)
+        for fn_name, rec in (pf.get("functions") or {}).items():
+            for cex_rec in (rec.get("cexs") or []):
+                total_adj += len((cex_rec.get("judge") or {}).get("adjacent_bugs") or [])
+    print(f"\n=== judge-dir summary ===")
+    print(f"  files parsed:   {summary.get('n_files_parsed', 0)}")
+    print(f"  files skipped:  {summary.get('n_files_skipped', 0)}")
+    print(f"  verdict counts: realistic={total_real}  unrealistic={total_unreal}  uncertain={total_uncertain}")
+    print(f"  adjacent-bug hypotheses: {total_adj}")
+    print(f"  summary.json: {Path(args.output) / args.driver / 'summary.json'}")
+    return 0
+
+
 def _cmd_verify_dir(args: argparse.Namespace) -> int:
     """Run the full pipeline on every .c file in a directory."""
     from bmc_agent.config import Config
@@ -612,6 +666,59 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         print(f"  {fname}: {len(bugs)} bug(s)")
         for report in bugs:
             print(f"    [{report.bug_type.upper()}] {report.function_name} — {report.violated_property}")
+
+    # ------------------------------------------------------------------
+    # Adjacent-bug follow-up rounds
+    # ------------------------------------------------------------------
+    follow_n = int(getattr(args, "follow_adjacent_rounds", 0) or 0)
+    if follow_n > 0:
+        from pathlib import Path as _Path
+        from bmc_agent.adjacent_follower import follow_rounds
+        sweep_output = _Path(config.artifact_dir) / args.driver
+        source_dir = _Path(args.source_dir)
+        print(f"\n=== Adjacent-bug follow-up: up to {follow_n} round(s) ===")
+        rounds_out = follow_rounds(
+            source_dir=source_dir,
+            sweep_output=sweep_output,
+            config=config,
+            rounds=follow_n,
+        )
+        for round_num, drivers in sorted(rounds_out.items()):
+            total = sum(len(bs) for bs in drivers.values())
+            print(f"  Round {round_num}: {len(drivers)} driver(s), {total} new bug(s)")
+            for drv, bs in sorted(drivers.items()):
+                if not bs:
+                    continue
+                for r in bs:
+                    print(f"    [{r.bug_type.upper()}] {drv}/{r.function_name} — {r.violated_property}")
+
+    # ------------------------------------------------------------------
+    # Per-bug markdown report generation
+    # ------------------------------------------------------------------
+    # For every realism-confirmed function (ANY of its per-CEx records had
+    # realism=realistic AND confidence!=unlikely), write a human-readable
+    # markdown report to <output>/reports/<function>.md plus an index.md.
+    # Always runs at end of verify-dir so reviewers don't need to grep JSON.
+    try:
+        from bmc_agent.report_generator import generate_reports
+        rerun_cmd = (
+            f"python -m bmc_agent.cli verify-dir --source-dir {args.source_dir} "
+            f"--driver {args.driver} --output <new_output> "
+            f"--exclude 'test_*'  # (re-supply the include/defines/flags you used)"
+        )
+        written = generate_reports(
+            sweep_output=config.artifact_dir,
+            driver=args.driver,
+            rerun_cmd=rerun_cmd,
+        )
+        if written:
+            print(f"\n=== Per-bug reports: {len(written) - 1} finding(s) + index ===")
+            for p in written:
+                print(f"  {p}")
+        else:
+            print("\n=== Per-bug reports: 0 realism-confirmed findings ===")
+    except Exception as exc:
+        print(f"\nReport generation failed: {exc}")
 
     return 0
 
@@ -1330,6 +1437,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Pairs well with --raw-bytes."
         ),
     )
+    vd.add_argument(
+        "--follow-adjacent-rounds",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "After the main sweep, harvest realism_check.adjacent_bugs[] from "
+            "every bug_report.json and re-run the pipeline on each referenced "
+            "function. Round-N outputs go to <output>/adjacent_round_N/. "
+            "Default 0 (disabled). Recommended: 1 for MVP."
+        ),
+    )
     _add_model_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)
 
@@ -1495,6 +1614,75 @@ def build_parser() -> argparse.ArgumentParser:
     cg.add_argument("--output", required=True, help="Output directory for generated corpus")
     cg.add_argument("--count", type=int, default=5, help="Number of programs to generate")
     cg.set_defaults(func=_cmd_corpus_generate)
+
+    # ------------------------------------------------------------------
+    # judge-dir — simple LLM-as-judge mode (bypasses classifier/realism/
+    # refinement/feedback-loop). See bmc_agent/judge_pipeline.py.
+    # ------------------------------------------------------------------
+    jd = subparsers.add_parser(
+        "judge-dir",
+        help=(
+            "Simple LLM-as-judge mode: for each CBMC counterexample, hand "
+            "everything to one tool-using LLM call. No multi-stage pipeline."
+        ),
+    )
+    jd.add_argument("--source-dir", required=True, help="Directory containing .c files")
+    jd.add_argument("--driver", required=True, help="Driver name prefix")
+    jd.add_argument("--output", default="judge_out", help="Artifact directory")
+    jd.add_argument("--include-dir", action="append", default=[],
+                    help="Add include directory for preprocessing (repeatable)")
+    jd.add_argument("-D", "--define", dest="defines", action="append", default=[],
+                    help="Preprocessor define (repeatable)")
+    jd.add_argument("--exclude", action="append", default=[],
+                    help="Glob pattern of filenames to skip (repeatable)")
+    jd.add_argument("--cbmc-unwind", type=int, default=4)
+    jd.add_argument("--cbmc-timeout", type=int, default=60)
+    jd.add_argument("--max-functions", type=int, default=None,
+                    help="Cap total functions judged (for smoke testing)")
+    jd.add_argument("--only-file", action="append", default=None,
+                    help="Only run on these files (basename or stem; repeatable)")
+    jd.add_argument(
+        "--enable-flag-selection",
+        action="store_true",
+        default=False,
+        help="Phase 1.5: per-function LLM-picked CBMC flags (unsigned-overflow / "
+             "conversion / pointer-overflow). Default off.",
+    )
+    jd.add_argument(
+        "--enable-feedback-loop",
+        action="store_true",
+        default=False,
+        help="Distill UNREALISTIC/UNCERTAIN verdicts into learned constraints "
+             "(persisted to <output>/<driver>/learned_constraints.json) "
+             "and apply them to subsequent harness gens. WARNING: can quietly "
+             "kill real bugs (see feedback_llm_as_judge memory).",
+    )
+    jd.add_argument(
+        "--agentic-harness",
+        action="store_true",
+        default=False,
+        help="Use the LLM-driven harness builder (bmc_agent/agentic_harness_gen.py) "
+             "instead of the deterministic HarnessGenerator. The LLM reads "
+             "callees/callers, decides per-callee stub-vs-inline, sizes buffers "
+             "to match real callers, and emits a complete harness. Falls back "
+             "to deterministic gen on failure.",
+    )
+    jd.add_argument(
+        "--refine-rounds",
+        type=int,
+        default=0,
+        metavar="N",
+        help="When the judge rules a CEx UNREALISTIC/UNCERTAIN and "
+             "--agentic-harness is on, hand verdict reasoning + harness + "
+             "witness back to the agentic generator and re-run CBMC up to N "
+             "rounds. Stops on REALISTIC, clean, or budget exhaustion. The "
+             "LLM (not a regex) decides whether/how to incorporate the "
+             "judge's reasoning, so this avoids the legacy feedback-loop "
+             "failure mode of regex-distilled __CPROVER_assume killing real "
+             "bugs. Default 0 (disabled). Recommended starting value: 1.",
+    )
+    _add_model_arg(jd)
+    jd.set_defaults(func=_cmd_judge_dir)
 
     return parser
 

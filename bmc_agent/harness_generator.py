@@ -1967,11 +1967,197 @@ _PRIMITIVE_POINTEE_TYPES = {
 }
 
 
+def _emit_cast_chain_init(
+    pname: str, obj_name: str, func_body: Optional[str] = None,
+    struct_definitions: Optional[dict] = None,
+    max_depth: int = 4,
+) -> list[str]:
+    """Emit typed allocations for ``(struct X *)(<pname>-><chain>)`` cast
+    patterns found in *func_body*.
+
+    Addresses the dominant wrong-struct-cast artifact in libarchive (and
+    any framework that uses opaque ``void *`` data fields filled in by a
+    separate registrar/factory function): the harness leaves nested
+    struct-pointer field chains nondet, the function body then casts the
+    chain's terminal field to a concrete struct pointer, and CBMC reports
+    a NULL deref on the cast result because the harness never produced a
+    valid object.
+
+    Strategy: for each matching cast, emit one local struct for each
+    chain element (one for each intermediate struct field, one for the
+    cast-target type) and chain them via ``.field = &next_obj`` /
+    ``(void *)&next_obj``. Order is from innermost to outermost so each
+    backing exists when assigned.
+
+    The emitted block uses unique-suffix names so multiple casts in the
+    same function don't clash.
+
+    Example for cab_checksum_finish (body has
+    ``cab = (struct cab *)(a->format->data);``)::
+
+        /* cast-chain init: a->format->data → struct cab */
+        struct cab _a_castdata0_target;
+        struct archive_format_descriptor _a_castdata0_field1;
+        _a_castdata0_field1.data = (void *)&_a_castdata0_target;
+        _a_obj.format = &_a_castdata0_field1;
+
+    Returns ``[]`` if no cast pattern matches or func_body is empty.
+    """
+    if not func_body or not pname or not obj_name:
+        return []
+    # Match: (struct X *) ( pname -> field1 -> field2 -> ... -> fieldN )
+    # Where the inner expression starts at pname-> and is a chain of
+    # field accesses. Up to 4 chain hops kept conservative.
+    chain_re = re.compile(
+        r"\(\s*struct\s+(\w+)\s*\*\s*\)\s*\(\s*"
+        + re.escape(pname)
+        + r"\s*->\s*(\w+(?:\s*->\s*\w+){0,3})\s*\)"
+    )
+    out: list[str] = []
+    seen_chains: set[tuple[str, tuple[str, ...]]] = set()
+    for idx, m in enumerate(chain_re.finditer(func_body)):
+        target_struct = m.group(1)
+        chain_str = m.group(2)
+        chain = tuple(s.strip() for s in chain_str.split("->") if s.strip())
+        if not chain:
+            continue
+        key = (target_struct, chain)
+        if key in seen_chains:
+            continue
+        seen_chains.add(key)
+        target_var = f"_{pname}_castchain{idx}_target"
+        out.append(
+            f"    /* cast-chain init: {pname}->{chain_str} → struct {target_struct} */"
+        )
+        out.append(f"    struct {target_struct} {target_var};")
+        # Walk the chain inside-out. The terminal field assigns to
+        # &target_var. Intermediate fields assign to &next_intermediate.
+        if len(chain) == 1:
+            # Single hop: pname->field is the cast target.
+            # ALWAYS non-NULL: libarchive's framework guarantees outer
+            # struct fields are non-NULL when callbacks are dispatched.
+            # The leaf-level bugs (e.g. cfdata->memimage NULL) surface
+            # via nondet fields of the typed backing, not via outer-NULL.
+            field = chain[0]
+            out.append(
+                f"    {obj_name}.{field} = (struct {target_struct} *)&{target_var};"
+            )
+            continue
+        # Multi-hop: build intermediate struct backings.
+        # The LAST chain element holds the target as ``void *`` (typical
+        # for libarchive's ``data`` field) or as a typed pointer.
+        # We don't know each intermediate type, so we emit forward
+        # declarations of the chain via the field assignments — the
+        # backing structs themselves use OPAQUE typedefs that the C
+        # compiler resolves from the surrounding TU.
+        last_field = chain[-1]
+        prev = target_var
+        # Emit intermediate backings in reverse order. We need the type
+        # of each intermediate struct. Without struct_definitions, we
+        # can't know it, so emit a generic-pointer chain via
+        # ``__CPROVER_assume`` on field-non-NULL and rely on the cast.
+        # ACTUALLY simpler: for chains of length >= 2, the typical
+        # pattern is ``a->format->data`` where ``format`` is a struct
+        # pointer (typed) and ``data`` is ``void *``. Build one
+        # intermediate backing of the right type by best-effort regex.
+        intermediates: list[tuple[str, str]] = []  # (varname, type_decl)
+        # For each intermediate hop, we need the struct type holding
+        # that field. We don't have it locally — fall back to a void *
+        # link via __CPROVER_assume on field validity. Best-effort:
+        # emit a struct-of-unknown-tag backing the C compiler will
+        # resolve.
+        # In practice the most common libarchive shape is exactly
+        # 2-deep (``a->format->data``). Handle that as a special case
+        # using ``struct archive_format_descriptor`` (only valid when
+        # pname's type is ``struct archive_read *``). Other chains
+        # use a void *-cast workaround.
+        if len(chain) == 2 and chain[-1] == "data":
+            # Libarchive-specific shape — ALWAYS non-NULL chain.
+            # Framework guarantees a->format and format->data are valid
+            # when format-reader callbacks are dispatched. Leaf-level
+            # bugs (cfdata->memimage NULL etc.) surface via nondet
+            # fields of the typed backing struct.
+            mid_field, terminal_field = chain
+            mid_var = f"_{pname}_castchain{idx}_fmt"
+            out.append(f"    struct archive_format_descriptor {mid_var};")
+            out.append(f"    {mid_var}.{terminal_field} = (void *)&{target_var};")
+            out.append(f"    {obj_name}.{mid_field} = &{mid_var};")
+        else:
+            # Generic shallow assignment: skip — the chain depth or
+            # intermediate types aren't safe to guess. Fall back to a
+            # single-hop init at the outermost field only.
+            out = out[:-2]  # discard the comment + target_var decl
+            continue
+
+        # DEEP CHAIN EXPANSION: after the 2-hop cast-chain landed,
+        # walk target_var's pointer-to-struct fields that are dereffed
+        # in func_body. For each, emit a typed backing recursively up
+        # to MAX_DEPTH levels. Addresses seed bugs where the buggy state
+        # is N hops deep (e.g. seed `32b62cf7`: cab_checksum_finish derefs
+        # `cab->entry_cfdata->memimage`. With entry_cfdata nondet, CBMC
+        # crashes at the first deref; with entry_cfdata as typed backing,
+        # CBMC reaches memimage and can explore memimage=NULL — the
+        # seed-bug-trigger state).
+        if not struct_definitions:
+            continue
+        from collections import deque
+        worklist = deque([(target_struct, target_var, 0)])
+        emitted_pairs = set()  # (struct_tag, field) to avoid duplicate work
+        MAX_DEPTH = max_depth
+        while worklist:
+            cur_tag, cur_var, depth = worklist.popleft()
+            if depth >= MAX_DEPTH:
+                continue
+            fields = struct_definitions.get(cur_tag) or []
+            for ftype, fname in fields:
+                # Only expand pointer-to-struct fields.
+                t = ftype.strip()
+                if t.count("*") != 1:
+                    continue
+                base = re.sub(r"\bconst\b", "", t[:-1]).strip()
+                if not (base.startswith("struct ") or base.startswith("union ")):
+                    continue
+                inner_tag = _resolve_struct_name(base, struct_definitions)
+                if not inner_tag or inner_tag == cur_tag:
+                    continue  # skip unresolvable or self-ref
+                # Only emit if the function body actually accesses this
+                # chain (avoid allocating unused fields).
+                if f"{cur_var.lstrip('_')}.{fname}" not in func_body and \
+                   f"->{fname}" not in func_body:
+                    continue
+                pair_key = (cur_tag, fname)
+                if pair_key in emitted_pairs:
+                    continue
+                emitted_pairs.add(pair_key)
+                inner_var = f"_{cur_var}_{fname}"
+                out.append(
+                    f"    /* deep-chain: {cur_var}.{fname} → struct {inner_tag} */"
+                )
+                out.append(f"    struct {inner_tag} {inner_var};")
+                # Always non-NULL for deep-chain backings: if we used
+                # disjunctive here, CBMC would pick the all-NULL
+                # assignment for every property (cheapest crash) and the
+                # leaf-level seed-bug states (e.g. memimage=NULL with the
+                # chain otherwise valid) would never be explored. The
+                # outer cast-chain stays disjunctive — that's where the
+                # "real caller might pass NULL" discovery happens. Inner
+                # backings model the framework's invariant: once dispatch
+                # reaches the callback with a valid outer struct, the
+                # registrar-set inner pointers are also valid.
+                out.append(
+                    f"    {cur_var}.{fname} = &{inner_var};"
+                )
+                worklist.append((inner_tag, inner_var, depth + 1))
+    return out
+
+
 def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
     enclosing_struct_tag: Optional[str] = None,
     infer_field_validity: bool = False,
     infer_struct_field_validity: bool = False,
+    struct_definitions: Optional[dict] = None,
+    func_body: Optional[str] = None,
 ) -> list[str]:
     """Emit harness statements that initialise a single struct field.
 
@@ -2085,6 +2271,94 @@ def _emit_struct_field_init(
             btype = "unsigned char" if base != "int8_t" else "signed char"
             out.append(f"    {btype} {backing}[{buf_size}];")
             out.append(f"    {obj_name}.{fname} = ({t}){backing};")
+        elif (
+            struct_definitions
+            and (base.startswith("struct ") or base.startswith("union "))
+            and _resolve_struct_name(base, struct_definitions)
+        ):
+            # Typed recursive struct-pointer init. When the pointee struct
+            # body is in struct_definitions, allocate a typed backing
+            # struct (non-NULL by construction) instead of leaving the
+            # field nondet OR using the byte-buffer disjunctive init.
+            # This matches how real callers always have these pointer
+            # fields pointing to a valid allocated object (e.g.
+            # archive_read_support_format_iso9660 sets
+            # ``a->format->data = calloc(..., struct iso9660)`` before
+            # any format-reader callback runs). Without this, libarchive
+            # format-vtable callbacks (parse_rockridge, isJolietSVD,
+            # init_unpack, lzx_huffman_init) hit spurious CBMC NULL-deref
+            # on the field, which the classifier correctly rejects as
+            # unreachable — but the harness state IS reachable in real
+            # code, so the seed bug downstream is also lost.
+            inner_tag = _resolve_struct_name(base, struct_definitions)
+            inner_obj = f"_{obj_name}_{fname}_obj"
+            base_for_decl = re.sub(r"^\s*const\s+", "", base).strip()
+            out.append(
+                f"    /* typed backing for struct-pointer field "
+                f"{obj_name}.{fname} ({base})  */"
+            )
+            out.append(f"    {base_for_decl} {inner_obj};")
+            out.append(f"    {obj_name}.{fname} = &{inner_obj};")
+            # Recurse one level — bound length fields, terminate self-refs.
+            inner_fields = struct_definitions.get(inner_tag) or []
+            for f_t, f_n in inner_fields:
+                # Recursion guard: pass struct_definitions=None to inner
+                # call so we don't unbounded-recurse on cyclic struct
+                # graphs (e.g. ``struct archive_read`` contains a
+                # ``struct archive_format_descriptor *`` which contains
+                # a ``struct archive *`` etc.). One level is enough to
+                # unblock the dominant seed-bug pattern.
+                out.extend(
+                    _emit_struct_field_init(
+                        inner_obj, f_t, f_n, cbmc_unwind,
+                        enclosing_struct_tag=inner_tag,
+                        infer_field_validity=infer_field_validity,
+                        infer_struct_field_validity=infer_struct_field_validity,
+                        struct_definitions=None,  # NO further recursion
+                        func_body=None,
+                    )
+                )
+            return out
+        elif (
+            func_body
+            and t.strip() in ("void *", "const void *")
+            and infer_struct_field_validity
+        ):
+            # void *data field — scan the function body for a cast pattern
+            # like ``(struct X *)(<param>->data)`` and use X as the typed
+            # backing if found. This addresses the format-data idiom in
+            # libarchive: every format reader does
+            # ``X *x = (struct X *)(a->format->data);`` where X is
+            # format-specific (struct iso9660, struct cab, struct rar5,
+            # struct cpio). Without this, CBMC explores ``->data == NULL``
+            # which no real caller produces.
+            cast_pat = re.compile(
+                r"\(\s*struct\s+(\w+)\s*\*\s*\)\s*\(?\s*\w+\s*->\s*"
+                + re.escape(fname) + r"\b"
+            )
+            m = cast_pat.search(func_body)
+            if m and struct_definitions and m.group(1) in struct_definitions:
+                inner_tag = m.group(1)
+                inner_obj = f"_{obj_name}_{fname}_obj"
+                out.append(
+                    f"    /* typed-cast backing for void * field "
+                    f"{obj_name}.{fname}: '(struct {inner_tag} *)' */"
+                )
+                out.append(f"    struct {inner_tag} {inner_obj};")
+                out.append(f"    {obj_name}.{fname} = (void *)&{inner_obj};")
+                inner_fields = struct_definitions.get(inner_tag) or []
+                for f_t, f_n in inner_fields:
+                    out.extend(
+                        _emit_struct_field_init(
+                            inner_obj, f_t, f_n, cbmc_unwind,
+                            enclosing_struct_tag=inner_tag,
+                            infer_field_validity=infer_field_validity,
+                            infer_struct_field_validity=infer_struct_field_validity,
+                            struct_definitions=None,
+                            func_body=None,
+                        )
+                    )
+                return out
         elif infer_struct_field_validity and (
             base.startswith("struct ") or base.startswith("union ")
         ):
@@ -2629,8 +2903,25 @@ def _generate_nd_decls(
                             enclosing_struct_tag=struct_tag,
                             infer_field_validity=infer_field_validity,
                             infer_struct_field_validity=infer_struct_field_validity,
+                            struct_definitions=struct_definitions,
+                            func_body=getattr(func, "body", None),
                         )
                     )
+                # POST-PASS: cast-pattern-driven typed init for field chains.
+                # Scan func.body for ``(struct X *)(<pname>-><chain>)`` casts
+                # and emit typed backing for the chain. This addresses the
+                # dominant wrong-struct-cast artifact in libarchive format
+                # readers: ``cab = (struct cab *)(a->format->data)`` —
+                # without this, ``a->format->data`` stays nondet/NULL and
+                # CBMC reports a false deref. The registrar in real code
+                # always sets these to typed allocations.
+                lines.extend(
+                    _emit_cast_chain_init(
+                        pname, obj_name,
+                        func_body=getattr(func, "body", None),
+                        struct_definitions=struct_definitions,
+                    )
+                )
                 if pname in nonnull_params:
                     lines.append(
                         f"    /* {pname} is non-null by construction (addr of {obj_name}) */"

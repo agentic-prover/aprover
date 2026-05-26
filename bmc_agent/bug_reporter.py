@@ -164,6 +164,27 @@ class BugReporter:
         else:
             confidence = "confirmed_bmc"
 
+        # Defensive guard: never claim confirmed_dynamic without an actual
+        # CONFIRMED dynamic outcome AT WRITE TIME. The historical bug was
+        # bug_report.json showing confidence=confirmed_dynamic alongside
+        # classification.dynamic_result.outcome=not_triggered (probably from
+        # iteration ordering or stale state). If dynamic is missing, skipped,
+        # or anything other than CONFIRMED, fall back to the static tier.
+        if confidence == "confirmed_dynamic":
+            actual = dynamic.outcome if dynamic else None
+            if actual != DynamicOutcome.CONFIRMED:
+                logger.warning(
+                    "Downgrading 'confirmed_dynamic' for '%s' — dynamic outcome "
+                    "is %s, not CONFIRMED; falling back to static tier",
+                    func.name, actual,
+                )
+                if getattr(validation_result, "system_entry_reached", False):
+                    confidence = "confirmed_system_entry"
+                elif validation_result.caller_path:
+                    confidence = "confirmed_bmc"
+                else:
+                    confidence = "confirmed_bmc"
+
         # Realism check downgrade: UNREALISTIC → "unlikely"
         # confirmed_dynamic is immune only when the crash came from a source-level
         # property (e.g. overflow, null-deref, OOB).  When the failing property is

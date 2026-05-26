@@ -8,6 +8,7 @@ Each result is saved as a JSON file inside the function directory.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -106,20 +107,46 @@ class ArtifactStore:
     # ------------------------------------------------------------------
 
     def save_bug_report(self, driver: str, function: str, report: Any) -> Path:
-        """Save a bug report to ``{driver}/{function}/bug_report.json``."""
-        path = self._fn_dir(driver, function) / "bug_report.json"
-        payload: dict[str, Any] = {
-            "saved_at": _utcnow(),
-        }
+        """Save a bug report. Each (function, failing_property) pair gets its
+        own file so multi-CEx functions don't overwrite earlier verdicts.
+
+        Layout:
+          ``{driver}/{function}/bug_report.json``                   — latest CEx (back-compat)
+          ``{driver}/{function}/bug_reports/<property_safe>.json``  — per-CEx history (preserved)
+        """
+        fn_dir = self._fn_dir(driver, function)
+        path = fn_dir / "bug_report.json"
+        payload: dict[str, Any] = {"saved_at": _utcnow()}
         if isinstance(report, dict):
             payload["report"] = report
         elif hasattr(report, "__dataclass_fields__"):
             import dataclasses
-
             payload["report"] = dataclasses.asdict(report)
         else:
             payload["report"] = str(report)
+        # Latest-CEx file (kept for back-compat with readers that look here).
         _write_json(path, payload)
+        # Per-CEx historical record. Derive a filesystem-safe property name
+        # from the report's failing_property (or the counterexample's). When
+        # no property name is available, fall back to a timestamped suffix so
+        # we still preserve each save.
+        try:
+            r = payload.get("report") or {}
+            prop = ""
+            if isinstance(r, dict):
+                prop = (
+                    r.get("violated_property")
+                    or ((r.get("counterexample") or {}).get("failing_property") if isinstance(r.get("counterexample"), dict) else "")
+                    or ""
+                )
+            safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(prop))[:120] \
+                   or f"unnamed_{int(time.time()*1000)}"
+            (fn_dir / "bug_reports").mkdir(parents=True, exist_ok=True)
+            _write_json(fn_dir / "bug_reports" / f"{safe}.json", payload)
+        except Exception:
+            # History recording is best-effort; do not fail the save if it
+            # can't be written (e.g. read-only FS in tests).
+            pass
         return path
 
     def load_bug_report(self, driver: str, function: str) -> Optional[dict]:
@@ -160,8 +187,16 @@ class ArtifactStore:
     # ------------------------------------------------------------------
 
     def save_classification(self, driver: str, function: str, result: Any) -> Path:
-        """Save a ValidationResult to ``{driver}/{function}/classification.json``."""
-        path = self._fn_dir(driver, function) / "classification.json"
+        """Save a ValidationResult. Each (function, failing_property) pair gets
+        its own historical record so multi-CEx functions don't overwrite
+        earlier classifications.
+
+        Layout mirrors save_bug_report:
+          ``{driver}/{function}/classification.json``                     — latest CEx
+          ``{driver}/{function}/classifications/<property_safe>.json``    — per-CEx history
+        """
+        fn_dir = self._fn_dir(driver, function)
+        path = fn_dir / "classification.json"
         payload: dict[str, Any] = {"saved_at": _utcnow()}
         if hasattr(result, "to_dict"):
             payload["classification"] = result.to_dict()
@@ -173,6 +208,18 @@ class ArtifactStore:
         else:
             payload["classification"] = str(result)
         _write_json(path, payload)
+        try:
+            c = payload.get("classification") or {}
+            prop = ""
+            if isinstance(c, dict):
+                cex = c.get("counterexample") or {}
+                prop = (cex.get("failing_property") if isinstance(cex, dict) else "") or ""
+            safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(prop))[:120] \
+                   or f"unnamed_{int(time.time()*1000)}"
+            (fn_dir / "classifications").mkdir(parents=True, exist_ok=True)
+            _write_json(fn_dir / "classifications" / f"{safe}.json", payload)
+        except Exception:
+            pass
         return path
 
     def load_classification(self, driver: str, function: str) -> Optional[dict]:

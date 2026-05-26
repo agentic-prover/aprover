@@ -326,6 +326,19 @@ class Config:
     # Flag selector settings (Phase 1.5: per-function CBMC flag selection)
     enable_flag_selection: bool = False      # LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check)
 
+    # Agentic harness gen: replace the deterministic HarnessGenerator with an
+    # LLM tool-using call (bmc_agent/agentic_harness_gen.py). The LLM reads
+    # callees/callers, decides per-callee stub-vs-inline, sizes buffers to
+    # match real callers, and emits a complete harness.  Fallback to
+    # deterministic gen if the LLM cannot produce something CBMC parses.
+    enable_agentic_harness: bool = False
+    # When the judge rules a CEx UNREALISTIC and the agentic harness is on,
+    # hand the verdict reasoning + harness + witness back to the agentic
+    # generator so it can rewrite the harness. Bounded by this round count.
+    # Default 0 (disabled). Unlike the legacy feedback loop, the LLM (not
+    # a regex) decides whether to incorporate the judge's reasoning and how.
+    agentic_refine_rounds: int = 0
+
     # Realism checker settings (Phase 3 post-validation LLM audit)
     enable_realism_check: bool = False       # LLM agent that audits REAL_BUG findings for realistic exploitability
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
@@ -562,6 +575,8 @@ class Config:
             enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "false").lower() == "true",
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "false").lower() == "true",
+            enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
+            agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
             llm_role_overrides=_parse_role_overrides_env(),
         )

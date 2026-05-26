@@ -164,6 +164,14 @@ class ValidationResult:
             self.outcome = outcome
         # Dynamic validation result, populated after construction if enabled
         self.dynamic_result: DynamicValidationResult | None = None
+        # Per-check error flags. When CBMC errors on a sub-check (reachability
+        # or callee feasibility) and even the LLM fallback couldn't establish
+        # a confident answer, we mark the corresponding flag. Used by
+        # _try_dynamic_validation to skip dynamic when BOTH failed — running
+        # the GCC harness on a blind entry produces low-signal results that
+        # can mislead the realism check.
+        self.reachability_check_errored: bool = False
+        self.feasibility_check_errored: bool = False
 
     # ------------------------------------------------------------------
     # Backward-compat property
@@ -253,67 +261,20 @@ class CExValidator:
         func_name = func.name
         logger.info("Validating counterexample for '%s'", func_name)
 
-        # Vacuous-spec postcondition-violation filter. When the user spec is
-        # pre=true && post=true, the harness emits NO `kani::assert` line --
-        # any "postcondition violated" assertion the verifier reports is an
-        # intrinsic safety check (slice bounds inside the harness wrapper,
-        # `from_utf8(...).unwrap()`, an auto-injected match-exhaustiveness
-        # assertion, etc.) that has nothing to do with the function's
-        # correctness. Promoting it to REAL_BUG is meaningless; auto-skip
-        # to SPURIOUS. Catches the `is_mmx` / `invert_condition` shape of
-        # K2-vacuous-spec false positives observed in the CCC sweep.
-        spec_pre_trivial = (spec.precondition or "").strip() in ("", "true", "True")
-        spec_post_trivial = (spec.postcondition or "").strip() in ("", "true", "True")
-        fp = counterexample.failing_property or ""
-        trace_text = " ".join(getattr(counterexample, "trace", None) or [])
-        if (
-            spec_pre_trivial and spec_post_trivial
-            and fp.startswith("check_")
-            and "postcondition violated" in trace_text
-        ):
-            cause = "vacuous-spec postcondition-violation (no user postcondition; assertion is intrinsic harness wrapper)"
-            logger.info(
-                "Pre-classifier artifact filter: '%s' -- %s",
-                func_name, cause,
-            )
-            return ValidationResult(
-                outcome=CExOutcome.SPURIOUS,
-                function_name=func_name,
-                counterexample=counterexample,
-                caller_path=[],
-                system_entry_input="",
-                refinement_history=[],
-                final_precondition=spec.precondition,
-                reasoning=f"Pre-classifier artifact filter: {cause}.",
-                over_refinement_rejected=False,
-                system_entry_reached=False,
-            )
+        # Per-CEx error flags for the gate in _try_dynamic_validation.
+        # Set to True by the reachability/feasibility check methods when
+        # CBMC errors out so the validator falls back to the LLM. Reset
+        # at every validate() entry because each CEx gets its own check
+        # outcomes.
+        self._reach_errored = False
+        self._feas_errored = False
 
-        # Pre-classifier witness-pattern check (proactive perf + cost cut).
-        # If the witness obviously matches a known model-artifact pattern
-        # (library-init globals NULL, path-divergent unwind), skip the
-        # expensive classifier LLM reachability calls and emit a spurious
-        # validation directly. The realism check downstream will record
-        # the same artifact reason; this just avoids the extra LLM hop.
-        artifact_cause = _witness_obvious_artifact(counterexample, func)
-        if artifact_cause:
-            logger.info(
-                "Pre-classifier artifact filter: '%s' counterexample is a "
-                "model artifact (%s) — skipping classifier",
-                func_name, artifact_cause,
-            )
-            return ValidationResult(
-                outcome=CExOutcome.SPURIOUS,
-                function_name=func_name,
-                counterexample=counterexample,
-                caller_path=[],
-                system_entry_input="",
-                refinement_history=[],
-                final_precondition=spec.precondition,
-                reasoning=f"Pre-classifier artifact filter: {artifact_cause}.",
-                over_refinement_rejected=False,
-                system_entry_reached=False,
-            )
+        # Pre-classifier artifact filter REMOVED 2026-05-25 (per
+        # [[feedback-llm-as-judge]]). It used to pattern-match the witness
+        # shape and pre-decide SPURIOUS before the classifier LLM ran, which
+        # in practice killed real libarchive seed bugs whose witnesses match
+        # artifact patterns. The LLM judge is the correct place to weigh
+        # this — don't pre-filter in Python.
 
         # Unwind filter: CBMC unwinding assertions (.unwind.N) indicate that a loop
         # exceeded the BMC bound.  These are not directly reportable as bugs, but we
@@ -812,7 +773,23 @@ class CExValidator:
             # reproducer we can't claim the violation is reachable in
             # practice -- the immediate caller just forwards the parameter
             # without constructing it.
-            if _implicit_pc and not is_system_reachable:
+            # Vtable-dispatch escape hatch: when ANY function in the
+            # upward chain is registered as a callback via function-pointer
+            # dispatch (its address is taken in another in-project function,
+            # e.g. ``.read_header = cab_read_header`` in a
+            # ``struct archive_format_descriptor`` definition), the chain
+            # IS effectively system-reachable via the framework's dispatch
+            # loop. Without this, libarchive's format-reader callbacks
+            # (rar5_cleanup, cab_checksum_finish, record_hardlink, etc.)
+            # all hit the implicit-NULL downgrade because the upward walk
+            # stops at the registrar function rather than `main` — losing
+            # documented seed-bug matches that prior sweeps confirmed.
+            address_taken = getattr(parsed_file, "address_taken_in", {}) or {}
+            _vtable_dispatched = any(
+                fn in address_taken and address_taken[fn]
+                for fn in full_chain
+            )
+            if _implicit_pc and not is_system_reachable and not _vtable_dispatched:
                 result = ValidationResult(
                     function_name=func_name,
                     counterexample=counterexample,
@@ -856,6 +833,52 @@ class CExValidator:
                 ),
                 outcome=CExOutcome.REAL_BUG,
                 system_entry_reached=is_system_reachable,
+            )
+            self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
+            return result
+
+        # Vtable-dispatch escape hatch (mirror of the precondition-branch
+        # escape above). When the function is registered as a callback in a
+        # vtable (its address is taken in another in-project function), it
+        # is invoked by the framework's dispatch loop — which is outside
+        # the current file scope and can produce arbitrary input states.
+        # Classifying such CExes as SPURIOUS just because the registrar
+        # callers can't produce the state misses documented seed bugs
+        # (cab_checksum_finish, find_newc_header, parse_rockridge, etc.).
+        #
+        # Vtable escape (TIGHTENED): only fire when the function ITSELF
+        # is registered as a callback via function-pointer dispatch
+        # (its address is taken in another in-project function). The
+        # earlier "or _file_has_vtable_callbacks" clause was too broad —
+        # it promoted EVERY spurious in a file with any vtable callback,
+        # producing massive precision regression on byte-swap helpers
+        # and other unrelated artifacts.
+        address_taken = getattr(parsed_file, "address_taken_in", {}) or {}
+        if address_taken.get(func_name):
+            indirect = sorted(address_taken[func_name])[:4]
+            logger.info(
+                "Vtable-dispatched callback '%s' (address taken in %s) — "
+                "treating CEx as REAL_BUG reachable via framework dispatch",
+                func_name, indirect,
+            )
+            result = ValidationResult(
+                function_name=func_name,
+                counterexample=counterexample,
+                caller_path=[func_name],
+                system_entry_input=None,
+                refinement_history=[],
+                final_precondition=None,
+                reasoning=(
+                    f"'{func_name}' is registered as a callback via vtable "
+                    f"(its address is taken in {indirect}). The framework "
+                    f"dispatch loop (outside this file) can pass arbitrary "
+                    f"input state to the callback, so the CEx state IS "
+                    f"reachable through framework invocation even though "
+                    f"no in-file caller can produce it directly. "
+                    f"Classifying as REAL_BUG."
+                ),
+                outcome=CExOutcome.REAL_BUG,
+                system_entry_reached=True,
             )
             self._try_dynamic_validation(result, func, all_funcs, all_specs, parsed_file)
             return result
@@ -962,6 +985,7 @@ class CExValidator:
             logger.warning(
                 "CBMC feasibility check error for '%s': %s", func.name, result.error
             )
+            self._feas_errored = True
             return None
 
         # CBMC found a violation → postcondition violated with real callees → feasible
@@ -1106,6 +1130,7 @@ class CExValidator:
                 "CBMC reachability check error for '%s' → '%s': %s; falling back to LLM",
                 caller.name, callee_name, result.error,
             )
+            self._reach_errored = True
             return self._check_reachability_with_llm(
                 caller=caller,
                 callee_name=callee_name,
@@ -1918,6 +1943,25 @@ class CExValidator:
     ) -> None:
         """Run dynamic validation and attach the result to validation_result in-place."""
         if self._dynamic_validator is None:
+            return
+
+        # SKIP when BOTH static checks (reachability + callee feasibility)
+        # errored — running a blind GCC harness on a guessed entry produces
+        # low-signal results that can mislead the realism check (a clean
+        # run on the wrong entry path → realism wrongly demotes a real
+        # bug). When at least ONE check succeeded, dynamic still has
+        # foundation to build on. Flags are per-CEx instance state set by
+        # the reachability/feasibility check methods.
+        if (
+            getattr(self, "_reach_errored", False)
+            and getattr(self, "_feas_errored", False)
+        ):
+            logger.info(
+                "Skipping dynamic validation for '%s' — both reachability "
+                "and callee-feasibility checks errored; dynamic result "
+                "would be unreliable",
+                func.name,
+            )
             return
 
         caller_path = validation_result.caller_path
