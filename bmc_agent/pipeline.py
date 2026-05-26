@@ -983,6 +983,24 @@ class AMCPipeline:
                     func.name, exc,
                 )
 
+        # Realism-feedback-driven spec refiner. Complementary to
+        # _feedback_iterate: that one drives via the general distill
+        # prompt and writes to learned_constraints.json (effective next
+        # sweep). This one drives via realism's concrete key_concern,
+        # asks the LLM for the precise targeted clause, re-verifies
+        # in-sweep, and rejects if the targeted CEx is still present.
+        # Opt-in via --enable-spec-refiner.
+        if getattr(self.config, "enable_spec_refiner", False):
+            try:
+                validation, realism = self._spec_refine_iterate(
+                    validation, realism, func, spec, parsed, all_funcs,
+                    driver_name, all_specs or {},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Spec refiner failed for '%s': %s", func.name, exc,
+                )
+
         # Scenario-guided dynamic re-attempt.
         # When realism says REALISTIC but the dynamic harness either didn't
         # crash (`not_triggered`) or wasn't conclusive, ask the LLM to
@@ -1712,6 +1730,142 @@ class AMCPipeline:
             max_iters, func.name,
         )
         return validation, realism
+
+    # ------------------------------------------------------------------
+    # Realism-feedback-driven in-sweep spec refinement
+    # ------------------------------------------------------------------
+
+    def _spec_refine_iterate(
+        self,
+        validation: "ValidationResult",
+        realism: "RealismCheckResult | None",
+        func: "FunctionInfo",
+        spec: "Spec",
+        parsed: "ParsedCFile",
+        all_funcs: "dict[str, FunctionInfo]",
+        driver_name: str,
+        all_specs: "dict[str, Spec]",
+    ) -> "tuple[ValidationResult, RealismCheckResult | None]":
+        """Single-shot in-sweep spec refinement driven by realism's
+        concrete key_concern. Complementary to ``_feedback_iterate``:
+        the existing loop uses the general distill prompt and writes
+        to learned_constraints.json (next-sweep effect); this method
+        uses ``spec_refiner``'s targeted prompt and re-verifies
+        in-sweep with the soundness acceptance check.
+
+        Triggers only when:
+          * config.enable_spec_refiner is True
+          * realism.verdict == UNREALISTIC
+          * realism.key_concern is concrete (names a specific identifier
+            / field / constraint — not "looks artificial")
+
+        Acceptance: the targeted CEx (failing_property) must be absent
+        from the post-refinement CEx set. The full "no previously-
+        REALISTIC CEx silently dropped" check requires multi-CEx
+        context this method doesn't have at single-CEx scope; that
+        guard is implicit here because we only refine on UNREALISTIC
+        verdicts (REALISTIC CExs aren't even seen by this codepath).
+        """
+        from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+        from bmc_agent.spec_refiner import (
+            SpecRefiner, _is_actionable_key_concern,
+        )
+
+        if (realism is None
+            or realism.verdict != RealismVerdict.UNREALISTIC
+            or not _is_actionable_key_concern(realism.key_concern)):
+            return validation, realism
+
+        refiner = SpecRefiner(self.config, self.llm)
+        proposal = refiner.propose_refinement(
+            func_info=func, current_spec=spec,
+            rejected_cex=validation.counterexample,
+            realism=realism,
+        )
+        if not proposal or not proposal.is_actionable:
+            logger.info(
+                "spec_refiner (%s): no actionable proposal "
+                "(scope=%s) — keeping verdict",
+                func.name, getattr(proposal, "scope", "none"),
+            )
+            return validation, realism
+
+        refined_spec = refiner.apply_refinement_to_spec(
+            spec=spec, proposal=proposal,
+        )
+
+        # Re-verify the function under the refined spec. Same flag
+        # selection as the iter-0 run so we're comparing apples to
+        # apples and don't silently drop a check class.
+        iter_flags = (getattr(self, "_flag_selections", {}) or {}).get(func.name)
+        try:
+            new_verdict = self.bmc_engine.check_function(
+                func, refined_spec, parsed, driver_name,
+                all_funcs=all_funcs,
+                flag_selection=iter_flags,
+            )
+        except Exception as exc:
+            logger.warning(
+                "spec_refiner (%s): re-verification failed (%s) — "
+                "keeping original verdict", func.name, exc,
+            )
+            return validation, realism
+
+        targeted_prop = getattr(validation.counterexample,
+                                "failing_property", "") or ""
+        new_props = {
+            (getattr(c, "failing_property", "") or "")
+            for c in (new_verdict.counterexamples or [])
+        }
+
+        if targeted_prop in new_props:
+            logger.info(
+                "spec_refiner (%s): added clause '%s' did NOT exclude "
+                "the targeted CEx %s — REJECTING refinement",
+                func.name, proposal.added_clause, targeted_prop,
+            )
+            return validation, realism
+
+        # Targeted CEx is gone. Two sub-cases:
+        if new_verdict.verified or not new_verdict.counterexamples:
+            logger.info(
+                "spec_refiner (%s): refined PRE produced VERIFIED "
+                "CLEAN (added clause: '%s')",
+                func.name, proposal.added_clause,
+            )
+            return _verified_clean_validation(validation), _realism_verified()
+
+        # Other CExs survived — re-validate the new primary CEx and
+        # re-check realism so the downstream report reflects the
+        # post-refinement state.
+        new_ce = new_verdict.counterexamples[0]
+        new_validation = self.validator.validate(
+            func=func, spec=refined_spec, counterexample=new_ce,
+            all_funcs=all_funcs, all_specs=all_specs,
+            parsed_file=parsed, driver_name=driver_name,
+        )
+        try:
+            new_realism = self.realism_checker.check(
+                func=func, counterexample=new_ce,
+                validation_result=new_validation, parsed_file=parsed,
+                all_funcs=all_funcs, spec=refined_spec,
+                cbmc_harness_path=getattr(new_verdict, "harness_path", ""),
+            )
+        except Exception as exc:
+            logger.warning(
+                "spec_refiner (%s): post-refinement realism failed "
+                "(%s) — returning new validation with prior realism",
+                func.name, exc,
+            )
+            new_realism = realism
+        logger.info(
+            "spec_refiner (%s): refined PRE removed targeted CEx; new "
+            "primary CEx=%s, realism=%s",
+            func.name,
+            getattr(new_ce, "failing_property", "?"),
+            new_realism.verdict.value if new_realism else "?",
+        )
+        return new_validation, new_realism
 
     # ------------------------------------------------------------------
     # Multi-file / whole-codebase entry point
