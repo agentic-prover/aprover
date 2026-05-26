@@ -421,15 +421,34 @@ class RealismChecker:
                     + prompt
                 )
 
-            raw = self.llm.complete(
-                sys_prompt,
-                user_prompt,
-                max_tokens=4096 + (4000 if use_thinking else 0),
-                thinking=use_thinking,
-                thinking_budget=4000,
-                role="realism",
+            # Pass 1 (primary verdict): delegate to RealismAgent.
+            # The agent owns the LLM call + parse boundary; the
+            # orchestrator (this function) handles witness pre-checks,
+            # hint injection, Pass 2 / adjacent-bug / tool-use
+            # augmentation, and the grounding audit.
+            from bmc_agent.agents.realism import RealismAgent
+            _pass1_agent = RealismAgent(
+                config=self.config, llm=self.llm,
+                system_prompt=sys_prompt,
             )
-            pass1 = _parse_result(raw, func.name)
+            _pass1_result = _pass1_agent.run(
+                user_prompt=user_prompt,
+                func_name=func.name,
+                use_thinking=use_thinking,
+            )
+            if not _pass1_result.ok:
+                # Re-raise as LLMError so the existing except-handler
+                # path below (which already has _SKIPPED fallback,
+                # logging, etc.) covers this case unchanged.
+                err = (_pass1_result.error or "Pass 1 agent failed")
+                if "LLMError" in err:
+                    # Strip our wrapper prefix so the upstream
+                    # except-handler sees the same message shape it
+                    # always has.
+                    err = err.replace("LLMError: ", "")
+                raise LLMError(err)
+            pass1 = _pass1_result.output
+            raw = _pass1_result.raw_response
 
             # PASS 2 (disabled by default after the prompt simplification):
             # the new Pass-1 prompt already gives the LLM full context plus
