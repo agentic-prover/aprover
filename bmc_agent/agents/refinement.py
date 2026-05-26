@@ -45,7 +45,7 @@ class RefinementAgent(BaseAgent[RefinementProposal]):
 
     def __init__(self, config: "Config", llm: "LLMClient") -> None:
         from bmc_agent.prompts import SPEC_SYSTEM_PROMPT
-        type(self).system_prompt = SPEC_SYSTEM_PROMPT
+        self.system_prompt = SPEC_SYSTEM_PROMPT
         super().__init__(config, llm)
 
     def _llm_call_kwargs(self) -> dict:

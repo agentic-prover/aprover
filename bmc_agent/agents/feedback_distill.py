@@ -52,10 +52,12 @@ class FeedbackDistillAgent(BaseAgent[Remediation]):
     name = "feedback_distill"
 
     def __init__(self, config: "Config", llm: "LLMClient") -> None:
-        # Lazy import to avoid circulars (prompts imports config which
-        # imports... etc.).
+        # Set as instance attribute (not class attribute) so multiple
+        # FeedbackDistillAgent instances can't accidentally mutate
+        # each other's state if a future change makes the prompt
+        # per-config.
         from bmc_agent.prompts import SPEC_SYSTEM_PROMPT
-        type(self).system_prompt = SPEC_SYSTEM_PROMPT
+        self.system_prompt = SPEC_SYSTEM_PROMPT
         super().__init__(config, llm)
 
     def _llm_call_kwargs(self) -> dict:

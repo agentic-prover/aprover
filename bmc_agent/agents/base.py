@@ -85,6 +85,11 @@ class BaseAgent(abc.ABC, Generic[T]):
     #: System prompt for this agent. Subclasses set as a class attribute.
     system_prompt: str = ""
 
+    #: Max retries on LLM-error or parse-error inside ``run()``. Default 0
+    #: (single attempt, fail-fast). Set higher in subclasses where the
+    #: structured-output schema is occasionally violated by the LLM.
+    max_retries: int = 0
+
     def __init__(self, config: "Config", llm: "LLMClient") -> None:
         if not self.name:
             raise ValueError(
@@ -126,6 +131,12 @@ class BaseAgent(abc.ABC, Generic[T]):
     def run(self, **kwargs: Any) -> AgentResult[T]:
         """Drive one full invocation: build prompt → call LLM → parse.
 
+        Retries on LLM-error or parse-failure up to ``self.max_retries``
+        additional attempts (default 0 = single attempt). The prompt is
+        re-built once at the top — retries pay only for the LLM round
+        trip + parse, which is the right behaviour for the common case
+        where the LLM occasionally violates a structured-output schema.
+
         Returns an ``AgentResult``. Callers can check ``result.ok`` for
         a quick success/failure boolean, or inspect ``output`` / ``error``
         directly.
@@ -135,23 +146,28 @@ class BaseAgent(abc.ABC, Generic[T]):
         except Exception as exc:
             return AgentResult(error=f"build_prompt: {exc!r}")
 
-        raw, llm_err = self._call_llm(prompt)
-        if llm_err is not None:
-            return AgentResult(raw_response=raw or "", error=llm_err)
+        last_err = ""
+        last_raw = ""
+        for attempt in range(self.max_retries + 1):
+            raw, llm_err = self._call_llm(prompt)
+            if llm_err is not None:
+                last_err = llm_err
+                last_raw = raw or ""
+                continue
 
-        try:
-            output = self.parse(raw or "")
-        except Exception as exc:
-            return AgentResult(
-                raw_response=raw or "",
-                error=f"parse: {exc!r}",
-            )
-        if output is None:
-            return AgentResult(
-                raw_response=raw or "",
-                error="parse: returned None (unparseable response)",
-            )
-        return AgentResult(output=output, raw_response=raw or "")
+            try:
+                output = self.parse(raw or "")
+            except Exception as exc:
+                last_err = f"parse: {exc!r}"
+                last_raw = raw or ""
+                continue
+            if output is None:
+                last_err = "parse: returned None (unparseable response)"
+                last_raw = raw or ""
+                continue
+            return AgentResult(output=output, raw_response=raw or "")
+
+        return AgentResult(raw_response=last_raw, error=last_err)
 
     # ------------------------------------------------------------------
     # Hook for subclass overrides (tool-use, retry, critique, …)

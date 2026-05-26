@@ -251,3 +251,92 @@ def test_agent_result_ok_property():
     assert AgentResult(output=None).ok is False
     assert AgentResult(output="x", error="oops").ok is False
     assert AgentResult(output=None, error="oops").ok is False
+
+
+# ---------------------------------------------------------------------------
+# Retry semantics
+# ---------------------------------------------------------------------------
+
+def test_run_no_retry_by_default():
+    """max_retries=0 (the default) means one attempt total. An LLM error
+    on attempt 1 yields a failure result; the LLM is called once."""
+    from bmc_agent.llm import LLMError
+    llm = MagicMock()
+    llm.complete.side_effect = LLMError("boom")
+    agent = _make_agent(llm)
+    result = agent.run(text="t")
+    assert result.ok is False
+    assert llm.complete.call_count == 1
+
+
+def test_run_retries_on_parse_returned_none():
+    """When parse() returns None on the first response but valid on the
+    second, run() succeeds on the second attempt."""
+    llm = MagicMock()
+    llm.complete.side_effect = ["", "  the answer  "]   # 1st parses to None, 2nd OK
+    Agent = _make_test_agent_class()
+    Agent.max_retries = 2
+    from bmc_agent.config import Config
+    agent = Agent(config=Config(llm_api_key="t"), llm=llm)
+    result = agent.run(text="t")
+    assert result.ok is True
+    assert result.output == "the answer"
+    assert llm.complete.call_count == 2
+
+
+def test_run_retries_on_llm_error():
+    """LLMError on attempt 1 + success on attempt 2 → run() succeeds."""
+    from bmc_agent.llm import LLMError
+    llm = MagicMock()
+    llm.complete.side_effect = [LLMError("transient"), "second try"]
+    Agent = _make_test_agent_class()
+    Agent.max_retries = 1
+    from bmc_agent.config import Config
+    agent = Agent(config=Config(llm_api_key="t"), llm=llm)
+    result = agent.run(text="t")
+    assert result.ok is True
+    assert result.output == "second try"
+    assert llm.complete.call_count == 2
+
+
+def test_run_exhausts_retries_then_reports_last_error():
+    """If every attempt fails, run() returns the LAST error."""
+    from bmc_agent.llm import LLMError
+    llm = MagicMock()
+    llm.complete.side_effect = [
+        LLMError("first failure"),
+        LLMError("second failure"),
+        LLMError("third failure"),
+    ]
+    Agent = _make_test_agent_class()
+    Agent.max_retries = 2
+    from bmc_agent.config import Config
+    agent = Agent(config=Config(llm_api_key="t"), llm=llm)
+    result = agent.run(text="t")
+    assert result.ok is False
+    assert "third failure" in result.error
+    assert llm.complete.call_count == 3
+
+
+def test_run_rebuilds_prompt_only_once_across_retries():
+    """The prompt is fixed at the top — retries don't re-call
+    build_prompt. Saves work + ensures consistent inputs across
+    attempts (otherwise the comparison "did retries help?" is muddled)."""
+    from bmc_agent.llm import LLMError
+    from bmc_agent.agents.base import BaseAgent
+    from bmc_agent.config import Config
+    call_count = {"build": 0}
+
+    class _Counter(BaseAgent[str]):
+        name = "x"
+        system_prompt = "sp"
+        max_retries = 3
+        def build_prompt(self, **kw):
+            call_count["build"] += 1
+            return "p"
+        def parse(self, response): return response.strip() or None
+
+    llm = MagicMock()
+    llm.complete.side_effect = [LLMError("e"), LLMError("e"), "ok"]
+    _Counter(config=Config(llm_api_key="t"), llm=llm).run()
+    assert call_count["build"] == 1

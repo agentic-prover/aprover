@@ -549,32 +549,22 @@ class SpecGeneratorV2:
             n_callers_actual=self.k_callers,
         )
 
-        # Step 5: LLM call + parse (with one retry).
-        for attempt in range(MAX_PARSE_RETRIES + 1):
-            try:
-                response = self.llm.complete(
-                    self._spec_system_prompt, prompt, role="spec_gen",
-                )
-            except Exception as exc:
-                logger.warning("v2 [%s]: LLM call failed (attempt %d): %r",
-                               fn_name, attempt + 1, exc)
-                continue
-            payload = _extract_json_object(response)
-            if payload is None:
-                logger.warning("v2 [%s]: JSON extract failed (attempt %d)",
-                               fn_name, attempt + 1)
-                continue
-            validated = _validate_and_extract(payload, fn_name)
-            if validated is None:
-                continue
-            pv, pp, post, loops, disagreement, notes = validated
-            spec = _build_spec_from_validated(
-                fn_name, pv, pp, post, loops, disagreement,
-                status=SpecStatus.GENERATED,
-            )
+        # Step 5: delegate to SpecGenAgent for the LLM-call boundary.
+        # The agent owns the retry-on-parse-fail loop (max_retries =
+        # MAX_PARSE_RETRIES). Validation + Spec construction happen
+        # inside its parse(); failure surfaces as result.ok=False.
+        from bmc_agent.agents.spec_gen import SpecGenAgent
+        agent = SpecGenAgent(
+            config=self.config, llm=self.llm,
+            system_prompt=self._spec_system_prompt,
+        )
+        result = agent.run(prompt=prompt, fn_name=fn_name)
+        if result.ok:
+            spec = result.output
+            disagreement = bool(spec.spec_disagreement)
             if disagreement:
                 logger.info(
-                    "v2 [%s]: spec_disagreement=true; notes=%s", fn_name, notes
+                    "v2 [%s]: spec_disagreement=true", fn_name,
                 )
 
             # Step 5b: v2.2 tool-use branch. Trigger when:
