@@ -231,7 +231,7 @@ class CExValidator:
         self.store = store
         self.harness_gen = harness_gen
         self._dynamic_validator: DynamicValidator | None = (
-            DynamicValidator(config, harness_gen)
+            DynamicValidator(config, harness_gen, llm=llm)
             if getattr(config, "enable_dynamic_validation", False)
             else None
         )
