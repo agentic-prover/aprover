@@ -3639,11 +3639,23 @@ class HarnessGenerator:
             harness_lines.extend(nondet_decls)
         harness_lines.append(f"    /* Call {fn_name} with real callee bodies */")
         _ret_bare_feas = _ret_type_bare(ret_type)
+        # postcond_to_assert translates the postcondition's ``result``
+        # keyword into a literal C identifier ``result`` — so the
+        # return-capture variable MUST be named ``result`` (matching the
+        # main harness's _ret_var convention at line ~4413). Using
+        # ``_result`` produced "failed to find symbol 'result'" CBMC
+        # errors on functions whose postconditions reference the return
+        # value (e.g., set_timefilter_date). When a param itself is
+        # named ``result``, fall back to ``_amc_ret`` to avoid the
+        # redefinition that hit libarchive's isint / isint_w.
+        _ret_var_feas = "result"
+        if any(pn == _ret_var_feas for _, pn in sig.parameters):
+            _ret_var_feas = "_amc_ret"
         if _ret_bare_feas == "void":
             harness_lines.append(f"    {fn_name}({call_args});")
         else:
-            harness_lines.append(f"    {_ret_bare_feas} _result = {fn_name}({call_args});")
-            harness_lines.append("    (void)_result;")
+            harness_lines.append(f"    {_ret_bare_feas} {_ret_var_feas} = {fn_name}({call_args});")
+            harness_lines.append(f"    (void){_ret_var_feas};")
             if assert_stmts:
                 harness_lines.append("    /* Postcondition — check violation still fires */")
                 for stmt in assert_stmts:

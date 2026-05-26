@@ -721,3 +721,123 @@ def test_feasibility_harness_concrete_struct_still_stack_allocates(tmp_path):
     assert "struct concrete_t _p_val" in text
     # And not flagged as opaque
     assert "/* opaque" not in text
+
+
+# ---------------------------------------------------------------------------
+# Feasibility-harness return-variable / postcondition mismatch
+# ---------------------------------------------------------------------------
+
+def test_feasibility_harness_return_var_matches_postcond_result_keyword(tmp_path):
+    """The postcondition DSL uses ``result`` as the return-value
+    placeholder, and ``postcond_to_assert`` translates it to a literal
+    C identifier ``result``. The feasibility harness's local
+    return-capture variable MUST also be named ``result`` (with
+    collision fallback to ``_amc_ret`` when a param shadows it) —
+    otherwise CBMC fails with ``failed to find symbol 'result'`` →
+    CONVERSION ERROR → exit 6 on every function whose postcondition
+    references the return value (e.g. libarchive's
+    set_timefilter_date)."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from bmc_agent.cbmc import Counterexample
+
+    fut_sig = FunctionSignature(
+        name="fn", return_type="int",
+        parameters=[("int", "x")],
+    )
+    fut = FunctionInfo(
+        name="fn", signature=fut_sig,
+        body="{\n    return x == 0 ? -25 : 0;\n}",
+        callees=set(),
+        source_file=str(tmp_path / "fake.c"),
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"fn": fut_sig},
+        function_bodies={"fn": fut.body},
+        call_graph={"fn": set()},
+    )
+    # Postcondition referencing the return value via the standard
+    # ``result`` placeholder — the same shape set_timefilter_date uses.
+    spec = Spec(
+        function_name="fn", precondition="true",
+        postcondition="result == -25 || result == 0",
+        status=SpecStatus.GENERATED,
+    )
+    cex = Counterexample(
+        failing_property="fn.assertion.1",
+        variable_assignments={}, trace=[],
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_feasibility_harness(
+        func=fut, spec=spec, counterexample=cex,
+        parsed_file=parsed, all_specs={},
+    )
+
+    # The call must capture into ``result`` (matching the postcond
+    # translator), NOT ``_result``.
+    assert "int result = fn(" in text, (
+        f"FUT call doesn't use 'result' as return-capture name:\n"
+        f"{text[-1500:]}"
+    )
+    # And the postcondition assert must reference the same name
+    assert "result == -25" in text
+
+
+def test_feasibility_harness_return_var_collision_fallback(tmp_path):
+    """When a parameter is itself named ``result``, the return-capture
+    variable falls back to ``_amc_ret`` to avoid the C redefinition
+    that hit libarchive's isint / isint_w."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+    from bmc_agent.cbmc import Counterexample
+
+    fut_sig = FunctionSignature(
+        name="isint", return_type="int",
+        parameters=[("const char *", "s"), ("int *", "result")],
+    )
+    fut = FunctionInfo(
+        name="isint", signature=fut_sig,
+        body="{\n    *result = 0;\n    return s ? 1 : 0;\n}",
+        callees=set(),
+        source_file=str(tmp_path / "fake.c"),
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"isint": fut_sig},
+        function_bodies={"isint": fut.body},
+        call_graph={"isint": set()},
+    )
+    spec = Spec(
+        function_name="isint", precondition="true", postcondition="true",
+        status=SpecStatus.GENERATED,
+    )
+    cex = Counterexample(
+        failing_property="isint.assertion.1",
+        variable_assignments={}, trace=[],
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_feasibility_harness(
+        func=fut, spec=spec, counterexample=cex,
+        parsed_file=parsed, all_specs={},
+    )
+
+    # Param 'result' already declared — return capture must use _amc_ret
+    assert "int _amc_ret = isint(" in text, (
+        f"return-capture collision fallback not applied:\n{text[-1500:]}"
+    )
+    assert "int result = isint(" not in text, (
+        "would have collided with parameter named 'result'"
+    )
