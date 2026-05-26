@@ -127,6 +127,21 @@ Cap proposed overrides at 64 — anything higher is a state-space hazard. \
 Return null when no concrete bound is readable; the global default + \
 reactive feedback handles the rest.
 
+FLAG 7: per-function timeout override (seconds)
+The global default is {global_timeout}s. Override ONLY when the function's \
+shape gives you a CONCRETE reason to expect very different runtime cost:
+- Trivial getter / predicate (<10 LoC, no loops): default is fine; null.
+- Large parser / state machine (>200 LoC, multiple nested loops, \
+many struct accesses): propose a HIGHER timeout (e.g., 300-600s) to \
+avoid wasted "timeout → retry" cycles.
+- Very wide call graph (many callees stubbed = many extra state \
+bits): higher timeout helps CBMC complete instead of cut off.
+- High unwind_override (e.g., >16): scale timeout up proportionally; \
+each unwind step multiplies CBMC's state space.
+Cap proposed overrides at 600 (10 minutes) — anything higher and you \
+should probably split the harness or simplify the spec instead. \
+Return null when the global default is appropriate (most cases).
+
 Respond with ONLY valid JSON — no markdown, no extra text:
 {{
   "unsigned_overflow_check": true | false,
@@ -135,12 +150,15 @@ Respond with ONLY valid JSON — no markdown, no extra text:
   "pointer_overflow_check": true | false,
   "undefined_shift_check": true | false,
   "unwind_override": <integer 1-64> | null,
-  "reasoning": "<one concise sentence covering all enabled flags + unwind choice>"
+  "timeout_override": <integer 30-600> | null,
+  "reasoning": "<one concise sentence covering all enabled flags + unwind + timeout choice>"
 }}
 """
 
 
 _MAX_UNWIND_OVERRIDE = 64
+_MIN_TIMEOUT_OVERRIDE = 30
+_MAX_TIMEOUT_OVERRIDE = 600
 
 
 @dataclass
@@ -156,6 +174,11 @@ class FlagSelection:
     # Capped at _MAX_UNWIND_OVERRIDE; the LLM may propose larger but the
     # parser clamps. None = use global default.
     unwind_override: Optional[int] = None
+    # When non-None, overrides the global CBMC timeout (seconds) for THIS
+    # function only. Clamped to [_MIN_TIMEOUT_OVERRIDE, _MAX_TIMEOUT_OVERRIDE].
+    # Not a CBMC command-line flag — applied by bmc_engine as the
+    # subprocess wallclock cap. None = use global default.
+    timeout_override: Optional[int] = None
     reasoning: str = ""
 
     def to_dict(self) -> dict:
@@ -166,6 +189,7 @@ class FlagSelection:
             "pointer_overflow_check": self.pointer_overflow_check,
             "undefined_shift_check": self.undefined_shift_check,
             "unwind_override": self.unwind_override,
+            "timeout_override": self.timeout_override,
             "reasoning": self.reasoning,
         }
 
@@ -177,12 +201,15 @@ class FlagSelection:
             or self.pointer_overflow_check
             or self.undefined_shift_check
             or self.unwind_override is not None
+            or self.timeout_override is not None
         )
 
     def enabled_flags(self) -> list[str]:
         """Render as a list of CBMC flag strings. ``--unwind N`` is
         included when unwind_override is set; the caller is responsible
         for NOT also passing the global ``--unwind`` in that case.
+        ``timeout=Ns`` is included as a pseudo-flag for log/audit clarity;
+        it isn't an actual CBMC flag, just shown in the enabled list.
         """
         flags = []
         if self.unsigned_overflow_check:
@@ -197,6 +224,8 @@ class FlagSelection:
             flags.append("--undefined-shift-check")
         if self.unwind_override is not None:
             flags.append(f"--unwind {self.unwind_override}")
+        if self.timeout_override is not None:
+            flags.append(f"timeout={self.timeout_override}s")
         return flags
 
 
@@ -281,12 +310,14 @@ class FlagSelector:
 
         tm = getattr(self.config, "threat_model", "security")
         global_unwind = int(getattr(self.config, "cbmc_unwind", 4))
+        global_timeout = int(getattr(self.config, "cbmc_timeout", 120))
         prompt = _FLAG_SELECTION_PROMPT.format(
             threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             name=func.name,
             signature=signature_str,
             body=body,
             global_unwind=global_unwind,
+            global_timeout=global_timeout,
         )
 
         try:
@@ -342,6 +373,23 @@ def _parse_response(raw: str, func_name: str) -> FlagSelection:
         except ValueError:
             unwind_override = None
 
+    # Same shape for the timeout override. Clamp to
+    # [_MIN_TIMEOUT_OVERRIDE, _MAX_TIMEOUT_OVERRIDE]; anything outside
+    # falls back to None (use global default). Booleans rejected.
+    raw_timeout = data.get("timeout_override")
+    timeout_override: Optional[int] = None
+    if isinstance(raw_timeout, bool):
+        pass
+    elif isinstance(raw_timeout, int) and raw_timeout >= _MIN_TIMEOUT_OVERRIDE:
+        timeout_override = min(raw_timeout, _MAX_TIMEOUT_OVERRIDE)
+    elif isinstance(raw_timeout, str):
+        try:
+            n = int(raw_timeout.strip())
+            if n >= _MIN_TIMEOUT_OVERRIDE:
+                timeout_override = min(n, _MAX_TIMEOUT_OVERRIDE)
+        except ValueError:
+            timeout_override = None
+
     reasoning = str(data.get("reasoning", "")).strip()
 
     sel = FlagSelection(
@@ -351,6 +399,7 @@ def _parse_response(raw: str, func_name: str) -> FlagSelection:
         pointer_overflow_check=poc,
         undefined_shift_check=usc,
         unwind_override=unwind_override,
+        timeout_override=timeout_override,
         reasoning=reasoning,
     )
     if sel.any_enabled():

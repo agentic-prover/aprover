@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from bmc_agent.flag_selector import (
+    _MAX_TIMEOUT_OVERRIDE,
     _MAX_UNWIND_OVERRIDE,
+    _MIN_TIMEOUT_OVERRIDE,
     FlagSelection,
     FlagSelector,
     _parse_response,
@@ -219,3 +221,102 @@ def test_select_one_passes_role_spec_gen():
         "flag_selector.complete() must pass role='spec_gen' so per-role "
         "overrides apply (see the v2.2 calibration sweep regression)."
     )
+
+
+# ---------- timeout_override --------------------------------------------
+
+
+def test_timeout_override_emitted_in_enabled_flags():
+    sel = FlagSelection(timeout_override=300)
+    assert sel.any_enabled()
+    assert "timeout=300s" in sel.enabled_flags()
+
+
+def test_timeout_override_none_emits_nothing():
+    sel = FlagSelection(timeout_override=None)
+    assert "timeout=" not in " ".join(sel.enabled_flags())
+
+
+def test_timeout_override_in_to_dict():
+    sel = FlagSelection(timeout_override=240)
+    assert sel.to_dict()["timeout_override"] == 240
+
+
+def test_parse_timeout_override_accepted():
+    raw = '{"timeout_override": 180, "reasoning": "large parser"}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override == 180
+
+
+def test_parse_timeout_override_null_yields_none():
+    raw = '{"timeout_override": null, "reasoning": ""}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override is None
+
+
+def test_parse_timeout_override_string_int_accepted():
+    raw = '{"timeout_override": "240", "reasoning": ""}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override == 240
+
+
+def test_parse_timeout_override_clamps_to_max():
+    raw = f'{{"timeout_override": {_MAX_TIMEOUT_OVERRIDE + 1000}, "reasoning": ""}}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override == _MAX_TIMEOUT_OVERRIDE
+
+
+def test_parse_timeout_override_rejects_below_min():
+    """timeouts < _MIN_TIMEOUT_OVERRIDE are nonsense (CBMC needs setup time)."""
+    for n in (-10, 0, 1, _MIN_TIMEOUT_OVERRIDE - 1):
+        raw = f'{{"timeout_override": {n}, "reasoning": ""}}'
+        sel = _parse_response(raw, "fn")
+        assert sel.timeout_override is None, f"timeout={n} should be rejected"
+
+
+def test_parse_timeout_override_rejects_boolean():
+    raw = '{"timeout_override": true, "reasoning": ""}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override is None
+
+
+def test_parse_timeout_override_missing_field_defaults_to_none():
+    raw = '{"unsigned_overflow_check": true, "reasoning": ""}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override is None
+
+
+def test_parse_timeout_override_non_numeric_rejected():
+    raw = '{"timeout_override": "not a number", "reasoning": ""}'
+    sel = _parse_response(raw, "fn")
+    assert sel.timeout_override is None
+
+
+def test_any_enabled_fires_when_only_timeout_set():
+    sel = FlagSelection(timeout_override=200)
+    assert sel.any_enabled() is True
+
+
+def test_select_all_global_timeout_included_in_prompt():
+    """The prompt should show the global default so the LLM only overrides
+    when it has reason to."""
+    cfg = _mock_config()
+    cfg.cbmc_timeout = 90
+    llm = MagicMock()
+    llm.complete.return_value = '{"timeout_override": null}'
+    sel = FlagSelector(cfg, llm)
+    sel.select_all({"foo": _func_info("foo")})
+    _, kwargs = llm.complete.call_args
+    prompt = kwargs.get("user_prompt") or ""
+    assert "default is 90s" in prompt or "90s" in prompt
+
+
+def test_select_all_with_timeout_override_in_response():
+    cfg = _mock_config()
+    cfg.cbmc_timeout = 120
+    llm = MagicMock()
+    llm.complete.return_value = '{"unsigned_overflow_check": false, "signed_overflow_check": false, "conversion_check": false, "pointer_overflow_check": false, "undefined_shift_check": false, "unwind_override": null, "timeout_override": 300, "reasoning": "large parser"}'
+    sel = FlagSelector(cfg, llm)
+    result = sel.select_all({"foo": _func_info("foo")})
+    assert result["foo"].timeout_override == 300
+    assert "timeout=300s" in result["foo"].enabled_flags()

@@ -135,6 +135,8 @@ class BMCEngine:
             undefined_shift_check   = bool(getattr(flag_selection, "undefined_shift_check", False))
             # Per-function unwind override (None = use global default).
             unwind_for_this_run     = getattr(flag_selection, "unwind_override", None) or self.config.cbmc_unwind
+            # Per-function CBMC timeout override (None = use global default).
+            timeout_for_this_run    = getattr(flag_selection, "timeout_override", None) or self.config.cbmc_timeout
 
             if flag_selection and flag_selection.any_enabled():
                 logger.debug(
@@ -164,7 +166,7 @@ class BMCEngine:
             cbmc_result = run_cbmc(
                 harness_path=harness_path,
                 unwind=unwind_for_this_run,
-                timeout=self.config.cbmc_timeout,
+                timeout=timeout_for_this_run,
                 cbmc_path=self.config.cbmc_path,
                 include_dirs=getattr(self.config, "include_dirs", None),
                 defines=getattr(self.config, "cbmc_defines", None),
