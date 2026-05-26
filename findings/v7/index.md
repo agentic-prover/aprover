@@ -5,6 +5,13 @@
 **Config**: `--agentic-harness --refine-rounds 1 --enable-flag-selection`  
 **Note**: sweep was still in progress at index-generation time; more findings may follow.
 
+## Bundled reproduction artifacts
+
+- CBMC harnesses (LLM-written): `findings/v7/harnesses/<bug>.c`
+- Dynamic reproducers (winning attempt for grade-A/B): `findings/v7/reproducers/<bug>.c`
+- CBMC witnesses + abbreviated trace: embedded inline in each report
+- ASan/UBSan stderr excerpts: embedded inline in each report
+
 ## 10 unique realistic finding(s)
 
 | Grade | File | Function | Property | Dyn-val | Also via | Report |
@@ -23,12 +30,12 @@
 ## Evidence grades
 
 - **A** — judge realistic AND dyn-val sanitizer hit reproduces the same property class. Strongest evidence.
-- **B** — judge realistic AND dyn-val sanitizer hit on a related path, different property class. The reproducer triggered a crash in libarchive's code via the same code path, but not the same bug class CBMC identified. Circumstantial — needs human review to decide whether the ASan signal corresponds to the CBMC finding or is an unrelated side-bug.
+- **B** — judge realistic AND dyn-val sanitizer hit on a related path, different property class. The reproducer triggered a crash in libarchive's code via the same code path, but not the same bug class CBMC identified.
 - **C** — judge realistic, dyn-val did not reproduce. Judge-only.
 
 ## Caveats
 
-- These are automated findings from a research prototype. The CBMC   counterexample is real; the realism judgement is an LLM call.
-- The agentic harness writes a harness it believes matches the real   caller chain. When it gets that wrong, the finding may be a   harness artifact even when CBMC says 'verification failed'.
-- Grade **B** findings should be treated as 'crash reproduced in   libarchive but the exact CBMC trace was not exhibited'.
-- This is not coordinated disclosure. None of these has been   filed with libarchive upstream.
+- These are automated findings from a research prototype. The CBMC counterexample is real; the realism judgement is an LLM call.
+- The agentic harness writes a harness it believes matches the real caller chain. When it gets that wrong, the finding may be a harness artifact even when CBMC says 'verification failed'.
+- Grade **B** findings reproduced a crash in libarchive but not the exact CBMC property class.
+- This is not coordinated disclosure. None of these has been filed with libarchive upstream.

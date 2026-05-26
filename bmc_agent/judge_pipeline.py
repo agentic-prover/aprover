@@ -842,10 +842,23 @@ def run_judge_pipeline(
                 try: os.unlink(harness_path)
                 except OSError: pass
 
+            # Persist CBMC witnesses alongside the result so downstream
+            # report generation can bundle them without re-running CBMC.
+            # Each entry: {failing_property, variable_assignments,
+            # trace[:200], description}.
+            cex_dump = []
+            for c in (cbmc_res.counterexamples or []):
+                cex_dump.append({
+                    "failing_property": getattr(c, "failing_property", "") or "",
+                    "description": getattr(c, "description", "") or "",
+                    "variable_assignments": dict(getattr(c, "variable_assignments", {}) or {}),
+                    "trace": list(getattr(c, "trace", []) or [])[:200],
+                })
             (fn_out / "cbmc_result.json").write_text(json.dumps({
                 "verified": cbmc_res.verified,
                 "n_counterexamples": len(cbmc_res.counterexamples or []),
                 "error": cbmc_res.error,
+                "counterexamples": cex_dump,
             }, indent=2))
 
             if cbmc_res.error:
