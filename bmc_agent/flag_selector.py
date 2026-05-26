@@ -15,6 +15,15 @@ Currently selects:
                                casts on packet fields, register values).
   --pointer-overflow-check   — pointer arithmetic overflow (buffer indexing,
                                stride-based address computation).
+  --undefined-shift-check    — undefined-behaviour shifts (negative shift count,
+                               shift >= width, signed-overflow on left shift).
+  --unwind N (per-function)  — per-function loop-unwinding override. When the
+                               function contains loops whose bound can be read
+                               from the body or signature, the LLM estimates
+                               that bound and overrides the global ``--unwind``.
+                               Avoids the unwinding-assertion artifacts that a
+                               static global default produces on parser-style
+                               functions.
 
 Design principle: agents propose, conventional tools dispose.  The LLM decides
 which checks are meaningful; CBMC executes them soundly.
@@ -25,7 +34,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from bmc_agent.logger import get_logger
 from bmc_agent.prompts import THREAT_MODEL_CONTEXT
@@ -45,6 +54,7 @@ flags are semantically meaningful for it.
 
 FUNCTION: {name}
 SIGNATURE: {signature}
+GLOBAL UNWIND DEFAULT: {global_unwind}
 BODY:
 {body}
 
@@ -87,15 +97,50 @@ offsets (base + offset, ptr + count*stride).
 comes from external data.
 Do NOT enable for simple array iteration with provably-bounded indices.
 
+FLAG 5: --undefined-shift-check
+Enable when the function:
+- Uses bit-shift operators (<<, >>, <<=, >>=) on values from external \
+sources where the shift count could be negative, zero, or >= the operand width.
+- Combines fields via shift-then-OR for packed binary formats (file headers, \
+network protocols) where attacker-controlled bytes feed the shift count.
+- Shifts signed integers left (undefined when MSB would be lost).
+Do NOT enable when shifts are by constant amounts known to be in [0, width-1] \
+or when the operand is provably from a small constrained domain.
+
+FLAG 6: per-function --unwind override (numeric)
+The global default is --unwind {global_unwind}. Override ONLY when you can \
+read a CONCRETE loop bound from the function body or signature that the \
+global default is wrong for. Patterns:
+- `for (i = 0; i < N; i++)` where N is a parameter, struct field, or \
+constant → propose unwind = max(N + 2, default). If N is unbounded user \
+input, return null (use global default; the realism check filters the \
+unwinding-assertion artefacts).
+- `for (i = 0; i < ARRAY_SIZE_MACRO; i++)` where ARRAY_SIZE is a small \
+fixed constant → propose unwind = ARRAY_SIZE + 1.
+- Nested loops: propose the SMALLEST unwind that covers the largest loop. \
+CBMC's state-space cost grows multiplicatively — overshooting blows the \
+solver budget.
+- `while (1)` / unbounded loops: return null (use global default; the \
+function is unbounded by design and a numeric override won't help).
+- No loops at all: return null (the global default is irrelevant).
+Cap proposed overrides at 64 — anything higher is a state-space hazard. \
+Return null when no concrete bound is readable; the global default + \
+reactive feedback handles the rest.
+
 Respond with ONLY valid JSON — no markdown, no extra text:
 {{
   "unsigned_overflow_check": true | false,
   "signed_overflow_check": true | false,
   "conversion_check": true | false,
   "pointer_overflow_check": true | false,
-  "reasoning": "<one concise sentence covering all enabled flags>"
+  "undefined_shift_check": true | false,
+  "unwind_override": <integer 1-64> | null,
+  "reasoning": "<one concise sentence covering all enabled flags + unwind choice>"
 }}
 """
+
+
+_MAX_UNWIND_OVERRIDE = 64
 
 
 @dataclass
@@ -106,6 +151,11 @@ class FlagSelection:
     signed_overflow_check: bool = False
     conversion_check: bool = False
     pointer_overflow_check: bool = False
+    undefined_shift_check: bool = False
+    # When non-None, overrides the global ``--unwind`` for THIS function only.
+    # Capped at _MAX_UNWIND_OVERRIDE; the LLM may propose larger but the
+    # parser clamps. None = use global default.
+    unwind_override: Optional[int] = None
     reasoning: str = ""
 
     def to_dict(self) -> dict:
@@ -114,6 +164,8 @@ class FlagSelection:
             "signed_overflow_check": self.signed_overflow_check,
             "conversion_check": self.conversion_check,
             "pointer_overflow_check": self.pointer_overflow_check,
+            "undefined_shift_check": self.undefined_shift_check,
+            "unwind_override": self.unwind_override,
             "reasoning": self.reasoning,
         }
 
@@ -123,9 +175,15 @@ class FlagSelection:
             or self.signed_overflow_check
             or self.conversion_check
             or self.pointer_overflow_check
+            or self.undefined_shift_check
+            or self.unwind_override is not None
         )
 
     def enabled_flags(self) -> list[str]:
+        """Render as a list of CBMC flag strings. ``--unwind N`` is
+        included when unwind_override is set; the caller is responsible
+        for NOT also passing the global ``--unwind`` in that case.
+        """
         flags = []
         if self.unsigned_overflow_check:
             flags.append("--unsigned-overflow-check")
@@ -135,6 +193,10 @@ class FlagSelection:
             flags.append("--conversion-check")
         if self.pointer_overflow_check:
             flags.append("--pointer-overflow-check")
+        if self.undefined_shift_check:
+            flags.append("--undefined-shift-check")
+        if self.unwind_override is not None:
+            flags.append(f"--unwind {self.unwind_override}")
         return flags
 
 
@@ -218,11 +280,13 @@ class FlagSelector:
         body = (func.body or "")[:1500]
 
         tm = getattr(self.config, "threat_model", "security")
+        global_unwind = int(getattr(self.config, "cbmc_unwind", 4))
         prompt = _FLAG_SELECTION_PROMPT.format(
             threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
             name=func.name,
             signature=signature_str,
             body=body,
+            global_unwind=global_unwind,
         )
 
         try:
@@ -256,6 +320,27 @@ def _parse_response(raw: str, func_name: str) -> FlagSelection:
     soc = bool(data.get("signed_overflow_check", False))
     cc  = bool(data.get("conversion_check", False))
     poc = bool(data.get("pointer_overflow_check", False))
+    usc = bool(data.get("undefined_shift_check", False))
+
+    # Parse + sanity-check the unwind override. The LLM is told to cap
+    # at _MAX_UNWIND_OVERRIDE; clamp anyway as a defense-in-depth.
+    # Values <=0 / non-int / 1 (CBMC requires >= 2) are treated as None.
+    raw_unwind = data.get("unwind_override")
+    unwind_override: Optional[int] = None
+    if isinstance(raw_unwind, bool):
+        # JSON booleans are ints in Python; bool would coerce to 0/1
+        # but neither is meaningful here.
+        pass
+    elif isinstance(raw_unwind, int) and raw_unwind >= 2:
+        unwind_override = min(raw_unwind, _MAX_UNWIND_OVERRIDE)
+    elif isinstance(raw_unwind, str):
+        try:
+            n = int(raw_unwind.strip())
+            if n >= 2:
+                unwind_override = min(n, _MAX_UNWIND_OVERRIDE)
+        except ValueError:
+            unwind_override = None
+
     reasoning = str(data.get("reasoning", "")).strip()
 
     sel = FlagSelection(
@@ -263,6 +348,8 @@ def _parse_response(raw: str, func_name: str) -> FlagSelection:
         signed_overflow_check=soc,
         conversion_check=cc,
         pointer_overflow_check=poc,
+        undefined_shift_check=usc,
+        unwind_override=unwind_override,
         reasoning=reasoning,
     )
     if sel.any_enabled():

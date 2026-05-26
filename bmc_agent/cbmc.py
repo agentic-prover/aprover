@@ -65,6 +65,7 @@ def run_cbmc(
     signed_overflow_check: bool = False,
     conversion_check: bool = False,
     pointer_overflow_check: bool = False,
+    undefined_shift_check: bool = False,
     pointer_check: bool = False,
     bounds_check: bool = False,
     div_by_zero_check: bool = False,
@@ -124,6 +125,8 @@ def run_cbmc(
         cmd.append("--conversion-check")
     if pointer_overflow_check:
         cmd.append("--pointer-overflow-check")
+    if undefined_shift_check:
+        cmd.append("--undefined-shift-check")
     if pointer_check:
         cmd.append("--pointer-check")
     if bounds_check:

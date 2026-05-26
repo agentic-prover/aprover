@@ -132,6 +132,9 @@ class BMCEngine:
             signed_overflow_check   = bool(getattr(flag_selection, "signed_overflow_check", False))
             conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
             pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
+            undefined_shift_check   = bool(getattr(flag_selection, "undefined_shift_check", False))
+            # Per-function unwind override (None = use global default).
+            unwind_for_this_run     = getattr(flag_selection, "unwind_override", None) or self.config.cbmc_unwind
 
             if flag_selection and flag_selection.any_enabled():
                 logger.debug(
@@ -160,7 +163,7 @@ class BMCEngine:
                 pass
             cbmc_result = run_cbmc(
                 harness_path=harness_path,
-                unwind=self.config.cbmc_unwind,
+                unwind=unwind_for_this_run,
                 timeout=self.config.cbmc_timeout,
                 cbmc_path=self.config.cbmc_path,
                 include_dirs=getattr(self.config, "include_dirs", None),
@@ -169,6 +172,7 @@ class BMCEngine:
                 signed_overflow_check=signed_overflow_check,
                 conversion_check=conversion_check,
                 pointer_overflow_check=pointer_overflow_check,
+                undefined_shift_check=undefined_shift_check,
                 pointer_check=pointer_check,
                 bounds_check=bounds_check,
                 div_by_zero_check=div_by_zero_check,
