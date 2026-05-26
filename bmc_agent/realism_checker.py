@@ -584,8 +584,15 @@ class RealismChecker:
         )
         if not getattr(self.config, "enable_realism_tools", False):
             return base
-        if base.verdict == RealismVerdict.REALISTIC:
-            return base   # don't second-guess REALISTIC findings
+        # All verdicts go through augmentation when tools are enabled.
+        # The earlier "skip REALISTIC" guard was meant to protect real-bug
+        # findings from being re-judged, but in practice it protected
+        # confabulated REALISTIC verdicts (the archive_match_include_uname_w
+        # pattern observed in the v2.2 calibration sweep) from getting
+        # tool-verified. The augmentation's logging tracks verdict flips
+        # (REALISTIC→UNREALISTIC gets a WARNING) so any demotion is
+        # visible. Real-bug findings backed by concrete evidence will
+        # remain REALISTIC after augmentation (the tools merely confirm).
         try:
             augmented = self._augment_with_tools(
                 base_result=base, func=func, counterexample=counterexample,
@@ -680,15 +687,37 @@ class RealismChecker:
         # If augmentation flipped to REALISTIC, log the divergence —
         # base UNREALISTIC → augmented REALISTIC suggests the base
         # call missed evidence the tools surfaced.
+        # Log verdict flips at WARNING so divergence is visible. Two cases
+        # worth surfacing prominently:
+        #   * base UNREALISTIC → augmented REALISTIC: base was over-confident
+        #     about ruling out; tools surfaced new evidence
+        #   * base REALISTIC → augmented UNREALISTIC: base confabulated;
+        #     tools (lookup_function on a guard-having callee, etc.)
+        #     demoted. This case became possible when we lifted the
+        #     skip-REALISTIC gate; auditors should track these to
+        #     confirm the demotion is sound and not a tool-induced regression.
         if (
             parsed_result.verdict == RealismVerdict.REALISTIC
             and base_result.verdict != RealismVerdict.REALISTIC
         ):
             logger.warning(
                 "Realism augmentation for '%s': base=%s → tool-use=REALISTIC "
-                "(tool_calls=%d). The tool-use evidence promoted the verdict; "
-                "this is the rare case where the base check was over-confident.",
+                "(tool_calls=%d). The tool-use evidence PROMOTED the verdict; "
+                "this is the rare case where the base check was over-confident "
+                "about ruling out.",
                 func.name, base_result.verdict.value,
+                tu_result.tool_calls_made,
+            )
+        elif (
+            base_result.verdict == RealismVerdict.REALISTIC
+            and parsed_result.verdict != RealismVerdict.REALISTIC
+        ):
+            logger.warning(
+                "Realism augmentation for '%s': base=REALISTIC → tool-use=%s "
+                "(tool_calls=%d). The tool-use evidence DEMOTED the verdict; "
+                "audit to confirm — likely the base check confabulated "
+                "(e.g., didn't actually read into a callee's NULL guard).",
+                func.name, parsed_result.verdict.value,
                 tu_result.tool_calls_made,
             )
         else:
