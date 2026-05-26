@@ -320,6 +320,15 @@ def test_pipeline_runs_realism_when_dynamic_confirmed():
     pipeline.realism_checker.check_with_tools_if_enabled.assert_called_once()
 
 
+@pytest.mark.skip(
+    reason=(
+        "Auto-downgrade based on phrase-matching reasoning was intentionally "
+        "removed at realism_checker.py:2610-2616 — the rationale (in the "
+        "code) is that phrase-matching adds bias rather than precision. The "
+        "test asserts the OLD behaviour. Kept for reference in case the "
+        "feature is ever re-enabled with stronger evidence."
+    ),
+)
 def test_realistic_downgraded_when_reasoning_says_artifact():
     """REALISTIC verdict with reasoning that admits it's a CBMC artifact
     is downgraded to UNREALISTIC.
@@ -352,6 +361,15 @@ def test_realistic_downgraded_when_reasoning_says_artifact():
     assert "auto-downgraded" in r.key_concern.lower()
 
 
+@pytest.mark.skip(
+    reason=(
+        "Auto-downgrade based on missing REQ-1/REQ-2 evidence fields was "
+        "intentionally removed at realism_checker.py:2610-2616 (same "
+        "rationale as test_realistic_downgraded_when_reasoning_says_artifact "
+        "— evidence-field templating was replaced by a freer prompt that "
+        "doesn't carry the REQ fields). Kept for reference."
+    ),
+)
 def test_realistic_downgraded_when_evidence_missing():
     """REALISTIC verdict without REQ-1 source-line-guard or REQ-2
     public-API call chain is downgraded to UNCERTAIN.
