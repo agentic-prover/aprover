@@ -170,7 +170,7 @@ class Config:
     # acceptance check (targeted CEx gone AND no previously-realistic
     # CEx silently dropped). Opt-in via ``--enable-spec-refiner``;
     # defaults off so existing pipeline behaviour is unchanged.
-    enable_spec_refiner: bool = False
+    enable_spec_refiner: bool = True
 
     # LLM-driven inline-vs-stub advisor for callees that the mechanical
     # rule (file-local static, ≤30 LoC, no loops/alloc/recursion) marked
@@ -178,7 +178,7 @@ class Config:
     # when the body is a small predicate / getter whose stub would
     # produce stub-disconnect FPs. Opt-in via ``--enable-inlining-advisor``;
     # defaults off so existing pipeline behaviour is unchanged.
-    enable_inlining_advisor: bool = False
+    enable_inlining_advisor: bool = True
 
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
@@ -329,12 +329,12 @@ class Config:
     max_requeue_per_function: int = 3  # global cap on how many times a single function can be re-queued
 
     # Dynamic validation settings (Phase 3 Stage 3)
-    enable_dynamic_validation: bool = False  # compile and run a GCC harness to confirm real faults
+    enable_dynamic_validation: bool = True   # compile and run a GCC harness to confirm real faults
     dynamic_validation_timeout: int = 30     # seconds to allow the compiled harness to run
     dynamic_cc_path: str = "gcc"             # C compiler for dynamic harness compilation
 
     # Flag selector settings (Phase 1.5: per-function CBMC flag selection)
-    enable_flag_selection: bool = False      # LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check)
+    enable_flag_selection: bool = True       # LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check)
 
     # Agentic harness gen: replace the deterministic HarnessGenerator with an
     # LLM tool-using call (bmc_agent/agentic_harness_gen.py). The LLM reads
@@ -350,21 +350,21 @@ class Config:
     agentic_refine_rounds: int = 0
 
     # Realism checker settings (Phase 3 post-validation LLM audit)
-    enable_realism_check: bool = False       # LLM agent that audits REAL_BUG findings for realistic exploitability
+    enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
 
     # Feedback loop: distill UNREALISTIC verdicts into learned constraints
     # or code-change TODOs (see bmc_agent/feedback_loop.py). The harness
     # generator auto-applies learned function/project clauses on the next
-    # sweep so the same artifact pattern stops re-appearing.
-    enable_feedback_loop: bool = False
+    # sweep so the same artifact pattern stops re-appearing. Default-on
+    # as part of the recommended pipeline (use --no-feedback-loop to disable).
+    enable_feedback_loop: bool = True
     # In-sweep convergence: after distilling a clause and persisting it,
     # immediately re-run CBMC on the same function (with the new harness
     # picking up the clause via Step 1.7). Loop until the function
     # verifies clean, a REALISTIC verdict emerges, the new CE is the
     # same class as the previous one (clause was a no-op), or
-    # ``feedback_max_iters`` is exhausted. Off by default so it doesn't
-    # change non-opt-in pipeline timing.
+    # ``feedback_max_iters`` is exhausted.
     feedback_max_iters: int = 3
 
     # Threat model — shapes CBMC baseline flags, spec prompts, and realism context.
@@ -578,12 +578,12 @@ class Config:
             cbmc_defines=[d for d in os.environ.get("BMC_AGENT_CBMC_DEFINES", "").split(":") if d],
             cc_path=os.environ.get("BMC_AGENT_CC_PATH", "cc"),
             preprocess=os.environ.get("BMC_AGENT_PREPROCESS", "false").lower() == "true",
-            enable_dynamic_validation=(os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION") or os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION") or "false").lower() == "true",
+            enable_dynamic_validation=(os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION") or os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION") or "true").lower() == "true",
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
-            enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "false").lower() == "true",
+            enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
-            enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "false").lower() == "true",
+            enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),

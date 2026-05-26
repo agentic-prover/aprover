@@ -33,6 +33,35 @@ def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
         config.llm_model = model  # type: ignore[attr-defined]
 
 
+def _print_ai_layers(config) -> None:
+    """Print the active AI layers so the operator can see what's running.
+
+    The six AI-driven layers are default-on as of the recommended-pipeline
+    rollout. Listing them at startup makes it obvious which ones a given
+    run actually exercises (including the effect of --no-* and --minimal).
+    """
+    layers = [
+        ("realism check",        getattr(config, "enable_realism_check", False)),
+        ("dynamic validation",   getattr(config, "enable_dynamic_validation", False)),
+        ("flag selection",       getattr(config, "enable_flag_selection", False)),
+        ("feedback loop",        getattr(config, "enable_feedback_loop", False)),
+        ("spec refiner",         getattr(config, "enable_spec_refiner", False)),
+        ("inlining advisor",     getattr(config, "enable_inlining_advisor", False)),
+    ]
+    on  = [n for n, v in layers if v]
+    off = [n for n, v in layers if not v]
+    if on:
+        thinking_tag = (
+            " (extended thinking)"
+            if getattr(config, "enable_realism_thinking", False)
+            and getattr(config, "enable_realism_check", False)
+            else ""
+        )
+        print(f"AI layers ON:  {', '.join(on)}{thinking_tag}")
+    if off:
+        print(f"AI layers OFF: {', '.join(off)}")
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     """Phase 1: Generate specs for all functions in a C source file."""
     from bmc_agent.artifacts import ArtifactStore
@@ -333,6 +362,26 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
+    # --no-<flag> escape hatches (override the default-on AI layers).
+    if getattr(args, "no_realism_check", False):
+        config.enable_realism_check = False
+    if getattr(args, "no_dynamic_validation", False):
+        config.enable_dynamic_validation = False
+    if getattr(args, "no_flag_selection", False):
+        config.enable_flag_selection = False
+    if getattr(args, "no_feedback_loop", False):
+        config.enable_feedback_loop = False
+    if getattr(args, "no_spec_refiner", False):
+        config.enable_spec_refiner = False
+    if getattr(args, "no_inlining_advisor", False):
+        config.enable_inlining_advisor = False
+    if getattr(args, "minimal", False):
+        config.enable_realism_check = False
+        config.enable_dynamic_validation = False
+        config.enable_flag_selection = False
+        config.enable_feedback_loop = False
+        config.enable_spec_refiner = False
+        config.enable_inlining_advisor = False
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -344,9 +393,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print("Mode: FilteringOnly (skip_refinement=True) — RQ3 ablation baseline")
     if config.preprocess:
         print(f"Include dirs: {config.include_dirs}")
-    if config.enable_realism_check:
-        thinking_tag = " (extended thinking)" if config.enable_realism_thinking else ""
-        print(f"Realism check: enabled{thinking_tag}")
+    _print_ai_layers(config)
 
     pipeline = AMCPipeline(config)
     bug_reports = pipeline.run(
@@ -606,6 +653,26 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
+    # --no-<flag> escape hatches (override the default-on AI layers).
+    if getattr(args, "no_realism_check", False):
+        config.enable_realism_check = False
+    if getattr(args, "no_dynamic_validation", False):
+        config.enable_dynamic_validation = False
+    if getattr(args, "no_flag_selection", False):
+        config.enable_flag_selection = False
+    if getattr(args, "no_feedback_loop", False):
+        config.enable_feedback_loop = False
+    if getattr(args, "no_spec_refiner", False):
+        config.enable_spec_refiner = False
+    if getattr(args, "no_inlining_advisor", False):
+        config.enable_inlining_advisor = False
+    if getattr(args, "minimal", False):
+        config.enable_realism_check = False
+        config.enable_dynamic_validation = False
+        config.enable_flag_selection = False
+        config.enable_feedback_loop = False
+        config.enable_spec_refiner = False
+        config.enable_inlining_advisor = False
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1323,9 +1390,32 @@ def build_parser() -> argparse.ArgumentParser:
             "recursion) marked STUB. The advisor reconsiders them per-caller "
             "in a batched LLM call; may PROMOTE small predicates / getters / "
             "accessors to inline when stubbing would produce stub-disconnect "
-            "FPs. Bounded — never demotes; default STUB on uncertainty. Opt-in."
+            "FPs. Bounded — never demotes; default STUB on uncertainty. "
+            "Default ON; pass --no-inlining-advisor to disable."
         ),
     )
+    # --no-<flag> escape hatches. The six AI layers
+    # (realism / dynamic-validation / flag-selection / feedback-loop /
+    # spec-refiner / inlining-advisor) are default-on as the recommended
+    # bug-hunting pipeline. These flags turn them OFF individually for
+    # ablations, parity comparisons, or zero-LLM-cost smoke runs.
+    ver.add_argument("--no-realism-check", action="store_true", default=False,
+                     help="Disable the LLM realism filter on CExs.")
+    ver.add_argument("--no-dynamic-validation", action="store_true", default=False,
+                     help="Disable building + running the GCC reproducer.")
+    ver.add_argument("--no-flag-selection", action="store_true", default=False,
+                     help="Disable per-function CBMC flag selection.")
+    ver.add_argument("--no-feedback-loop", action="store_true", default=False,
+                     help="Disable in-sweep realism-driven feedback loop.")
+    ver.add_argument("--no-spec-refiner", action="store_true", default=False,
+                     help="Disable in-sweep realism-feedback-driven spec refiner.")
+    ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
+                     help="Disable LLM inline-vs-stub advisor.")
+    ver.add_argument("--minimal", action="store_true", default=False,
+                     help=("Turn ALL six default-on AI layers off (realism, "
+                           "dyn-val, flag-selection, feedback-loop, spec-refiner, "
+                           "inlining-advisor). Equivalent to passing every --no-* "
+                           "individually. For zero-LLM-cost smoke runs."))
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -1487,8 +1577,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-inlining-advisor",
         action="store_true",
         default=False,
-        help="See `verify --help` for the full explanation. Opt-in.",
+        help="Default ON; pass --no-inlining-advisor to disable.",
     )
+    # --no-<flag> escape hatches (mirror --verify).
+    vd.add_argument("--no-realism-check", action="store_true", default=False,
+                    help="Disable the LLM realism filter on CExs.")
+    vd.add_argument("--no-dynamic-validation", action="store_true", default=False,
+                    help="Disable building + running the GCC reproducer.")
+    vd.add_argument("--no-flag-selection", action="store_true", default=False,
+                    help="Disable per-function CBMC flag selection.")
+    vd.add_argument("--no-feedback-loop", action="store_true", default=False,
+                    help="Disable in-sweep realism-driven feedback loop.")
+    vd.add_argument("--no-spec-refiner", action="store_true", default=False,
+                    help="Disable in-sweep realism-feedback-driven spec refiner.")
+    vd.add_argument("--no-inlining-advisor", action="store_true", default=False,
+                    help="Disable LLM inline-vs-stub advisor.")
+    vd.add_argument("--minimal", action="store_true", default=False,
+                    help=("Turn ALL six default-on AI layers off. For "
+                          "zero-LLM-cost smoke runs / ablations."))
     vd.add_argument(
         "--follow-adjacent-rounds",
         type=int,

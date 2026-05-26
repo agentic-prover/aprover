@@ -3855,11 +3855,17 @@ class HarnessGenerator:
                 ok, _reason = _should_inline_callee(cname, parsed_file, max_loc=max_loc)
                 if ok:
                     inline_local_callees.add(cname)
-        # Inlining advisor (opt-in): reconsider callees the mechanical
-        # rule marked STUB. May PROMOTE some to inline; never demotes.
+        # Inlining advisor: reconsider callees the mechanical rule marked
+        # STUB. May PROMOTE some to inline; never demotes. Gated on BOTH
+        # ``inline_pure_callees`` and ``enable_inlining_advisor`` — if the
+        # user explicitly disabled inlining (the first flag), the advisor
+        # doesn't override that, regardless of the advisor flag's default.
         # Safe degradation: any failure (no LLM client, parse error, etc.)
         # leaves the mechanical-rule decision intact.
-        if getattr(self.config, "enable_inlining_advisor", False):
+        if (
+            getattr(self.config, "inline_pure_callees", True)
+            and getattr(self.config, "enable_inlining_advisor", False)
+        ):
             try:
                 from bmc_agent.inlining_advisor import InliningAdvisor
                 from bmc_agent.llm import LLMClient
