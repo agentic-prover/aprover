@@ -192,6 +192,22 @@ Four remediation paths — pick exactly ONE:
         REQUIRED: `clause` field is a global C boolean expression
         (no function-local variables; e.g. `xmlMalloc != NULL`).
 
+  CLAUSE SYNTAX RULES (for scope b/c; violating these makes the harness
+  fail CBMC parse and the clause is discarded):
+
+    * Must be a valid C boolean expression that compiles inside
+      ``__CPROVER_assume(<clause>);``.
+    * NO pseudo-formal-logic: ``forall X in S: ...`` and ``exists ...``
+      are NOT C. CBMC's actual quantifiers are ``__CPROVER_forall { T
+      x; P(x) }`` and ``__CPROVER_exists { T x; P(x) }`` with brace
+      blocks — use those, or rewrite as a conjunction of concrete
+      atoms over named fields.
+    * NO mathematical set notation (``∈``, ``∀``, ``∃``, ``∧``, ``∨``).
+    * For invariants over linked structures (rb-trees, linked lists),
+      prefer assuming the ROOT pointer's validity rather than
+      universally quantifying over every node — the latter rarely
+      typechecks as C.
+
   (d) scope="function-post-relax"
         ONLY applicable when the violated property is the FUT's own
         postcondition assertion (CBMC names it ``main.assertion.<N>``).
