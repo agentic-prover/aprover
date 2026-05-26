@@ -189,6 +189,15 @@ class Config:
     # 8 LLM turns. Default-on; --no-spec-gen-tools to disable.
     enable_spec_gen_tools: bool = True
 
+    # Realism check with bounded tool use. When the base realism check
+    # returns UNCERTAIN/UNREALISTIC, fires a second LLM call with tools
+    # (walk_call_chain, lookup_function, lookup_callee_postcondition)
+    # so the LLM can verify call chains against the parsed corpus
+    # instead of hallucinating them. REALISTIC verdicts are kept as-is
+    # (never weakened by augmentation). Bounded: max 3 tool calls, 6
+    # LLM turns. Default-on; --no-realism-tools to disable.
+    enable_realism_tools: bool = True
+
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
     # Required for wire-format parsers (protobuf upb varints, length-prefixed

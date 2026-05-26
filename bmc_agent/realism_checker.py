@@ -547,6 +547,159 @@ class RealismChecker:
             )
 
     # ------------------------------------------------------------------
+    # Tool-use augmentation (commit 3 of the tool-use trilogy)
+    # ------------------------------------------------------------------
+
+    def check_with_tools_if_enabled(
+        self,
+        func: "FunctionInfo",
+        counterexample: "Counterexample",
+        validation_result: "ValidationResult",
+        parsed_file: "ParsedCFile",
+        all_funcs: "dict[str, FunctionInfo]",
+        spec: "Spec",
+        all_specs: "Optional[dict[str, Spec]]" = None,
+        cbmc_harness_path: str = "",
+    ) -> RealismCheckResult:
+        """Wrap :meth:`check` with an optional tool-use augmentation pass.
+
+        Always runs the base check first. If ``config.enable_realism_tools``
+        is on AND the base verdict is UNCERTAIN/UNREALISTIC, fires a
+        second LLM call with tool access so the LLM can verify call
+        chains, look up callee bodies, and check callee POSTs against
+        the witness state.
+
+        REALISTIC verdicts are kept as-is — augmenting a "realistic"
+        finding with tools would only weaken it, and we don't want
+        the tool-use branch to silently demote real-bug candidates.
+
+        Returns the augmented result on success; the base result if
+        the augmentation fails / declines / times out.
+        """
+        base = self.check(
+            func=func, counterexample=counterexample,
+            validation_result=validation_result, parsed_file=parsed_file,
+            all_funcs=all_funcs, spec=spec,
+            cbmc_harness_path=cbmc_harness_path,
+        )
+        if not getattr(self.config, "enable_realism_tools", False):
+            return base
+        if base.verdict == RealismVerdict.REALISTIC:
+            return base   # don't second-guess REALISTIC findings
+        try:
+            augmented = self._augment_with_tools(
+                base_result=base, func=func, counterexample=counterexample,
+                spec=spec, parsed_file=parsed_file,
+                all_specs=all_specs or {},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Realism tool-use augmentation failed for '%s' "
+                "(%r) — keeping base verdict", func.name, exc,
+            )
+            return base
+        return augmented if augmented is not None else base
+
+    def _augment_with_tools(
+        self,
+        *,
+        base_result: RealismCheckResult,
+        func: "FunctionInfo",
+        counterexample: "Counterexample",
+        spec: "Spec",
+        parsed_file: "ParsedCFile",
+        all_specs: "dict[str, Spec]",
+    ) -> Optional[RealismCheckResult]:
+        """Run the tool-use realism call. Returns the parsed augmented
+        result, or None if the call/parse failed."""
+        from bmc_agent.llm import LLMError
+        from bmc_agent.realism_tools import (
+            RealismToolContext, build_realism_tools,
+            TOOL_USE_PROMPT_ADDENDUM,
+        )
+        ctx = RealismToolContext(
+            parsed=parsed_file,
+            all_specs=dict(all_specs),
+        )
+        tools, handlers = build_realism_tools(ctx)
+
+        # Reuse the base prompt + append the tool-use addendum + the
+        # base verdict so the LLM can refine it.
+        try:
+            base_prompt = self._build_prompt(
+                func=func,
+                counterexample=counterexample,
+                validation_result=None,  # not used in pass-2 reconsideration
+                parsed_file=parsed_file,
+                all_funcs={},   # tools fetch this on demand
+                spec=spec,
+                cbmc_harness_path="",
+            )
+        except Exception:
+            base_prompt = (
+                f"Reconsider realism for {func.name}'s CEx "
+                f"{counterexample.failing_property}."
+            )
+
+        reconsider = (
+            f"{base_prompt}\n\n"
+            f"--- BASE VERDICT (under reconsideration) ---\n"
+            f"verdict: {base_result.verdict.value}\n"
+            f"reasoning: {(base_result.reasoning or '')[:1000]}\n"
+            f"key_concern: {(base_result.key_concern or '')[:300]}\n"
+            f"{TOOL_USE_PROMPT_ADDENDUM}"
+        )
+
+        try:
+            tu_result = self.llm.complete_with_tools(
+                system_prompt=SPEC_SYSTEM_PROMPT,
+                user_prompt=reconsider,
+                tools=tools,
+                tool_handlers=handlers,
+                max_iterations=6,
+                max_tool_calls=3,
+                max_tokens_per_turn=4096,
+                role="realism",
+            )
+        except LLMError as exc:
+            logger.warning("Realism tool-use call failed for '%s': %s",
+                           func.name, exc)
+            return None
+        if tu_result.error:
+            logger.info(
+                "Realism tool-use terminated for '%s': %s "
+                "(iterations=%d, tool_calls=%d)",
+                func.name, tu_result.error,
+                tu_result.iterations, tu_result.tool_calls_made,
+            )
+            return None
+
+        parsed_result = _parse_result(tu_result.text, func.name)
+        if parsed_result is None:
+            return None
+        # If augmentation flipped to REALISTIC, log the divergence —
+        # base UNREALISTIC → augmented REALISTIC suggests the base
+        # call missed evidence the tools surfaced.
+        if (
+            parsed_result.verdict == RealismVerdict.REALISTIC
+            and base_result.verdict != RealismVerdict.REALISTIC
+        ):
+            logger.warning(
+                "Realism augmentation for '%s': base=%s → tool-use=REALISTIC "
+                "(tool_calls=%d). The tool-use evidence promoted the verdict; "
+                "this is the rare case where the base check was over-confident.",
+                func.name, base_result.verdict.value,
+                tu_result.tool_calls_made,
+            )
+        else:
+            logger.info(
+                "Realism augmentation for '%s': %s → %s (tool_calls=%d)",
+                func.name, base_result.verdict.value,
+                parsed_result.verdict.value, tu_result.tool_calls_made,
+            )
+        return parsed_result
+
+    # ------------------------------------------------------------------
     # Prompt construction
     # ------------------------------------------------------------------
 

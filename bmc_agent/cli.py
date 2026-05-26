@@ -48,6 +48,7 @@ def _print_ai_layers(config) -> None:
         ("spec refiner",         getattr(config, "enable_spec_refiner", False)),
         ("inlining advisor",     getattr(config, "enable_inlining_advisor", False)),
         ("spec-gen tools (v2.2)",getattr(config, "enable_spec_gen_tools", False)),
+        ("realism tools",        getattr(config, "enable_realism_tools", False)),
     ]
     on  = [n for n, v in layers if v]
     off = [n for n, v in layers if not v]
@@ -378,6 +379,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_inlining_advisor = False
     if getattr(args, "no_spec_gen_tools", False):
         config.enable_spec_gen_tools = False
+    if getattr(args, "no_realism_tools", False):
+        config.enable_realism_tools = False
     if getattr(args, "minimal", False):
         config.enable_realism_check = False
         config.enable_dynamic_validation = False
@@ -386,6 +389,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = False
         config.enable_inlining_advisor = False
         config.enable_spec_gen_tools = False
+        config.enable_realism_tools = False
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -672,6 +676,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_inlining_advisor = False
     if getattr(args, "no_spec_gen_tools", False):
         config.enable_spec_gen_tools = False
+    if getattr(args, "no_realism_tools", False):
+        config.enable_realism_tools = False
     if getattr(args, "minimal", False):
         config.enable_realism_check = False
         config.enable_dynamic_validation = False
@@ -680,6 +686,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = False
         config.enable_inlining_advisor = False
         config.enable_spec_gen_tools = False
+        config.enable_realism_tools = False
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1420,6 +1427,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Disable LLM inline-vs-stub advisor.")
     ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,
                      help="Disable v2.2 spec_gen bounded tool-use branch.")
+    ver.add_argument("--no-realism-tools", action="store_true", default=False,
+                     help="Disable realism check's bounded tool-use augmentation.")
     ver.add_argument("--minimal", action="store_true", default=False,
                      help=("Turn ALL default-on AI layers off (realism, "
                            "dyn-val, flag-selection, feedback-loop, spec-refiner, "
@@ -1604,6 +1613,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Disable LLM inline-vs-stub advisor.")
     vd.add_argument("--no-spec-gen-tools", action="store_true", default=False,
                     help="Disable v2.2 spec_gen bounded tool-use branch.")
+    vd.add_argument("--no-realism-tools", action="store_true", default=False,
+                    help="Disable realism check's bounded tool-use augmentation.")
     vd.add_argument("--minimal", action="store_true", default=False,
                     help=("Turn ALL default-on AI layers off. For "
                           "zero-LLM-cost smoke runs / ablations."))

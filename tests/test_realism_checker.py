@@ -198,7 +198,7 @@ def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
     pipeline.config = config
     pipeline.llm = MagicMock()
     pipeline.realism_checker = MagicMock()
-    pipeline.realism_checker.check = MagicMock(
+    pipeline.realism_checker.check_with_tools_if_enabled = MagicMock(
         side_effect=AssertionError("realism LLM should not be called on crash-class NOT_TRIGGERED")
     )
     pipeline.reporter = MagicMock()
@@ -222,7 +222,7 @@ def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
     )
     assert realism is not None
     assert realism.verdict == RealismVerdict.UNREALISTIC
-    pipeline.realism_checker.check.assert_not_called()
+    pipeline.realism_checker.check_with_tools_if_enabled.assert_not_called()
 
 
 def test_pipeline_does_not_skip_realism_on_silent_ub_property():
@@ -251,7 +251,7 @@ def test_pipeline_does_not_skip_realism_on_silent_ub_property():
     pipeline.config = config
     pipeline.llm = MagicMock()
     pipeline.realism_checker = MagicMock()
-    pipeline.realism_checker.check = MagicMock(return_value=RealismCheckResult(
+    pipeline.realism_checker.check_with_tools_if_enabled = MagicMock(return_value=RealismCheckResult(
         verdict=RealismVerdict.REALISTIC,
         reasoning="overflow on attacker-controlled size",
         key_concern="unsigned overflow",
@@ -277,7 +277,7 @@ def test_pipeline_does_not_skip_realism_on_silent_ub_property():
         parsed=MagicMock(), all_funcs={}, driver_name="d",
     )
     # Realism LLM MUST have been called on the silent-UB property.
-    pipeline.realism_checker.check.assert_called_once()
+    pipeline.realism_checker.check_with_tools_if_enabled.assert_called_once()
     # And the LLM's REALISTIC verdict propagates.
     assert realism is not None
     assert realism.verdict == RealismVerdict.REALISTIC
@@ -301,7 +301,7 @@ def test_pipeline_runs_realism_when_dynamic_confirmed():
     pipeline.llm = MagicMock()
     expected = RealismCheckResult(verdict=RealismVerdict.REALISTIC, reasoning="x")
     pipeline.realism_checker = MagicMock()
-    pipeline.realism_checker.check = MagicMock(return_value=expected)
+    pipeline.realism_checker.check_with_tools_if_enabled = MagicMock(return_value=expected)
     pipeline.reporter = MagicMock()
     pipeline.reporter.create_report = MagicMock(side_effect=lambda v, f, realism_check: realism_check)
 
@@ -317,7 +317,7 @@ def test_pipeline_runs_realism_when_dynamic_confirmed():
         parsed=MagicMock(), all_funcs={}, driver_name="d",
     )
     assert realism is expected
-    pipeline.realism_checker.check.assert_called_once()
+    pipeline.realism_checker.check_with_tools_if_enabled.assert_called_once()
 
 
 def test_realistic_downgraded_when_reasoning_says_artifact():

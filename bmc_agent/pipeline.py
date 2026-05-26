@@ -953,13 +953,18 @@ class AMCPipeline:
                 llm_confidence="high",
             )
         else:
-            realism = self.realism_checker.check(
+            # Route through check_with_tools_if_enabled so the realism
+            # check optionally augments UNCERTAIN/UNREALISTIC verdicts
+            # with a tool-using LLM pass. The wrapper falls back to
+            # the base check transparently when the flag is off / fails.
+            realism = self.realism_checker.check_with_tools_if_enabled(
                 func=func,
                 counterexample=validation.counterexample,
                 validation_result=validation,
                 parsed_file=parsed,
                 all_funcs=all_funcs,
                 spec=spec,
+                all_specs=all_specs,
                 cbmc_harness_path=cbmc_harness_path,
             )
         # Feedback loop: if realism rejected and the loop is enabled,
