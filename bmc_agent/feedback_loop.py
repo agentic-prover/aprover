@@ -198,8 +198,8 @@ Four remediation paths — pick exactly ONE:
     * Must be a valid C boolean expression that compiles inside
       ``__CPROVER_assume(<clause>);``.
     * NO pseudo-formal-logic: ``forall X in S: ...`` and ``exists ...``
-      are NOT C. CBMC's actual quantifiers are ``__CPROVER_forall { T
-      x; P(x) }`` and ``__CPROVER_exists { T x; P(x) }`` with brace
+      are NOT C. CBMC's actual quantifiers are ``__CPROVER_forall {{ T
+      x; P(x) }}`` and ``__CPROVER_exists {{ T x; P(x) }}`` with brace
       blocks — use those, or rewrite as a conjunction of concrete
       atoms over named fields.
     * NO mathematical set notation (``∈``, ``∀``, ``∃``, ``∧``, ``∨``).
@@ -252,9 +252,14 @@ def learn_from_rejection(
 ) -> Remediation:
     """Ask the LLM to distill an UNREALISTIC realism verdict into a
     structured remediation. Returns ``Remediation`` (which may be
-    NONE if no safe fix is possible)."""
-    from bmc_agent.llm import LLMError
-    from bmc_agent.prompts import SPEC_SYSTEM_PROMPT
+    NONE if no safe fix is possible).
+
+    v2: delegates to ``FeedbackDistillAgent`` (C2 step 2). The function
+    survives as the public API for callers (pipeline + existing tests)
+    — it owns the verdict-gating policy and converts agent failures
+    into a clean ``Remediation(scope=NONE, rationale=...)`` so the
+    pipeline never crashes from a single feedback call.
+    """
     from bmc_agent.realism_checker import RealismVerdict
 
     # Fire on UNREALISTIC (definite artifact — distill an invariant)
@@ -265,47 +270,27 @@ def learn_from_rejection(
         return Remediation(scope=RemediationScope.NONE,
                            rationale="Feedback loop only fires on UNREALISTIC/UNCERTAIN.")
 
-    body = (getattr(func, "body", None) or "(unavailable)")[:6000]
-    var_state = "\n".join(
-        f"  {k} = {v}"
-        for k, v in (counterexample.variable_assignments or {}).items()
-    )[:3000] or "  (no witness variables)"
+    # Lazy import to avoid the agents package importing feedback_loop
+    # back at module load time.
+    from bmc_agent.agents.feedback_distill import FeedbackDistillAgent
 
-    prompt = _DISTILL_PROMPT.format(
-        verdict=realism.verdict.value.upper(),
-        function_name=func.name,
-        function_body=body,
-        violated_property=counterexample.failing_property,
-        witness_state=var_state,
-        rejection_reasoning=(realism.reasoning or "")[:1500],
-        key_concern=(realism.key_concern or "")[:300],
-        existing_project_clauses=(
-            "\n".join(f"  {c}" for c in existing_project_clauses) or "  (none)"
-        ),
+    agent = FeedbackDistillAgent(config=config, llm=llm)
+    result = agent.run(
+        func=func,
+        counterexample=counterexample,
+        realism=realism,
+        existing_project_clauses=existing_project_clauses,
     )
-
-    try:
-        raw = llm.complete(
-            SPEC_SYSTEM_PROMPT,
-            prompt,
-            # K2 Think exhausts a 2048 budget on its <think> trace before
-            # emitting the JSON remediation -- live sweep showed 16 of these
-            # calls failing with finish_reason=length. The role="feedback_distill"
-            # tag routes the call to Claude in hybrid mode; bumping max_tokens
-            # also gives K2 enough headroom when hybrid isn't configured.
-            max_tokens=16384,
-            thinking=False,
-            role="feedback_distill",
-        )
-    except LLMError as exc:
+    if not result.ok:
         logger.warning(
-            "Feedback distillation LLM call failed for '%s': %s",
-            func.name, exc,
+            "Feedback distillation failed for '%s': %s",
+            func.name, (result.error or "")[:200],
         )
-        return Remediation(scope=RemediationScope.NONE,
-                           rationale=f"LLM call failed: {exc}")
-
-    return _parse_remediation(raw, func.name)
+        return Remediation(
+            scope=RemediationScope.NONE,
+            rationale=f"agent: {(result.error or 'no result')[:200]}",
+        )
+    return result.output
 
 
 def _parse_remediation(raw: str, func_name: str) -> Remediation:

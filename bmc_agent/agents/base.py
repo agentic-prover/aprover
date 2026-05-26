@@ -157,6 +157,18 @@ class BaseAgent(abc.ABC, Generic[T]):
     # Hook for subclass overrides (tool-use, retry, critique, …)
     # ------------------------------------------------------------------
 
+    def _llm_call_kwargs(self) -> dict:
+        """Extra kwargs passed to ``LLMClient.complete``. Override in
+        subclasses that need non-default ``max_tokens``, ``thinking``,
+        ``temperature``, etc. Default: empty dict.
+
+        Common overrides:
+          * ``max_tokens`` — when the response includes a long reasoning
+            block (K2-Think) before the structured payload.
+          * ``thinking`` — turn extended-thinking on/off per agent.
+        """
+        return {}
+
     def _call_llm(self, prompt: str) -> tuple[str, Optional[str]]:
         """One LLM round-trip. Returns ``(raw_text, error_or_None)``.
 
@@ -168,6 +180,7 @@ class BaseAgent(abc.ABC, Generic[T]):
         try:
             response = self.llm.complete(
                 self.system_prompt, prompt, role=self.name,
+                **self._llm_call_kwargs(),
             )
         except LLMError as exc:
             return "", f"LLMError: {exc!r}"
