@@ -1980,24 +1980,49 @@ class CExValidator:
         if self._dynamic_validator is None:
             return
 
-        # SKIP when BOTH static checks (reachability + callee feasibility)
-        # errored — running a blind GCC harness on a guessed entry produces
-        # low-signal results that can mislead the realism check (a clean
-        # run on the wrong entry path → realism wrongly demotes a real
-        # bug). When at least ONE check succeeded, dynamic still has
-        # foundation to build on. Flags are per-CEx instance state set by
-        # the reachability/feasibility check methods.
+        # When BOTH static checks (reachability + callee feasibility)
+        # errored, the historical policy was to SKIP dynamic validation
+        # entirely, on the theory that a blind harness on a guessed
+        # entry produces low-signal results.
+        #
+        # That policy is INVERTED here: when CBMC errors and we have a
+        # public-API-validated reproducer, the LLM-built dynamic harness
+        # becomes the BEST available oracle — it's the only mechanical
+        # truth check that doesn't depend on the broken CBMC checks.
+        # Without it, the only signal left is LLM reachability (which
+        # we've seen confabulate). With it, we get an actual
+        # crash-or-not signal from real linked code driven by the real
+        # public API.
+        #
+        # The skip is preserved only when the reproducer is
+        # UNREPRODUCIBLE-marked (LLM declined / synthetic stub
+        # rejected), since running a fake harness is genuinely
+        # low-signal regardless of CBMC state.
         if (
             getattr(self, "_reach_errored", False)
             and getattr(self, "_feas_errored", False)
         ):
+            reproducer = (validation_result.system_entry_input or "").strip()
+            is_unreproducible = (
+                not reproducer
+                or reproducer.startswith("// UNREPRODUCIBLE")
+            )
+            if is_unreproducible:
+                logger.info(
+                    "Skipping dynamic validation for '%s' — both CBMC checks "
+                    "errored AND reproducer is UNREPRODUCIBLE-marked; no "
+                    "ground-truth oracle available",
+                    func.name,
+                )
+                return
             logger.info(
-                "Skipping dynamic validation for '%s' — both reachability "
-                "and callee-feasibility checks errored; dynamic result "
-                "would be unreliable",
+                "CBMC reachability + feasibility errored for '%s' — leaning "
+                "on dynamic validation as the only remaining ground-truth "
+                "oracle (reproducer passed public-API validation, so a "
+                "crash/no-crash signal will be authoritative)",
                 func.name,
             )
-            return
+            # Fall through to run dyn-val.
 
         caller_path = validation_result.caller_path
         entry_name = caller_path[0] if caller_path else func.name
