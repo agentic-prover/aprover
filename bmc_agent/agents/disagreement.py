@@ -46,20 +46,24 @@ is wrong and propose a concrete fix.
                              property.
 - Realism check (LLM):       REALISTIC — concluded a real public-API
                              caller could reach the CEx state.
-- Dynamic validation:        NOT_TRIGGERED — the LLM-generated
-                             reproducer (which uses only the project's
-                             public API) compiled, linked against the
-                             real library, and ran to completion
-                             without faulting.
+- Dynamic validation:        Either NOT_TRIGGERED (the LLM-generated
+                             reproducer compiled, linked against the
+                             real library, and ran without faulting),
+                             OR the LLM emitted a ``// UNREPRODUCIBLE``
+                             marker — i.e. it tried to write a
+                             public-API reproducer for the CEx state
+                             and admitted it couldn't construct one.
+                             The reproducer block below shows which.
 
 This is a structured disagreement: BMC and realism say the bug is
-reachable from real callers; the actual mechanical run with a real
-reproducer says it isn't.
+reachable from real callers; the mechanical / LLM-side evidence
+says it isn't.
 
 === REALISM REASONING (truncated) ===
 {realism_reasoning}
 
-=== REPRODUCER (the one that DID NOT fault) ===
+=== REPRODUCER (NOT_TRIGGERED case: the one that didn't fault;
+                UNREPRODUCIBLE case: the marker + LLM's explanation) ===
 ```c
 {reproducer_source}
 ```

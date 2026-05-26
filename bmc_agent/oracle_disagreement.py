@@ -63,8 +63,7 @@ logger = get_logger("oracle_disagreement")
 class DisagreementKind(str, Enum):
     """The structural shape of an oracle disagreement.
 
-    Only the most-actionable shape is detected today; more shapes can
-    be added incrementally without API changes. Future kinds we expect:
+    Future kinds we may add:
 
       * BMC_FAIL_REALISM_UNREAL_DYN_CONFIRMED  — realism missed, dyn-val
         is mechanical truth; promote
@@ -72,7 +71,20 @@ class DisagreementKind(str, Enum):
         ever run dyn-val on clean verifications
     """
 
+    #: The canonical case: BMC + realism both think the bug is reachable;
+    #: the mechanical reproducer (compiled + linked against the real .so)
+    #: ran cleanly without faulting.
     BMC_FAIL_REALISM_REAL_DYN_NOT_TRIGGERED = "bmc_fail_realism_real_dyn_not_triggered"
+
+    #: A subtler case: dyn-val returned INCONCLUSIVE, but the reason is
+    #: a ``// UNREPRODUCIBLE`` marker the LLM emitted instead of a
+    #: real reproducer — meaning the LLM ITSELF couldn't write a
+    #: public-API call sequence that reaches the CEx state. That's
+    #: stronger evidence of caller-contract slip than NOT_TRIGGERED
+    #: (the LLM looked, gave up, and said so). Triggered on the
+    #: archive_match_owner_excluded triage where this exact shape
+    #: was a struct-invariant FP that Phase 3d missed.
+    BMC_FAIL_REALISM_REAL_REPRODUCER_UNREACHABLE = "bmc_fail_realism_real_reproducer_unreachable"
 
 
 @dataclass(frozen=True)
@@ -113,20 +125,51 @@ def detect_disagreement(report: dict) -> Optional[DisagreementCase]:
         return None
     dyn = str(dyn).lower().strip()
 
-    # The actionable disagreement
+    reproducer_source = str(report.get("reproducer") or "")
+    function_name = str(report.get("function_name") or "")
+    violated_property = str(report.get("violated_property") or "")
+    realism_reasoning = str(
+        (report.get("realism_check") or {}).get("reasoning") or ""
+    )[:1500]
+
+    # Shape 1: BMC fail + realism REAL + dyn NOT_TRIGGERED
+    # — the canonical case (mechanical run came up clean).
     if realism == "realistic" and dyn == "not_triggered":
         return DisagreementCase(
             kind=DisagreementKind.BMC_FAIL_REALISM_REAL_DYN_NOT_TRIGGERED,
-            function_name=str(report.get("function_name") or ""),
-            violated_property=str(report.get("violated_property") or ""),
+            function_name=function_name,
+            violated_property=violated_property,
             bmc_verdict="fail",
             realism_verdict=realism,
             dyn_outcome=dyn,
-            realism_reasoning=str(
-                (report.get("realism_check") or {}).get("reasoning") or ""
-            )[:1500],
-            reproducer_source=str(report.get("reproducer") or "")[:3000],
+            realism_reasoning=realism_reasoning,
+            reproducer_source=reproducer_source[:3000],
         )
+
+    # Shape 2: BMC fail + realism REAL + dyn INCONCLUSIVE *and* the
+    # reproducer is UNREPRODUCIBLE-marked. The dyn-val didn't produce
+    # a verdict because the LLM ITSELF admitted (via the UNREPRODUCIBLE
+    # marker) that the CEx state can't be reached from a public-API
+    # call sequence. That's a strong "no real caller can produce
+    # this" signal — caught by the cex_validator's
+    # _reproducer_uses_public_api gate in 272b854, surfaced here for
+    # Phase 3d diagnosis.
+    if (
+        realism == "realistic"
+        and dyn == "inconclusive"
+        and reproducer_source.lstrip().startswith("// UNREPRODUCIBLE")
+    ):
+        return DisagreementCase(
+            kind=DisagreementKind.BMC_FAIL_REALISM_REAL_REPRODUCER_UNREACHABLE,
+            function_name=function_name,
+            violated_property=violated_property,
+            bmc_verdict="fail",
+            realism_verdict=realism,
+            dyn_outcome=dyn,
+            realism_reasoning=realism_reasoning,
+            reproducer_source=reproducer_source[:3000],
+        )
+
     return None
 
 

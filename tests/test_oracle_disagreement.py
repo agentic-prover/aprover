@@ -667,3 +667,76 @@ def test_pipeline_returns_false_when_property_fp(tmp_path):
     )
     result = p._diagnose_oracle_disagreements("drv", "fn")
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 3d shape 2: realism REALISTIC + dyn INCONCLUSIVE + UNREPRODUCIBLE
+# ---------------------------------------------------------------------------
+
+def _make_unreproducible_report(**extra):
+    """Build a bug_report with the UNREPRODUCIBLE shape — surfaced by
+    the archive_match_owner_excluded triage."""
+    rep = _make_report(realism="realistic", dyn="inconclusive")
+    rep["reproducer"] = (
+        "// UNREPRODUCIBLE: The bug requires match_owner_id to return "
+        "134217728 (0x8000000), but there is no public API to configure "
+        "archive_match internal state to produce this specific non-boolean "
+        "return value from the internal matching function."
+    )
+    rep.update(extra)
+    return rep
+
+
+def test_detect_fires_on_realism_real_dyn_inconclusive_unreproducible():
+    """Phase 3d shape 2: when dyn-val is inconclusive specifically
+    because the LLM emitted ``// UNREPRODUCIBLE``, that's the same
+    signal as not_triggered (the LLM looked and couldn't construct
+    a public-API call sequence) — fire the diagnoser."""
+    from bmc_agent.oracle_disagreement import (
+        detect_disagreement, DisagreementKind,
+    )
+    rep = _make_unreproducible_report()
+    case = detect_disagreement(rep)
+    assert case is not None
+    assert case.kind == DisagreementKind.BMC_FAIL_REALISM_REAL_REPRODUCER_UNREACHABLE
+    assert case.dyn_outcome == "inconclusive"
+
+
+def test_detect_no_fire_on_inconclusive_without_unreproducible_marker():
+    """A regular ``inconclusive`` (compile failure, timeout, etc.) is
+    NOT the same as an UNREPRODUCIBLE marker — the former is a tool
+    issue, the latter is structural unreachability. Only the latter
+    fires shape 2."""
+    from bmc_agent.oracle_disagreement import detect_disagreement
+    rep = _make_report(realism="realistic", dyn="inconclusive")
+    rep["reproducer"] = "#include <archive.h>\nint main(){return 0;}"
+    assert detect_disagreement(rep) is None
+
+
+def test_detect_no_fire_on_unrealistic_with_unreproducible_marker():
+    """Realism UNREAL + UNREPRODUCIBLE → all sources agree no real
+    bug; no disagreement to diagnose."""
+    from bmc_agent.oracle_disagreement import detect_disagreement
+    rep = _make_unreproducible_report(realism_check={"verdict": "unrealistic"})
+    assert detect_disagreement(rep) is None
+
+
+def test_detect_unreproducible_marker_recognised_after_whitespace():
+    """The detector strips leading whitespace before checking the
+    marker prefix — matches the dyn_validator's gate."""
+    from bmc_agent.oracle_disagreement import detect_disagreement
+    rep = _make_unreproducible_report()
+    rep["reproducer"] = "\n\n   // UNREPRODUCIBLE: stuff"
+    assert detect_disagreement(rep) is not None
+
+
+def test_detect_unreproducible_carries_reproducer_to_diagnose():
+    """The unreproducible marker + the LLM's explanation reach the
+    diagnoser as the reproducer_source — the marker text is the
+    LLM's own admission of unreachability, which is the diagnostic
+    signal."""
+    from bmc_agent.oracle_disagreement import detect_disagreement
+    rep = _make_unreproducible_report()
+    case = detect_disagreement(rep)
+    assert case is not None
+    assert "UNREPRODUCIBLE" in case.reproducer_source
