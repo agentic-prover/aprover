@@ -172,6 +172,14 @@ class Config:
     # defaults off so existing pipeline behaviour is unchanged.
     enable_spec_refiner: bool = False
 
+    # LLM-driven inline-vs-stub advisor for callees that the mechanical
+    # rule (file-local static, ≤30 LoC, no loops/alloc/recursion) marked
+    # STUB. The advisor reconsiders them and may PROMOTE some to inline
+    # when the body is a small predicate / getter whose stub would
+    # produce stub-disconnect FPs. Opt-in via ``--enable-inlining-advisor``;
+    # defaults off so existing pipeline behaviour is unchanged.
+    enable_inlining_advisor: bool = False
+
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
     # Required for wire-format parsers (protobuf upb varints, length-prefixed

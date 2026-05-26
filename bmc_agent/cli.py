@@ -331,6 +331,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.use_legacy_spec_gen = True
     if getattr(args, "enable_spec_refiner", False):
         config.enable_spec_refiner = True
+    if getattr(args, "enable_inlining_advisor", False):
+        config.enable_inlining_advisor = True
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -602,6 +604,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.use_legacy_spec_gen = True
     if getattr(args, "enable_spec_refiner", False):
         config.enable_spec_refiner = True
+    if getattr(args, "enable_inlining_advisor", False):
+        config.enable_inlining_advisor = True
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1309,6 +1313,19 @@ def build_parser() -> argparse.ArgumentParser:
             "previously-realistic CEx silently dropped). Opt-in."
         ),
     )
+    ver.add_argument(
+        "--enable-inlining-advisor",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable LLM-driven inline-vs-stub decisions for callees the "
+            "mechanical rule (file-local static, ≤30 LoC, no loops/alloc/"
+            "recursion) marked STUB. The advisor reconsiders them per-caller "
+            "in a batched LLM call; may PROMOTE small predicates / getters / "
+            "accessors to inline when stubbing would produce stub-disconnect "
+            "FPs. Bounded — never demotes; default STUB on uncertainty. Opt-in."
+        ),
+    )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -1462,6 +1479,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vd.add_argument(
         "--enable-spec-refiner",
+        action="store_true",
+        default=False,
+        help="See `verify --help` for the full explanation. Opt-in.",
+    )
+    vd.add_argument(
+        "--enable-inlining-advisor",
         action="store_true",
         default=False,
         help="See `verify --help` for the full explanation. Opt-in.",

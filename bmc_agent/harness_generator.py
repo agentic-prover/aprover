@@ -3855,6 +3855,30 @@ class HarnessGenerator:
                 ok, _reason = _should_inline_callee(cname, parsed_file, max_loc=max_loc)
                 if ok:
                     inline_local_callees.add(cname)
+        # Inlining advisor (opt-in): reconsider callees the mechanical
+        # rule marked STUB. May PROMOTE some to inline; never demotes.
+        # Safe degradation: any failure (no LLM client, parse error, etc.)
+        # leaves the mechanical-rule decision intact.
+        if getattr(self.config, "enable_inlining_advisor", False):
+            try:
+                from bmc_agent.inlining_advisor import InliningAdvisor
+                from bmc_agent.llm import LLMClient
+                advisor = InliningAdvisor(self.config, LLMClient(self.config))
+                candidates = sorted(local_callees - inline_local_callees)
+                if candidates:
+                    decisions = advisor.decide(
+                        candidates=candidates,
+                        parsed_file=parsed_file,
+                        caller_name=fn_name,
+                    )
+                    for cname, decision in decisions.items():
+                        if decision.inline:
+                            inline_local_callees.add(cname)
+            except Exception as exc:
+                logger.warning(
+                    "inlining advisor failed for '%s' — keeping mechanical decisions: %s",
+                    fn_name, exc,
+                )
         stubbed_local_callees = local_callees - inline_local_callees
         all_stub_callees = stubbed_local_callees | extern_callees | registry_callees
 
