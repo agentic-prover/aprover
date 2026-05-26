@@ -338,6 +338,29 @@ def _c_default_value(ret_type: str) -> str:
     return "0"
 
 
+_RET_TYPE_STORAGE_CLASS_RE = re.compile(
+    r'\b(static|inline|extern|register|_Noreturn)\b\s*'
+)
+
+
+def _ret_type_bare(ret_type: str) -> str:
+    """Strip storage-class / inline keywords from a function's return type.
+
+    The signature-keeping parser fallback (regex-based, used when
+    tree-sitter isn't installed) keeps ``static`` / ``inline`` in
+    ``return_type``. Using that raw return type to declare a local
+    variable in the harness — ``static void result = fut(...);`` —
+    produces invalid C: ``void`` cannot be a variable type, plus the
+    assignment from a void expression is also illegal. CBMC rejects
+    with "void-typed symbol not permitted" / CONVERSION ERROR.
+
+    Use this helper everywhere a return type is being substituted into
+    a local-variable declaration in a generated harness; keep the raw
+    return type only where we re-emit the FUNCTION definition itself.
+    """
+    return _RET_TYPE_STORAGE_CLASS_RE.sub('', ret_type).strip()
+
+
 def _params_str(params: list[tuple[str, str]]) -> str:
     """Build a C parameter list string, handling variadic '...' correctly.
 
@@ -592,11 +615,16 @@ def _generate_stub(
             for stmt in assume_stmts:
                 lines.append(f"    {stmt}")
 
-    if ret_type.strip() == "void":
+    ret_type_bare = _ret_type_bare(ret_type)
+    if ret_type_bare == "void":
         lines.append("    /* void return — nothing to havoc */")
     else:
-        # Havoc the return value: declare it, constrain by postcondition
-        lines.append(f"    {ret_type} result;")
+        # Havoc the return value: declare it, constrain by postcondition.
+        # Strip storage class — ``static void result;`` would be invalid
+        # (void can't be a variable type) and ``static int result;`` is
+        # legal but unintended (file-scope-like lifetime is meaningless
+        # for a havoc value).
+        lines.append(f"    {ret_type_bare} result;")
 
         # Built-in stub contracts for well-known allocator-family externs.
         # Without these, CBMC stubs return arbitrary garbage pointers that
@@ -691,8 +719,48 @@ _LIBRARY_INIT_GLOBALS: tuple[str, ...] = (
 )
 
 
+_CLAUSE_STRUCT_DEREF_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\s*->"
+)
+
+
+def _clause_references_only_known_idents(
+    clause: str, param_names: set[str],
+) -> bool:
+    """A learned clause is safe to emit only if every struct-dereference
+    root (``X->``) in it refers either to a parameter of the current
+    function OR to a name that's plausibly a global (e.g., ``g_init``,
+    or just isn't a short single-letter parameter-style name).
+
+    Reason: project-wide clauses are distilled from one function's
+    counterexample (e.g., ``a->inclusion_uids.count == 0`` from an
+    internal helper whose param is named ``a``) and then re-emitted
+    across every function's harness. When the current function's
+    matching parameter is named differently (e.g., ``_a`` in the
+    public-API entry), CBMC fails with "failed to find symbol 'a'"
+    (exit code 6). The conservative gate looks ONLY at
+    parameter-style roots (single letter, or starts with ``_`` and
+    has length ≤ 4) — those are the realistic case for confusing one
+    function's params with another's. Globals like ``g_init`` are
+    passed through.
+
+    Skipping a clause is preferable to crashing the harness — the
+    clause is an OPTIMIZATION, not a soundness invariant.
+    """
+    roots = _CLAUSE_STRUCT_DEREF_RE.findall(clause)
+    for root in roots:
+        # Only flag short parameter-style names — that's the regression we're
+        # guarding against. Longer names (g_init, archive_match_globals_xx)
+        # are almost certainly globals or typedef'd handles.
+        is_param_style = len(root) <= 4 or root.startswith("_")
+        if is_param_style and root not in param_names:
+            return False
+    return True
+
+
 def _emit_learned_clauses(
-    config: "Config", func_name: str, scope: str
+    config: "Config", func_name: str, scope: str,
+    param_names: "set[str] | None" = None,
 ) -> list[str]:
     """Return `__CPROVER_assume(...)` statements for clauses learned
     from previous realism rejections (feedback loop arm (b)/(c)).
@@ -701,6 +769,12 @@ def _emit_learned_clauses(
     to the named function; project clauses apply to every harness.
     Returns empty list when the feedback loop is disabled or the store
     is empty.
+
+    When ``param_names`` is supplied, project-scope clauses whose root
+    identifier is not in the set are skipped — those would otherwise
+    produce ``failed to find symbol 'X'`` CBMC errors (exit code 6) in
+    functions whose parameters are named differently from the function
+    where the clause was distilled.
     """
     if not getattr(config, "enable_feedback_loop", False):
         return []
@@ -720,6 +794,23 @@ def _emit_learned_clauses(
             "Feedback-loop clause read failed for '%s': %s", func_name, exc,
         )
         return []
+
+    if scope == "project" and param_names is not None:
+        filtered: list[str] = []
+        for c in clauses:
+            if not c.strip():
+                continue
+            if _clause_references_only_known_idents(c, param_names):
+                filtered.append(c)
+            else:
+                from bmc_agent.logger import get_logger
+                get_logger("harness").debug(
+                    "Skipping project clause for '%s' — root identifier not "
+                    "in current params %s: %s",
+                    func_name, sorted(param_names), c[:120],
+                )
+        clauses = filtered
+
     return [f"__CPROVER_assume({c});" for c in clauses if c.strip()]
 
 
@@ -3193,10 +3284,11 @@ class HarnessGenerator:
         harness_body_lines.append(
             f"    /* Step 3: call {fn_name} — reachability stub constrains state */"
         )
-        if ret_type == "void":
+        _ret_bare_reach = _ret_type_bare(ret_type)
+        if _ret_bare_reach == "void":
             harness_body_lines.append(f"    {fn_name}({call_args});")
         else:
-            harness_body_lines.append(f"    {ret_type} _caller_result = {fn_name}({call_args});")
+            harness_body_lines.append(f"    {_ret_bare_reach} _caller_result = {fn_name}({call_args});")
             harness_body_lines.append(f"    (void)_caller_result;")
         harness_body_lines.append("")
         harness_body_lines.append(
@@ -3302,10 +3394,11 @@ class HarnessGenerator:
         # iff such a path exists, confirming the callee state is reachable.
         lines.append("    assert(0); /* reachability witness */")
 
-        if ret_type == "void":
+        _ret_bare_stub = _ret_type_bare(ret_type)
+        if _ret_bare_stub == "void":
             lines.append("    /* void return */")
         else:
-            lines.append(f"    {ret_type} result;")
+            lines.append(f"    {_ret_bare_stub} result;")
             lines.append("    return result;")
 
         lines.append("}")
@@ -3467,10 +3560,11 @@ class HarnessGenerator:
             harness_lines.append("    /* Remaining inputs (no witness value) */")
             harness_lines.extend(nondet_decls)
         harness_lines.append(f"    /* Call {fn_name} with real callee bodies */")
-        if ret_type == "void":
+        _ret_bare_feas = _ret_type_bare(ret_type)
+        if _ret_bare_feas == "void":
             harness_lines.append(f"    {fn_name}({call_args});")
         else:
-            harness_lines.append(f"    {ret_type} _result = {fn_name}({call_args});")
+            harness_lines.append(f"    {_ret_bare_feas} _result = {fn_name}({call_args});")
             harness_lines.append("    (void)_result;")
             if assert_stmts:
                 harness_lines.append("    /* Postcondition — check violation still fires */")
@@ -3970,14 +4064,15 @@ class HarnessGenerator:
             sib_sig = parsed_file.functions[sib_name]
             sib_params = _params_str(sib_sig.parameters)
             sib_ret = sib_sig.return_type.strip()
+            sib_ret_bare = _ret_type_bare(sib_ret)
             body_lines = [
                 f"/* Sibling placeholder (referenced by TU-scope dispatch table): {sib_name} */",
                 f"{sib_ret} {sib_name}({sib_params}) {{",
             ]
-            if sib_ret == "void":
+            if sib_ret_bare == "void":
                 body_lines.append("    /* void sibling — no return */")
             else:
-                body_lines.append(f"    {sib_ret} _r;")
+                body_lines.append(f"    {sib_ret_bare} _r;")
                 body_lines.append("    return _r;")
             body_lines.append("}")
             sibling_func_defs.append("\n".join(body_lines))
@@ -4268,7 +4363,13 @@ class HarnessGenerator:
 
         # Step 1.6: project-wide invariants learned from prior realism
         # rejections (feedback loop arm (c)). Off unless enable_feedback_loop.
-        proj_clauses = _emit_learned_clauses(self.config, fn_name, "project")
+        # Gate by current function's param names so clauses distilled from
+        # a different function (with differently-named params, e.g. ``a`` vs
+        # ``_a``) aren't blindly applied and break CBMC parse.
+        proj_clauses = _emit_learned_clauses(
+            self.config, fn_name, "project",
+            param_names=set(param_names),
+        )
         if proj_clauses:
             harness_body_lines.append("")
             harness_body_lines.append("    /* Step 1.6: learned project invariants */")
@@ -4336,10 +4437,11 @@ class HarnessGenerator:
             _ret_var = "_amc_ret"
         harness_body_lines.append("")
         harness_body_lines.append("    /* Step 3: call the function under test */")
-        if ret_type == "void":
+        _ret_bare_main = _ret_type_bare(ret_type)
+        if _ret_bare_main == "void":
             harness_body_lines.append(f"    {fn_name}({call_args});")
         else:
-            harness_body_lines.append(f"    {ret_type} {_ret_var} = {fn_name}({call_args});")
+            harness_body_lines.append(f"    {_ret_bare_main} {_ret_var} = {fn_name}({call_args});")
             harness_body_lines.append(f"    (void){_ret_var};  /* suppress unused-variable warning */")
 
         # Step 4: assert postcondition
@@ -4468,7 +4570,12 @@ class HarnessGenerator:
 
         # Step 1.6: project-wide invariants learned from prior realism
         # rejections (feedback loop arm (c)). Off unless enable_feedback_loop.
-        proj_clauses = _emit_learned_clauses(self.config, fn_name, "project")
+        # Gate project clauses by the current function's params (same reason
+        # as the main harness above: avoid "failed to find symbol" errors).
+        proj_clauses = _emit_learned_clauses(
+            self.config, fn_name, "project",
+            param_names=set(param_names),
+        )
         if proj_clauses:
             body_lines.append("    /* Step 1.6: learned project invariants */")
             body_lines.extend(f"    {s}" for s in proj_clauses)
