@@ -1248,3 +1248,249 @@ def test_intentional_truncation_empty_description_no_fire():
     assert _witness_indicates_intentional_truncation(
         Counterexample(failing_property="f.x.1")
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# Grounding-audit helpers (commit 94fc64d) — _extract_tool_names,
+# _extract_grounding_field, _apply_grounding_consistency
+# ---------------------------------------------------------------------------
+
+def _make_realism_result(verdict, reasoning: str = "", key_concern: str = "", confidence: str = "high"):
+    from bmc_agent.realism_checker import RealismCheckResult
+    return RealismCheckResult(
+        verdict=verdict,
+        reasoning=reasoning,
+        key_concern=key_concern,
+        llm_confidence=confidence,
+    )
+
+
+def test_extract_tool_names_returns_call_order_with_args():
+    """Tool-call walker must return (name, args) pairs in invocation order
+    so the audit can check whether lookup_function was called on the target."""
+    from bmc_agent.realism_checker import _extract_tool_names
+
+    msgs = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"function": {"name": "lookup_function",
+                              "arguments": '{"name": "foo"}'}},
+                {"function": {"name": "lookup_callee_postcondition",
+                              "arguments": '{"name": "bar"}'}},
+            ],
+        },
+        {"role": "tool", "content": "result"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"function": {"name": "lookup_function",
+                              "arguments": '{"name": "match_owner_name_mbs"}'}},
+            ],
+        },
+    ]
+    out = _extract_tool_names(msgs)
+    assert out == [
+        ("lookup_function", {"name": "foo"}),
+        ("lookup_callee_postcondition", {"name": "bar"}),
+        ("lookup_function", {"name": "match_owner_name_mbs"}),
+    ]
+
+
+def test_extract_tool_names_handles_dict_arguments_and_skips_non_assistant():
+    """Tolerates arguments already parsed into a dict and skips non-assistant
+    or malformed entries instead of crashing."""
+    from bmc_agent.realism_checker import _extract_tool_names
+
+    msgs = [
+        "not a dict",
+        {"role": "user", "tool_calls": [{"function": {"name": "ignored"}}]},
+        {"role": "assistant", "tool_calls": [
+            "not a dict",
+            {"function": {"name": "lookup_function", "arguments": {"name": "x"}}},
+            {"function": {"name": "", "arguments": "{}"}},  # empty name skipped
+            {"function": {"name": "lookup_function", "arguments": "not json"}},
+        ]},
+    ]
+    out = _extract_tool_names(msgs)
+    assert out == [
+        ("lookup_function", {"name": "x"}),
+        ("lookup_function", {}),  # malformed args → empty dict, not crash
+    ]
+
+
+def test_extract_tool_names_empty_and_none_inputs():
+    from bmc_agent.realism_checker import _extract_tool_names
+    assert _extract_tool_names([]) == []
+    assert _extract_tool_names(None) == []
+
+
+def test_extract_grounding_field_from_bare_json():
+    """Pure JSON output with a grounding sub-object returns the sub-object."""
+    from bmc_agent.realism_checker import _extract_grounding_field
+
+    raw = json.dumps({
+        "verdict": "UNREALISTIC",
+        "grounding": {
+            "looked_up_target_body": True,
+            "quoted_line": "if (p != NULL && strcmp(p, name) == 0)",
+            "guard_search_result": "guard present: if (p != NULL && strcmp(p, name))",
+        },
+    })
+    g = _extract_grounding_field(raw)
+    assert g["looked_up_target_body"] is True
+    assert g["quoted_line"].startswith("if (p")
+    assert g["guard_search_result"].lower().startswith("guard present")
+
+
+def test_extract_grounding_field_from_fenced_markdown():
+    """Verdict JSON wrapped in ```json fences must still parse."""
+    from bmc_agent.realism_checker import _extract_grounding_field
+
+    raw = "```json\n" + json.dumps({
+        "verdict": "REALISTIC",
+        "grounding": {"looked_up_target_body": False, "quoted_line": "",
+                      "guard_search_result": "no guard found"},
+    }) + "\n```"
+    g = _extract_grounding_field(raw)
+    assert g.get("looked_up_target_body") is False
+    assert g.get("guard_search_result") == "no guard found"
+
+
+def test_extract_grounding_field_embedded_in_prose():
+    """Some LLMs emit prose before/after the JSON; the embedded-JSON
+    recovery path must still find the grounding field."""
+    from bmc_agent.realism_checker import _extract_grounding_field
+
+    raw = (
+        "Here is my analysis:\n"
+        + json.dumps({
+            "verdict": "UNREALISTIC",
+            "grounding": {"looked_up_target_body": True,
+                          "quoted_line": "x", "guard_search_result": "no guard found"},
+        })
+        + "\nThat's all."
+    )
+    g = _extract_grounding_field(raw)
+    assert g.get("looked_up_target_body") is True
+
+
+def test_extract_grounding_field_missing_or_malformed_returns_empty():
+    from bmc_agent.realism_checker import _extract_grounding_field
+
+    assert _extract_grounding_field("") == {}
+    assert _extract_grounding_field("not json at all") == {}
+    # JSON without grounding key
+    assert _extract_grounding_field(json.dumps({"verdict": "REALISTIC"})) == {}
+    # grounding is wrong type (string, not dict)
+    assert _extract_grounding_field(json.dumps({"grounding": "nope"})) == {}
+
+
+def test_apply_grounding_consistency_passes_through_non_realistic():
+    """UNREALISTIC and UNCERTAIN verdicts are not audited — only REALISTIC
+    is held to the grounding bar."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    for v in (RealismVerdict.UNREALISTIC, RealismVerdict.UNCERTAIN):
+        r = _make_realism_result(v, reasoning="x")
+        out = _apply_grounding_consistency(r, {}, "foo", looked_up_target=False)
+        assert out is r  # exact same object, no modification
+
+
+def test_apply_grounding_consistency_demotes_when_target_not_looked_up():
+    """REALISTIC + LLM never called lookup_function(target) → demote to
+    UNCERTAIN. Reasoning is annotated so audit trail survives."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(
+        RealismVerdict.REALISTIC,
+        reasoning="strcmp(p, name) is unguarded",
+        key_concern="null deref via strcmp",
+    )
+    out = _apply_grounding_consistency(
+        r, {"looked_up_target_body": False}, "match_owner_name_mbs",
+        looked_up_target=False,
+    )
+    assert out.verdict == RealismVerdict.UNCERTAIN
+    assert out.reasoning.startswith("[grounding-audit demoted]")
+    assert "strcmp(p, name) is unguarded" in out.reasoning
+    assert out.key_concern == "null deref via strcmp"  # preserved
+    assert out.llm_confidence == "low"  # downgraded
+
+
+def test_apply_grounding_consistency_flips_when_guard_present():
+    """REALISTIC verdict that contradicts its own grounding.guard_search_result
+    (which says guard IS present) must flip to UNREALISTIC."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(
+        RealismVerdict.REALISTIC,
+        reasoning="strcmp(p, name) called without NULL check",
+    )
+    grounding = {
+        "looked_up_target_body": True,
+        "quoted_line": "if (p != NULL && strcmp(p, name) == 0)",
+        "guard_search_result": "guard present: if (p != NULL && ...)",
+    }
+    out = _apply_grounding_consistency(
+        r, grounding, "match_owner_name_mbs", looked_up_target=True,
+    )
+    assert out.verdict == RealismVerdict.UNREALISTIC
+    assert out.reasoning.startswith("[grounding-audit flipped from REALISTIC]")
+    assert "guard present" in out.reasoning.lower()
+    assert "strcmp(p, name) called without NULL check" in out.reasoning
+    assert out.key_concern == "grounding contradicted verdict"
+
+
+def test_apply_grounding_consistency_case_insensitive_guard_match():
+    """The 'guard present:' prefix check must be case-insensitive so the LLM
+    has some leeway in capitalisation."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(RealismVerdict.REALISTIC, reasoning="x")
+    for phrase in ("guard present: ...", "Guard Present: ...", "GUARD PRESENT: ..."):
+        out = _apply_grounding_consistency(
+            r, {"guard_search_result": phrase}, "f", looked_up_target=True,
+        )
+        assert out.verdict == RealismVerdict.UNREALISTIC, phrase
+
+
+def test_apply_grounding_consistency_no_guard_keeps_realistic():
+    """REALISTIC + lookup_function called + grounding says 'no guard found'
+    → keep the original verdict. The audit isn't a blanket downgrade."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(RealismVerdict.REALISTIC, reasoning="real bug")
+    grounding = {
+        "looked_up_target_body": True,
+        "quoted_line": "strcmp(p, name)",
+        "guard_search_result": "no guard found",
+    }
+    out = _apply_grounding_consistency(
+        r, grounding, "f", looked_up_target=True,
+    )
+    assert out.verdict == RealismVerdict.REALISTIC
+    assert out is r  # passthrough
+
+
+def test_apply_grounding_consistency_missing_guard_field_keeps_realistic():
+    """If grounding field is empty/missing the guard_search_result clause,
+    don't flip — only the explicit 'guard present' signal counts as
+    contradictory evidence."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(RealismVerdict.REALISTIC, reasoning="real bug")
+    # looked_up=True so the demotion arm doesn't trip; grounding has no
+    # guard_search_result key at all
+    out = _apply_grounding_consistency(
+        r, {"looked_up_target_body": True}, "f", looked_up_target=True,
+    )
+    assert out.verdict == RealismVerdict.REALISTIC
+    assert out is r
