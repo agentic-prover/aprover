@@ -211,6 +211,108 @@ def _trivial_spec(fn_name: str, evidence_tag: str, reason: str = "") -> Spec:
     )
 
 
+# ---------- body-evidence: handle-magic-check PRE inference -----------------
+#
+# Almost every public C library API starts with a "handle validation"
+# check that derefs its first argument:
+#
+#   archive_check_magic(_a, ARCHIVE_MATCH_MAGIC, ...);   // libarchive
+#   __archive_check_magic((_a), ((0xcad11c9U)), ...);   // preprocessed form
+#
+# The macro IS the canonical encoding of the public-API caller contract:
+# "I require a valid handle of type X." Treating the boundary spec as
+# ``true/true`` (the alternative) makes BMC explore _a == NULL, which
+# trivially crashes inside the check and produces a caller-contract-slip
+# CEx on every single public API in the project — the dominant FP shape
+# we saw on libarchive.
+#
+# This helper does a body-level regex match for the magic-check pattern
+# and, when found, returns the contract clauses (param != NULL AND
+# param->magic == M) to use as the PRE instead.
+
+_MAGIC_CHECK_RE = re.compile(
+    r"\b"
+    r"(?P<macro>\w*[Cc]heck[_]?[Mm]agic\w*)"
+    r"\s*\(\s*"
+    r"\(*\s*(?P<param>[A-Za-z_]\w*)\s*\)*\s*,"  # 1st arg, optional parens
+    r"\s*"
+    r"\(*\s*(?P<magic>[\w0-9xX]+[uUlL]*)\s*\)*"  # 2nd arg
+)
+
+
+def _looks_like_magic_constant(token: str) -> bool:
+    """A handle-validation 2nd argument is meaningful only if it looks
+    like a magic constant — either an UPPERCASE identifier containing
+    MAGIC, or an integer/hex literal. Filters out cases where the regex
+    accidentally matches some other call (a flag enum, etc.)."""
+    t = token.strip().rstrip("uUlL")
+    if not t:
+        return False
+    if t.startswith(("0x", "0X")):
+        return all(c in "0123456789abcdefABCDEFxX" for c in t)
+    if t.isdigit():
+        return True
+    # Symbolic form: must be UPPERCASE and contain "MAGIC"
+    return t.isupper() and "MAGIC" in t
+
+
+def _infer_handle_contract_precondition(
+    func_info: "FunctionInfo",
+) -> Optional[tuple[str, str]]:
+    """Scan the function body for a handle-validation magic-check call
+    on a parameter, and return ``(param_name, magic_token)`` when found.
+
+    Returns None when no such pattern is found — the caller should fall
+    back to the trivial PRE.
+
+    Examples that match:
+      archive_check_magic(_a, ARCHIVE_MATCH_MAGIC, ...);
+      __archive_check_magic((_a), ((0xcad11c9U)), ...);
+
+    Examples that do NOT match:
+      foo(x, 0)           — 2nd arg isn't magic-shaped
+      check(x)            — name doesn't contain magic
+      bar(local, MAGIC)   — 1st arg isn't a parameter
+    """
+    body = getattr(func_info, "body", None) or ""
+    if not body:
+        return None
+    sig = getattr(func_info, "signature", None)
+    if sig is None:
+        return None
+    param_names = {pname for _, pname in sig.parameters if pname}
+    if not param_names:
+        return None
+
+    # Scan only the first ~10 lines — magic check is always at the top.
+    head = "\n".join(body.splitlines()[:12])
+    for m in _MAGIC_CHECK_RE.finditer(head):
+        param = m.group("param")
+        magic = m.group("magic")
+        if param not in param_names:
+            continue
+        if not _looks_like_magic_constant(magic):
+            continue
+        return (param, magic)
+    return None
+
+
+def _spec_from_handle_contract(
+    fn_name: str, param: str, magic: str,
+) -> Spec:
+    """Build a spec encoding the inferred handle-validation contract."""
+    pre = f"{param} != NULL && {param}->magic == {magic}"
+    return Spec(
+        function_name=fn_name,
+        precondition=pre,
+        postcondition="true",
+        status=SpecStatus.GENERATED,
+        pre_validity=pre,
+        pre_protocol="",
+        evidence={pre: ["caller_contract:magic_check"]},
+    )
+
+
 def _spec_from_seed_only(
     fn_name: str,
     seed_clauses: list,
@@ -393,7 +495,24 @@ class SpecGeneratorV2:
             pass
 
         # Step 2: boundary check → trivial spec (attacker-controlled input).
+        # Before falling back to ``true/true``, try to infer a handle-
+        # validation contract from the body — many C libraries (libarchive,
+        # sqlite3, libcurl) start every public API with a magic-check macro
+        # that documents the caller contract. When present, a permissive
+        # boundary spec lets BMC explore ``handle == NULL`` and generates
+        # caller-contract-slip CExes on every public API — the dominant FP
+        # shape on libarchive. Encoding the handle contract at spec time
+        # prevents that whole FP class before BMC runs.
         if self.boundary_detector and self.boundary_detector.is_boundary(fn_name):
+            contract = _infer_handle_contract_precondition(func_info)
+            if contract is not None:
+                param, magic = contract
+                logger.info(
+                    "v2 [%s]: boundary function — inferred handle "
+                    "contract: %s != NULL && %s->magic == %s",
+                    fn_name, param, param, magic,
+                )
+                return _spec_from_handle_contract(fn_name, param, magic)
             logger.debug("v2 [%s]: boundary function — trivial spec", fn_name)
             return _trivial_spec(fn_name, "external_boundary")
 
