@@ -46,6 +46,18 @@ class Spec:
     # flat ``precondition`` field on demand. See plan_validity_protocol_split.
     pre_validity: str = ""
     pre_protocol: str = ""
+    # Provenance: maps each clause text → list of evidence tags that
+    # support it. Tag conventions used by spec_generator_v2:
+    #   "body:L<line>"        — derived from reading the function body
+    #   "caller_site_<idx>"   — derived from observing call site #idx
+    #   "header_comment"      — extracted from doxygen/header annotation
+    #   "signature_pattern"   — derived from universal_contracts patterns
+    #   "canonical_contract"  — from universal_stub_contracts registry
+    #   "external_boundary"   — boundary function; spec is trivial by design
+    # Empty dict for v1-generated specs (back-compat). Consumed by the
+    # feedback loop to drop low-trust clauses preferentially when a
+    # bug-hunt assertion fires spuriously.
+    evidence: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self, _seen: frozenset | None = None) -> dict:
         # Guard against circular callee_specs (e.g. mutually recursive fns).
@@ -66,6 +78,7 @@ class Spec:
             "spec_disagreement": self.spec_disagreement,
             "pre_validity": self.pre_validity,
             "pre_protocol": self.pre_protocol,
+            "evidence": self.evidence,
         }
 
     @classmethod
@@ -83,7 +96,44 @@ class Spec:
             spec_disagreement=d.get("spec_disagreement", False),
             pre_validity=d.get("pre_validity", ""),
             pre_protocol=d.get("pre_protocol", ""),
+            evidence=d.get("evidence", {}),
         )
+
+    def evidence_for(self, clause: str) -> list[str]:
+        """Return the evidence tags for ``clause``, or [] if untagged.
+
+        Lookup is exact-text; callers should pass clause strings as
+        they appear in pre_validity / pre_protocol / postcondition.
+        """
+        return self.evidence.get(clause, [])
+
+    def clause_trust_score(self, clause: str) -> int:
+        """Rough trust score (higher = more trusted).
+
+        Used by feedback_loop to decide which clause to drop first when
+        a bug-hunt assertion fires spuriously. Scoring:
+
+          +3 canonical_contract           (hand-curated, authoritative)
+          +2 caller_site_*                (independent evidence)
+          +2 header_comment               (author-stated intent)
+          +1 signature_pattern            (universal pattern, no LLM)
+          +0 body:*                       (impl-only, contamination risk)
+          -1 (no evidence tags)           (unsupported guess)
+
+        When dropping clauses, drop lowest-scored first.
+        """
+        tags = self.evidence_for(clause)
+        if not tags:
+            return -1
+        score = 0
+        for tag in tags:
+            if tag == "canonical_contract":
+                score = max(score, 3)
+            elif tag.startswith("caller_site_") or tag == "header_comment":
+                score = max(score, 2)
+            elif tag == "signature_pattern":
+                score = max(score, 1)
+        return score
 
     def split_precondition(self) -> tuple[str, str]:
         """Return ``(pre_validity, pre_protocol)``.

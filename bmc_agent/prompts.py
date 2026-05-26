@@ -1053,6 +1053,207 @@ Respond with ONLY valid JSON:
 If you see no adjacent bugs, respond with `{{"adjacent_bugs": []}}`.
 """
 
+# ---------------------------------------------------------------------------
+# Caller-grounded spec generation (v2)
+# ---------------------------------------------------------------------------
+#
+# Used by SpecGeneratorV2. Distinct from the v1 ENTRY_SPEC_PROMPT in that
+# it explicitly hands the LLM independent evidence sources (callers, doc
+# annotations, signature-pattern seeds) and asks it to reconcile rather
+# than infer from the body alone.
+#
+# Key design choices baked into this prompt:
+#   * Structured JSON output with per-clause evidence tags. The orchestrator
+#     enforces "every clause must have ≥1 evidence tag" — the schema is
+#     load-bearing for the feedback loop's directed relaxation.
+#   * Explicit validity vs protocol split done by the LLM (richer context
+#     than the regex classifier in spec.py).
+#   * Bias toward weaker PRE when body and callers disagree, with
+#     spec_disagreement=True flagged so the orchestrator can mark the
+#     finding for human review.
+
+CALLER_GROUNDED_SPEC_PROMPT = """\
+Your task: draft a precise formal spec (precondition + postcondition) for a
+single C function, by RECONCILING three independent evidence sources:
+
+  (a) the function body itself (what the code does — may include bugs);
+  (b) up to {n_callers} actual call sites in the codebase (what callers
+      establish before calling — this constrains what's REALISTIC);
+  (c) signature-pattern seeds + author doc annotations (what the
+      function declared as).
+
+The reconciliation step is the whole point. A spec derived from (a) alone
+captures whatever the buggy code happens to tolerate — that's the failure
+mode we are explicitly defending against. Use (b) and (c) as the
+EPISTEMIC ANCHOR; use (a) only to refine.
+
+Function under spec:
+```c
+{fn_signature}
+```
+
+{fn_body_block}
+{doc_annotations_block}
+{seed_clauses_block}
+{callers_block}
+{address_taken_block}
+{callee_specs_block}
+
+OUTPUT FORMAT — emit ONLY this JSON object, no prose:
+
+{{
+  "pre_validity": [
+    {{"clause": "<DSL clause>", "evidence": ["caller_site_1", "body:L42"]}}
+  ],
+  "pre_protocol": [
+    {{"clause": "<DSL clause>", "evidence": ["header_comment"]}}
+  ],
+  "postcondition": [
+    {{"clause": "<DSL clause>", "evidence": ["body:L88"]}}
+  ],
+  "loop_invariants": [],
+  "spec_disagreement": false,
+  "uncertainty_notes": "<one-line free-form on what you were unsure of>"
+}}
+
+EVIDENCE TAG VOCABULARY (use these EXACT strings):
+  "body:L<n>"            — derived from reading function body line <n>
+  "caller_site_<idx>"    — derived from observing the indexed caller above
+                            (1-indexed; e.g. caller_site_1 = first listed)
+  "address_taken_site_<idx>" — derived from the indexed vtable/callback
+                            registration site (when function only reached
+                            via function-pointer dispatch)
+  "header_comment"       — extracted from doxygen/header annotation
+  "signature_pattern"    — derived from universal pattern matching on
+                            parameter names + types (paired_pointers, etc.)
+  "canonical_contract"   — derived from a hand-curated registry entry
+                            (caller almost never produces this; the
+                            orchestrator short-circuits before the LLM call)
+
+HARD RULES — your output will be rejected if any of these are violated:
+
+  1. EVERY clause MUST have ≥1 evidence tag. Untagged clauses are guesses
+     and we reject them at parse time.
+  2. POST clauses MAY reference ONLY return value, out-parameters, or
+     globals visible at the signature scope. Internal struct fields the
+     caller cannot observe are forbidden in POST.
+  3. When body and callers disagree on a precondition strength, prefer
+     the WEAKER PRE (let any caller-side bug surface) and set
+     spec_disagreement=true with a uncertainty_notes explanation. Choosing
+     the tighter PRE to make the function verify clean is exactly the
+     methodology trap we are defending against.
+  4. Default ambiguous PRE clauses to pre_validity (caller's obligation)
+     rather than pre_protocol (assumed). Asserting too much surfaces
+     visible FPs that the feedback loop can drop; assuming too much hides
+     bugs invisibly.
+  5. If the callers list is EMPTY and address_taken_sites is also empty,
+     the function may be dead code or reachable only through paths not
+     visible in the corpus. Emit pre/post as trivial ({{}}) with evidence
+     ["signature_pattern"] (if seeds exist) or [] (if no signal at all);
+     set uncertainty_notes="no caller evidence available".
+
+VALIDITY vs PROTOCOL — split your PRE clauses:
+
+  pre_validity: caller-establishable memory-safety primitives. Things any
+    sane caller is obliged to ensure: !null(p), valid(p), valid_range(p, 0, n),
+    in_bounds(idx, arr_len), no_overflow(a + b), arithmetic comparisons of
+    pointer/length-shaped values.
+
+  pre_protocol: higher-level cooperation invariants the callee assumes the
+    broader system maintains: locked(&mu), initialized(obj), state(s == OPEN),
+    ref-count predicates, "callback registered" invariants.
+
+When in doubt → validity. (See rule 4.)
+
+DSL syntax — keep clauses minimal first-order predicates joined implicitly
+across the list (each clause is its own AND-conjunct). Allowed primitives:
+  !null(p)              — p is non-NULL
+  valid(p)              — p points to an allocation
+  valid_range(p, lo, hi) — p[lo..hi) is in-bounds for p's allocation
+  valid_string(s)       — s is non-NULL and NUL-terminated within bounds
+  in_bounds(i, n)       — 0 <= i < n
+  no_overflow(expr)     — the arithmetic expr doesn't overflow
+  <relational op on params/return>  — e.g. ``start <= end``, ``result >= 0``
+"""
+
+
+def render_caller_grounded_spec_prompt(
+    *,
+    fn_signature: str,
+    fn_body: str,
+    callers: list,                # list[CallerEvidence], typed loosely to avoid import cycle
+    address_taken_sites: list,
+    doc_annotations: list,
+    seed_clauses: list,
+    callee_specs: dict,           # {name: Spec.to_dict()}
+    n_callers_actual: int = 5,
+) -> str:
+    """Render :data:`CALLER_GROUNDED_SPEC_PROMPT` with the evidence bundle.
+
+    Conditional blocks (callers, address-taken, doc annotations, seed
+    clauses, callee specs) are omitted entirely when empty so the LLM
+    doesn't see boilerplate-with-zero-content. Each block carries its
+    own header and the indexing matches the evidence-tag vocabulary.
+    """
+    fn_body_block = (
+        f"Function body:\n```c\n{fn_body}\n```\n" if fn_body.strip() else ""
+    )
+    if doc_annotations:
+        lines = ["Author documentation annotations:"]
+        for d in doc_annotations:
+            lines.append(f"  - {d.render()}")
+        doc_annotations_block = "\n".join(lines) + "\n"
+    else:
+        doc_annotations_block = ""
+    if seed_clauses:
+        lines = ["Signature-pattern seed clauses (deterministic, no LLM):"]
+        for s in seed_clauses:
+            lines.append(f"  - {s.render()}")
+        seed_clauses_block = "\n".join(lines) + "\n"
+    else:
+        seed_clauses_block = ""
+    if callers:
+        lines = [f"Observed call sites ({len(callers)} of {n_callers_actual} max):"]
+        for i, c in enumerate(callers, start=1):
+            lines.append(f"\n--- caller_site_{i} ---")
+            lines.append(c.render())
+        callers_block = "\n".join(lines) + "\n"
+    else:
+        callers_block = "Observed call sites: NONE (no direct callers found in corpus).\n"
+    if address_taken_sites:
+        lines = [
+            f"Address-taken / callback-registration sites "
+            f"({len(address_taken_sites)} — function only reached via "
+            f"function-pointer dispatch):"
+        ]
+        for i, c in enumerate(address_taken_sites, start=1):
+            lines.append(f"\n--- address_taken_site_{i} ---")
+            lines.append(c.render())
+        address_taken_block = "\n".join(lines) + "\n"
+    else:
+        address_taken_block = ""
+    if callee_specs:
+        lines = ["Callees' specs (use as compositional context):"]
+        for name, spec in callee_specs.items():
+            pre = spec.get("precondition", "") or "true"
+            post = spec.get("postcondition", "") or "true"
+            lines.append(f"  {name}: PRE={pre!s}  POST={post!s}")
+        callee_specs_block = "\n".join(lines) + "\n"
+    else:
+        callee_specs_block = ""
+
+    return CALLER_GROUNDED_SPEC_PROMPT.format(
+        n_callers=n_callers_actual,
+        fn_signature=fn_signature,
+        fn_body_block=fn_body_block,
+        doc_annotations_block=doc_annotations_block,
+        seed_clauses_block=seed_clauses_block,
+        callers_block=callers_block,
+        address_taken_block=address_taken_block,
+        callee_specs_block=callee_specs_block,
+    )
+
+
 REACHABILITY_PROMPT = """\
 You are a formal verification expert analyzing C code reachability.
 

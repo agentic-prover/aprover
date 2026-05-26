@@ -335,6 +335,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.threat_model = args.threat_model
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
+    if getattr(args, "legacy_spec_gen", False):
+        config.use_legacy_spec_gen = True
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -602,6 +604,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.threat_model = args.threat_model
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
+    if getattr(args, "legacy_spec_gen", False):
+        config.use_legacy_spec_gen = True
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1296,6 +1300,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Pairs well with --raw-bytes."
         ),
     )
+    ver.add_argument(
+        "--legacy-spec-gen",
+        action="store_true",
+        default=False,
+        help=(
+            "Use the legacy v1 SpecGenerator instead of the default v2 "
+            "(caller-grounded, evidence-tagged). v1 drafts from the function "
+            "body alone; v2 reconciles body + observed call sites + doc "
+            "annotations + signature patterns. Use this flag only for parity "
+            "comparison against historical runs — v2 should otherwise be "
+            "strictly better on internal functions."
+        ),
+    )
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -1435,6 +1452,16 @@ def build_parser() -> argparse.ArgumentParser:
             "CBMC built-in checks surface memory-safety bugs from nondet harness "
             "inputs; LLM budget shifts to realism + classifier in Phase 3. "
             "Pairs well with --raw-bytes."
+        ),
+    )
+    vd.add_argument(
+        "--legacy-spec-gen",
+        action="store_true",
+        default=False,
+        help=(
+            "Use the legacy v1 SpecGenerator instead of the default v2 "
+            "(caller-grounded, evidence-tagged). See `verify --help` for the "
+            "full explanation. Use only for parity comparison."
         ),
     )
     vd.add_argument(

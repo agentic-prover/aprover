@@ -170,6 +170,13 @@ class Config:
     # See findings/PLAN_validity_protocol_split.md.
     spec_mode: str = "functional"
 
+    # When True, instantiate the legacy v1 SpecGenerator instead of the
+    # default v2 SpecGeneratorV2. v2 is caller-grounded with provenance
+    # tags and is the default; v1 remains accessible for parity
+    # comparison and as an escape hatch during the v2 rollout cycle.
+    # Set via ``--legacy-spec-gen`` on verify / verify-dir.
+    use_legacy_spec_gen: bool = False
+
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
     # Required for wire-format parsers (protobuf upb varints, length-prefixed

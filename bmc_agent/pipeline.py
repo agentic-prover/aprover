@@ -282,7 +282,17 @@ class AMCPipeline:
         self.config = config
         self.store = ArtifactStore(config.artifact_dir)
         self.llm = LLMClient(config)
-        self.spec_gen = SpecGenerator(config, self.llm, self.store)
+        # v2 (caller-grounded, evidence-tagged) is the default; v1 is the
+        # opt-in legacy path under --legacy-spec-gen. v2 starts without
+        # boundary_detector / corpus_paths; run() and run_directory()
+        # populate them before invoking generate_specs.
+        if getattr(config, "use_legacy_spec_gen", False):
+            logger.info("spec-gen: using LEGACY (v1) SpecGenerator")
+            self.spec_gen = SpecGenerator(config, self.llm, self.store)
+        else:
+            from bmc_agent.spec_generator_v2 import SpecGeneratorV2
+            logger.info("spec-gen: using v2 (caller-grounded) SpecGeneratorV2")
+            self.spec_gen = SpecGeneratorV2(config, self.llm, self.store)
         self.bmc_engine = BMCEngine(config, self.store)
         self.harness_gen = HarnessGenerator(config)
         self.validator = CExValidator(
@@ -294,6 +304,41 @@ class AMCPipeline:
         self.reporter = BugReporter(self.store)
         self.realism_checker = RealismChecker(config, self.llm)
         self.propagation_events: list[PropagationEvent] = []
+
+    # ------------------------------------------------------------------
+    # v2 spec-gen plumbing
+    # ------------------------------------------------------------------
+
+    def _configure_v2_corpus(
+        self,
+        *,
+        source_dir: Optional[Path] = None,
+        corpus_files: Optional[list[Path]] = None,
+        explicit_headers: Optional[list[Path]] = None,
+    ) -> None:
+        """Populate v2 SpecGeneratorV2 with the corpus + boundary context
+        for this sweep. No-op for v1 SpecGenerator.
+        """
+        from bmc_agent.spec_generator_v2 import SpecGeneratorV2
+        if not isinstance(self.spec_gen, SpecGeneratorV2):
+            return
+        if corpus_files is not None:
+            self.spec_gen.corpus_paths = list(corpus_files)
+        if source_dir is not None:
+            try:
+                from bmc_agent.boundary_detector import BoundaryDetector
+                self.spec_gen.boundary_detector = BoundaryDetector.autodiscover(
+                    Path(source_dir), explicit_headers=explicit_headers,
+                )
+                logger.info(
+                    "v2 boundary detector: %d public functions discovered from %s",
+                    len(self.spec_gen.boundary_detector), source_dir,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "v2: boundary detector autodiscover failed (%r) — every "
+                    "function will be treated as internal", exc,
+                )
 
     # ------------------------------------------------------------------
     # Public API
@@ -361,6 +406,15 @@ class AMCPipeline:
         # components (spec_gen, harness_generator, realism_checker) can
         # opt-in to using them. Empty dict = no hints / normal sweep.
         self.config.function_hints = dict(function_hints or {})
+
+        # v2 spec-gen wants the surrounding corpus + boundary headers so
+        # it can caller-ground specs. For single-file run() we use the
+        # source file's parent directory as the autodiscover root and
+        # treat the file itself as the only corpus member.
+        self._configure_v2_corpus(
+            source_dir=Path(source_file).parent,
+            corpus_files=[Path(source_file)],
+        )
 
         specs = self.spec_gen.generate_specs(
             source_file=source_file,
@@ -1716,6 +1770,13 @@ class AMCPipeline:
 
         logger.info(
             "=== run_directory: %d files in '%s' ===", len(c_files), source_dir
+        )
+
+        # v2 spec-gen: corpus = all .c files in the sweep; boundary headers
+        # = autodiscovered from source_dir. Set once for the whole sweep.
+        self._configure_v2_corpus(
+            source_dir=source_dir,
+            corpus_files=c_files,
         )
 
         import tempfile, os
