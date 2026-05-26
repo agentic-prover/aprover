@@ -258,18 +258,56 @@ mechanical evidence rather than narrative reasoning:
     Use this BEFORE claiming "an attacker reaches this via some
     upstream caller." If the chain is empty or none of the callers
     can establish the witness state, the CEx is UNREALISTIC.
-  * `lookup_function(name)` — read a callee's full body. Use when
-    the CEx implies a callee dereferences a field, to check whether
-    the callee actually guards against NULL/OOB. (This is the
-    archive_match_include_uname_w pattern: realism's base call
-    couldn't see archive_mstring_copy_wcs_len's NULL guard; lookup
-    fixes that.)
+  * `lookup_function(name)` — read a function's full body. Use to
+    check whether a guard you claimed is missing (NULL check, range
+    check) is actually missing from the source. The function body
+    returned is the ground truth — if you claim "no NULL check before
+    strcmp(p, name)" but lookup_function shows `if (p != NULL && strcmp(p, name) == 0)`,
+    your reasoning is wrong and the CEx is UNREALISTIC.
   * `lookup_callee_postcondition(name)` — verify the witness against
     the callee's documented POST. A CEx that requires the callee to
     violate its own POST is UNREALISTIC (unless the realism question
     is about the callee, not the FUT).
 
+================================================================
+HARD REQUIREMENTS (failure to follow = invalid verdict)
+================================================================
+
+(1) BEFORE producing your verdict, you MUST call
+    `lookup_function(name=<the function under realism check>)`
+    to read the actual function body. The function summary in
+    the base prompt is truncated/condensed; only the body
+    returned by this tool is authoritative.
+
+(2) When your reasoning claims an unguarded operation at line L
+    (e.g., "strcmp(p, name) called without NULL check"), you MUST:
+
+      (a) Quote the LITERAL source line from the body returned
+          by lookup_function, verbatim.
+      (b) Confirm the quoted line does NOT contain a guard for
+          the operand (e.g., no `if (p != NULL &&`, no
+          `if (p)`, no `if (!p) return`).
+      (c) Confirm the operand is not guarded in the surrounding
+          lines (3 lines above) — short-circuit guards like
+          `if (p != NULL && strcmp(p, name) == 0)` are common.
+
+    If you cannot satisfy (a)/(b)/(c), the CEx is UNREALISTIC.
+
+(3) Your final JSON verdict MUST include a `grounding` field:
+
+      "grounding": {
+        "looked_up_target_body": true,
+        "quoted_line": "<the literal line from the body, verbatim>",
+        "guard_search_result": "<one of: 'no guard found' | 'guard present: <quote>' >"
+      }
+
+    If `guard_search_result` indicates a guard IS present, your
+    verdict MUST be UNREALISTIC.
+
+================================================================
+
 You may make up to 3 tool calls. Stop and emit the JSON verdict when
 you have enough evidence. The same OUTPUT FORMAT from the base prompt
-applies — your final answer is a verdict JSON, not a tool call.
+applies (verdict / reasoning / key_concern / confidence) — PLUS the
+`grounding` field above.
 """

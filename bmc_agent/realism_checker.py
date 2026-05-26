@@ -684,6 +684,29 @@ class RealismChecker:
         parsed_result = _parse_result(tu_result.text, func.name)
         if parsed_result is None:
             return None
+
+        # Extract which tools were actually called (not just the count).
+        # Surfaces whether the LLM followed the "MUST call lookup_function
+        # on target" requirement in TOOL_USE_PROMPT_ADDENDUM.
+        tool_names_called = _extract_tool_names(tu_result.messages)
+        logger.info(
+            "Realism augmentation tools called for '%s': %s",
+            func.name,
+            tool_names_called or "(none)",
+        )
+        looked_up_target = any(
+            n == "lookup_function" and arg.get("name") == func.name
+            for n, arg in tool_names_called
+        )
+
+        # Parse the grounding field added by the (c) hard requirement.
+        # If verdict=REALISTIC but grounding contradicts (guard present,
+        # or target body never looked up), demote — verdict is unsound.
+        grounding = _extract_grounding_field(tu_result.text)
+        parsed_result = _apply_grounding_consistency(
+            parsed_result, grounding, func.name, looked_up_target,
+        )
+
         # If augmentation flipped to REALISTIC, log the divergence —
         # base UNREALISTIC → augmented REALISTIC suggests the base
         # call missed evidence the tools surfaced.
@@ -2292,6 +2315,138 @@ def _recover_verdict_from_prose(text: str) -> "RealismVerdict | None":
 # ---------------------------------------------------------------------------
 # LLM response parser
 # ---------------------------------------------------------------------------
+
+
+def _extract_tool_names(messages: list) -> list[tuple[str, dict]]:
+    """Walk a tool-use message history and return [(tool_name, args), ...] in
+    call order. Used by the augmentation logger so we can see *which* tools
+    the LLM actually called, not just the count — surfacing whether the
+    "MUST call lookup_function on target" requirement was respected.
+    """
+    out: list[tuple[str, dict]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "assistant":
+            continue
+        tcs = msg.get("tool_calls") or []
+        for tc in tcs:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            name = fn.get("name") or ""
+            args_raw = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+            except Exception:
+                args = {}
+            if name:
+                out.append((name, args))
+    return out
+
+
+def _extract_grounding_field(raw: str) -> dict:
+    """Extract the ``grounding`` JSON sub-object from the LLM verdict text.
+
+    The hard-requirement addendum (TOOL_USE_PROMPT_ADDENDUM) demands a
+    ``grounding`` field with looked_up_target_body / quoted_line /
+    guard_search_result. Returns {} if absent or unparseable. We don't
+    use the existing _parse_result data dict directly because callers
+    of this helper may want the raw nested structure.
+    """
+    if not raw:
+        return {}
+    try:
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            inner: list[str] = []
+            in_fence = False
+            for line in lines:
+                if line.startswith("```"):
+                    in_fence = not in_fence
+                    continue
+                if in_fence or not lines[0].startswith("```"):
+                    inner.append(line)
+            text = "\n".join(inner).strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            embedded = _extract_first_json_object(text)
+            if embedded is None:
+                return {}
+            data = json.loads(embedded)
+        g = data.get("grounding")
+        return g if isinstance(g, dict) else {}
+    except Exception:
+        return {}
+
+
+def _apply_grounding_consistency(
+    parsed_result: "RealismCheckResult",
+    grounding: dict,
+    func_name: str,
+    looked_up_target: bool,
+) -> "RealismCheckResult":
+    """Audit a realism augmentation verdict against its grounding evidence.
+
+    Two failure modes worth demoting:
+
+    1. Verdict=REALISTIC but the LLM never called lookup_function on the
+       target FUT. The hard-requirement addendum demands this; skipping
+       it means the verdict is narrative-only, not source-grounded.
+
+    2. Verdict=REALISTIC but ``grounding.guard_search_result`` indicates
+       a guard IS present. That's an internal contradiction — the
+       grounding field itself says "guard present" while the verdict
+       claims the operation is unguarded. Trust the grounding evidence.
+
+    Returns a possibly-modified RealismCheckResult.
+    """
+    if parsed_result.verdict != RealismVerdict.REALISTIC:
+        return parsed_result
+
+    # Case 1: REALISTIC but target body never looked up.
+    if not looked_up_target:
+        logger.warning(
+            "Realism augmentation for '%s': verdict=REALISTIC but the LLM "
+            "did NOT call lookup_function on the target — verdict is "
+            "narrative-only, not source-grounded. Demoting to UNCERTAIN.",
+            func_name,
+        )
+        return RealismCheckResult(
+            verdict=RealismVerdict.UNCERTAIN,
+            reasoning=(
+                "[grounding-audit demoted] " + (parsed_result.reasoning or "")
+            )[:2000],
+            key_concern=parsed_result.key_concern,
+            llm_confidence="low",
+        )
+
+    # Case 2: grounding evidence contradicts the verdict.
+    gsr = str(grounding.get("guard_search_result") or "").strip().lower()
+    if gsr.startswith("guard present"):
+        logger.warning(
+            "Realism augmentation for '%s': verdict=REALISTIC but "
+            "grounding.guard_search_result='%s' says a guard IS present. "
+            "Verdict contradicts its own evidence — flipping to UNREALISTIC.",
+            func_name, gsr,
+        )
+        return RealismCheckResult(
+            verdict=RealismVerdict.UNREALISTIC,
+            reasoning=(
+                "[grounding-audit flipped from REALISTIC] "
+                "Verdict claimed unguarded operation, but the grounding "
+                "field returned by the same LLM said: "
+                + str(grounding.get("guard_search_result") or "")[:300]
+                + "\n\n--- Original reasoning ---\n"
+                + (parsed_result.reasoning or "")
+            )[:2000],
+            key_concern="grounding contradicted verdict",
+            llm_confidence="medium",
+        )
+
+    return parsed_result
 
 
 def _parse_adjacent_bugs(raw: str, func_name: str) -> list[dict]:
