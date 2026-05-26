@@ -528,7 +528,10 @@ Respond with ONLY valid JSON in this exact format:
 """
 
 REPRODUCER_PROMPT = """\
-You are a formal verification expert generating C test cases that trigger bugs.
+You are generating a C reproducer that demonstrates a bug AGAINST THE REAL
+LIBRARY. The reproducer will be compiled and linked against the project's
+installed .so / .a; a crash in YOUR fabricated code does NOT validate the
+bug, only a crash in the real library code does.
 
 A real bug was found in function '{buggy_function}'. The call chain from the
 system entry point to the buggy function is:
@@ -537,21 +540,50 @@ system entry point to the buggy function is:
 The counterexample (variable state that triggers the bug):
 {counterexample_state}
 
-Function signatures:
+Function signatures (these are real symbols you call — do NOT re-implement them):
 {function_signatures}
 
-Your task: Generate a minimal, self-contained C test case (main function) that:
-1. Creates the necessary data structures
-2. Initializes them to concrete values that will trigger the bug
-3. Calls the functions in order along the call chain
-4. The bug should manifest (crash, assertion failure, or undefined behavior)
+Your task: emit a minimal C ``main()`` that drives the REAL library to
+trigger the bug.
 
-The test case should be realistic — use the counterexample values as a guide.
+HARD CONSTRAINTS — your reproducer will be REJECTED if it violates any of these:
+
+  1. MUST `#include <archive.h>` (and `<archive_entry.h>` if you use entries).
+     The reproducer is compiled with `-larchive` and linked against the real
+     project's shared library. Internal headers (`*_private.h`) are NOT on
+     the include path — don't reach for them.
+
+  2. MUST NOT re-implement project functions inline. If you redefine
+     `entry_list_add`, `add_entry`, `archive_match_*`, etc. in your own C,
+     you're testing your own stub, not the real library. The link step
+     will use the real symbols regardless of what you define, but any
+     "crash" in your inline duplicate is a synthetic FP, not a real bug.
+
+  3. MUST NOT fabricate copies of internal structs (`struct match_file`,
+     `struct entry_list`, `struct archive_match`, etc.). These are opaque
+     types. Use the public-API constructors (`archive_match_new()`,
+     `archive_entry_new()`, …) to obtain instances, and the public setters
+     to populate them. Pointer arithmetic on opaque pointers / direct
+     field access is forbidden — there is no way to do that from outside
+     the library and reach a real bug.
+
+  4. MUST drive state via public-API calls only. To set a struct's
+     internal state, you call the public functions that set that state.
+     If the counterexample requires a state no public API can produce,
+     emit exactly `// UNREPRODUCIBLE: <one-line reason>` and nothing else
+     — that's the honest answer, and it's what realism uses to demote
+     the finding.
+
+  5. If the function can take attacker-controlled bytes (filename,
+     archive contents), construct those as plain `char[]` arrays inline.
+     Keep everything in-memory: `archive_read_open_memory`,
+     `archive_write_open_memory` (correct signatures: buffer is `void*`
+     not `void**`; size is `size_t value` not `&size_t`).
 
 Respond with ONLY valid JSON in this exact format:
 {{
-  "reproducer_code": "<complete C test case as a string>",
-  "explanation": "<brief explanation of why these inputs trigger the bug>",
+  "reproducer_code": "<complete C source — MUST start with #include <archive.h> OR be exactly the UNREPRODUCIBLE comment>",
+  "explanation": "<brief explanation of why these inputs trigger the real-library bug>",
   "concrete_values": {{
     "<variable>": "<value>",
     ...

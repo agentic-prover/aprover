@@ -1912,21 +1912,56 @@ class CExValidator:
             if data is not None:
                 code = data.get("reproducer_code", "").strip()
                 if code:
+                    # Guard against LLM-fabricated synthetic reproducers that
+                    # reimplement the library inline instead of linking against
+                    # the real .so. The REPRODUCER_PROMPT forbids this, but
+                    # past sweeps showed the model sometimes does it anyway
+                    # (e.g., reimplementing entry_list_add as a standalone
+                    # buggy stub, then "crashing" on the stub) — producing
+                    # misleading confirmed_dynamic verdicts on synthetic
+                    # crashes that prove nothing about the real library.
+                    #
+                    # The HONEST `// UNREPRODUCIBLE: …` answer is fine and
+                    # gets passed through verbatim so dyn-val skips it
+                    # cleanly. Anything else that lacks `#include <archive.h>`
+                    # is rejected as synthetic — return the explicit
+                    # UNREPRODUCIBLE marker so downstream knows nothing got
+                    # validated against real linked code.
+                    if code.startswith("// UNREPRODUCIBLE"):
+                        return code
+                    # Project-agnostic public-header detection: derive the
+                    # allowlist from config.include_dirs (same heuristic
+                    # boundary_detector uses for public-fn detection). Falls
+                    # back to a built-in set if no headers are auto-detected.
+                    project_headers = _autodiscover_public_headers(
+                        getattr(self.config, "include_dirs", None) or []
+                    ) or None  # None → use _reproducer_uses_public_api's fallback
+                    if not _reproducer_uses_public_api(code, project_headers):
+                        sample = (project_headers or ["<built-in list>"])[:3]
+                        logger.warning(
+                            "Reproducer for '%s' lacks any project public-API "
+                            "header (looked for: %s) and would test "
+                            "LLM-fabricated stubs instead of real linked code "
+                            "— rejecting as synthetic; marking UNREPRODUCIBLE.",
+                            call_chain[-1] if call_chain else "?",
+                            sample,
+                        )
+                        return (
+                            "// UNREPRODUCIBLE: reproducer did not include any "
+                            "project public-API header; would have tested "
+                            "fabricated stubs instead of real linked code"
+                        )
                     return code
         except LLMError as exc:
             logger.warning("LLM reproducer generation failed: %s", exc)
 
-        # Fallback: minimal stub reproducer
+        # Fallback: minimal stub reproducer (UNREPRODUCIBLE marker variant
+        # so downstream treats it as "no reproducer available" instead of
+        # attempting to compile + run a no-op).
         chain_str = " → ".join(call_chain)
         return (
-            f"/* Minimal reproducer for bug in '{call_chain[-1] if call_chain else 'unknown'}'\n"
-            f"   Call chain: {chain_str}\n"
-            f"   Counterexample state: {state_str}\n"
-            f"   TODO: fill in concrete values from counterexample */\n"
-            f"void trigger_bug(void) {{\n"
-            f"    /* Initialize variables using counterexample values:\n"
-            f"       {state_str} */\n"
-            f"}}\n"
+            f"// UNREPRODUCIBLE: LLM did not produce a reproducer; "
+            f"call chain was {chain_str}, witness {state_str[:120]}…"
         )
 
     # ------------------------------------------------------------------
@@ -2230,6 +2265,79 @@ def _witness_obvious_artifact(counterexample, func=None) -> Optional[str]:
     if cause:
         return cause
     return None
+
+
+def _reproducer_uses_public_api(
+    code: str,
+    public_headers: "Optional[list[str]]" = None,
+) -> bool:
+    """Defensive: does the reproducer actually link against the real library?
+
+    Returns True when the source contains at least one ``#include <X>``
+    where X is in the project's public header set. Returns False when the
+    LLM fabricated a standalone reproducer with inline struct + function
+    copies — a pattern observed in the v2.2 sweep where the LLM
+    re-implemented ``entry_list_add`` as its own buggy stub and "crashed"
+    on the stub, producing a misleading ``confirmed_dynamic`` verdict on
+    synthetic code that proved nothing about the real library.
+
+    Project-agnostic via ``public_headers``: pass the list of public-API
+    header basenames (e.g. ``["archive.h", "archive_entry.h"]`` for
+    libarchive, ``["curl/curl.h"]`` for libcurl, etc.). When None, falls
+    back to a built-in set covering libraries bmc-agent has been
+    calibrated on. Auto-derivation from ``config.include_dirs`` happens
+    upstream in the caller (cex_validator's ``_dynamic_validate_bug``).
+
+    Heuristic: presence of any project header include + nothing more.
+    Strict on the include; permissive on everything else (the include
+    is the load-bearing signal — if it's there, the link step will use
+    real symbols regardless of any duplicate inline definitions).
+    """
+    if public_headers is None:
+        # Fallback set for projects bmc-agent has been calibrated on.
+        # The proper path is to pass an autodiscovered set from the
+        # caller; this fallback exists so the function still does
+        # SOMETHING useful when called bare.
+        public_headers = [
+            "archive.h", "archive_entry.h",          # libarchive
+            "curl/curl.h",                            # libcurl
+            "libxml/parser.h", "libxml/xmlreader.h",  # libxml2
+            "openssl/ssl.h",                          # openssl
+            "zlib.h",                                 # zlib
+            "bzlib.h",                                # bzip2
+        ]
+    for hdr in public_headers:
+        # Allow both <hdr> and "hdr" forms; the LLM emits angle-bracketed
+        # forms in practice but quote-form is valid C.
+        if f"#include <{hdr}>" in code or f'#include "{hdr}"' in code:
+            return True
+    return False
+
+
+def _autodiscover_public_headers(include_dirs: "list[str]") -> "list[str]":
+    """Walk include_dirs for top-level *.h files, returning basenames.
+    Mirrors BoundaryDetector.autodiscover's heuristic: top-level *.h,
+    excluding *_private.h / *_internal.h. Used by cex_validator to
+    derive the project's public-header allowlist for reproducer
+    validation. Returns an empty list when no headers found, in which
+    case _reproducer_uses_public_api falls back to its built-in set.
+    """
+    from pathlib import Path
+    names: list[str] = []
+    seen: set[str] = set()
+    for d in include_dirs or []:
+        try:
+            for h in sorted(Path(d).glob("*.h")):
+                name = h.name
+                if name.endswith("_private.h") or name.endswith("_internal.h"):
+                    continue
+                if name in seen:
+                    continue
+                seen.add(name)
+                names.append(name)
+        except OSError:
+            continue
+    return names
 
 
 def _parse_json_response(text: str) -> Optional[dict]:
