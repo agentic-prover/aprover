@@ -1208,4 +1208,47 @@ def run_judge_pipeline(
 
     summary["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     (out_root / "summary.json").write_text(json.dumps(summary, indent=2))
+
+    # Post-sweep mechanical revalidation. Doesn't mutate judge verdicts —
+    # writes a sibling revalidation.json with revised labels per finding
+    # plus a flips list (judge=realistic but mechanically demoted).
+    # See bmc_agent/post_validator.py for the four checks applied.
+    try:
+        from bmc_agent.post_validator import (
+            revalidate_sweep_output,
+            _DEMOTION_LABELS,
+        )
+        reval_results = revalidate_sweep_output(out_root)
+        flips = [
+            r for r in reval_results
+            if r.original_verdict == "realistic"
+            and r.revised_label in _DEMOTION_LABELS
+        ]
+        reval_payload = {
+            "sweep_root": str(out_root),
+            "n_findings": len(reval_results),
+            "n_flips": len(flips),
+            "flips": [
+                {
+                    "finding_id": r.finding_id,
+                    "revised_label": r.revised_label,
+                    "reasons": r.reasons,
+                }
+                for r in flips
+            ],
+            "results": [r.to_dict() for r in reval_results],
+        }
+        (out_root / "revalidation.json").write_text(
+            json.dumps(reval_payload, indent=2)
+        )
+        if flips:
+            logger.warning(
+                "post_validator: %d judge=realistic finding(s) mechanically demoted "
+                "— see %s",
+                len(flips),
+                out_root / "revalidation.json",
+            )
+    except Exception as exc:
+        logger.exception("post_validator revalidation failed: %r", exc)
+
     return summary

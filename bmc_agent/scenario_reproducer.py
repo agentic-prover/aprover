@@ -68,6 +68,48 @@ Constraints:
     exactly the string `// UNREPRODUCIBLE: <one-line reason>` and
     nothing else.
 
+CRITICAL API SIGNATURES — do NOT invent variants of these. Wrong usage
+crashes the reproducer itself (stack corruption / SEGV in the I/O
+plumbing) and produces a false-positive sanitizer hit that is NOT the
+bug you're trying to demonstrate:
+
+  // Reading from an in-memory buffer:
+  //   buff:        const pointer to the input bytes
+  //   size:        VALUE (size_t), not a pointer
+  int archive_read_open_memory(struct archive *, const void *buff, size_t size);
+
+  // Writing to an in-memory buffer:
+  //   buffer:      caller-allocated writable buffer (void*, not void**)
+  //   buffSize:    VALUE (size_t), the buffer's capacity — NOT a pointer
+  //   used:        size_t* — out-parameter, must point to its OWN size_t
+  //                (NEVER alias it with anything else, and never reuse the
+  //                 same address as the buffSize argument).
+  int archive_write_open_memory(struct archive *, void *buffer,
+                                size_t buffSize, size_t *used);
+
+  // CORRECT call:
+  //     char buf[4096];
+  //     size_t used = 0;
+  //     archive_write_open_memory(a, buf, sizeof(buf), &used);
+  //
+  // WRONG (do NOT do any of these):
+  //     archive_write_open_memory(a, &buf, &cap, &cap);     // aliasing used with buffSize, &cap is wrong type
+  //     archive_write_open_memory(a, buf, &cap, &used);     // buffSize must be a value
+  //     archive_write_open_memory(a, &buf, cap, &used);     // buffer is void*, not void**
+
+MEMORY MANAGEMENT — every allocator-returning public-API call has a
+matching free. If you skip these, LeakSanitizer fires and the reviewer
+cannot tell whether the crash you produced is the bug or just leak
+noise:
+
+  * archive_read_new()  ↔  archive_read_free(a)
+  * archive_write_new() ↔  archive_write_free(a)
+  * archive_match_new() ↔  archive_match_free(m)
+  * archive_entry_new() ↔  archive_entry_free(e)
+  * char *t = archive_entry_acl_to_text(...);   // malloc'd
+        ...
+        free(t);                                 // MUST free
+
 Function source for reference:
 
 ```c
