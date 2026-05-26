@@ -371,10 +371,9 @@ class JudgeAgent:
         if result.verdict == "unrealistic":
             adjacent = self._search_adjacent_bugs(messages, primary_result=result)
             if adjacent:
-                # Merge into the result's adjacent_bugs[] (the LLM may have
-                # listed some during the primary verdict too).
-                merged = list(result.adjacent_bugs or []) + adjacent
-                result.adjacent_bugs = merged
+                primary = result.adjacent_bugs if isinstance(result.adjacent_bugs, list) else []
+                extra = adjacent if isinstance(adjacent, list) else []
+                result.adjacent_bugs = primary + extra
         return result
 
     # ------------------------------------------------------------------
@@ -468,12 +467,14 @@ class JudgeAgent:
                         "tool_call_id": tc.get("id", ""),
                         "content": "verdict_recorded",
                     })
+                    raw_adj = args.get("adjacent_bugs")
+                    adj_list = raw_adj if isinstance(raw_adj, list) else []
                     return JudgeResult(
                         verdict=str(args.get("verdict", "uncertain")).lower(),
                         confidence=str(args.get("confidence", "low")).lower(),
                         reasoning=str(args.get("reasoning", "")),
                         attacker_scenario=str(args.get("attacker_scenario", "")),
-                        adjacent_bugs=args.get("adjacent_bugs") or [],
+                        adjacent_bugs=adj_list,
                         turns_used=turn + 1,
                         tools_invoked=list(self._tools_invoked),
                     )
@@ -547,7 +548,7 @@ class JudgeAgent:
             max_turns=MAX_ADJACENT_SEARCH_TURNS,
             label="adjacent",
         )
-        return adj_result.adjacent_bugs or []
+        return adj_result.adjacent_bugs if isinstance(adj_result.adjacent_bugs, list) else []
 
     # ------------------------------------------------------------------
     # Initial-context builder
