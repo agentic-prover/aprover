@@ -657,6 +657,25 @@ class AMCPipeline:
                         self_recheck_queue.add(fn_name)
 
         # ------------------------------------------------------------------
+        # Phase 3b: synthesize per-function sibling-CEx summary into
+        # bug_report.json so the persisted record reflects ALL property
+        # checks for the function, not just the first one that saved.
+        # Background: bug_report.json is saved when the first real-bug
+        # CEx is classified, but later sibling CExes for the same
+        # function may flip to SPURIOUS / UNRESOLVED — leaving the
+        # persisted report wrongly looking like a clean confirmed bug.
+        # This synthesis decorates the report with sibling stats and
+        # downgrades confidence when sibling instability is high.
+        # ------------------------------------------------------------------
+        for fn_name in {r.function_name for r in bug_reports}:
+            try:
+                self._synthesize_sibling_cex_summary(driver_name, fn_name)
+            except Exception as exc:
+                logger.warning(
+                    "Sibling-CEx synthesis failed for '%s': %s", fn_name, exc,
+                )
+
+        # ------------------------------------------------------------------
         # Phase 3c: Re-run BMC on refined functions (CEGAR loop)
         # A spurious CEx may have masked a real bug lurking behind it.
         # After tightening the precondition, re-verify the function itself.
@@ -895,6 +914,127 @@ class AMCPipeline:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _synthesize_sibling_cex_summary(
+        self, driver_name: str, fn_name: str,
+    ) -> None:
+        """After all CExes for a function have been processed, re-save
+        bug_report.json with a sibling_cex_summary field that reflects
+        the FULL set of property checks — not just the first one that
+        saved the report.
+
+        Two outputs:
+
+        (1) ``report.sibling_cex_summary`` field:
+              {
+                'total_cexes_validated': N,
+                'real_bug_count': k1,
+                'unresolved_count': k2,
+                'spurious_count': k3,
+                'latent_count': k4,
+                'instability_signal': bool,
+              }
+            ``instability_signal`` is True when N > 1 AND
+            (unresolved + spurious) / total >= 0.5 — i.e. the majority
+            of sibling property checks weren't confirmed real bugs.
+
+        (2) Confidence downgrade: when instability_signal is True AND
+            the saved confidence is high (confirmed_*), downgrade to
+            ``unlikely`` with a reasoning_trail note.
+
+        Background: bug_report.json gets OVERWRITTEN by each save_report
+        call, but only real-bug CExes call save_report. The first
+        real-bug CEx wins; later UNRESOLVED/SPURIOUS sibling CExes
+        for the same function (often the result of CBMC errors or
+        over-refined preconditions) leave no trace in the top-level
+        report. This synthesis surfaces that signal.
+        """
+        import json as _json
+        from pathlib import Path
+
+        fn_dir = self.store._fn_dir(driver_name, fn_name)
+        cls_dir = Path(fn_dir) / "classifications"
+        br_path = Path(fn_dir) / "bug_report.json"
+
+        if not br_path.exists():
+            return
+
+        outcomes: list[str] = []
+        if cls_dir.exists():
+            for f in sorted(cls_dir.glob("*.json")):
+                try:
+                    payload = _json.loads(f.read_text())
+                except Exception:
+                    continue
+                c = payload.get("classification") or {}
+                o = (c.get("outcome") or "").lower().strip()
+                if o:
+                    outcomes.append(o)
+
+        n_total = len(outcomes)
+        if n_total == 0:
+            return  # no per-CEx records — nothing to synthesize
+
+        n_real      = sum(1 for o in outcomes if o == "real_bug")
+        n_spurious  = sum(1 for o in outcomes if o == "spurious")
+        n_unres     = sum(1 for o in outcomes if o == "unresolved")
+        n_latent    = sum(1 for o in outcomes if o == "latent")
+
+        instability = (
+            n_total > 1
+            and (n_unres + n_spurious) >= max(1, n_total // 2)
+        )
+
+        summary = {
+            "total_cexes_validated": n_total,
+            "real_bug_count": n_real,
+            "unresolved_count": n_unres,
+            "spurious_count": n_spurious,
+            "latent_count": n_latent,
+            "instability_signal": instability,
+        }
+
+        try:
+            payload = _json.loads(br_path.read_text())
+        except Exception:
+            return
+        report = payload.get("report") or {}
+        if not isinstance(report, dict):
+            return
+
+        report["sibling_cex_summary"] = summary
+
+        # Confidence downgrade when sibling instability is high. We
+        # only demote from high-confidence tiers; if confidence is
+        # already 'unlikely' or absent, leave it alone (no extra info
+        # to add).
+        original_confidence = report.get("confidence")
+        downgrade_targets = {"confirmed_dynamic", "confirmed_system_entry", "realistic"}
+        if instability and original_confidence in downgrade_targets:
+            note = (
+                f"\n\n[SIBLING-CEX INSTABILITY] {n_unres} unresolved + "
+                f"{n_spurious} spurious sibling counterexamples out of "
+                f"{n_total} total for this function. Confidence "
+                f"downgraded from '{original_confidence}' to 'unlikely' "
+                f"— the verdict is built on only {n_real} confirmed "
+                f"CEx(es); the remaining property checks failed to "
+                f"reach a clean verdict (often a sign of CBMC errors, "
+                f"over-refined preconditions, or LLM-fallback "
+                f"confabulation in the per-property reachability check)."
+            )
+            report["confidence"] = "unlikely"
+            report["reasoning_trail"] = (
+                (report.get("reasoning_trail") or "") + note
+            )
+            logger.warning(
+                "Sibling-CEx instability for '%s': %d unresolved + %d "
+                "spurious / %d total — downgrading confidence from "
+                "'%s' to 'unlikely'",
+                fn_name, n_unres, n_spurious, n_total, original_confidence,
+            )
+
+        payload["report"] = report
+        br_path.write_text(_json.dumps(payload, indent=2, default=str))
 
     def _make_report(
         self,
