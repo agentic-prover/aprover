@@ -214,8 +214,17 @@ def _parse_cbmc_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
 
     # CBMC exit codes: 0 = verified, 10 = failed (property violated), other = error
     if returncode not in (0, 10):
-        # Probably a parse / compile error
-        err_msg = stderr.strip() or f"cbmc exited with code {returncode}"
+        # Probably a parse / compile error. Prefer stderr, but if stderr is
+        # empty CBMC may have routed the parse error to stdout (some versions
+        # do this on --json-ui mode) — include a snippet of stdout so the
+        # error log isn't just "cbmc exited with code N" with no context.
+        err_msg = stderr.strip()
+        if not err_msg:
+            stdout_snippet = (raw or "").strip()[:1500]
+            if stdout_snippet:
+                err_msg = f"cbmc exited with code {returncode}; stdout: {stdout_snippet}"
+            else:
+                err_msg = f"cbmc exited with code {returncode} (no stderr or stdout)"
         return CBMCResult(verified=False, raw_output=_cap_raw(raw), error=err_msg)
 
     verified = returncode == 0
