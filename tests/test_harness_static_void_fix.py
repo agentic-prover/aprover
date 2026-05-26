@@ -490,3 +490,119 @@ def test_feasibility_harness_still_stubs_known_registry_externals(tmp_path):
         f"registry-known external not stubbed:\n{text[-2000:]}"
     )
     assert f"{registry_callee}_stub(" in text
+
+
+# ---------------------------------------------------------------------------
+# Pseudo-formal-logic syntactic gate
+# ---------------------------------------------------------------------------
+
+def test_clause_syntactic_safe_rejects_bare_forall():
+    """LLM-emitted ``forall struct ... in ... : ...`` is not valid C —
+    CBMC rejects with "syntax error before 'struct'". Reject at emit
+    time."""
+    from bmc_agent.harness_generator import _clause_is_syntactically_safe
+    bad = (
+        "a != NULL && valid(&a->t) && "
+        "(forall struct archive_rb_node *n in a->t: valid(container_of(n, struct match_file, node)))"
+    )
+    assert _clause_is_syntactically_safe(bad) is False
+
+
+def test_clause_syntactic_safe_rejects_bare_exists():
+    from bmc_agent.harness_generator import _clause_is_syntactically_safe
+    assert _clause_is_syntactically_safe(
+        "exists int i: a[i] == 0"
+    ) is False
+
+
+def test_clause_syntactic_safe_accepts_cprover_quantifiers():
+    """CBMC's own ``__CPROVER_forall`` / ``__CPROVER_exists`` ARE valid —
+    they must not be rejected by the gate."""
+    from bmc_agent.harness_generator import _clause_is_syntactically_safe
+    assert _clause_is_syntactically_safe(
+        "__CPROVER_forall { int i; 0 <= i && i < n ==> a[i] != 0 }"
+    ) is True
+    assert _clause_is_syntactically_safe(
+        "__CPROVER_exists { int i; a[i] == target }"
+    ) is True
+
+
+def test_clause_syntactic_safe_accepts_plain_boolean_expressions():
+    """Ordinary C boolean expressions pass the gate unchanged."""
+    from bmc_agent.harness_generator import _clause_is_syntactically_safe
+    for c in (
+        "a != NULL",
+        "(a->count == 0 || a->ids != NULL)",
+        "((struct archive_match *)_a)->magic == 0xcad11c9U",
+        "1 == 1",
+    ):
+        assert _clause_is_syntactically_safe(c) is True, c
+
+
+def test_emit_learned_clauses_filters_pseudo_logic_in_function_scope(tmp_path):
+    """Integration: a function-scope clause containing ``forall``
+    must be filtered (this is the regression — function-scope clauses
+    bypassed the param-name gate but not the syntactic gate)."""
+    import json as _json
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import _emit_learned_clauses
+
+    art_dir = tmp_path / "artifacts"
+    art_dir.mkdir()
+    bad_clause = (
+        "a != NULL && (forall struct archive_rb_node *n in a->t: "
+        "valid(container_of(n, struct match_file, node)))"
+    )
+    (art_dir / "learned_constraints.json").write_text(_json.dumps({
+        "project_clauses": [],
+        "function_clauses": {"add_entry": [bad_clause, "a != NULL"]},
+        "function_post_relaxations": {},
+        "code_change_todos": [],
+        "version": 1,
+    }))
+
+    config = Config(
+        llm_api_key="test",
+        enable_feedback_loop=True,
+        artifact_dir=str(art_dir),
+    )
+
+    out = _emit_learned_clauses(config, "add_entry", "function")
+    # Pseudo-logic clause filtered; plain one kept.
+    assert all("forall" not in c for c in out), (
+        f"forall clause leaked through gate: {out}"
+    )
+    assert any("a != NULL" in c for c in out)
+
+
+def test_emit_learned_clauses_filters_pseudo_logic_in_project_scope(tmp_path):
+    """Same gate also applies to project scope, alongside the
+    param-name check."""
+    import json as _json
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import _emit_learned_clauses
+
+    art_dir = tmp_path / "artifacts"
+    art_dir.mkdir()
+    (art_dir / "learned_constraints.json").write_text(_json.dumps({
+        "project_clauses": [
+            "g_init != 0",
+            "exists int i: g_arr[i] > 0",
+        ],
+        "function_clauses": {},
+        "function_post_relaxations": {},
+        "code_change_todos": [],
+        "version": 1,
+    }))
+
+    config = Config(
+        llm_api_key="test",
+        enable_feedback_loop=True,
+        artifact_dir=str(art_dir),
+    )
+
+    out = _emit_learned_clauses(
+        config, "any_fn", "project", param_names={"x"},
+    )
+    assert all("exists" not in c for c in out)
+    assert any("g_init" in c for c in out)

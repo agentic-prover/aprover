@@ -724,6 +724,27 @@ _CLAUSE_STRUCT_DEREF_RE = re.compile(
 )
 
 
+# Pseudo-formal-logic patterns the LLM sometimes emits in learned clauses
+# (e.g. ``forall struct archive_rb_node *n in t: valid(n)``). These are
+# not valid C ``__CPROVER_assume`` expressions — CBMC rejects with
+# "syntax error before 'struct'" / "syntax error before ':'" → exit code 6.
+# Note: CBMC's actual quantifier intrinsics are __CPROVER_forall /
+# __CPROVER_exists with brace-block syntax; bare ``forall`` / ``exists``
+# without that prefix are the LLM-emitted broken pattern.
+_PSEUDO_LOGIC_RE = re.compile(
+    r"(?<!__CPROVER_)\b(forall|exists)\b"
+)
+
+
+def _clause_is_syntactically_safe(clause: str) -> bool:
+    """Best-effort syntactic check: reject learned clauses that contain
+    pseudo-formal-logic constructs the LLM sometimes drafts but CBMC
+    can't parse. Returning False makes the caller skip the clause —
+    safer than failing the entire harness on a single bad assume.
+    """
+    return _PSEUDO_LOGIC_RE.search(clause) is None
+
+
 def _clause_references_only_known_idents(
     clause: str, param_names: set[str],
 ) -> bool:
@@ -794,6 +815,25 @@ def _emit_learned_clauses(
             "Feedback-loop clause read failed for '%s': %s", func_name, exc,
         )
         return []
+
+    # Syntactic-validity gate: rejects pseudo-formal-logic clauses
+    # (``forall ... in ... : ...``) the LLM sometimes emits — CBMC
+    # rejects those with "syntax error before 'struct'" → exit code 6.
+    # Applied to BOTH project and function scope.
+    syntactic_filtered: list[str] = []
+    for c in clauses:
+        if not c.strip():
+            continue
+        if _clause_is_syntactically_safe(c):
+            syntactic_filtered.append(c)
+        else:
+            from bmc_agent.logger import get_logger
+            get_logger("harness").debug(
+                "Skipping %s clause for '%s' — contains pseudo-formal-logic "
+                "tokens (forall/exists without __CPROVER_ prefix): %s",
+                scope, func_name, c[:160],
+            )
+    clauses = syntactic_filtered
 
     if scope == "project" and param_names is not None:
         filtered: list[str] = []
