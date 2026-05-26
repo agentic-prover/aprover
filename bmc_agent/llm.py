@@ -24,6 +24,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 from bmc_agent.config import Config
@@ -516,3 +517,330 @@ class LLMClient:
 
         self._client = anthropic.Anthropic(**kwargs)
         return self._client
+
+
+# ---------------------------------------------------------------------------
+# Tool-use foundation
+# ---------------------------------------------------------------------------
+#
+# Multi-turn LLM dialogue with tool dispatch. Used by spec_gen v2.2 and the
+# realism check's walk_call_chain extension. Provider-portable in principle
+# but currently only the OpenAI-compatible path is wired (OpenRouter+Claude,
+# K2 Think, etc.); the Anthropic native path raises a NotImplementedError
+# until / unless we need it.
+#
+# Safety rails are mandatory: max_iterations bounds the LLM round-trips,
+# max_tool_calls bounds total tool executions, per-tool-result content is
+# truncated, handlers run in-process (no subprocess) with exception capture
+# fed back to the LLM as is_error results.
+
+
+_DEFAULT_TOOL_RESULT_TRUNCATE = 8000
+
+
+@dataclass
+class ToolDef:
+    """One tool the LLM may call. Schemas use JSON Schema-style param spec.
+
+    Provider-specific format conversion lives in ``_tools_to_openai_schema``.
+    """
+
+    name: str
+    description: str
+    parameters: dict   # JSON Schema for the tool's arguments
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation parsed from the LLM's response."""
+
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class ToolUseResult:
+    """Final result of a multi-turn tool-use dialogue."""
+
+    text: str                           # final assistant text (after all tool calls)
+    iterations: int                     # how many LLM round-trips occurred
+    tool_calls_made: int                # total successful tool calls
+    messages: list                      # full message history for debugging
+    error: str = ""                     # non-empty when terminated by a cap or error
+
+
+def _tools_to_openai_schema(tools: list[ToolDef]) -> list[dict]:
+    """Render ToolDef → OpenAI-compatible tools list (used by /v1/chat/completions)."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            },
+        }
+        for t in tools
+    ]
+
+
+def _add_complete_with_tools_to_llm():
+    """Bind ``complete_with_tools`` onto :class:`LLMClient`. Done as a
+    separate function rather than inlining inside the class body because
+    this file is already large and ``LLMClient`` is far above.
+    """
+
+    def complete_with_tools(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[ToolDef],
+        tool_handlers: "dict[str, Callable[[dict], object]]",
+        *,
+        max_iterations: int = 10,
+        max_tool_calls: int = 5,
+        max_tokens_per_turn: int = 4096,
+        temperature: float = 0.0,
+        result_truncate: int = _DEFAULT_TOOL_RESULT_TRUNCATE,
+        role: str = "",
+    ) -> ToolUseResult:
+        """Multi-turn LLM dialogue with tool dispatch.
+
+        The LLM may emit ``tool_calls`` in its response; we execute the
+        corresponding handler from ``tool_handlers`` and feed the result
+        back as a ``role="tool"`` message. Terminates when the LLM
+        emits a non-tool-call response, ``max_iterations`` round-trips
+        complete, or ``max_tool_calls`` tool invocations occur.
+
+        Provider routing: currently requires the openai-compatible path
+        (OpenRouter+Claude, K2 Think, etc.). The anthropic native path
+        raises NotImplementedError. Use a per-role override to ensure
+        spec-gen / realism land on the openai path.
+        """
+        # Per-role config swap (mirrors :meth:`complete`).
+        role_settings = self.config.role_settings(role) if role else None
+        saved_settings = None
+        if role_settings and (
+            role_settings.get("model") != self.config.llm_model
+            or role_settings.get("base_url") != self.config.llm_base_url
+            or role_settings.get("api_key") != (self.config.llm_api_key or "")
+            or role_settings.get("provider") != self.config.llm_provider
+        ):
+            saved_settings = {
+                "model": self.config.llm_model,
+                "base_url": self.config.llm_base_url,
+                "api_key": self.config.llm_api_key,
+                "provider": self.config.llm_provider,
+                "client": self._client,
+            }
+            self.config.llm_model = role_settings["model"]
+            self.config.llm_base_url = role_settings["base_url"]
+            self.config.llm_api_key = role_settings["api_key"]
+            self.config.llm_provider = role_settings["provider"]
+            self._client = None
+
+        try:
+            provider = self.config.resolved_provider()
+            if provider != "openai":
+                raise NotImplementedError(
+                    f"complete_with_tools requires the openai-compatible provider "
+                    f"(got {provider!r}). Configure a per-role override or set "
+                    f"BMC_AGENT_LLM_BASE_URL to an OpenAI-compatible endpoint."
+                )
+
+            return self._openai_tool_use_loop(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                tools=tools,
+                tool_handlers=tool_handlers,
+                max_iterations=max_iterations,
+                max_tool_calls=max_tool_calls,
+                max_tokens_per_turn=max_tokens_per_turn,
+                temperature=temperature,
+                result_truncate=result_truncate,
+            )
+        finally:
+            if saved_settings is not None:
+                self.config.llm_model = saved_settings["model"]
+                self.config.llm_base_url = saved_settings["base_url"]
+                self.config.llm_api_key = saved_settings["api_key"]
+                self.config.llm_provider = saved_settings["provider"]
+                self._client = saved_settings["client"]
+
+    def _openai_tool_use_loop(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[ToolDef],
+        tool_handlers: "dict[str, Callable[[dict], object]]",
+        max_iterations: int,
+        max_tool_calls: int,
+        max_tokens_per_turn: int,
+        temperature: float,
+        result_truncate: int,
+    ) -> ToolUseResult:
+        """The actual OpenAI-compatible /v1/chat/completions tool-use loop."""
+        api_key = self.config.resolved_api_key()
+        if not api_key:
+            raise LLMError(
+                "No API key for OpenAI-compatible provider. Export "
+                "BMC_AGENT_LLM_API_KEY / ANTHROPIC_API_KEY / K2THINK_API_KEY "
+                "or configure a per-role override."
+            )
+        base = (self.config.llm_base_url or "https://api.k2think.ai/v1").rstrip("/")
+        if not base.endswith("/v1") and not base.endswith("/v1/"):
+            if "/v1" not in base:
+                base = base + "/v1"
+        url = base.rstrip("/") + "/chat/completions"
+
+        try:
+            import httpx  # type: ignore
+        except ImportError as exc:
+            raise LLMError(
+                "The 'httpx' package is required for the openai-compatible provider."
+            ) from exc
+
+        tool_schemas = _tools_to_openai_schema(tools)
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        tool_calls_made = 0
+        timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
+        timeout = httpx.Timeout(timeout_s, connect=10.0)
+
+        for iteration in range(max_iterations):
+            payload = {
+                "model": self.config.llm_model,
+                "messages": messages,
+                "max_tokens": max_tokens_per_turn,
+                "temperature": temperature,
+                "tools": tool_schemas,
+                "tool_choice": "auto",
+                "stream": False,
+            }
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                raise LLMError(
+                    f"Tool-use request failed: HTTP {resp.status_code}: {resp.text[:500]}"
+                )
+            try:
+                data = resp.json()
+            except json.JSONDecodeError as exc:
+                raise LLMError(f"Tool-use response not JSON: {resp.text[:500]}") from exc
+
+            usage = data.get("usage") or {}
+            if usage:
+                logger.debug(
+                    "LLM usage (tool-use iter %d): prompt=%s completion=%s total=%s",
+                    iteration + 1,
+                    usage.get("prompt_tokens"),
+                    usage.get("completion_tokens"),
+                    usage.get("total_tokens"),
+                )
+
+            choices = data.get("choices") or []
+            if not choices:
+                return ToolUseResult(
+                    text="", iterations=iteration + 1,
+                    tool_calls_made=tool_calls_made, messages=messages,
+                    error="no choices in response",
+                )
+            choice = choices[0]
+            msg = choice.get("message") or {}
+            messages.append(msg)
+
+            raw_tool_calls = msg.get("tool_calls") or []
+            if not raw_tool_calls:
+                # Final assistant message — done.
+                text = msg.get("content") or ""
+                if isinstance(text, list):
+                    text = "".join(
+                        p.get("text", "")
+                        for p in text if isinstance(p, dict)
+                    )
+                return ToolUseResult(
+                    text=_strip_reasoning_blocks(text),
+                    iterations=iteration + 1,
+                    tool_calls_made=tool_calls_made,
+                    messages=messages,
+                )
+
+            # Execute each tool call; append a tool result message per call.
+            for raw in raw_tool_calls:
+                tc_id = raw.get("id", "")
+                fn = raw.get("function") or {}
+                name = fn.get("name", "")
+                args_raw = fn.get("arguments", "{}")
+                try:
+                    args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+                except json.JSONDecodeError:
+                    args = {}
+
+                if tool_calls_made >= max_tool_calls:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": (
+                            "ERROR: max_tool_calls cap reached. "
+                            "Emit a final answer now using the evidence you've gathered."
+                        ),
+                    })
+                    continue
+
+                handler = tool_handlers.get(name)
+                if handler is None:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": f"ERROR: tool '{name}' is not registered",
+                    })
+                    continue
+
+                try:
+                    result = handler(args)
+                except Exception as exc:  # noqa: BLE001
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": f"ERROR: tool '{name}' raised {type(exc).__name__}: {exc}",
+                    })
+                    tool_calls_made += 1
+                    continue
+
+                if isinstance(result, str):
+                    content = result
+                else:
+                    try:
+                        content = json.dumps(result, default=str)
+                    except TypeError:
+                        content = str(result)
+                if len(content) > result_truncate:
+                    content = content[:result_truncate] + "\n…[truncated]"
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": content,
+                })
+                tool_calls_made += 1
+
+        return ToolUseResult(
+            text="", iterations=max_iterations,
+            tool_calls_made=tool_calls_made, messages=messages,
+            error=f"max_iterations ({max_iterations}) exceeded",
+        )
+
+    LLMClient.complete_with_tools = complete_with_tools  # type: ignore[attr-defined]
+    LLMClient._openai_tool_use_loop = _openai_tool_use_loop  # type: ignore[attr-defined]
+
+
+_add_complete_with_tools_to_llm()
