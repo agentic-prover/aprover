@@ -2920,13 +2920,13 @@ def _generate_nd_decls(
                     lines.append(
                         f"    /* {pname} is non-null by construction (addr of cursor) */"
                     )
-            elif clean_base in ("char", "unsigned char", "uint8_t", "int8_t") and star_count == 1:
-                # Single-indirection byte-shaped pointer.  Three strategies:
+            elif clean_base in ("char", "unsigned char", "uint8_t", "int8_t", "wchar_t") and star_count == 1:
+                # Single-indirection byte/wchar-shaped pointer. Strategies:
                 #
-                #  - Default for ``char`` (raw_bytes=False): bounded
-                #    null-terminated string, so strlen-style traversal
-                #    loops terminate within the CBMC unwinding bound.
-                #    Right for textual APIs (printf, strcpy).
+                #  - Default for ``char`` / ``wchar_t`` (raw_bytes=False):
+                #    bounded null-terminated string, so strlen/wcslen-style
+                #    traversal loops terminate within the CBMC unwinding
+                #    bound. Right for textual APIs.
                 #
                 #  - Default for ``unsigned char``/``uint8_t``/``int8_t``:
                 #    raw byte buffer (no NUL).  These types are the C
@@ -2941,11 +2941,20 @@ def _generate_nd_decls(
                 #    length-prefixed blobs) that read N raw bytes from
                 #    ptr[0..N) regardless of NULs.
                 #
+                # ``wchar_t`` is NEVER emitted as a raw-byte buffer even
+                # under raw_bytes — it's a wide-string type, the C
+                # convention for wide-char data is null-terminated. Without
+                # this branch ``wchar_t *`` falls through to the generic
+                # pointer init which allocates a SINGLE wchar (no buffer,
+                # no terminator), producing
+                # ``add_pattern_wcs.pointer_arithmetic.5`` style FPs on
+                # every ``wcslen``/``wcschr`` call in the function body.
+                #
                 # char** (e.g. argv) uses the default treatment in either mode.
                 buf_name = f"_{pname}_buf"
-                is_textual = (clean_base == "char")
+                is_textual = (clean_base in ("char", "wchar_t"))
                 emit_raw = raw_bytes or not is_textual
-                if emit_raw:
+                if emit_raw and clean_base != "wchar_t":
                     lines.append(
                         f"    /* raw byte buffer for '{pname}' "
                         f"({cbmc_unwind + 1} bytes, no NUL termination) */"
@@ -2957,11 +2966,15 @@ def _generate_nd_decls(
                     lines.append(f"    {ptype_stripped} {pname} = ({ptype_stripped}){buf_name};")
                 else:
                     len_name = f"_{pname}_len"
-                    lines.append(f"    /* bounded null-terminated string for '{pname}' (max {cbmc_unwind} chars) */")
-                    lines.append(f"    char {buf_name}[{cbmc_unwind + 1}];")
+                    is_wide = (clean_base == "wchar_t")
+                    backing_t = "wchar_t" if is_wide else "char"
+                    nul_literal = "L'\\0'" if is_wide else "'\\0'"
+                    descriptor = "wide " if is_wide else ""
+                    lines.append(f"    /* bounded null-terminated {descriptor}string for '{pname}' (max {cbmc_unwind} chars) */")
+                    lines.append(f"    {backing_t} {buf_name}[{cbmc_unwind + 1}];")
                     lines.append(f"    unsigned int {len_name};")
                     lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){cbmc_unwind});")
-                    lines.append(f"    {buf_name}[{len_name}] = '\\0';")
+                    lines.append(f"    {buf_name}[{len_name}] = {nul_literal};")
                     lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
                 if pname in nonnull_params:
                     lines.append(f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */")

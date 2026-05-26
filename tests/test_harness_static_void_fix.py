@@ -952,3 +952,105 @@ def test_reachability_harness_header_comment_sanitized(tmp_path):
         f"raw apostrophe leaked into reachability harness header:\n"
         f"{header[:1500]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# wchar_t* parameter buffer init (valid_string for wide strings)
+# ---------------------------------------------------------------------------
+
+def test_wchar_t_pointer_param_emits_bounded_null_terminated_buffer(tmp_path):
+    """Pre-fix, ``const wchar_t *pattern`` parameters got a single-wchar
+    backing (``wchar_t _pattern_val; pattern = &_pattern_val;``) and any
+    ``wcslen(pattern)`` / ``wcschr(pattern, ...)`` call in the body
+    walked past the buffer → ``pointer_arithmetic.5`` style FP.
+
+    Fix: extend the char/uint8/int8 branch (which already emitted a
+    bounded null-terminated buffer) to also cover ``wchar_t *``. The
+    backing must be a wchar_t array with a position where ``L'\\0'``
+    is asserted, mirroring the char-string treatment."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+
+    fut_sig = FunctionSignature(
+        name="fn", return_type="int",
+        parameters=[("const wchar_t *", "pattern")],
+    )
+    fut = FunctionInfo(
+        name="fn", signature=fut_sig,
+        body="{\n    return (int)pattern[0];\n}",
+        callees=set(),
+        source_file=str(tmp_path / "fake.c"),
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"fn": fut_sig},
+        function_bodies={"fn": fut.body},
+        call_graph={"fn": set()},
+    )
+    spec = Spec(
+        function_name="fn",
+        precondition="valid_string(pattern)",
+        postcondition="true",
+        status=SpecStatus.GENERATED,
+    )
+
+    config = Config(llm_api_key="test")
+    gen = HarnessGenerator(config)
+    text = gen.generate_harness(
+        func=fut, spec=spec, parsed_file=parsed,
+        all_funcs={"fn": fut},
+    )
+
+    # No single-wchar backing
+    assert "wchar_t _pattern_val;" not in text, (
+        f"single-wchar backing leaked:\n{text[-1500:]}"
+    )
+    # Bounded buffer + null-terminator emitted
+    assert "wchar_t _pattern_buf[" in text
+    assert "L'\\0'" in text
+    # The comment is wide-string-specific
+    assert "bounded null-terminated wide string" in text
+
+
+def test_char_pointer_param_unchanged(tmp_path):
+    """Sanity: the char* path still emits its existing null-terminated
+    treatment — the wchar_t extension is additive."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+
+    fut_sig = FunctionSignature(
+        name="fn", return_type="int",
+        parameters=[("const char *", "s")],
+    )
+    fut = FunctionInfo(
+        name="fn", signature=fut_sig,
+        body="{\n    return (int)s[0];\n}",
+        callees=set(),
+        source_file=str(tmp_path / "fake.c"),
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "fake.c"),
+        functions={"fn": fut_sig},
+        function_bodies={"fn": fut.body},
+        call_graph={"fn": set()},
+    )
+    spec = Spec(
+        function_name="fn", precondition="valid_string(s)",
+        postcondition="true", status=SpecStatus.GENERATED,
+    )
+
+    gen = HarnessGenerator(Config(llm_api_key="test"))
+    text = gen.generate_harness(
+        func=fut, spec=spec, parsed_file=parsed, all_funcs={"fn": fut},
+    )
+    assert "char _s_buf[" in text
+    # No accidental wide treatment for char*
+    assert "wide string" not in text
