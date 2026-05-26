@@ -295,6 +295,7 @@ class FlagSelector:
                 user_prompt=prompt,
                 max_tokens=256,
                 thinking=False,
+                role="spec_gen",
             )
         except LLMError as exc:
             logger.warning("LLM flag selection call failed for '%s': %s", func.name, exc)
