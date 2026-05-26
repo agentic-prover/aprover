@@ -437,3 +437,228 @@ def test_orchestrator_falls_back_to_seedless_when_no_seeds(tmp_path):
     )
     assert spec.precondition == "true"
     assert spec.status == SpecStatus.FAILED
+
+
+# ---------- v2.2 tool-use trigger gate -------------------------------------
+
+
+def _mock_tu_result(text, error=""):
+    """Build a ToolUseResult mock matching the dataclass shape."""
+    from bmc_agent.llm import ToolUseResult
+    return ToolUseResult(
+        text=text, iterations=2, tool_calls_made=1,
+        messages=[], error=error,
+    )
+
+
+def test_v22_does_not_fire_when_disabled(tmp_path):
+    """enable_spec_gen_tools=False → tool-use branch is skipped."""
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.enable_spec_gen_tools = False
+    # Base v2 returns a spec with spec_disagreement=True — would trigger
+    # if the flag were on.
+    llm.complete.return_value = (
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["body:L1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": true,'
+        ' "uncertainty_notes": "body and callers disagree"}'
+    )
+    gen = SpecGeneratorV2(cfg, llm, store)
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    fi = FunctionInfo(
+        name="fn",
+        signature=FunctionSignature(name="fn", return_type="int",
+                                    parameters=[("int *", "p")]),
+        body="int fn(int *p) { return *p; }",
+        callees=set(), source_file="",
+    )
+    gen._generate_one(
+        func_info=fi,
+        parsed=_minimal_parsed_file("fn", fi.signature),
+        all_specs_so_far={},
+        corpus_paths=[],
+    )
+    # complete_with_tools must NOT have been called.
+    assert not hasattr(llm.complete_with_tools, "call_count") or \
+        llm.complete_with_tools.call_count == 0
+
+
+def test_v22_fires_on_spec_disagreement(tmp_path):
+    """enable_spec_gen_tools=True + spec_disagreement=True → tool-use fires."""
+    from unittest.mock import MagicMock
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.enable_spec_gen_tools = True
+    # Base v2 flags disagreement.
+    llm.complete.return_value = (
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["body:L1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": true,'
+        ' "uncertainty_notes": "ambiguous"}'
+    )
+    # complete_with_tools returns a refined spec.
+    llm.complete_with_tools = MagicMock(return_value=_mock_tu_result(
+        '{"pre_validity": ['
+        '{"clause": "!null(p)", "evidence": ["body:L1"]},'
+        '{"clause": "!null(p->next)", "evidence": ["body:L3"]}'
+        '],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": false,'
+        ' "uncertainty_notes": ""}'
+    ))
+    gen = SpecGeneratorV2(cfg, llm, store)
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    fi = FunctionInfo(
+        name="fn",
+        signature=FunctionSignature(name="fn", return_type="int",
+                                    parameters=[("struct foo *", "p")]),
+        body="int fn(struct foo *p) { return p->next->val; }",
+        callees=set(), source_file="",
+    )
+    spec = gen._generate_one(
+        func_info=fi,
+        parsed=_minimal_parsed_file("fn", fi.signature),
+        all_specs_so_far={},
+        corpus_paths=[],
+    )
+    assert llm.complete_with_tools.call_count == 1
+    # Refined spec has the additional field-level clause.
+    assert "!null(p->next)" in spec.pre_validity
+
+
+def test_v22_fires_on_no_caller_evidence(tmp_path):
+    """Empty callers + empty address_taken_sites → tool-use fires."""
+    from unittest.mock import MagicMock
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.enable_spec_gen_tools = True
+    llm.complete.return_value = (
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["body:L1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": false,'
+        ' "uncertainty_notes": "no caller evidence"}'
+    )
+    llm.complete_with_tools = MagicMock(return_value=_mock_tu_result(
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["body:L1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": false,'
+        ' "uncertainty_notes": ""}'
+    ))
+    gen = SpecGeneratorV2(cfg, llm, store)
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    fi = FunctionInfo(
+        name="orphan",
+        signature=FunctionSignature(name="orphan", return_type="int",
+                                    parameters=[("int *", "p")]),
+        body="int orphan(int *p) { return *p; }",
+        callees=set(), source_file="",
+    )
+    gen._generate_one(
+        func_info=fi,
+        parsed=_minimal_parsed_file("orphan", fi.signature),
+        all_specs_so_far={},
+        corpus_paths=[],  # empty corpus → no callers → no address-taken
+    )
+    assert llm.complete_with_tools.call_count == 1
+
+
+def test_v22_falls_back_to_base_when_tool_use_fails(tmp_path):
+    """Tool-use call raises → caller returns the base v2 spec."""
+    from unittest.mock import MagicMock
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.enable_spec_gen_tools = True
+    llm.complete.return_value = (
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["body:L1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": true,'
+        ' "uncertainty_notes": ""}'
+    )
+    llm.complete_with_tools = MagicMock(side_effect=RuntimeError("tool-use crashed"))
+    gen = SpecGeneratorV2(cfg, llm, store)
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    fi = FunctionInfo(
+        name="fn",
+        signature=FunctionSignature(name="fn", return_type="int",
+                                    parameters=[("int *", "p")]),
+        body="int fn(int *p) { return *p; }",
+        callees=set(), source_file="",
+    )
+    spec = gen._generate_one(
+        func_info=fi,
+        parsed=_minimal_parsed_file("fn", fi.signature),
+        all_specs_so_far={},
+        corpus_paths=[],
+    )
+    # We got the base v2 spec back (single !null(p) clause).
+    assert spec.pre_validity == "!null(p)"
+
+
+def test_v22_falls_back_to_base_when_tool_use_returns_error(tmp_path):
+    """ToolUseResult with .error set → caller returns the base spec."""
+    from unittest.mock import MagicMock
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.enable_spec_gen_tools = True
+    llm.complete.return_value = (
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["body:L1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": true,'
+        ' "uncertainty_notes": ""}'
+    )
+    llm.complete_with_tools = MagicMock(return_value=_mock_tu_result(
+        text="", error="max_iterations exceeded",
+    ))
+    gen = SpecGeneratorV2(cfg, llm, store)
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    fi = FunctionInfo(
+        name="fn",
+        signature=FunctionSignature(name="fn", return_type="int",
+                                    parameters=[("int *", "p")]),
+        body="int fn(int *p) { return *p; }",
+        callees=set(), source_file="",
+    )
+    spec = gen._generate_one(
+        func_info=fi,
+        parsed=_minimal_parsed_file("fn", fi.signature),
+        all_specs_so_far={},
+        corpus_paths=[],
+    )
+    assert spec.pre_validity == "!null(p)"
+
+
+def test_v22_does_not_fire_when_base_spec_is_clean(tmp_path):
+    """No disagreement + callers present → tool-use SKIPPED (cost saver)."""
+    from unittest.mock import MagicMock
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.enable_spec_gen_tools = True
+    llm.complete.return_value = (
+        '{"pre_validity": [{"clause": "!null(p)", "evidence": ["caller_site_1"]}],'
+        ' "pre_protocol": [], "postcondition": [],'
+        ' "loop_invariants": [], "spec_disagreement": false,'
+        ' "uncertainty_notes": ""}'
+    )
+    llm.complete_with_tools = MagicMock()  # would crash test if called
+    gen = SpecGeneratorV2(cfg, llm, store)
+    # Build a parsed file where the function has a real caller (so
+    # bundle.callers is non-empty), avoiding the no-caller-evidence trigger.
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".c",
+                                      delete=False) as tmp:
+        tmp.write("int caller(int *p) { return target(p); }\n"
+                  "int target(int *p) { return *p; }\n")
+        tmp_path_c = tmp.name
+    fi = FunctionInfo(
+        name="target",
+        signature=FunctionSignature(name="target", return_type="int",
+                                    parameters=[("int *", "p")]),
+        body="int target(int *p) { return *p; }",
+        callees=set(), source_file=tmp_path_c,
+    )
+    parsed = _minimal_parsed_file("target", fi.signature)
+    parsed.path = tmp_path_c
+    gen._generate_one(
+        func_info=fi,
+        parsed=parsed,
+        all_specs_so_far={},
+        corpus_paths=[Path(tmp_path_c)],
+    )
+    # No disagreement, has callers → tool-use must NOT fire.
+    assert llm.complete_with_tools.call_count == 0

@@ -180,6 +180,15 @@ class Config:
     # defaults off so existing pipeline behaviour is unchanged.
     enable_inlining_advisor: bool = True
 
+    # spec_gen v2.2: bounded LLM tool use during spec drafting. When the
+    # base v2 spec for a function flags spec_disagreement (body vs callers
+    # contradict) OR has no caller evidence (vtable-only / orphan), v2.2
+    # fires a second LLM call with tools (lookup_function, find_more_callers,
+    # lookup_struct, lookup_caller_spec, grep_corpus) so the LLM can fetch
+    # authoritative data mid-reasoning. Bounded: max 5 tool calls per spec,
+    # 8 LLM turns. Default-on; --no-spec-gen-tools to disable.
+    enable_spec_gen_tools: bool = True
+
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.
     # Required for wire-format parsers (protobuf upb varints, length-prefixed

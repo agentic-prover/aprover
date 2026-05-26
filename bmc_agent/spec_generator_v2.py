@@ -457,6 +457,31 @@ class SpecGeneratorV2:
                 logger.info(
                     "v2 [%s]: spec_disagreement=true; notes=%s", fn_name, notes
                 )
+
+            # Step 5b: v2.2 tool-use branch. Trigger when:
+            #   * config.enable_spec_gen_tools is True, AND
+            #   * the base spec flagged disagreement (body vs callers
+            #     contradicted) OR there's no caller evidence at all
+            #     (vtable-only / orphan functions where caller-grounding
+            #     fell back to seed-only).
+            # The tool-use call gets to fetch additional callers / look
+            # up callees / inspect struct fields mid-reasoning, then
+            # emits a refined spec. Soundness: output is CBMC-verified
+            # downstream, same as the base v2 spec.
+            if (
+                getattr(self.config, "enable_spec_gen_tools", False)
+                and (disagreement or (not bundle.callers
+                                       and not bundle.address_taken_sites))
+            ):
+                refined = self._generate_with_tools(
+                    func_info=func_info, parsed=parsed,
+                    base_spec=spec, prompt=prompt,
+                    bundle=bundle, corpus_paths=corpus_paths,
+                    all_specs_so_far=all_specs_so_far,
+                )
+                if refined is not None:
+                    return refined
+                # Tool-use failed / declined → fall back to base spec.
             return spec
 
         # Step 6+7: fall back to seed-only spec.
@@ -466,6 +491,90 @@ class SpecGeneratorV2:
         )
         return _spec_from_seed_only(fn_name, bundle.seed_clauses,
                                     reason="llm_parse_failed")
+
+    # -- v2.2 tool-use branch ------------------------------------------------
+
+    def _generate_with_tools(
+        self,
+        *,
+        func_info: "FunctionInfo",
+        parsed: "ParsedCFile",
+        base_spec: Spec,
+        prompt: str,
+        bundle,
+        corpus_paths: list[Path],
+        all_specs_so_far: dict[str, Spec],
+    ) -> Optional[Spec]:
+        """v2.2 tool-use branch. Returns a refined Spec when the LLM
+        emits one + it passes validation; None when the LLM declined
+        or produced something unparseable (caller falls back to the
+        base v2 spec).
+        """
+        from bmc_agent.spec_gen_tools import (
+            SpecToolContext, build_spec_gen_tools, TOOL_USE_PROMPT_ADDENDUM,
+        )
+        ctx = SpecToolContext(
+            parsed=parsed,
+            corpus_paths=corpus_paths,
+            all_specs_so_far=all_specs_so_far,
+            boundary_detector=self.boundary_detector,
+        )
+        tools, handlers = build_spec_gen_tools(ctx)
+        fn_name = func_info.name
+
+        # Reuse the same caller-grounded prompt; append the tool-use
+        # instructions so the LLM knows it can fetch more data.
+        augmented_prompt = prompt + TOOL_USE_PROMPT_ADDENDUM
+
+        try:
+            tu_result = self.llm.complete_with_tools(
+                system_prompt=self._spec_system_prompt,
+                user_prompt=augmented_prompt,
+                tools=tools,
+                tool_handlers=handlers,
+                max_iterations=8,
+                max_tool_calls=5,
+                max_tokens_per_turn=4096,
+                role="spec_gen",
+            )
+        except Exception as exc:
+            logger.warning(
+                "v2.2 [%s]: tool-use call failed (%r); using base spec",
+                fn_name, exc,
+            )
+            return None
+
+        if tu_result.error:
+            logger.info(
+                "v2.2 [%s]: tool-use terminated with error '%s' "
+                "(iterations=%d, tool_calls=%d) — using base spec",
+                fn_name, tu_result.error,
+                tu_result.iterations, tu_result.tool_calls_made,
+            )
+            return None
+
+        payload = _extract_json_object(tu_result.text)
+        if payload is None:
+            logger.warning(
+                "v2.2 [%s]: tool-use response JSON extract failed — using base spec",
+                fn_name,
+            )
+            return None
+        validated = _validate_and_extract(payload, fn_name)
+        if validated is None:
+            return None
+        pv, pp, post, loops, disagreement, notes = validated
+        refined = _build_spec_from_validated(
+            fn_name, pv, pp, post, loops, disagreement,
+            status=SpecStatus.GENERATED,
+        )
+        logger.info(
+            "v2.2 [%s]: tool-use refined spec accepted "
+            "(tool_calls=%d, iterations=%d, disagreement=%s)",
+            fn_name, tu_result.tool_calls_made,
+            tu_result.iterations, disagreement,
+        )
+        return refined
 
 
 # ---------- topological layering --------------------------------------------

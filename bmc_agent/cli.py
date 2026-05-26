@@ -36,9 +36,9 @@ def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
 def _print_ai_layers(config) -> None:
     """Print the active AI layers so the operator can see what's running.
 
-    The six AI-driven layers are default-on as of the recommended-pipeline
-    rollout. Listing them at startup makes it obvious which ones a given
-    run actually exercises (including the effect of --no-* and --minimal).
+    The default-on AI layers are listed here; --no-* / --minimal flags
+    individually disable. Visible at startup so users can audit what
+    a given run actually exercises.
     """
     layers = [
         ("realism check",        getattr(config, "enable_realism_check", False)),
@@ -47,6 +47,7 @@ def _print_ai_layers(config) -> None:
         ("feedback loop",        getattr(config, "enable_feedback_loop", False)),
         ("spec refiner",         getattr(config, "enable_spec_refiner", False)),
         ("inlining advisor",     getattr(config, "enable_inlining_advisor", False)),
+        ("spec-gen tools (v2.2)",getattr(config, "enable_spec_gen_tools", False)),
     ]
     on  = [n for n, v in layers if v]
     off = [n for n, v in layers if not v]
@@ -375,6 +376,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = False
     if getattr(args, "no_inlining_advisor", False):
         config.enable_inlining_advisor = False
+    if getattr(args, "no_spec_gen_tools", False):
+        config.enable_spec_gen_tools = False
     if getattr(args, "minimal", False):
         config.enable_realism_check = False
         config.enable_dynamic_validation = False
@@ -382,6 +385,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_feedback_loop = False
         config.enable_spec_refiner = False
         config.enable_inlining_advisor = False
+        config.enable_spec_gen_tools = False
     _apply_model_arg(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
@@ -666,6 +670,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = False
     if getattr(args, "no_inlining_advisor", False):
         config.enable_inlining_advisor = False
+    if getattr(args, "no_spec_gen_tools", False):
+        config.enable_spec_gen_tools = False
     if getattr(args, "minimal", False):
         config.enable_realism_check = False
         config.enable_dynamic_validation = False
@@ -673,6 +679,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_feedback_loop = False
         config.enable_spec_refiner = False
         config.enable_inlining_advisor = False
+        config.enable_spec_gen_tools = False
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1411,11 +1418,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Disable in-sweep realism-feedback-driven spec refiner.")
     ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
                      help="Disable LLM inline-vs-stub advisor.")
+    ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,
+                     help="Disable v2.2 spec_gen bounded tool-use branch.")
     ver.add_argument("--minimal", action="store_true", default=False,
-                     help=("Turn ALL six default-on AI layers off (realism, "
+                     help=("Turn ALL default-on AI layers off (realism, "
                            "dyn-val, flag-selection, feedback-loop, spec-refiner, "
-                           "inlining-advisor). Equivalent to passing every --no-* "
-                           "individually. For zero-LLM-cost smoke runs."))
+                           "inlining-advisor, spec-gen-tools). Equivalent to "
+                           "passing every --no-* individually. For "
+                           "zero-LLM-cost smoke runs."))
     _add_model_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
@@ -1592,8 +1602,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Disable in-sweep realism-feedback-driven spec refiner.")
     vd.add_argument("--no-inlining-advisor", action="store_true", default=False,
                     help="Disable LLM inline-vs-stub advisor.")
+    vd.add_argument("--no-spec-gen-tools", action="store_true", default=False,
+                    help="Disable v2.2 spec_gen bounded tool-use branch.")
     vd.add_argument("--minimal", action="store_true", default=False,
-                    help=("Turn ALL six default-on AI layers off. For "
+                    help=("Turn ALL default-on AI layers off. For "
                           "zero-LLM-cost smoke runs / ablations."))
     vd.add_argument(
         "--follow-adjacent-rounds",
