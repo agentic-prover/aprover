@@ -19,10 +19,12 @@ without changing the BaseAgent contract.
 from bmc_agent.agents.base import AgentResult, BaseAgent
 from bmc_agent.agents.disagreement import DisagreementDiagnoseAgent
 from bmc_agent.agents.feedback_distill import FeedbackDistillAgent
+from bmc_agent.agents.refinement import RefinementAgent
 
 __all__ = [
     "AgentResult",
     "BaseAgent",
     "DisagreementDiagnoseAgent",
     "FeedbackDistillAgent",
+    "RefinementAgent",
 ]

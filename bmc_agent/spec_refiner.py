@@ -183,6 +183,11 @@ class SpecRefiner:
         rejected CEx. Returns None when the realism key_concern isn't
         concrete enough to drive a refinement (gate-keeping at the
         trigger; we don't burn an LLM call on vague rejections).
+
+        v2: delegates to ``RefinementAgent`` (C2 step 3). This method
+        retains the public signature and owns the gating policy
+        (verdict + actionable key_concern); the agent owns the prompt
+        + parse + LLM-call cycle.
         """
         from bmc_agent.realism_checker import RealismVerdict
         if realism.verdict != RealismVerdict.UNREALISTIC:
@@ -194,52 +199,24 @@ class SpecRefiner:
             )
             return None
 
-        sig = func_info.signature
-        params_str = ", ".join(f"{t} {n}" for t, n in sig.parameters) or "void"
-        fn_signature = f"{sig.return_type} {sig.name}({params_str})"
+        # Lazy import to avoid the agents package importing
+        # spec_refiner back at module load time.
+        from bmc_agent.agents.refinement import RefinementAgent
 
-        witness = "\n".join(
-            f"  {k} = {v}"
-            for k, v in (rejected_cex.variable_assignments or {}).items()
-        )[:2000] or "  (no witness state)"
-
-        # Extract property class for the evidence tag default.
-        prop = rejected_cex.failing_property or ""
-        parts = prop.split(".")
-        prop_class = "unknown"
-        for p in reversed(parts):
-            if not p.isdigit():
-                prop_class = p
-                break
-
-        prompt = _REFINE_PROMPT.format(
-            fn_name=func_info.name,
-            fn_signature=fn_signature,
-            fn_body=(func_info.body or "(unavailable)")[:4000],
-            pre_validity=current_spec.pre_validity or "(empty)",
-            pre_protocol=current_spec.pre_protocol or "(empty)",
-            postcondition=current_spec.postcondition or "(empty)",
-            failing_property=prop or "(unknown)",
-            witness_state=witness,
-            key_concern=realism.key_concern,
-            realism_reasoning=(realism.reasoning or "")[:1500],
-            property_class=prop_class,
+        agent = RefinementAgent(config=self.config, llm=self.llm)
+        result = agent.run(
+            func_info=func_info,
+            current_spec=current_spec,
+            rejected_cex=rejected_cex,
+            realism=realism,
         )
-
-        try:
-            from bmc_agent.prompts import SPEC_SYSTEM_PROMPT
-            raw = self.llm.complete(
-                SPEC_SYSTEM_PROMPT, prompt,
-                max_tokens=4096, thinking=False,
-                role="refinement",
-            )
-        except Exception as exc:
+        if not result.ok:
             logger.warning(
-                "spec_refiner [%s]: LLM call failed: %r", func_info.name, exc
+                "spec_refiner [%s]: agent failed: %s",
+                func_info.name, (result.error or "")[:200],
             )
             return None
-
-        return _parse_refinement_response(raw, func_info.name)
+        return result.output
 
     def apply_refinement_to_spec(
         self,
