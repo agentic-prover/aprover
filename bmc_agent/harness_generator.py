@@ -747,6 +747,30 @@ _CLAUSE_STRUCT_DEREF_RE = re.compile(
 )
 
 
+# Any identifier reference. Used to spot bare references like ``acl != NULL``
+# that lack a ``->`` so the struct-deref filter misses them but still
+# require the identifier to resolve in the current TU's scope.
+_CLAUSE_IDENT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+# Identifiers we never treat as locals, regardless of length / shape.
+# C/CBMC keywords + standard constants + commonly-referenced primitive
+# types/macros that the LLM threads through clauses.
+_CLAUSE_RESERVED_IDENTS: frozenset[str] = frozenset({
+    "NULL", "true", "false", "TRUE", "FALSE",
+    "sizeof", "offsetof", "typeof",
+    "void", "char", "short", "int", "long", "float", "double", "signed",
+    "unsigned", "_Bool", "bool", "size_t", "ssize_t", "ptrdiff_t",
+    "wchar_t", "int8_t", "int16_t", "int32_t", "int64_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "uintptr_t", "intptr_t", "off_t",
+    "struct", "union", "enum", "const", "volatile", "restrict",
+    "if", "else", "for", "while", "do", "switch", "case", "default",
+    "return", "break", "continue", "goto",
+    "static", "extern", "inline", "register", "auto",
+})
+
+
 # Pseudo-formal-logic patterns the LLM sometimes emits in learned clauses
 # (e.g. ``forall struct archive_rb_node *n in t: valid(n)``). These are
 # not valid C ``__CPROVER_assume`` expressions — CBMC rejects with
@@ -768,36 +792,73 @@ def _clause_is_syntactically_safe(clause: str) -> bool:
     return _PSEUDO_LOGIC_RE.search(clause) is None
 
 
+def _is_param_style_ident(ident: str) -> bool:
+    """Heuristic: name looks like a function parameter rather than a
+    global / macro / type. Matches single-letter names, underscore-
+    prefixed names, and other ≤4-char identifiers — the shapes that
+    realistically collide between sibling functions in the same project.
+    Longer names (``g_init``, ``archive_match_globals_xx``, ``xmlMalloc``)
+    are assumed to be globals.
+    """
+    return len(ident) <= 4 or ident.startswith("_")
+
+
 def _clause_references_only_known_idents(
     clause: str, param_names: set[str],
 ) -> bool:
-    """A learned clause is safe to emit only if every struct-dereference
-    root (``X->``) in it refers either to a parameter of the current
-    function OR to a name that's plausibly a global (e.g., ``g_init``,
-    or just isn't a short single-letter parameter-style name).
+    """A learned clause is safe to emit only if every parameter-style
+    identifier referenced in it (whether as a struct-deref root like
+    ``acl->field`` or a bare comparison like ``acl != NULL``) is in
+    the current function's parameter set. Identifiers that look like
+    globals / macros / types / function calls are passed through.
 
     Reason: project-wide clauses are distilled from one function's
-    counterexample (e.g., ``a->inclusion_uids.count == 0`` from an
-    internal helper whose param is named ``a``) and then re-emitted
-    across every function's harness. When the current function's
-    matching parameter is named differently (e.g., ``_a`` in the
-    public-API entry), CBMC fails with "failed to find symbol 'a'"
-    (exit code 6). The conservative gate looks ONLY at
-    parameter-style roots (single letter, or starts with ``_`` and
-    has length ≤ 4) — those are the realistic case for confusing one
-    function's params with another's. Globals like ``g_init`` are
-    passed through.
+    counterexample (e.g., ``acl != NULL`` from ``archive_acl_*``) and
+    then re-emitted across every function's harness. When the current
+    function doesn't have a parameter named ``acl``, CBMC fails with
+    "failed to find symbol 'acl'" (exit code 6) and the whole TU dies
+    at parse — wiping out all findings on that file. Observed on the
+    libarchive postfix8 sweep: a single bad bare-ident clause caused
+    701 CBMC parse failures across 6 files.
 
-    Skipping a clause is preferable to crashing the harness — the
-    clause is an OPTIMIZATION, not a soundness invariant.
+    The check rejects only parameter-style identifiers (see
+    ``_is_param_style_ident``). UPPER_CASE macros, function-call
+    identifiers (followed by ``(``), and longer names are passed
+    through. Skipping a clause is always preferable to crashing the
+    harness — the clause is an OPTIMIZATION, not a soundness invariant.
     """
-    roots = _CLAUSE_STRUCT_DEREF_RE.findall(clause)
-    for root in roots:
-        # Only flag short parameter-style names — that's the regression we're
-        # guarding against. Longer names (g_init, archive_match_globals_xx)
-        # are almost certainly globals or typedef'd handles.
-        is_param_style = len(root) <= 4 or root.startswith("_")
-        if is_param_style and root not in param_names:
+    # Pattern 1: struct-deref roots (``X->field``).
+    for root in _CLAUSE_STRUCT_DEREF_RE.findall(clause):
+        if _is_param_style_ident(root) and root not in param_names:
+            return False
+
+    # Pattern 2: bare identifier references (``X != NULL``, ``X > 0``).
+    for m in _CLAUSE_IDENT_RE.finditer(clause):
+        ident = m.group(1)
+        # Skip function-call identifiers (``foo(...)``) — those resolve
+        # at link time against any declared function in the TU, not
+        # against the current function's parameters.
+        tail = clause[m.end():].lstrip()
+        if tail.startswith("("):
+            continue
+        # Reserved words, primitive types, NULL/true/false.
+        if ident in _CLAUSE_RESERVED_IDENTS:
+            continue
+        # CBMC builtins.
+        if ident.startswith("__CPROVER_"):
+            continue
+        # ALL_CAPS or UpperCamel_WITH_UNDERSCORE → almost certainly a
+        # macro / enum constant (e.g. ``ARCHIVE_ENTRY_ACL_TYPE_NFS4``,
+        # ``SIZE_MAX``, ``ARCHIVE_OK``).
+        if ident.isupper():
+            continue
+        if ident[0].isupper() and "_" in ident:
+            continue
+        # Long lowercase identifiers (``xmlMalloc``, ``archive_acl_clear``)
+        # are assumed globals/functions, not local params.
+        if not _is_param_style_ident(ident):
+            continue
+        if ident not in param_names:
             return False
     return True
 

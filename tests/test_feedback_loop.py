@@ -233,6 +233,112 @@ def test_harness_emit_learned_clauses_project(tmp_path: Path):
     assert "__CPROVER_assume(xmlMalloc != NULL);" in out
 
 
+def test_harness_emit_learned_clauses_project_skips_bare_ident_collision(tmp_path: Path):
+    """Regression: postfix8 sweep (2026-05-27) had 701 CBMC parse failures
+    because the project_clauses store held ``acl != NULL`` — distilled
+    from archive_acl.c functions — and the filter only checked struct-
+    deref roots (``X->``), so the bare-identifier clause leaked into
+    every harness, including rar5_cleanup whose params don't include
+    ``acl``. CBMC reported ``failed to find symbol 'acl'`` and the whole
+    TU died at parse. The filter must also skip param-style bare-ident
+    references that don't resolve in the current function's scope.
+    """
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+    from bmc_agent.harness_generator import _emit_learned_clauses
+    from bmc_agent.config import Config
+
+    store = LearnedConstraintsStore(tmp_path)
+    # Both clauses came from archive_acl.c's ``acl`` parameter.
+    store.record("archive_acl_clear", Remediation(
+        scope=RemediationScope.PROJECT_INVARIANT,
+        clause="acl != NULL",
+        confidence="high",
+    ))
+    store.record("archive_acl_clear", Remediation(
+        scope=RemediationScope.PROJECT_INVARIANT,
+        clause="!(acl != NULL && (acl->acl_types & ARCHIVE_ENTRY_ACL_TYPE_NFS4))",
+        confidence="high",
+    ))
+
+    config = Config()
+    config.artifact_dir = str(tmp_path)
+    config.enable_feedback_loop = True
+
+    # rar5_cleanup's only param is ``a`` (struct archive_read *). Both
+    # ``acl``-rooted clauses must be filtered out.
+    out_other = _emit_learned_clauses(
+        config, "rar5_cleanup", "project", param_names={"a"},
+    )
+    assert out_other == [], (
+        f"both acl-rooted clauses should be filtered for rar5_cleanup, got {out_other}"
+    )
+
+    # For an archive_acl function (param ``acl``), both should survive.
+    out_self = _emit_learned_clauses(
+        config, "archive_acl_clear", "project", param_names={"acl"},
+    )
+    assert "__CPROVER_assume(acl != NULL);" in out_self
+
+
+def test_harness_emit_learned_clauses_project_keeps_global_bare_ident(tmp_path: Path):
+    """Long lowercase identifiers (xmlMalloc, archive_match_globals) are
+    treated as globals — they must survive the bare-ident filter even
+    when not in the current function's param set."""
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+    from bmc_agent.harness_generator import _emit_learned_clauses
+    from bmc_agent.config import Config
+
+    store = LearnedConstraintsStore(tmp_path)
+    store.record("xmlFoo", Remediation(
+        scope=RemediationScope.PROJECT_INVARIANT,
+        clause="xmlMalloc != NULL",
+        confidence="high",
+    ))
+
+    config = Config()
+    config.artifact_dir = str(tmp_path)
+    config.enable_feedback_loop = True
+
+    # Calling function has a totally different parameter set; xmlMalloc
+    # should still be emitted because it's clearly a global, not a param.
+    out = _emit_learned_clauses(
+        config, "rar5_cleanup", "project", param_names={"a"},
+    )
+    assert "__CPROVER_assume(xmlMalloc != NULL);" in out
+
+
+def test_harness_emit_learned_clauses_project_keeps_macro_constants(tmp_path: Path):
+    """ALL_CAPS and UpperCamel_WITH_UNDERSCORE identifiers (macros,
+    enum constants like SIZE_MAX or ARCHIVE_OK) must pass through the
+    bare-ident filter even when the rest of the clause's identifiers
+    match the param set."""
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+    from bmc_agent.harness_generator import _emit_learned_clauses
+    from bmc_agent.config import Config
+
+    store = LearnedConstraintsStore(tmp_path)
+    store.record("acl_new_entry", Remediation(
+        scope=RemediationScope.PROJECT_INVARIANT,
+        clause="size < SIZE_MAX",
+        confidence="high",
+    ))
+
+    config = Config()
+    config.artifact_dir = str(tmp_path)
+    config.enable_feedback_loop = True
+
+    out = _emit_learned_clauses(
+        config, "acl_new_entry", "project", param_names={"size"},
+    )
+    assert "__CPROVER_assume(size < SIZE_MAX);" in out
+
+
 def test_harness_emit_learned_clauses_function_scoped(tmp_path: Path):
     """function clauses must be returned ONLY for the matching function."""
     from bmc_agent.feedback_loop import (
