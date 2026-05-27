@@ -917,6 +917,37 @@ class AMCPipeline:
                 )
 
         # ------------------------------------------------------------------
+        # Phase 3e: in-pipeline triage of UNRESOLVED counterexamples.
+        # After Phase 3b drains caller-rechecks, every CEx that ended
+        # UNRESOLVED (caller-chain trace + dyn-val + spec-refiner
+        # disagreed, or the soundness guard refused over-tightening)
+        # gets a second-opinion verdict from the tool-augmented
+        # TriageToolsAgent. The agent walks the call chain, audits
+        # size calculators against writers, and applies reachability
+        # gates (private-header, alloc-site-invariant) before voting.
+        # REAL_BUG / high promotes to a bug report; LIKELY_FP / high
+        # writes a triage sidecar so post-hoc summaries can prune
+        # without re-running triage.
+        # ------------------------------------------------------------------
+        if (
+            getattr(self.config, "enable_phase_3e_triage", False)
+            and self.reporter._unresolved
+        ):
+            try:
+                self._run_phase_3e_triage(
+                    driver_name=driver_name,
+                    parsed=parsed,
+                    all_funcs=all_funcs,
+                    current_specs=current_specs,
+                    bug_reports=bug_reports,
+                    confirmed_real_bugs=confirmed_real_bugs,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Phase 3e triage block failed: %s", exc, exc_info=True,
+                )
+
+        # ------------------------------------------------------------------
         # Phase 4: Spec Quality Analysis (optional, expensive)
         # ------------------------------------------------------------------
         if self.config.enable_spec_quality:
@@ -1050,6 +1081,193 @@ class AMCPipeline:
                 )
                 return True
         return False
+
+    def _run_phase_3e_triage(
+        self,
+        *,
+        driver_name: str,
+        parsed: ParsedCFile,
+        all_funcs: dict[str, FunctionInfo],
+        current_specs: dict[str, Spec],
+        bug_reports: list,
+        confirmed_real_bugs: set,
+    ) -> None:
+        """Phase 3e: independent triage of UNRESOLVED counterexamples.
+
+        Mirrors ``scripts/triage_unresolved.py``'s contract so the
+        sidecar layout is identical to the post-hoc path — analysts
+        can compare pipeline-time vs post-hoc verdicts without two
+        parsers. Promotes only ``REAL_BUG/high`` to bug reports;
+        anything weaker stays in ``_unresolved`` so we never inflate
+        the confirmed-bug count from a borderline triage call.
+        """
+        import json as _json
+
+        from bmc_agent.agents.triage import TriageVerdict
+        from bmc_agent.agents.triage_tools import TriageToolsAgent
+
+        unresolved_snapshot = list(self.reporter._unresolved)
+        if not unresolved_snapshot:
+            return
+
+        logger.info(
+            "--- Phase 3e: Triaging %d UNRESOLVED counterexample(s) ---",
+            len(unresolved_snapshot),
+        )
+
+        corpus_paths = list(getattr(self.spec_gen, "corpus_paths", []) or [])
+        agent = TriageToolsAgent(
+            self.config,
+            self.llm,
+            parsed_file=parsed,
+            corpus_paths=corpus_paths,
+            all_specs=current_specs,
+        )
+
+        promoted: list[int] = []
+        counts = {"real_bug": 0, "likely_fp": 0, "needs_human": 0, "errored": 0}
+
+        for idx, validation in enumerate(unresolved_snapshot):
+            fn_name = validation.function_name
+            func = all_funcs.get(fn_name)
+            spec = current_specs.get(fn_name)
+            cex = validation.counterexample
+            prop = getattr(cex, "failing_property", "") or ""
+            if func is None or spec is None or not prop:
+                counts["errored"] += 1
+                continue
+
+            try:
+                harness_path = self.store._fn_dir(driver_name, fn_name) / "harness.c"
+                harness_text = (
+                    harness_path.read_text(encoding="utf-8", errors="replace")
+                    if harness_path.exists()
+                    else ""
+                )
+            except Exception:
+                harness_text = ""
+
+            witness_lines: list[str] = []
+            for k, v in (getattr(cex, "variable_assignments", {}) or {}).items():
+                if k.startswith("__CPROVER_"):
+                    continue
+                witness_lines.append(f"  {k} = {v}")
+            witness_text = "\n".join(witness_lines)
+
+            dyn = getattr(validation, "dynamic_result", None)
+            dyn_outcome = None
+            dyn_reasoning = None
+            if dyn is not None:
+                outcome_val = getattr(dyn, "outcome", None)
+                dyn_outcome = (
+                    outcome_val.value if hasattr(outcome_val, "value")
+                    else (str(outcome_val) if outcome_val is not None else None)
+                )
+                dyn_reasoning = getattr(dyn, "reasoning", None)
+
+            logger.info("Phase 3e: triaging %s::%s", fn_name, prop)
+            result = agent.run(
+                function_name=fn_name,
+                function_source=func.body or "",
+                cbmc_property=prop,
+                harness_source=harness_text,
+                witness_text=witness_text,
+                caller_path=validation.caller_path or [],
+                dyn_outcome=dyn_outcome,
+                dyn_reasoning=dyn_reasoning,
+                reproducer_source=validation.system_entry_input or "",
+                realism_verdict=None,
+                realism_reasoning=None,
+                pipeline_reasoning=validation.reasoning or "",
+                sys_entry_reached=bool(
+                    getattr(validation, "system_entry_reached", False)
+                ),
+            )
+            if not result.ok or result.output is None:
+                counts["errored"] += 1
+                logger.warning(
+                    "Phase 3e: triage failed for %s::%s (%s)",
+                    fn_name, prop, result.error or "no output",
+                )
+                continue
+
+            tr = result.output
+            counts[tr.verdict.value] = counts.get(tr.verdict.value, 0) + 1
+
+            try:
+                safe = "".join(
+                    ch if ch.isalnum() or ch in "._-" else "_"
+                    for ch in str(prop)
+                )[:120] or "unnamed"
+                cls_dir = (
+                    self.store._fn_dir(driver_name, fn_name) / "classifications"
+                )
+                cls_dir.mkdir(parents=True, exist_ok=True)
+                sidecar = cls_dir / f"{safe}.triage.json"
+                sidecar.write_text(_json.dumps({
+                    "verdict": tr.verdict.value,
+                    "confidence": tr.confidence,
+                    "fp_class": tr.fp_class,
+                    "reasoning": tr.reasoning,
+                    "phase": "3e",
+                }, indent=2))
+            except Exception as exc:
+                logger.warning(
+                    "Phase 3e: sidecar write failed for %s::%s: %s",
+                    fn_name, prop, exc,
+                )
+
+            if (
+                tr.verdict == TriageVerdict.REAL_BUG
+                and tr.confidence == "high"
+            ):
+                bug_key = (fn_name, _prop_type(prop))
+                if bug_key in confirmed_real_bugs:
+                    logger.info(
+                        "Phase 3e: %s already confirmed (key=%s) — no double-promotion",
+                        fn_name, bug_key[1],
+                    )
+                    promoted.append(idx)  # drop from unresolved either way
+                    continue
+                validation.outcome = CExOutcome.REAL_BUG
+                validation.reasoning = (
+                    (validation.reasoning or "")
+                    + f"\n\n[Phase 3e triage: {tr.verdict.value}/{tr.confidence}"
+                    + (f", fp_class={tr.fp_class}" if tr.fp_class else "")
+                    + f"] {tr.reasoning[:600]}"
+                )
+                try:
+                    report = self._make_report(
+                        validation, func, spec, parsed, all_funcs,
+                        driver_name, current_specs, cbmc_harness_path="",
+                    )
+                    self.reporter.save_report(report, driver_name)
+                    bug_reports.append(report)
+                    confirmed_real_bugs.add(bug_key)
+                    promoted.append(idx)
+                    logger.info(
+                        "Phase 3e: PROMOTED %s::%s → REAL_BUG", fn_name, prop,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Phase 3e: promotion failed for %s::%s: %s",
+                        fn_name, prop, exc,
+                    )
+
+        if promoted:
+            promoted_set = set(promoted)
+            self.reporter._unresolved = [
+                v for i, v in enumerate(unresolved_snapshot)
+                if i not in promoted_set
+            ]
+
+        logger.info(
+            "Phase 3e complete: real_bug=%d (promoted=%d), likely_fp=%d, "
+            "needs_human=%d, errored=%d",
+            counts.get("real_bug", 0), len(promoted),
+            counts.get("likely_fp", 0), counts.get("needs_human", 0),
+            counts.get("errored", 0),
+        )
 
     def _synthesize_sibling_cex_summary(
         self, driver_name: str, fn_name: str,

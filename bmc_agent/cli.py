@@ -661,6 +661,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
+    if getattr(args, "enable_phase_3e_triage", False):
+        config.enable_phase_3e_triage = True
     # --no-<flag> escape hatches (override the default-on AI layers).
     if getattr(args, "no_realism_check", False):
         config.enable_realism_check = False
@@ -678,6 +680,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_gen_tools = False
     if getattr(args, "no_realism_tools", False):
         config.enable_realism_tools = False
+    if getattr(args, "no_phase_3e_triage", False):
+        config.enable_phase_3e_triage = False
     if getattr(args, "minimal", False):
         config.enable_realism_check = False
         config.enable_dynamic_validation = False
@@ -687,6 +691,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_inlining_advisor = False
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
+        config.enable_phase_3e_triage = False
     _apply_model_arg(config, args)
 
     include_dirs = args.include_dir or []
@@ -1598,6 +1603,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Default ON; pass --no-inlining-advisor to disable.",
     )
+    vd.add_argument(
+        "--enable-phase-3e-triage",
+        action="store_true",
+        default=False,
+        help=(
+            "Phase 3e: in-pipeline TriageToolsAgent oracle on UNRESOLVED "
+            "counterexamples. Promotes REAL_BUG/high verdicts to bug "
+            "reports and writes per-CEx triage.json sidecars matching "
+            "scripts/triage_unresolved.py. Default OFF (expensive)."
+        ),
+    )
     # --no-<flag> escape hatches (mirror --verify).
     vd.add_argument("--no-realism-check", action="store_true", default=False,
                     help="Disable the LLM realism filter on CExs.")
@@ -1615,6 +1631,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Disable v2.2 spec_gen bounded tool-use branch.")
     vd.add_argument("--no-realism-tools", action="store_true", default=False,
                     help="Disable realism check's bounded tool-use augmentation.")
+    vd.add_argument("--no-phase-3e-triage", action="store_true", default=False,
+                    help="Disable Phase 3e triage even if env BMC_AGENT_ENABLE_PHASE_3E_TRIAGE=true.")
     vd.add_argument("--minimal", action="store_true", default=False,
                     help=("Turn ALL default-on AI layers off. For "
                           "zero-LLM-cost smoke runs / ablations."))

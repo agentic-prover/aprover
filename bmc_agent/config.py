@@ -398,6 +398,17 @@ class Config:
     enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
 
+    # Phase 3e — in-pipeline TriageToolsAgent oracle. After Phase 3b
+    # drains the caller-recheck queue, every UNRESOLVED counterexample
+    # gets an independent triage verdict from a tool-augmented agent
+    # that walks the call chain and audits size calculators against
+    # writers. REAL_BUG/high verdicts promote to bug reports; LIKELY_FP
+    # verdicts are recorded for downstream consumers but kept in the
+    # unresolved bucket. Default off — the agent is expensive (~10-iter
+    # tool-use loop per CEx) and the post-hoc ``scripts/triage_unresolved.py``
+    # already provides the same data outside the pipeline.
+    enable_phase_3e_triage: bool = False
+
     # Feedback loop: distill UNREALISTIC verdicts into learned constraints
     # or code-change TODOs (see bmc_agent/feedback_loop.py). The harness
     # generator auto-applies learned function/project clauses on the next
@@ -661,6 +672,7 @@ class Config:
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
             enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
+            enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
