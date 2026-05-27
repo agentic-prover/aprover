@@ -354,6 +354,37 @@ def test_store_refuses_auto_promote_function_local_clause(tmp_path: Path):
         )
 
 
+def test_store_cleanup_contaminated_project_clauses(tmp_path: Path):
+    """Legacy stores from before the write-time gate (2f19a1c) may have
+    contaminated clauses in project_clauses. The cleanup utility scans
+    and removes them; genuine project clauses (long names like
+    xmlMalloc, ARCHIVE_OK-style macros) survive."""
+    import json
+    from bmc_agent.feedback_loop import LearnedConstraintsStore
+
+    bad_store = {
+        "version": LearnedConstraintsStore.SCHEMA_VERSION,
+        "function_clauses": {},
+        "project_clauses": [
+            "acl != NULL",                          # contaminated (param-style)
+            "!(a != NULL && a->t == 1)",            # contaminated (param-style root)
+            "xmlMalloc != NULL",                    # genuine (long ident)
+            "g_init != NULL",                       # genuine (≥5 chars, no _ prefix)
+        ],
+        "code_change_todos": [],
+    }
+    (tmp_path / LearnedConstraintsStore.FILENAME).write_text(json.dumps(bad_store))
+
+    store = LearnedConstraintsStore(tmp_path)
+    removed = store.cleanup_contaminated_project_clauses()
+    assert removed == 2
+    remaining = store.project_clauses()
+    assert "acl != NULL" not in remaining
+    assert "!(a != NULL && a->t == 1)" not in remaining
+    assert "xmlMalloc != NULL" in remaining
+    assert "g_init != NULL" in remaining
+
+
 def test_store_still_promotes_genuine_project_clause(tmp_path: Path):
     """Sanity check: a long-name clause (xmlMalloc != NULL) is the
     canonical project-wide invariant and must still auto-promote."""

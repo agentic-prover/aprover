@@ -583,6 +583,35 @@ class LearnedConstraintsStore:
             self._save()
         return promoted
 
+    def cleanup_contaminated_project_clauses(self) -> int:
+        """Remove clauses from project_clauses that reference param-style
+        identifiers (short names, ``_``-prefixed). These can exist in
+        legacy stores created before the write-time gate (2f19a1c) was
+        added. Returns the number of clauses removed.
+
+        Contaminated clauses get demoted to function_clauses if the
+        ``from_function`` provenance is unknown (it isn't tracked for
+        project_clauses) — so we just delete them and let the next
+        sweep relearn them at the proper scope. Safer than guessing.
+        """
+        from bmc_agent.harness_generator import clause_has_param_style_ident
+        proj = self._data.get("project_clauses", []) or []
+        kept: list[str] = []
+        removed = 0
+        for clause in proj:
+            if clause_has_param_style_ident(clause):
+                logger.info(
+                    "cleanup: removing contaminated project clause "
+                    "(references param-style ident): %s", clause[:120],
+                )
+                removed += 1
+            else:
+                kept.append(clause)
+        if removed:
+            self._data["project_clauses"] = kept
+            self._save()
+        return removed
+
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("w", encoding="utf-8") as f:
