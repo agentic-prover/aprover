@@ -648,17 +648,14 @@ class RealismChecker:
         all_specs: "dict[str, Spec]",
     ) -> Optional[RealismCheckResult]:
         """Run the tool-use realism call. Returns the parsed augmented
-        result, or None if the call/parse failed."""
-        from bmc_agent.llm import LLMError
-        from bmc_agent.realism_tools import (
-            RealismToolContext, build_realism_tools,
-            TOOL_USE_PROMPT_ADDENDUM,
-        )
-        ctx = RealismToolContext(
-            parsed=parsed_file,
-            all_specs=dict(all_specs),
-        )
-        tools, handlers = build_realism_tools(ctx)
+        result, or None if the call/parse failed.
+
+        v2: delegates the LLM-call boundary to ``RealismToolsAgent``
+        (C2 step 7). This method retains ownership of the
+        reconsider-prompt construction and the downstream grounding
+        audit; the agent owns prompt → complete_with_tools → parse.
+        """
+        from bmc_agent.realism_tools import TOOL_USE_PROMPT_ADDENDUM
 
         # Reuse the base prompt + append the tool-use addendum + the
         # base verdict so the LLM can refine it.
@@ -687,38 +684,34 @@ class RealismChecker:
             f"{TOOL_USE_PROMPT_ADDENDUM}"
         )
 
-        try:
-            tu_result = self.llm.complete_with_tools(
-                system_prompt=SPEC_SYSTEM_PROMPT,
-                user_prompt=reconsider,
-                tools=tools,
-                tool_handlers=handlers,
-                max_iterations=6,
-                max_tool_calls=3,
-                max_tokens_per_turn=4096,
-                role="realism",
-            )
-        except LLMError as exc:
-            logger.warning("Realism tool-use call failed for '%s': %s",
-                           func.name, exc)
-            return None
-        if tu_result.error:
-            logger.info(
-                "Realism tool-use terminated for '%s': %s "
-                "(iterations=%d, tool_calls=%d)",
-                func.name, tu_result.error,
-                tu_result.iterations, tu_result.tool_calls_made,
-            )
+        from bmc_agent.agents.realism_tools import RealismToolsAgent
+        agent = RealismToolsAgent(
+            config=self.config, llm=self.llm,
+            system_prompt=SPEC_SYSTEM_PROMPT,
+            parsed_file=parsed_file,
+            all_specs=all_specs,
+        )
+        agent_result = agent.run(user_prompt=reconsider, func_name=func.name)
+        tu_result = agent_result.tool_use_result
+        if not agent_result.ok:
+            if agent_result.error and "LLMError" in agent_result.error:
+                logger.warning("Realism tool-use call failed for '%s': %s",
+                               func.name, agent_result.error[:200])
+            elif tu_result is not None and tu_result.error:
+                logger.info(
+                    "Realism tool-use terminated for '%s': %s "
+                    "(iterations=%d, tool_calls=%d)",
+                    func.name, tu_result.error,
+                    tu_result.iterations, (tu_result.tool_calls_made if tu_result else 0),
+                )
             return None
 
-        parsed_result = _parse_result(tu_result.text, func.name)
-        if parsed_result is None:
-            return None
+        parsed_result = agent_result.output
 
         # Extract which tools were actually called (not just the count).
         # Surfaces whether the LLM followed the "MUST call lookup_function
         # on target" requirement in TOOL_USE_PROMPT_ADDENDUM.
-        tool_names_called = _extract_tool_names(tu_result.messages)
+        tool_names_called = _extract_tool_names(tu_result.messages) if tu_result else []
         logger.info(
             "Realism augmentation tools called for '%s': %s",
             func.name,
@@ -732,7 +725,7 @@ class RealismChecker:
         # Parse the grounding field added by the (c) hard requirement.
         # If verdict=REALISTIC but grounding contradicts (guard present,
         # or target body never looked up), demote — verdict is unsound.
-        grounding = _extract_grounding_field(tu_result.text)
+        grounding = _extract_grounding_field(agent_result.raw_response)
         parsed_result = _apply_grounding_consistency(
             parsed_result, grounding, func.name, looked_up_target,
         )
@@ -759,7 +752,7 @@ class RealismChecker:
                 "this is the rare case where the base check was over-confident "
                 "about ruling out.",
                 func.name, base_result.verdict.value,
-                tu_result.tool_calls_made,
+                (tu_result.tool_calls_made if tu_result else 0),
             )
         elif (
             base_result.verdict == RealismVerdict.REALISTIC
@@ -771,13 +764,13 @@ class RealismChecker:
                 "audit to confirm — likely the base check confabulated "
                 "(e.g., didn't actually read into a callee's NULL guard).",
                 func.name, parsed_result.verdict.value,
-                tu_result.tool_calls_made,
+                (tu_result.tool_calls_made if tu_result else 0),
             )
         else:
             logger.info(
                 "Realism augmentation for '%s': %s → %s (tool_calls=%d)",
                 func.name, base_result.verdict.value,
-                parsed_result.verdict.value, tu_result.tool_calls_made,
+                parsed_result.verdict.value, (tu_result.tool_calls_made if tu_result else 0),
             )
         return parsed_result
 

@@ -54,12 +54,20 @@ class AgentResult(Generic[T]):
                         is empty.
     Parse failure:      ``output`` is None, ``error`` describes the parse
                         problem, ``raw_response`` is the offending text.
+
+    Tool-use agents additionally populate ``tool_use_result`` with the
+    full ``ToolUseResult`` (messages, iterations, tool_calls_made)
+    so the orchestrator can run downstream audits (which tools were
+    called, with what args). Non-tool agents leave this as None.
     """
 
     output: Optional[T] = None
     raw_response: str = ""
     error: Optional[str] = None
     tool_calls_made: int = 0
+    #: Populated by tool-using agents only. Type is ``ToolUseResult``;
+    #: typed as ``Any`` to avoid importing llm.py at module load.
+    tool_use_result: Optional[Any] = None
 
     @property
     def ok(self) -> bool:
@@ -149,6 +157,10 @@ class BaseAgent(abc.ABC, Generic[T]):
         last_err = ""
         last_raw = ""
         for attempt in range(self.max_retries + 1):
+            # Tool-using subclasses stash the ToolUseResult on the
+            # instance before _call_llm returns; non-tool agents leave
+            # it None.
+            self._last_tool_use_result = None
             raw, llm_err = self._call_llm(prompt)
             if llm_err is not None:
                 last_err = llm_err
@@ -165,7 +177,13 @@ class BaseAgent(abc.ABC, Generic[T]):
                 last_err = "parse: returned None (unparseable response)"
                 last_raw = raw or ""
                 continue
-            return AgentResult(output=output, raw_response=raw or "")
+            tu = getattr(self, "_last_tool_use_result", None)
+            return AgentResult(
+                output=output,
+                raw_response=raw or "",
+                tool_calls_made=(tu.tool_calls_made if tu else 0),
+                tool_use_result=tu,
+            )
 
         return AgentResult(raw_response=last_raw, error=last_err)
 

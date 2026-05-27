@@ -21,6 +21,7 @@ from bmc_agent.agents.base import AgentResult, BaseAgent
 from bmc_agent.agents.disagreement import DisagreementDiagnoseAgent
 from bmc_agent.agents.feedback_distill import FeedbackDistillAgent
 from bmc_agent.agents.realism import RealismAgent
+from bmc_agent.agents.realism_tools import RealismToolsAgent
 from bmc_agent.agents.refinement import RefinementAgent
 from bmc_agent.agents.spec_gen import SpecGenAgent
 
@@ -31,6 +32,7 @@ __all__ = [
     "DisagreementDiagnoseAgent",
     "FeedbackDistillAgent",
     "RealismAgent",
+    "RealismToolsAgent",
     "RefinementAgent",
     "SpecGenAgent",
 ]
