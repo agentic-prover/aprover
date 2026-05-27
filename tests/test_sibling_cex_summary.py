@@ -32,14 +32,22 @@ def _make_pipeline(tmp_path: Path):
     return pipeline
 
 
-def _write_bug_report(fn_dir: Path, confidence: str, reasoning_trail: str = "base"):
+def _write_bug_report(
+    fn_dir: Path,
+    confidence: str,
+    reasoning_trail: str = "base",
+    realism_verdict: str | None = None,
+):
+    report: dict = {
+        "function_name": fn_dir.name,
+        "confidence": confidence,
+        "reasoning_trail": reasoning_trail,
+    }
+    if realism_verdict is not None:
+        report["realism_check"] = {"verdict": realism_verdict}
     payload = {
         "saved_at": "2026-05-26T00:00:00+00:00",
-        "report": {
-            "function_name": fn_dir.name,
-            "confidence": confidence,
-            "reasoning_trail": reasoning_trail,
-        },
+        "report": report,
     }
     (fn_dir / "bug_report.json").write_text(json.dumps(payload, indent=2))
 
@@ -192,6 +200,101 @@ def test_no_downgrade_when_stable_high_confidence(tmp_path):
     report = _read_report(fn_dir)
     assert report["confidence"] == "confirmed_dynamic"
     assert "[SIBLING-CEX INSTABILITY]" not in report.get("reasoning_trail", "")
+
+
+def test_no_downgrade_when_realism_realistic_even_under_instability(tmp_path):
+    """Regression: postfix9 next_field (Bug 4 / seed #26 — PAX OOB read).
+
+    Function had 10 CExes: 3 real_bug + 7 unresolved. One of the
+    real_bug CExes (``next_field.pointer_arithmetic.17``) reached
+    confidence=confirmed_bmc with realism=realistic — the upstream-known
+    Bug 4. Under the original instability logic, 7 unresolved >= 10/2,
+    so the function was downgraded to ``unlikely`` and the real bug
+    was lost.
+
+    Fix: when realism=realistic, sibling instability does NOT downgrade.
+    Realism is an independent signal — the LLM read the witness for
+    THIS CEx and judged it reachable from in-tree callers. Sibling
+    unresolved CExes are noise from CBMC/harness limits, not evidence
+    against that specific verdict.
+    """
+    p = _make_pipeline(tmp_path)
+    fn_dir = p.store._fn_dir("drv", "next_field")
+    _write_bug_report(
+        fn_dir,
+        "confirmed_bmc",
+        reasoning_trail="initial trail",
+        realism_verdict="realistic",
+    )
+    # 10 CExes, 3 real_bug + 7 unresolved (exact postfix9 distribution)
+    for i in range(3):
+        _write_classification(fn_dir, f"p_real_{i}", "real_bug")
+    for i in range(7):
+        _write_classification(fn_dir, f"p_unres_{i}", "unresolved")
+
+    p._synthesize_sibling_cex_summary("drv", "next_field")
+
+    report = _read_report(fn_dir)
+    summary = report["sibling_cex_summary"]
+    # The instability signal still fires (the data IS unstable)
+    assert summary["instability_signal"] is True
+    assert summary["real_bug_count"] == 3
+    assert summary["unresolved_count"] == 7
+    # But the confidence is NOT downgraded thanks to the realistic
+    # realism verdict.
+    assert report["confidence"] == "confirmed_bmc", (
+        f"expected confirmed_bmc preserved (realism=realistic), "
+        f"got {report['confidence']}"
+    )
+    assert "[SIBLING-CEX INSTABILITY]" not in report.get("reasoning_trail", ""), (
+        f"no downgrade note should be added: {report.get('reasoning_trail')!r}"
+    )
+
+
+def test_downgrade_still_fires_when_realism_unrealistic_under_instability(tmp_path):
+    """Sanity check: realism=unrealistic should NOT prevent the
+    instability downgrade. The new exception only triggers on
+    realism='realistic' — every other realism verdict (unrealistic,
+    uncertain, missing) leaves the original downgrade logic intact.
+    """
+    p = _make_pipeline(tmp_path)
+    fn_dir = p.store._fn_dir("drv", "fn_realism_unrealistic")
+    _write_bug_report(
+        fn_dir,
+        "confirmed_dynamic",
+        reasoning_trail="initial",
+        realism_verdict="unrealistic",
+    )
+    _write_classification(fn_dir, "p1", "real_bug")
+    _write_classification(fn_dir, "p2", "unresolved")
+    _write_classification(fn_dir, "p3", "spurious")
+
+    p._synthesize_sibling_cex_summary("drv", "fn_realism_unrealistic")
+
+    report = _read_report(fn_dir)
+    # Downgrade fires as before.
+    assert report["confidence"] == "unlikely"
+    assert "[SIBLING-CEX INSTABILITY]" in report["reasoning_trail"]
+
+
+def test_downgrade_still_fires_when_realism_missing_under_instability(tmp_path):
+    """Sanity check: bug reports without a realism_check field (e.g.
+    early-pipeline saves before realism ran) still get the downgrade.
+    The exception is specifically for the 'realistic' verdict, not
+    for absence of verdict."""
+    p = _make_pipeline(tmp_path)
+    fn_dir = p.store._fn_dir("drv", "fn_no_realism")
+    # realism_verdict=None → realism_check field omitted entirely
+    _write_bug_report(fn_dir, "confirmed_dynamic", realism_verdict=None)
+    _write_classification(fn_dir, "p1", "real_bug")
+    _write_classification(fn_dir, "p2", "unresolved")
+    _write_classification(fn_dir, "p3", "spurious")
+
+    p._synthesize_sibling_cex_summary("drv", "fn_no_realism")
+
+    report = _read_report(fn_dir)
+    assert report["confidence"] == "unlikely"
+    assert "[SIBLING-CEX INSTABILITY]" in report["reasoning_trail"]
 
 
 # ---------------------------------------------------------------------------

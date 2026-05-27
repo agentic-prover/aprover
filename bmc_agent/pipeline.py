@@ -1362,9 +1362,29 @@ class AMCPipeline:
         # only demote from high-confidence tiers; if confidence is
         # already 'unlikely' or absent, leave it alone (no extra info
         # to add).
+        #
+        # EXCEPTION: if the report's realism check returned 'realistic',
+        # don't downgrade. The realism verdict is an INDEPENDENT signal
+        # — the LLM read this specific CEx's witness and judged it
+        # reachable from real in-tree callers. Sibling CExes being
+        # unresolved is noise from CBMC/harness limitations, not
+        # evidence against the realistic verdict. (Regression motivating
+        # this exception: postfix9 next_field had 3 of 10 CExes marked
+        # real_bug at S1 — one with confirmed_bmc + realism=realistic
+        # capturing the upstream-known PAX OOB read. The other 7
+        # unresolved CExes are CBMC over-permissiveness on the harness's
+        # nondet inputs, not evidence the realistic CEx is wrong. Without
+        # this exception, the seed bug gets dropped to 'unlikely'.)
         original_confidence = report.get("confidence")
+        realism_verdict = (
+            (report.get("realism_check") or {}).get("verdict")
+        )
         downgrade_targets = {"confirmed_dynamic", "confirmed_system_entry", "realistic"}
-        if instability and original_confidence in downgrade_targets:
+        if (
+            instability
+            and original_confidence in downgrade_targets
+            and realism_verdict != "realistic"
+        ):
             note = (
                 f"\n\n[SIBLING-CEX INSTABILITY] {n_unres} unresolved + "
                 f"{n_spurious} spurious sibling counterexamples out of "
@@ -1385,6 +1405,20 @@ class AMCPipeline:
                 "spurious / %d total — downgrading confidence from "
                 "'%s' to 'unlikely'",
                 fn_name, n_unres, n_spurious, n_total, original_confidence,
+            )
+        elif (
+            instability
+            and original_confidence in downgrade_targets
+            and realism_verdict == "realistic"
+        ):
+            # Log when we skip the downgrade — useful signal in sweep
+            # logs that a realistic-verdict bug survived sibling noise.
+            logger.info(
+                "Sibling-CEx instability for '%s' (%d unresolved + %d "
+                "spurious / %d total) — NOT downgrading because realism "
+                "verdict was 'realistic'; realistic is an independent "
+                "signal and sibling noise does not override it",
+                fn_name, n_unres, n_spurious, n_total,
             )
 
         payload["report"] = report
