@@ -4652,6 +4652,41 @@ class HarnessGenerator:
             # without a matching -I dir.
             include_target = str(src_path)
 
+        # When the auto-retry path has populated
+        # ``config.session_stub_functions`` (RetryAction.STUB_CALLEE
+        # fired on a prior TIMEOUT), produce a STUBBED copy of the
+        # source and ``#include`` that instead. The stubbed source
+        # replaces selected callee bodies with nondet returns, cutting
+        # CBMC's state space dramatically for the retry. We write a
+        # fresh temp file (don't mutate the original) so the stub is
+        # reproducible from the harness — anyone looking at the
+        # harness sees both files side-by-side. Source path lives next
+        # to the original tmp so the relative ``-I`` resolution works.
+        stub_names = set(
+            getattr(self.config, "session_stub_functions", None) or []
+        )
+        if stub_names:
+            try:
+                src_text = src_path.read_text(encoding="utf-8")
+                stubbed_text, stubbed_set = _replace_function_bodies_with_stubs(
+                    src_text, stub_names
+                )
+                if stubbed_set:
+                    import tempfile as _tempfile
+                    stub_tag = "_".join(sorted(stubbed_set))[:60]
+                    with _tempfile.NamedTemporaryFile(
+                        suffix=".c",
+                        prefix=f"amc_stubbed_{src_path.stem}_{stub_tag}_",
+                        mode="w", encoding="utf-8", delete=False,
+                    ) as stub_tmp:
+                        stub_tmp.write(stubbed_text)
+                        include_target = stub_tmp.name
+            except Exception:
+                # Best-effort: if we can't read or rewrite, fall back to
+                # the original source (the CBMC retry then re-times-out,
+                # which is no worse than the pre-fix behaviour).
+                pass
+
         # Nondeterministic input declarations — reuse the existing helper.
         nonnull = _infer_nonnull_params(func, all_funcs, parsed_file)
         nd_decls = _generate_nd_decls(

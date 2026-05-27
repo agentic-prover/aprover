@@ -197,23 +197,28 @@ def test_plan_retry_unknown_is_no_action():
     assert plan_retry(d).action == RetryAction.NO_ACTION
 
 
-def test_plan_retry_timeout_maps_to_bump_timeout():
-    """CBMC wall-clock timeouts get a BUMP_TIMEOUT plan — the flag-
-    selection LLM agent's initial budget is sometimes underestimated
-    (e.g. archive_acl_to_text_w gets 120s default but actually needs
-    240s+). Without the bump, the verdict is silently dropped at
-    Phase 3 — any real bug in that function would be missed."""
+def test_plan_retry_timeout_maps_to_stub_callee_as_primary():
+    """CBMC wall-clock timeouts: PRIMARY recovery is STUB_CALLEE
+    (replace a heavy inlined callee's body with a nondet stub —
+    cuts state space rather than buying more time). The pipeline
+    falls back to BUMP_TIMEOUT when no callee is available to stub.
+
+    Why STUB_CALLEE first: in ``--real-libc`` mode the harness
+    ``#include``s the whole preprocessed source so callees are
+    inlined by default. The state-space explosion that triggers the
+    timeout is usually dominated by ONE inlined callee (recursive
+    parsers, state machines), so stubbing it cuts CBMC's work
+    proportionally — bumping timeout would just give the same
+    explosion more wall-clock to chew through."""
     d = CbmcErrorDiagnosis(error_class=CbmcErrorClass.TIMEOUT)
     p = plan_retry(d)
-    assert p.action == RetryAction.BUMP_TIMEOUT
-    # No target on this action (the per-function bump happens in the
-    # pipeline's per-function retry loop, not via a shared session
-    # mutation).
+    assert p.action == RetryAction.STUB_CALLEE
+    # No target on this action — the pipeline picks the callee from
+    # ``funcs[fn_name].callees`` since plan_retry doesn't have call-
+    # graph access.
     assert p.target is None
-    # Reason includes the budget-doubling rationale so the
-    # auto_retries.json audit log is self-explanatory.
-    assert "timeout" in p.reason.lower()
-    assert "doubl" in p.reason.lower()
+    assert "stub" in p.reason.lower()
+    assert "callee" in p.reason.lower()
 
 
 def test_plan_retry_oom_remains_no_action():

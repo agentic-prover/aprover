@@ -82,6 +82,28 @@ class RetryAction(str, Enum):
     ``incomplete type not permitted here`` for opaque-handle params
     whose body lives in another TU."""
 
+    STUB_CALLEE = "stub_callee"
+    """Replace a heavy inlined callee's body with a nondet stub and
+    re-run. Primary action for ``CbmcErrorClass.TIMEOUT`` in
+    ``--real-libc`` mode: the harness ``#include``s the whole
+    preprocessed source so CBMC inlines callees by default, and the
+    state-space explosion that causes the timeout is usually dominated
+    by one or two heavy callees (recursive parsers, state machines).
+    Stubbing them cuts the explored state space dramatically while
+    leaving the function-under-test's own logic intact.
+
+    Target is the CALLEE NAME picked by the pipeline's auto-retry loop
+    (which has access to ``funcs[fn_name].callees`` to apply a
+    heuristic — typically the longest local callee body). Applied by
+    appending to ``config.session_stub_functions``; ``_generate_real_libc``
+    consults the set and post-processes the included source via
+    ``_replace_function_bodies_with_stubs`` to a fresh tmp file.
+
+    Tradeoff: stubbing a callee can hide a bug that lives INSIDE it.
+    Only used as a recovery from TIMEOUT, where the alternative is
+    silently dropping the verdict.
+    """
+
     BUMP_TIMEOUT = "bump_timeout"
     """Double the per-function CBMC timeout (capped at 600s) and re-run.
 
@@ -208,16 +230,26 @@ def plan_retry(diag: CbmcErrorDiagnosis) -> RetryPlan:
             reason="syntax-before-* without a prev_token hint; caller should resolve and retry",
         )
 
-    # --- Actionable: CBMC wall-clock timeout — bump and retry ---
-    # Per-function action; the pipeline reads the function name out of
-    # the surrounding ``errored`` dict and threads it into the bump.
+    # --- Actionable: CBMC wall-clock timeout — stub heavy callee, then bump ---
+    # Primary recovery is STUB_CALLEE: the state-space explosion that
+    # causes the timeout is almost always dominated by one or two
+    # inlined callees (the harness #include's the whole preprocessed
+    # source in --real-libc mode). The pipeline auto-retry loop picks
+    # the callee from ``funcs[fn_name].callees`` using a heuristic
+    # (typically the longest local callee body), since plan_retry
+    # itself doesn't have access to call-graph info.
+    #
+    # If the pipeline can't apply STUB_CALLEE (e.g., the function has
+    # no local callees, or all candidates are already stubbed), it
+    # falls back to BUMP_TIMEOUT.
     if cls == CbmcErrorClass.TIMEOUT:
         return RetryPlan(
-            action=RetryAction.BUMP_TIMEOUT,
+            action=RetryAction.STUB_CALLEE,
             reason=(
-                "CBMC wall-clock timeout; the flag-selection LLM's "
-                "initial budget was insufficient. Doubling the per-"
-                "function timeout (cap 600s) and re-running."
+                "CBMC wall-clock timeout — primary recovery is to stub "
+                "a heavy inlined callee (cuts state space). Pipeline "
+                "picks the callee from call-graph info; falls back to "
+                "BUMP_TIMEOUT when no callee candidate exists."
             ),
         )
 

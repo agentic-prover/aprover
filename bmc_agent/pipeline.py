@@ -1456,7 +1456,9 @@ class AMCPipeline:
             # "all NO_ACTION".
             actionable_keys = [
                 (a, t) for (a, t) in plans_by_key
-                if a != RetryAction.NO_ACTION and (t or a == RetryAction.BUMP_TIMEOUT)
+                if a != RetryAction.NO_ACTION and (
+                    t or a in (RetryAction.BUMP_TIMEOUT, RetryAction.STUB_CALLEE)
+                )
             ]
             if not actionable_keys:
                 # Phase 3 escalation: if every plan in this round was
@@ -1509,13 +1511,25 @@ class AMCPipeline:
                 "; ".join(applied_summary) or "(none)",
             )
 
-            # BUMP_TIMEOUT actions are per-function (no shared session
-            # mutation). For each function whose diagnosis was TIMEOUT,
-            # double its per-function timeout (capped at 600s) on the
-            # flag_selection that bmc_engine consults. If the function
-            # has no flag_selection yet, create a minimal one carrying
-            # just the timeout override.
+            # Per-function recovery for TIMEOUT errors:
+            #
+            #   1. PRIMARY: STUB_CALLEE — pick a heavy callee from the
+            #      function's call-graph entry, add it to
+            #      session_stub_functions. The harness regen consults
+            #      that set and post-processes the included source to
+            #      replace the callee's body with a nondet stub. Cuts
+            #      CBMC's state space at the source (rather than buying
+            #      it more time to chew through the same explosion).
+            #
+            #   2. FALLBACK: BUMP_TIMEOUT — when no callee candidate
+            #      exists (function has no local callees, or all
+            #      candidates are already stubbed), double the per-
+            #      function timeout (capped at 600s).
+            #
+            # Both actions are per-function; the global session set
+            # mutation for STUB_CALLEE is accumulative across rounds.
             from bmc_agent.flag_selector import FlagSelection
+            stubbed_callees: dict[str, str] = {}
             bumped_timeouts: dict[str, int] = {}
             for fn_name, verdict in errored.items():
                 cbmc_res = verdict.cbmc_result
@@ -1528,10 +1542,41 @@ class AMCPipeline:
                 })
                 if diag.error_class != CbmcErrorClass.TIMEOUT:
                     continue
+
+                # PRIMARY: try STUB_CALLEE. Pick the longest local
+                # callee body that's not already in session_stub_functions.
+                # Skip system / libc functions: their names match
+                # ``_SYSTEM_FUNCTION_NAMES`` is the obvious filter but
+                # we don't have access to it here, so use a simpler
+                # heuristic — only stub a callee if its body lives in
+                # this same parsed_file's functions dict.
+                already_stubbed = set(
+                    getattr(self.config, "session_stub_functions", None) or []
+                )
+                fut = funcs.get(fn_name)
+                picked: Optional[str] = None
+                if fut is not None and getattr(fut, "callees", None):
+                    candidates = []
+                    for callee_name in fut.callees:
+                        if callee_name in already_stubbed:
+                            continue
+                        callee_info = funcs.get(callee_name)
+                        if callee_info is None:
+                            continue  # only stub LOCAL callees (with a body in TU)
+                        body = (callee_info.body or "")
+                        candidates.append((len(body), callee_name))
+                    if candidates:
+                        candidates.sort(reverse=True)  # longest body first
+                        picked = candidates[0][1]
+                if picked:
+                    self.config.session_stub_functions.append(picked)
+                    stubbed_callees[fn_name] = picked
+                    continue  # don't also bump-timeout this fn this round
+
+                # FALLBACK: BUMP_TIMEOUT.
                 if flag_selections is None:
                     flag_selections = {}
                 fs = flag_selections.get(fn_name)
-                # Current timeout — what the previous run actually used.
                 current = (
                     fs.timeout_override
                     if (fs is not None and fs.timeout_override is not None)
@@ -1539,8 +1584,7 @@ class AMCPipeline:
                 )
                 new_to = min(current * 2, 600)
                 if new_to <= current:
-                    # Already at the 600s cap — nothing more to bump.
-                    continue
+                    continue  # at the 600s cap
                 if fs is None:
                     flag_selections[fn_name] = FlagSelection(
                         timeout_override=new_to,
@@ -1549,6 +1593,16 @@ class AMCPipeline:
                 else:
                     fs.timeout_override = new_to
                 bumped_timeouts[fn_name] = new_to
+
+            if stubbed_callees:
+                logger.info(
+                    "Phase 2b auto-retry round %d: stubbed %d callee(s) "
+                    "to recover from TIMEOUT: %s",
+                    round_idx, len(stubbed_callees),
+                    ", ".join(
+                        f"{fn}→stub({c})" for fn, c in stubbed_callees.items()
+                    ),
+                )
             if bumped_timeouts:
                 logger.info(
                     "Phase 2b auto-retry round %d: bumped CBMC timeout for "
