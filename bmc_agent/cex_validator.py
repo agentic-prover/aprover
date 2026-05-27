@@ -2048,6 +2048,64 @@ class CExValidator:
         )
         validation_result.dynamic_result = dynamic_result
 
+        # Downgrade REAL_BUG → UNRESOLVED when dyn-val explicitly came
+        # up clean on a crash-class property. Without this, the static
+        # ``system_entry_reached=True`` caller-chain trace overrides
+        # the dyn-val NOT_TRIGGERED signal — yielding the FP class
+        # surfaced in postfix7 (e.g. ``append_id_w.pointer_dereference.11``:
+        # caller chain traced to ``archive_acl_to_text_w``, but the LLM-
+        # generated public-API reproducer compiled and ran to completion
+        # without crashing). The earlier pipeline-level realism-skip
+        # short-circuit (pipeline.py:_is_crash_class_property) only
+        # affects the realism field, not the classifier outcome — fixing
+        # only one of the two leaves the persisted ``outcome=real_bug``
+        # standing despite the contradiction.
+        #
+        # Sound: a crash-class CBMC property (pointer-deref, bounds,
+        # double-free, recursion/unwind) describes a fault that would
+        # SIGFAULT at runtime. If the dyn-val harness compiled, ran
+        # the same input under real libc, and finished cleanly in
+        # bounded time, the CBMC witness is a verification-model
+        # artifact (unconstrained allocator returns, symbolic-only
+        # aliasing, etc.) — NOT a real bug.
+        #
+        # Conservative: only fire on crash-class properties (the
+        # silent-UB classes like overflow/conversion don't crash at
+        # runtime, so dyn-val NOT_TRIGGERED there is uninformative
+        # and the existing realism-LLM path still handles them).
+        try:
+            from bmc_agent.dynamic_validator import DynamicOutcome
+            from bmc_agent.pipeline import _is_crash_class_property
+        except Exception:
+            return
+        # Defensive: some test fixtures pass a stripped-down stand-in
+        # for ValidationResult without an ``outcome`` field. Only fire
+        # the downgrade when the field is present and equals REAL_BUG.
+        current_outcome = getattr(validation_result, "outcome", None)
+        if (
+            current_outcome == CExOutcome.REAL_BUG
+            and dynamic_result is not None
+            and dynamic_result.outcome == DynamicOutcome.NOT_TRIGGERED
+            and _is_crash_class_property(
+                getattr(validation_result.counterexample, "failing_property", "") or ""
+            )
+        ):
+            logger.info(
+                "Classifier downgrade: '%s' outcome REAL_BUG → UNRESOLVED "
+                "(dyn-val NOT_TRIGGERED on crash-class property '%s' "
+                "contradicts the static caller-chain trace; classifying as "
+                "model artifact)",
+                func.name,
+                getattr(validation_result.counterexample, "failing_property", ""),
+            )
+            validation_result.outcome = CExOutcome.UNRESOLVED
+            validation_result.reasoning = (
+                (validation_result.reasoning or "")
+                + " [Downgraded REAL_BUG → UNRESOLVED: dyn-val NOT_TRIGGERED "
+                "on crash-class property contradicts the static caller-chain "
+                "trace; classifying as model artifact.]"
+            )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
