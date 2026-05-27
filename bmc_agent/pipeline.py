@@ -36,9 +36,20 @@ logger = get_logger("pipeline")
 
 
 # CBMC property classes that would manifest as a runtime crash if the bug
-# were real (signal-fault or assertion).  When dynamic validation reports
-# NOT_TRIGGERED on one of these, the CBMC witness is genuinely a model
-# artifact and the realism shortcut is safe.
+# were real (signal-fault, assertion, or a verification-bound exceeded by
+# input that would in practice DoS the program). When dynamic validation
+# reports NOT_TRIGGERED on one of these, the CBMC witness is genuinely a
+# model artifact and the realism shortcut is safe.
+#
+# Bound-class additions (recursion / unwind) cover the case where CBMC's
+# unwinding bound is tripped by an input that, in concrete runtime, would
+# either be unreachable through the public API or would manifest as a
+# crash / hang / RSS blowup that a dyn-val harness ALSO sees. If the
+# dyn-val harness runs the same input under real libc and finishes cleanly
+# in bounded time, the bound was a verification-budget artifact, not a
+# real bug. Without this, the postfix7 sweep's append_id_w.recursion
+# finding was being classified real_bug despite dyn-val explicitly running
+# clean — see classification gap analysis 2026-05-27.
 _CRASH_CLASS_PROPERTY_SUFFIXES: tuple[str, ...] = (
     "pointer_dereference",
     "pointer",                # CBMC's older single-property pointer check
@@ -51,6 +62,8 @@ _CRASH_CLASS_PROPERTY_SUFFIXES: tuple[str, ...] = (
     "div-by-zero",
     "memory-leak",
     "precondition_instance",  # PROPERTY_OF callee precondition violations
+    "recursion",              # CBMC --unwind cap exceeded by symbolic input
+    "unwind",                 # generic loop-unwinding bound exceeded
 )
 
 

@@ -3210,6 +3210,28 @@ def test_is_crash_class_property_recognises_crash_classes():
     assert _is_crash_class_property("f.precondition_instance.3")
 
 
+def test_is_crash_class_property_recognises_bound_classes():
+    """CBMC verification-bound failures (``recursion``, ``unwind``) are
+    treated as crash-class so the dyn-val NOT_TRIGGERED downgrade
+    fires.
+
+    Rationale: when CBMC's unwinding cap is tripped by symbolic input
+    that, under concrete runtime, would either be unreachable through
+    the public API OR would manifest as a DoS-class fault, the dyn-val
+    harness running the same input under real libc and finishing
+    cleanly in bounded time is strong evidence the CBMC witness is a
+    verification-budget artifact, not a real bug. The postfix7 sweep
+    on archive_acl.c (2026-05-27) classified
+    ``append_id_w.recursion`` as real_bug despite dyn-val running
+    clean — exactly this gap. Adding ``recursion``/``unwind`` to the
+    suffix list closes it."""
+    from bmc_agent.pipeline import _is_crash_class_property
+    assert _is_crash_class_property("append_id_w.recursion")
+    assert _is_crash_class_property("f.recursion.0")
+    assert _is_crash_class_property("f.unwind.0")
+    assert _is_crash_class_property("next_field_w.unwind.3")
+
+
 def test_is_crash_class_property_rejects_silent_ub_classes():
     """Silent-UB classes (overflow, conversion, shift, alignment) are
     NOT crash-class — the runtime wraps silently. The realism shortcut
