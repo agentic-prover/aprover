@@ -1,19 +1,30 @@
 """Diff two TriageAgent runs on the same sweep artifact.
 
-After the analyst-review-driven prompt update (reachability gates +
-confirmation-not-exploit reframe) landed, we re-triaged the existing
-postfix8 CExes. The v3 outputs got copied to ``*.triage.v3.json``
-sidecars before the re-run overwrote ``*.triage.json``. This script
-diffs the two and prints:
+After each analyst-review-driven prompt update, we re-triage the
+existing CExes. Before each re-run, the prior outputs get copied to
+``*.triage.<old>.json`` sidecars; the re-run overwrites
+``*.triage.json`` (the current/new verdicts). This script diffs the
+two and prints:
 
-  * per-CEx verdict changes (v3 → v4)
+  * per-CEx verdict changes (old → new)
   * net verdict-count delta
-  * the new FP classes the v4 prompt is finding
+  * the new FP classes the new prompt is finding
+
+Default suffix is ``v3`` (the original v3 vs v4 comparison this
+script was first written for). Pass ``--old-suffix v4`` for v4 vs v5,
+etc. The "new" side is always the current ``*.triage.json``.
 
 Usage:
+    # v3 vs v4 (the original)
     .venv/bin/python scripts/compare_triage_versions.py \\
         --sweep-dir /tmp/libarchive_postfix8 \\
         --driver libarchive_postfix8
+
+    # v4 vs v5 (after G3 landed)
+    .venv/bin/python scripts/compare_triage_versions.py \\
+        --sweep-dir /tmp/libarchive_postfix8 \\
+        --driver libarchive_postfix8 \\
+        --old-suffix v4 --old-label v4 --new-label v5
 """
 
 from __future__ import annotations
@@ -25,27 +36,40 @@ from collections import Counter
 from pathlib import Path
 
 
-def load_pair(triage_json: Path) -> tuple[dict | None, dict | None]:
-    """Return (v3 sidecar, v4 current). Either may be None."""
-    v4 = None
-    try:
-        v4 = json.loads(triage_json.read_text())
-    except Exception:
-        pass
-    v3_path = triage_json.with_name(triage_json.stem + ".v3.json")
-    v3 = None
-    try:
-        v3 = json.loads(v3_path.read_text())
-    except Exception:
-        pass
-    return v3, v4
+def make_load_pair(old_suffix: str):
+    def load_pair(triage_json: Path) -> tuple[dict | None, dict | None]:
+        """Return (old sidecar, new current). Either may be None."""
+        new = None
+        try:
+            new = json.loads(triage_json.read_text())
+        except Exception:
+            pass
+        old_path = triage_json.with_name(
+            triage_json.stem + f".{old_suffix}.json"
+        )
+        old = None
+        try:
+            old = json.loads(old_path.read_text())
+        except Exception:
+            pass
+        return old, new
+    return load_pair
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep-dir", required=True, type=Path)
     ap.add_argument("--driver", required=True)
+    ap.add_argument("--old-suffix", default="v3",
+                    help="Sidecar suffix to compare against. Default v3.")
+    ap.add_argument("--old-label", default=None,
+                    help="Label for the old side in the report. Defaults to --old-suffix.")
+    ap.add_argument("--new-label", default="v4",
+                    help="Label for the current side in the report. Default v4.")
     args = ap.parse_args()
+    old_label = args.old_label or args.old_suffix
+    new_label = args.new_label
+    load_pair = make_load_pair(args.old_suffix)
 
     driver_dir = args.sweep_dir / args.driver
     if not driver_dir.is_dir():
@@ -63,70 +87,87 @@ def main() -> int:
             for second in first.iterdir():
                 if second.is_dir() and (second / "classifications").is_dir():
                     triages.extend(second.glob("classifications/*.triage.json"))
-    # Exclude the .v3 sidecars from the walk
-    triages = [t for t in triages if not t.stem.endswith(".triage.v3")
-               and not t.name.endswith(".triage.v3.json")]
+    # Exclude any .triage.<suffix>.json sidecars from the walk —
+    # those are the "old" snapshots, never the current side.
+    triages = [t for t in triages
+               if not t.name.endswith(f".triage.{args.old_suffix}.json")]
 
     changes: list[dict] = []
-    v3_counter: Counter = Counter()
-    v4_counter: Counter = Counter()
+    # Paired-only counters — both sides present. The verdict-count
+    # table is on PAIRS so it reflects actual prompt-change deltas;
+    # mixing in unpaired CExes inflates the deltas with CExes the
+    # old run never saw.
+    old_counter: Counter = Counter()
+    new_counter: Counter = Counter()
+    only_new_counter: Counter = Counter()  # reported separately
+    only_old_counter: Counter = Counter()
     new_fp_classes: Counter = Counter()
-    only_v4: list[Path] = []
-    only_v3: list[Path] = []
+    only_new: list[Path] = []
+    only_old: list[Path] = []
     for t in sorted(triages):
-        v3, v4 = load_pair(t)
-        if v3 is None and v4 is None:
+        old, new = load_pair(t)
+        if old is None and new is None:
             continue
-        if v3 is None:
-            only_v4.append(t)
-            if v4:
-                v4_counter[v4.get("verdict", "?")] += 1
+        if old is None:
+            only_new.append(t)
+            if new:
+                only_new_counter[new.get("verdict", "?")] += 1
             continue
-        if v4 is None:
-            only_v3.append(t)
-            v3_counter[v3.get("verdict", "?")] += 1
+        if new is None:
+            only_old.append(t)
+            only_old_counter[old.get("verdict", "?")] += 1
             continue
-        v3_v = v3.get("verdict", "?")
-        v4_v = v4.get("verdict", "?")
-        v3_counter[v3_v] += 1
-        v4_counter[v4_v] += 1
-        if v3_v != v4_v:
+        old_v = old.get("verdict", "?")
+        new_v = new.get("verdict", "?")
+        old_counter[old_v] += 1
+        new_counter[new_v] += 1
+        if old_v != new_v:
             changes.append({
                 "path": str(t.relative_to(args.sweep_dir)),
                 "function": t.parent.parent.name,
                 "property": t.stem.replace(".triage", ""),
-                "v3": v3_v,
-                "v4": v4_v,
-                "v4_confidence": v4.get("confidence", "?"),
-                "v4_fp_class": v4.get("fp_class"),
-                "v4_reasoning": (v4.get("reasoning") or "")[:300],
+                "old": old_v,
+                "new": new_v,
+                "new_confidence": new.get("confidence", "?"),
+                "new_fp_class": new.get("fp_class"),
+                "new_reasoning": (new.get("reasoning") or "")[:300],
             })
-        if v4_v == "likely_fp" and v4.get("fp_class"):
-            new_fp_classes[v4["fp_class"]] += 1
+        if new_v == "likely_fp" and new.get("fp_class"):
+            new_fp_classes[new["fp_class"]] += 1
 
-    print(f"# TriageAgent v3 vs v4 diff — {args.driver}")
+    print(f"# TriageAgent {old_label} vs {new_label} diff — {args.driver}")
     print()
-    print(f"Total pairs compared: {sum(v3_counter.values())}")
-    print(f"Only-v4 (new triages): {len(only_v4)}")
-    print(f"Only-v3 (missing v4): {len(only_v3)}")
+    print(f"Total pairs compared: {sum(old_counter.values())}")
+    print(f"Only-{new_label} (no {old_label} sidecar): {len(only_new)}")
+    print(f"Only-{old_label} (missing current): {len(only_old)}")
     print()
-    print("## Verdict counts")
+    print("## Verdict counts (paired CExes only)")
     print()
-    print(f"| Verdict | v3 | v4 | Δ |")
+    print(f"| Verdict | {old_label} | {new_label} | Δ |")
     print(f"|---|---:|---:|---:|")
     for verdict in ("real_bug", "likely_fp", "needs_human"):
-        v3n = v3_counter.get(verdict, 0)
-        v4n = v4_counter.get(verdict, 0)
-        delta = v4n - v3n
+        old_n = old_counter.get(verdict, 0)
+        new_n = new_counter.get(verdict, 0)
+        delta = new_n - old_n
         sign = "+" if delta > 0 else ""
-        print(f"| {verdict} | {v3n} | {v4n} | {sign}{delta} |")
+        print(f"| {verdict} | {old_n} | {new_n} | {sign}{delta} |")
     print()
+    if only_new_counter:
+        print(f"## Unpaired CExes (only-{new_label}, no {old_label} sidecar)")
+        print()
+        print(f"| Verdict | {new_label} |")
+        print(f"|---|---:|")
+        for verdict in ("real_bug", "likely_fp", "needs_human"):
+            n = only_new_counter.get(verdict, 0)
+            if n:
+                print(f"| {verdict} | {n} |")
+        print()
     print(f"## Per-CEx verdict changes ({len(changes)} total)")
     print()
     flips = Counter()
     for ch in changes:
-        flips[(ch["v3"], ch["v4"])] += 1
-    print("| v3 → v4 | count |")
+        flips[(ch["old"], ch["new"])] += 1
+    print(f"| {old_label} → {new_label} | count |")
     print("|---|---:|")
     for (a, b), n in flips.most_common():
         print(f"| {a} → {b} | {n} |")
@@ -134,12 +175,12 @@ def main() -> int:
     print("## Change details")
     print()
     for ch in changes:
-        fp_tag = f" [{ch['v4_fp_class']}]" if ch.get("v4_fp_class") else ""
+        fp_tag = f" [{ch['new_fp_class']}]" if ch.get("new_fp_class") else ""
         print(f"### {ch['function']}::{ch['property']}")
-        print(f"  v3: **{ch['v3']}**  →  v4: **{ch['v4']}**{fp_tag} ({ch['v4_confidence']})")
-        print(f"  > {ch['v4_reasoning']}")
+        print(f"  {old_label}: **{ch['old']}**  →  {new_label}: **{ch['new']}**{fp_tag} ({ch['new_confidence']})")
+        print(f"  > {ch['new_reasoning']}")
         print()
-    print("## New FP classes from v4 gates")
+    print(f"## New FP classes from {new_label}")
     print()
     for cls, n in new_fp_classes.most_common():
         print(f"- `{cls}`: {n}")
