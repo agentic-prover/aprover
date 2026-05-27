@@ -58,52 +58,57 @@ class TriageResult:
 
 
 _SYSTEM_PROMPT = (
-    "You are an expert C verification engineer reviewing a CBMC "
-    "counterexample. Your job is to give an INDEPENDENT verdict on "
-    "whether the finding is a real bug in the source code or a "
-    "false positive caused by harness construction / verification "
-    "model limitations.\n\n"
-    "You will receive:\n"
-    "  * The function under test (source code)\n"
-    "  * The CBMC counterexample witness (concrete or symbolic state)\n"
-    "  * The CBMC harness that produced it\n"
-    "  * The static caller-chain trace (reachability through callers)\n"
-    "  * The dynamic-validation result (compile + run the public-API "
-    "reproducer; CONFIRMED / NOT_TRIGGERED / INCONCLUSIVE / no-run)\n"
-    "  * The realism-LLM verdict and reasoning (if available)\n"
-    "  * The pipeline's own classification reasoning\n\n"
-    "Think carefully and produce ONE of three verdicts:\n"
-    "  * REAL_BUG  — high confidence the source has a real bug a real "
-    "user could trigger via the public API; specify how to reproduce.\n"
-    "  * LIKELY_FP — the CEx witness state is unreachable through real "
-    "public-API call sequences; the harness over-constrains, the "
-    "caller-contract is implicit-but-real, or CBMC's model added the "
-    "freedom (nondet allocator returns, symbolic pointer offsets, "
-    "inter-object pointer compares, unwinding-bound artifacts, etc.)\n"
-    "  * NEEDS_HUMAN — the evidence is genuinely ambiguous; specify "
-    "what you'd need to see to decide.\n\n"
-    "Known FP CLASSES (use these tags in ``fp_class`` when matched):\n"
-    "  * harness_pointer_offset_unconstrained — harness lets pointer "
-    "parameter alias a symbolic offset that real callers never produce.\n"
-    "  * caller_contract_slip — internal helper trusts an implicit "
-    "size/state invariant maintained by the public caller (e.g. "
-    "buffer pre-sized via size-precomputation routine).\n"
-    "  * inter_object_pointer_compare — harness gives independent "
-    "backing buffers for pointer params that real callers keep in "
-    "the same buffer (C11 UB on inter-object compare).\n"
-    "  * cbmc_recursion_unwind_artifact — CBMC's --unwind bound "
-    "exceeded by symbolic input that real public-API inputs cannot "
-    "construct.\n"
-    "  * silent_ub_unreachable_offset — silent-UB property fires on "
-    "a CBMC-chosen offset that the public API cannot drive.\n\n"
+    "You are an expert C security engineer. You will be shown a "
+    "CBMC counterexample, the function it fires on, the call chain, "
+    "and supporting evidence. Your ONLY job: code-review the source "
+    "to determine whether there is a real bug a real user could "
+    "trigger through the public API.\n\n"
+    "Approach this exactly the way you would a code review on a PR: "
+    "read every function in the call chain, audit each write against "
+    "any size calculation that allocates the buffer, look for missing "
+    "branches in size accumulators, off-by-ones, missing NULL checks, "
+    "type-conversion truncations, integer overflows, etc. The CBMC "
+    "counterexample is a POINTER to where the bug might be — not the "
+    "bug itself. Real bugs frequently live N frames upstream from the "
+    "function the CEx fires on (in a size calculator that under-counts, "
+    "in a wrapper that forgets to NUL-terminate, in a caller that "
+    "doesn't honor a precondition the callee assumes).\n\n"
+    "CRITICAL: do NOT bias toward false-positive. The CBMC harness may "
+    "be over-permissive AND the underlying code may still have a real "
+    "bug. The questions are independent:\n"
+    "  * Is the CEx witness reproducible AS-IS through the public API?\n"
+    "    (Often no — harnesses are over-permissive.)\n"
+    "  * Is there a real bug in the code reachable through SOME public-"
+    "API call sequence the CEx pointed you toward?\n"
+    "    (Often yes — that's why the CEx fired.)\n"
+    "The second question is the one you must answer. Do NOT use the "
+    "answer to the first question as evidence for the second.\n\n"
+    "When auditing a size calculator (``*_text_len``, ``*_compute_size``, "
+    "``*_bytes_needed``, etc.) against its corresponding writer, build "
+    "a mental TABLE: enumerate every write path in the writer (every "
+    "``strcpy``, ``*p++``, ``append_*`` call, etc.), and for each one, "
+    "locate the matching ``length += N`` (or equivalent) in the "
+    "calculator. If any write has no matching budget — REAL BUG. If "
+    "any write is conditional on a flag/branch the calculator doesn't "
+    "also check — REAL BUG.\n\n"
+    "Three verdicts, no thumbnail:\n"
+    "  * REAL_BUG  — your audit identified at least one specific "
+    "source-level defect a public-API caller can trigger.\n"
+    "  * LIKELY_FP — your audit found no source-level defect, AND you "
+    "actively considered upstream size/precondition mismatches (NOT just "
+    "'the harness is over-permissive', which is necessary but not "
+    "sufficient).\n"
+    "  * NEEDS_HUMAN — the audit is incomplete or the evidence is "
+    "genuinely ambiguous after reading every relevant function.\n\n"
     "Respond with ONLY valid JSON, no markdown fences, no commentary:\n"
     "{\n"
     '  "verdict": "real_bug" | "likely_fp" | "needs_human",\n'
     '  "confidence": "low" | "medium" | "high",\n'
-    '  "fp_class": "<one of the known classes above OR null>",\n'
-    '  "reasoning": "<3-6 sentences citing specific evidence from the '
-    "inputs — function source line, witness value, caller-chain "
-    'point, dyn-val outcome, etc.>"\n'
+    '  "fp_class": "<short tag for the FP pattern OR null>",\n'
+    '  "reasoning": "<5-10 sentences. If REAL_BUG: quote the buggy line, '
+    "explain the trigger, name the public-API caller. If LIKELY_FP: list "
+    "what you audited and why each was safe. CITE SOURCE LINES — file:line "
+    'when possible.>"\n'
     "}"
 )
 
@@ -197,28 +202,80 @@ class TriageAgent(BaseAgent[TriageResult]):
         text = (response or "").strip()
         if not text:
             return None
-        # Strip fenced markdown defensively.
-        if text.startswith("```"):
-            lines = text.splitlines()
-            inner: list[str] = []
-            in_fence = False
-            for line in lines:
-                if line.startswith("```"):
-                    in_fence = not in_fence
+        # Try in order:
+        #   1. Whole response is a JSON object → parse directly
+        #   2. A ```json … ``` fenced block anywhere in the response →
+        #      parse the contents (handles agents that prose first, JSON last)
+        #   3. Any ``` … ``` fenced block whose contents parse as JSON
+        #   4. The LAST balanced {...} block in the text — important
+        #      because reasoning prose often contains C-code blocks
+        #      with embedded ``{`` braces that fool a naive
+        #      ``re.search(r'\{.*\}', text, DOTALL)`` (greedy match
+        #      from the first ``{`` in a code sample to the closing
+        #      ``}`` of the real JSON).
+        candidates: list[str] = []
+
+        # 1. whole response
+        candidates.append(text)
+
+        # 2. ```json fenced block (best-of any number)
+        for m in re.finditer(
+            r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+        ):
+            candidates.append(m.group(1))
+
+        # 4. all balanced {...} blocks via depth tracking
+        def _balanced_blocks(s: str) -> list[str]:
+            blocks: list[str] = []
+            i = 0
+            n = len(s)
+            while i < n:
+                if s[i] != "{":
+                    i += 1
                     continue
-                if in_fence:
-                    inner.append(line)
-            text = "\n".join(inner).strip()
-        try:
-            data = json.loads(text)
-        except Exception:
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m is None:
-                return None
+                depth = 0
+                j = i
+                in_str = False
+                escape = False
+                while j < n:
+                    c = s[j]
+                    if escape:
+                        escape = False
+                    elif in_str:
+                        if c == "\\":
+                            escape = True
+                        elif c == '"':
+                            in_str = False
+                    else:
+                        if c == '"':
+                            in_str = True
+                        elif c == "{":
+                            depth += 1
+                        elif c == "}":
+                            depth -= 1
+                            if depth == 0:
+                                blocks.append(s[i:j + 1])
+                                break
+                    j += 1
+                i = j + 1
+            return blocks
+
+        # Search LAST-FIRST so a verdict at the end of the response
+        # wins over example/sample JSON earlier in the prose.
+        for blk in reversed(_balanced_blocks(text)):
+            candidates.append(blk)
+
+        data = None
+        for cand in candidates:
             try:
-                data = json.loads(m.group(0))
+                parsed = json.loads(cand.strip())
             except Exception:
-                return None
+                continue
+            if isinstance(parsed, dict) and "verdict" in parsed:
+                data = parsed
+                break
+        if data is None:
+            return None
         verdict_str = (data.get("verdict") or "").lower().strip()
         try:
             verdict = TriageVerdict(verdict_str)
