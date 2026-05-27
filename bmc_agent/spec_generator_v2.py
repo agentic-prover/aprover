@@ -313,6 +313,195 @@ def _spec_from_handle_contract(
     )
 
 
+# ---------- body-evidence: paired (count, array) field invariant ------------
+#
+# When a function indexes ``param->arr_field[...]`` AND uses
+# ``param->count_field`` as the upper bound (or the count is consulted
+# in the same body), the invariant ``count == 0 || arr_field != NULL``
+# is implicit: real callers maintain it by setting arr_field BEFORE
+# incrementing count_field (libarchive's add_owner_id pattern). BMC
+# allows the state count>0+arr=NULL because nothing in this function's
+# body precludes it, yielding caller-contract-slip FPs that the
+# magic-check inference can't catch (the function isn't a public API).
+#
+# This helper detects the pattern; called as a body-evidence
+# augmentation alongside the magic-check inference, but for the
+# INTERNAL function being verified (not the boundary).
+
+# A field name "looks like" a count if it contains one of these tokens.
+# Conservative — only names that clearly imply enumeration / size.
+_COUNT_FIELD_TOKENS = ("count", "len", "size", "num", "n_items", "nitems")
+
+_STRUCT_INDEX_RE = re.compile(
+    r"\b(?P<param>[A-Za-z_]\w*)\s*->\s*(?P<arr>[A-Za-z_]\w*)\s*\["
+)
+_STRUCT_FIELD_READ_RE = re.compile(
+    r"\b(?P<param>[A-Za-z_]\w*)\s*->\s*(?P<field>[A-Za-z_]\w*)\b"
+)
+# Detect "writes" to a struct field: `p->f = …`, `p->f++`, `p->f--`,
+# `p->f += …`, `p->f -= …`, `p->f *= …`, etc. We use this to EXCLUDE
+# constructor-shaped functions from the paired-field inference — they
+# are the code that MAINTAINS the invariant by mutating both count
+# and array; applying the invariant as a PRE for the constructor
+# would be defensive but could hide a bug IN the constructor itself.
+_STRUCT_FIELD_WRITE_RE = re.compile(
+    r"\b(?P<param>[A-Za-z_]\w*)\s*->\s*(?P<field>[A-Za-z_]\w*)\s*"
+    r"(?:\+\+|--|[+\-*/%&|^]?=(?!=))"
+)
+
+
+def _looks_like_count_name(name: str) -> bool:
+    """Heuristic: does ``name`` look like a count-style field?"""
+    lname = name.lower()
+    return any(tok in lname for tok in _COUNT_FIELD_TOKENS)
+
+
+def _infer_paired_field_invariant(
+    func_info: "FunctionInfo",
+    parsed_file: "ParsedCFile",
+) -> Optional[tuple[str, str, str]]:
+    """Scan the function body for the (count, array) paired-field
+    pattern. Returns ``(param, count_field, array_field)`` when found.
+
+    Heuristic:
+      1. There is at least one ``<param>-><arr>[…]`` indexing
+         expression in the body.
+      2. The same body references ``<param>-><count>`` where
+         ``<count>`` is a different field of the same struct and
+         its name looks count-shaped (``_looks_like_count_name``).
+      3. ``<param>`` is a function parameter whose type is a
+         pointer-to-struct, and the struct's body is visible in
+         ``parsed_file.struct_definitions`` (so we can verify the
+         pair are real fields and not a typo / unrelated access).
+
+    Returns None when no such pattern is found — caller falls
+    through to the LLM-driven path. Conservative on purpose:
+    over-inferring a paired-field invariant could hide bugs where
+    the function ACTUALLY needs to handle ``count > 0 && arr ==
+    NULL`` (rare but possible — e.g. fresh struct mid-construction).
+    """
+    body = getattr(func_info, "body", None) or ""
+    if not body:
+        return None
+    sig = getattr(func_info, "signature", None)
+    if sig is None:
+        return None
+
+    # Map each parameter name to its struct tag (when the type is
+    # ``struct X *``).  We can only validate the pair against
+    # struct_definitions when we know the tag.
+    param_to_tag: dict[str, str] = {}
+    for ptype, pname in sig.parameters:
+        if not pname:
+            continue
+        t = (ptype or "").strip()
+        # Match ``struct TAG *`` (with optional const, multiple ws).
+        m = re.match(r"^(?:const\s+)?struct\s+([A-Za-z_]\w*)\s*\*", t)
+        if m:
+            param_to_tag[pname] = m.group(1)
+    if not param_to_tag:
+        return None
+
+    struct_defs = getattr(parsed_file, "struct_definitions", None) or {}
+
+    # Head of the body — first ~60 lines is enough to surface the
+    # pattern. Skip braces / declarations and look for the indexing
+    # and field-read expressions.
+    head = "\n".join(body.splitlines()[:60])
+
+    # Collect indexing expressions: ``<param>-><arr>[``.
+    indexed: dict[str, set[str]] = {}
+    for m in _STRUCT_INDEX_RE.finditer(head):
+        p, arr = m.group("param"), m.group("arr")
+        if p not in param_to_tag:
+            continue
+        indexed.setdefault(p, set()).add(arr)
+    if not indexed:
+        return None
+
+    # Collect all field reads: ``<param>-><field>``.
+    field_reads: dict[str, set[str]] = {}
+    for m in _STRUCT_FIELD_READ_RE.finditer(head):
+        p, f = m.group("param"), m.group("field")
+        if p not in param_to_tag:
+            continue
+        field_reads.setdefault(p, set()).add(f)
+
+    # Collect writes: ``<param>-><field>`` followed by an assignment /
+    # increment / compound-assign operator. A function that WRITES to
+    # either field of the pair is presumed to be a constructor /
+    # mutator (e.g., ``add_owner_id`` setting ids before count++).
+    # Applying the paired-field invariant as ITS PRE would risk
+    # hiding bugs in the mutator itself.
+    field_writes: dict[str, set[str]] = {}
+    for m in _STRUCT_FIELD_WRITE_RE.finditer(head):
+        p, f = m.group("param"), m.group("field")
+        if p not in param_to_tag:
+            continue
+        field_writes.setdefault(p, set()).add(f)
+
+    for param, arr_set in indexed.items():
+        tag = param_to_tag[param]
+        struct_fields = struct_defs.get(tag) or []
+        if not struct_fields:
+            # No struct body visible; skip — can't validate pairing.
+            continue
+        field_names = {fname for _ftype, fname in struct_fields}
+        # Restrict the array candidates to fields actually in the struct.
+        valid_arrs = arr_set & field_names
+        if not valid_arrs:
+            continue
+        # Find a count-like field that's ALSO in the struct AND
+        # actually read in the body.
+        reads = field_reads.get(param, set()) & field_names
+        count_candidates = [f for f in reads if _looks_like_count_name(f)]
+        # Exclude any field that's itself indexed (counts aren't indexed)
+        count_candidates = [f for f in count_candidates if f not in arr_set]
+        if not count_candidates:
+            continue
+        # Pick the first array + count pair. (Multiple pairs would be
+        # unusual; surfacing one is enough for the typical case.)
+        arr_field = sorted(valid_arrs)[0]
+        count_field = count_candidates[0]
+        # Sanity: the array field must be pointer-typed in the struct.
+        is_ptr_field = any(
+            fname == arr_field and "*" in (ftype or "")
+            for ftype, fname in struct_fields
+        )
+        if not is_ptr_field:
+            continue
+        # CONSTRUCTOR EXCLUSION: skip if this function writes either
+        # paired field — it's the code that MAINTAINS the invariant,
+        # not an accessor that relies on it.
+        writes = field_writes.get(param, set())
+        if count_field in writes or arr_field in writes:
+            continue
+        return (param, count_field, arr_field)
+    return None
+
+
+def _spec_from_paired_field_invariant(
+    fn_name: str, param: str, count_field: str, array_field: str,
+) -> Spec:
+    """Build a spec encoding the inferred paired-field invariant.
+
+    Form: ``param->count == 0 || param->array != NULL``. Real callers
+    maintain this by setting the array before incrementing the count
+    (libarchive add_owner_id pattern). With this in the PRE, BMC will
+    not explore the impossible ``count > 0 && array == NULL`` state.
+    """
+    pre = f"{param}->{count_field} == 0 || {param}->{array_field} != NULL"
+    return Spec(
+        function_name=fn_name,
+        precondition=pre,
+        postcondition="true",
+        status=SpecStatus.GENERATED,
+        pre_validity=pre,
+        pre_protocol="",
+        evidence={pre: ["caller_contract:paired_field_invariant"]},
+    )
+
+
 def _spec_from_seed_only(
     fn_name: str,
     seed_clauses: list,
@@ -515,6 +704,30 @@ class SpecGeneratorV2:
                 return _spec_from_handle_contract(fn_name, param, magic)
             logger.debug("v2 [%s]: boundary function — trivial spec", fn_name)
             return _trivial_spec(fn_name, "external_boundary")
+
+        # Step 2b: paired-field invariant inference for INTERNAL helpers.
+        # When the body indexes ``param->arr[…]`` AND reads ``param->count``,
+        # the implicit invariant is ``count == 0 || arr != NULL`` —
+        # maintained by the project's add_*/append_* constructors. BMC
+        # under permissive PRE would explore count>0+arr=NULL and
+        # generate caller-contract-slip CExes (the archive_match
+        # add_owner_id / match_owner_id pattern). Encoding the
+        # invariant at spec time prevents that FP class.
+        #
+        # Conservative — only fires when we can validate the pair
+        # against ``parsed_file.struct_definitions`` (avoids
+        # over-tightening when the struct body isn't visible).
+        paired = _infer_paired_field_invariant(func_info, parsed)
+        if paired is not None:
+            param, count_field, array_field = paired
+            logger.info(
+                "v2 [%s]: paired-field invariant inferred — "
+                "%s->%s == 0 || %s->%s != NULL",
+                fn_name, param, count_field, param, array_field,
+            )
+            return _spec_from_paired_field_invariant(
+                fn_name, param, count_field, array_field,
+            )
 
         # Step 3: gather evidence.
         from bmc_agent.spec_evidence import gather_evidence_bundle
