@@ -197,6 +197,32 @@ def test_plan_retry_unknown_is_no_action():
     assert plan_retry(d).action == RetryAction.NO_ACTION
 
 
+def test_plan_retry_timeout_maps_to_bump_timeout():
+    """CBMC wall-clock timeouts get a BUMP_TIMEOUT plan — the flag-
+    selection LLM agent's initial budget is sometimes underestimated
+    (e.g. archive_acl_to_text_w gets 120s default but actually needs
+    240s+). Without the bump, the verdict is silently dropped at
+    Phase 3 — any real bug in that function would be missed."""
+    d = CbmcErrorDiagnosis(error_class=CbmcErrorClass.TIMEOUT)
+    p = plan_retry(d)
+    assert p.action == RetryAction.BUMP_TIMEOUT
+    # No target on this action (the per-function bump happens in the
+    # pipeline's per-function retry loop, not via a shared session
+    # mutation).
+    assert p.target is None
+    # Reason includes the budget-doubling rationale so the
+    # auto_retries.json audit log is self-explanatory.
+    assert "timeout" in p.reason.lower()
+    assert "doubl" in p.reason.lower()
+
+
+def test_plan_retry_oom_remains_no_action():
+    """OOM is still NO_ACTION (no automated workaround) — guard against
+    the BUMP_TIMEOUT change accidentally widening the actionable set."""
+    d = CbmcErrorDiagnosis(error_class=CbmcErrorClass.OUT_OF_MEMORY)
+    assert plan_retry(d).action == RetryAction.NO_ACTION
+
+
 def test_plan_retry_oom_is_no_action():
     d = CbmcErrorDiagnosis(error_class=CbmcErrorClass.OUT_OF_MEMORY)
     assert plan_retry(d).action == RetryAction.NO_ACTION

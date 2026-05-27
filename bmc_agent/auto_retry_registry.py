@@ -15,8 +15,14 @@ apply without modifying bmc-agent source code. The fix is one of:
   ``incomplete type not permitted here`` for a struct that's only
   forward-declared in the harness TU, regen with that struct's
   parameters as nondet pointers.
-* **NO_ACTION** — for OOM, TIMEOUT, or UNKNOWN where the registry has
-  no automated workaround.
+* **bump the per-function CBMC timeout** — when CBMC times out, retry
+  with double the wall-clock budget (capped at 600s). The flag-
+  selection LLM agent picks an initial timeout per function but can
+  underestimate; the auto-retry path lets the verifier earn more
+  budget without re-running the LLM.
+
+* **NO_ACTION** — for OOM, UNKNOWN, or actionable class with no
+  identifier extracted.
 
 The registry is *deterministic* and hand-coded. No LLM in this layer.
 That's the whole point of Phase 1: high-confidence recoveries for the
@@ -76,9 +82,27 @@ class RetryAction(str, Enum):
     ``incomplete type not permitted here`` for opaque-handle params
     whose body lives in another TU."""
 
+    BUMP_TIMEOUT = "bump_timeout"
+    """Double the per-function CBMC timeout (capped at 600s) and re-run.
+
+    The flag-selection LLM agent's initial picks are correct most of
+    the time but sometimes underestimate — large parser / state-machine
+    functions (e.g. archive_acl_from_text_l, archive_acl_to_text_w on
+    the libarchive corpus) get the global 120s default but actually
+    need 240-600s. Without this action, TIMEOUT errors are silently
+    dropped at Phase 3's
+    ``if verdict.error and not verdict.counterexamples: continue``
+    gate — any real bug in those functions is missed.
+
+    Applied per function (target = fn_name). Each retry round doubles
+    the budget. Bounded by ``auto_retry_max_rounds`` (default 2 →
+    120s, 240s, 480s) and the 600s cap (anything higher should be
+    fixed by splitting the harness, not by sitting longer in CBMC).
+    """
+
     NO_ACTION = "no_action"
     """The classifier returned a class with no hand-coded recovery
-    (OOM, TIMEOUT, UNKNOWN, or actionable class with no identifier)."""
+    (OOM, UNKNOWN, or actionable class with no identifier)."""
 
 
 @dataclass(frozen=True)
@@ -184,7 +208,20 @@ def plan_retry(diag: CbmcErrorDiagnosis) -> RetryPlan:
             reason="syntax-before-* without a prev_token hint; caller should resolve and retry",
         )
 
-    # --- Non-actionable: OOM, TIMEOUT, UNKNOWN ---
+    # --- Actionable: CBMC wall-clock timeout — bump and retry ---
+    # Per-function action; the pipeline reads the function name out of
+    # the surrounding ``errored`` dict and threads it into the bump.
+    if cls == CbmcErrorClass.TIMEOUT:
+        return RetryPlan(
+            action=RetryAction.BUMP_TIMEOUT,
+            reason=(
+                "CBMC wall-clock timeout; the flag-selection LLM's "
+                "initial budget was insufficient. Doubling the per-"
+                "function timeout (cap 600s) and re-running."
+            ),
+        )
+
+    # --- Non-actionable: OOM, UNKNOWN ---
     return RetryPlan(
         action=RetryAction.NO_ACTION,
         reason=f"no recovery action wired for class {cls.value}",

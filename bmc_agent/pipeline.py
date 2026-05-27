@@ -1449,9 +1449,14 @@ class AMCPipeline:
                 })
 
             # Apply each distinct plan to the config session sets.
+            # BUMP_TIMEOUT is per-function so it doesn't need a target —
+            # the bump happens in the per-function retry loop below
+            # using flag_selections[fn_name]. Tag the action as
+            # actionable here so the retry round doesn't bail out as
+            # "all NO_ACTION".
             actionable_keys = [
                 (a, t) for (a, t) in plans_by_key
-                if a != RetryAction.NO_ACTION and t
+                if a != RetryAction.NO_ACTION and (t or a == RetryAction.BUMP_TIMEOUT)
             ]
             if not actionable_keys:
                 # Phase 3 escalation: if every plan in this round was
@@ -1503,6 +1508,54 @@ class AMCPipeline:
                 len(actionable_keys),
                 "; ".join(applied_summary) or "(none)",
             )
+
+            # BUMP_TIMEOUT actions are per-function (no shared session
+            # mutation). For each function whose diagnosis was TIMEOUT,
+            # double its per-function timeout (capped at 600s) on the
+            # flag_selection that bmc_engine consults. If the function
+            # has no flag_selection yet, create a minimal one carrying
+            # just the timeout override.
+            from bmc_agent.flag_selector import FlagSelection
+            bumped_timeouts: dict[str, int] = {}
+            for fn_name, verdict in errored.items():
+                cbmc_res = verdict.cbmc_result
+                if cbmc_res is None:
+                    continue
+                diag = classify({
+                    "error": getattr(cbmc_res, "error", verdict.error),
+                    "raw_output": getattr(cbmc_res, "raw_output", "") or "",
+                    "verified": getattr(cbmc_res, "verified", None),
+                })
+                if diag.error_class != CbmcErrorClass.TIMEOUT:
+                    continue
+                if flag_selections is None:
+                    flag_selections = {}
+                fs = flag_selections.get(fn_name)
+                # Current timeout — what the previous run actually used.
+                current = (
+                    fs.timeout_override
+                    if (fs is not None and fs.timeout_override is not None)
+                    else int(getattr(self.config, "cbmc_timeout", 120))
+                )
+                new_to = min(current * 2, 600)
+                if new_to <= current:
+                    # Already at the 600s cap — nothing more to bump.
+                    continue
+                if fs is None:
+                    flag_selections[fn_name] = FlagSelection(
+                        timeout_override=new_to,
+                        reasoning=f"auto-retry: bumped timeout {current}s → {new_to}s",
+                    )
+                else:
+                    fs.timeout_override = new_to
+                bumped_timeouts[fn_name] = new_to
+            if bumped_timeouts:
+                logger.info(
+                    "Phase 2b auto-retry round %d: bumped CBMC timeout for "
+                    "%d function(s): %s",
+                    round_idx, len(bumped_timeouts),
+                    ", ".join(f"{n}={t}s" for n, t in bumped_timeouts.items()),
+                )
 
             # Re-run CBMC for every errored function (the session sets are
             # now mutated; harness regen will pick them up).
