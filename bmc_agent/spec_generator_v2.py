@@ -618,71 +618,61 @@ class SpecGeneratorV2:
         emits one + it passes validation; None when the LLM declined
         or produced something unparseable (caller falls back to the
         base v2 spec).
+
+        v2: delegates to ``SpecGenWithToolsAgent`` (C2 step 8). This
+        method owns the prompt augmentation (adding the tool-use
+        addendum) and the post-LLM logging; the agent owns the
+        complete_with_tools loop + validation + Spec build.
         """
-        from bmc_agent.spec_gen_tools import (
-            SpecToolContext, build_spec_gen_tools, TOOL_USE_PROMPT_ADDENDUM,
-        )
-        ctx = SpecToolContext(
-            parsed=parsed,
-            corpus_paths=corpus_paths,
-            all_specs_so_far=all_specs_so_far,
-            boundary_detector=self.boundary_detector,
-        )
-        tools, handlers = build_spec_gen_tools(ctx)
+        from bmc_agent.agents.spec_gen_tools import SpecGenWithToolsAgent
+        from bmc_agent.spec_gen_tools import TOOL_USE_PROMPT_ADDENDUM
+
         fn_name = func_info.name
 
         # Reuse the same caller-grounded prompt; append the tool-use
         # instructions so the LLM knows it can fetch more data.
         augmented_prompt = prompt + TOOL_USE_PROMPT_ADDENDUM
 
-        try:
-            tu_result = self.llm.complete_with_tools(
-                system_prompt=self._spec_system_prompt,
-                user_prompt=augmented_prompt,
-                tools=tools,
-                tool_handlers=handlers,
-                max_iterations=8,
-                max_tool_calls=5,
-                max_tokens_per_turn=4096,
-                role="spec_gen",
-            )
-        except Exception as exc:
-            logger.warning(
-                "v2.2 [%s]: tool-use call failed (%r); using base spec",
-                fn_name, exc,
-            )
+        agent = SpecGenWithToolsAgent(
+            config=self.config, llm=self.llm,
+            system_prompt=self._spec_system_prompt,
+            parsed=parsed,
+            corpus_paths=corpus_paths,
+            all_specs_so_far=all_specs_so_far,
+            boundary_detector=self.boundary_detector,
+        )
+        result = agent.run(prompt=augmented_prompt, fn_name=fn_name)
+        tu_result = result.tool_use_result
+
+        if not result.ok:
+            if result.error and "LLMError" in result.error:
+                logger.warning(
+                    "v2.2 [%s]: tool-use call failed (%s); using base spec",
+                    fn_name, result.error[:200],
+                )
+            elif tu_result is not None and tu_result.error:
+                logger.info(
+                    "v2.2 [%s]: tool-use terminated with error '%s' "
+                    "(iterations=%d, tool_calls=%d) — using base spec",
+                    fn_name, tu_result.error,
+                    tu_result.iterations, tu_result.tool_calls_made,
+                )
+            else:
+                logger.warning(
+                    "v2.2 [%s]: tool-use response unparseable — using base spec",
+                    fn_name,
+                )
             return None
 
-        if tu_result.error:
+        refined = result.output
+        disagreement = bool(refined.spec_disagreement)
+        if tu_result is not None:
             logger.info(
-                "v2.2 [%s]: tool-use terminated with error '%s' "
-                "(iterations=%d, tool_calls=%d) — using base spec",
-                fn_name, tu_result.error,
-                tu_result.iterations, tu_result.tool_calls_made,
+                "v2.2 [%s]: tool-use refined spec accepted "
+                "(tool_calls=%d, iterations=%d, disagreement=%s)",
+                fn_name, tu_result.tool_calls_made,
+                tu_result.iterations, disagreement,
             )
-            return None
-
-        payload = _extract_json_object(tu_result.text)
-        if payload is None:
-            logger.warning(
-                "v2.2 [%s]: tool-use response JSON extract failed — using base spec",
-                fn_name,
-            )
-            return None
-        validated = _validate_and_extract(payload, fn_name)
-        if validated is None:
-            return None
-        pv, pp, post, loops, disagreement, notes = validated
-        refined = _build_spec_from_validated(
-            fn_name, pv, pp, post, loops, disagreement,
-            status=SpecStatus.GENERATED,
-        )
-        logger.info(
-            "v2.2 [%s]: tool-use refined spec accepted "
-            "(tool_calls=%d, iterations=%d, disagreement=%s)",
-            fn_name, tu_result.tool_calls_made,
-            tu_result.iterations, disagreement,
-        )
         return refined
 
 
