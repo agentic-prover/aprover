@@ -40,14 +40,14 @@ yet.)
 
 ## Real-bug candidate
 
-**ONE.** Heap OOB read in `ncdev_bar_read` triggered by
-`NEURON_IOCTL_BAR_READ` with `arg.bar = 2` and `arg.count > 1`.
-See `POTENTIAL_BUG_ncdev_bar_read.md` for full analysis,
-`ncdev_bar_read_poc.c` for the reproducer sketch, and
-`DISCLOSURE_DRAFT.md` for the private-report template.
+**ONE candidate** identified in this sweep. Source-audit case is
+substantive but no KASAN reproducer yet — full details (including the
+function, trigger, and PoC sketch) are embargoed pending verification.
+See the private companion repo `agentic-prover/aprover-findings-embargoed`
+under `findings/aws_neuron_driver/unconfirmed/`.
 
-**Status: UNCONFIRMED.** Needs KASAN PoC on a Trainium / Inferentia
-host or QEMU+Neuron-driver build to confirm before disclosure.
+**Status: UNCONFIRMED.** Pending KASAN PoC on a Trainium / Inferentia
+host or QEMU+Neuron-driver build before disclosure to AWS Security.
 
 ## False-positive distribution
 
@@ -87,9 +87,8 @@ memory-safe under M1+M2+M3:
 - `ncdev_dma_copy_start` / `_ack_completed`
 - `ncdev_dma_descriptor_copyout`
 - `ncdev_mem_buf_zerocopy64_batch`
-- `ncdev_bar_rw` (the BAR-RW dispatch — though `ncdev_bar_read`
-  it calls has the OOB)
-- `ncdev_bar_write`
+- (embargoed BAR-RW dispatch + callees — see private companion repo
+  under `findings/aws_neuron_driver/unconfirmed/`)
 - `ncdev_resource_mmap_info`
 - `ncdev_release_neuron_ds`
 - `ncdev_throttling_notifications_set`
@@ -118,7 +117,6 @@ during initial kernel-mode bring-up.
 - `README.md` (this)
 - `scorecard_*.json` — per-file verdicts
 - `sweep_*.log` — raw sweep output
-- `POTENTIAL_BUG_ncdev_bar_read.md` — bug analysis
-- `ncdev_bar_read_poc.c` — reproducer sketch
-- `DISCLOSURE_DRAFT.md` — private-report template (DO NOT SEND
-  without user review)
+- Bug analysis, reproducer sketch, and disclosure draft — moved to
+  the private companion repo `agentic-prover/aprover-findings-embargoed`
+  under `findings/aws_neuron_driver/unconfirmed/`

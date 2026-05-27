@@ -29,14 +29,14 @@ blow-ups and no retry-burning on HTTP 4xx.
 
 ### Notable findings
 
-**neuron_cdev `ncdev_bar_read` verified clean** — directly contradicts
+**neuron_cdev `<embargoed-callee-fn>` verified clean** — directly contradicts
 yesterday's trivial-spec sweep that flagged this function as a
 heap-OOB-read candidate. Root cause documented in
 [`findings/methodology_insight_2026-05-22.md`](../../methodology_insight_2026-05-22.md):
 the LLM-generated precondition encodes
-`valid_range(reg_addresses, 0, data_count)` as a caller obligation;
+`valid_range(<addr-array>, 0, data_count)` as a caller obligation;
 CBMC trusts it and verifies clean. The actual bug is in the caller
-`ncdev_bar_rw` violating that contract, but the LLM-spec stub mode
+`<embargoed-caller-fn>` violating that contract, but the LLM-spec stub mode
 verifies the caller clean against the over-permissive callee spec
 too. **Important paper-track methodology finding**: trivial-spec is
 the recall floor, LLM-spec adds precision; right deployment runs
@@ -89,5 +89,5 @@ processed function. Per-file run.log has the full Phase 1+2+3 trace.
 The LLM-spec mode produced fewer clean verdicts on cdev because it
 imposes precondition assumptions that CBMC must clear, but ALSO
 verifies functional postconditions (the bmc-agent value-add). The
-ncdev_bar_read divergence is the paper-track methodology insight
+<embargoed-callee-fn> divergence is the paper-track methodology insight
 documented above.

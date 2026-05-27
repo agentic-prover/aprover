@@ -11,9 +11,9 @@ LLM-spec on the rest of the file.
 
 ## Setup
 
-- Target: `ncdev_bar_rw` from `/tmp/aws-neuron-driver/neuron_cdev.c`
+- Target: `<embargoed-caller-fn>` from `<target-source-file>`
   (the function that yesterday's trivial-spec sweep had implicated as
-  passing un-sized `reg_addresses` to `ncdev_bar_read`).
+  passing un-sized `<addr-array>` to `<embargoed-callee-fn>`).
 - Specs: re-used the existing LLM-generated `spec.json` files from
   `/tmp/aprover_neuron_hybrid_p2/neuron_cdev/neuron_cdev_p2/` —
   identical inputs as the 2026-05-21 P2 sweep.
@@ -45,9 +45,9 @@ harness contract catches the common cases first.
 
 CBMC reports each call site as an independent assertion failure, so a
 single root-cause bug surfaces twice when it has two call sites. In
-this case `ncdev_bar_rw` calls both `ncdev_bar_read` (line 1648) and
-`ncdev_bar_write` (line 1650) with the same mis-sized
-`reg_addresses` + `arg.count` pair; both stubs flag the `R_OK`
+this case `<embargoed-caller-fn>` calls both `<embargoed-callee-fn>` (call site A) and
+`<embargoed-sibling-callee-fn>` (call site B) with the same mis-sized
+`<addr-array>` + `<count-arg>` pair; both stubs flag the `R_OK`
 violation, but the fix is one line in the caller. Counting failures
 is fine for tool diagnostics; counting **root-cause bugs** is what
 the paper's evaluation table should use.
@@ -60,22 +60,22 @@ Raw CBMC logs (kept for paper-track reference):
 
 ## What surfaced
 
-`[ncdev_bar_read_stub.assertion.3]`:
+`[<embargoed-callee-fn>_stub.assertion.3]`:
 
 ```
-assertion reg_addresses != ((u64 *)NULL) && 0 >= 0
+assertion <addr-array> != ((u64 *)NULL) && 0 >= 0
        && data_count >= (unsigned int)0
-       && R_OK(reg_addresses, (unsigned long int)data_count * sizeof(u64))
+       && R_OK(<addr-array>, (unsigned long int)data_count * sizeof(u64))
        : FAILURE
 ```
 
 This is exactly the caller-contract slip from
 `methodology_insight_2026-05-22.md`. The bug-hunt mode emits this as
-`assert(...)` at the top of `ncdev_bar_read_stub`; when CBMC binds
-the formal `reg_addresses` parameter to the caller's actual
-expression (a 1-element kmalloc when `arg.bar != 0`), the
-`__CPROVER_r_ok(reg_addresses, arg.count * 8)` term fails. The
-failure is reported at the **caller's call site** in `ncdev_bar_rw`,
+`assert(...)` at the top of `<embargoed-callee-fn>_stub`; when CBMC binds
+the formal `<addr-array>` parameter to the caller's actual
+expression (a 1-element kmalloc when `<flag-arg> != 0`), the
+`__CPROVER_r_ok(<addr-array>, <count-arg> * 8)` term fails. The
+failure is reported at the **caller's call site** in `<embargoed-caller-fn>`,
 which is exactly where the responsibility lives.
 
 Functional mode (the same LLM-spec) silently assumes this clause
@@ -85,7 +85,7 @@ inside the stub, pruning the buggy caller path and verifying clean.
 
 | Clause | Why it's a FP |
 |--------|--------------|
-| `valid(user_va)` in ncdev_bar_read/write | callee uses `copy_to_user`, which handles NULL gracefully |
+| `valid(user_va)` in <embargoed-callee-fn>/write | callee uses `copy_to_user`, which handles NULL gracefully |
 | `data_count > 0` | callee's loops run zero iterations safely on 0 |
 | `bar == 0 \|\| bar == 2` | callee's else-branch returns `-EINVAL` for other values |
 | `(n == 0 \|\| valid_range(from, 0, n))` in neuron\_copy\_from\_user | `from` is a userspace pointer; `copy_from_user` does its own `__access_ok` |
@@ -123,7 +123,7 @@ Every run (functional, bug-hunt, all relaxed variants) reports
 `[main.assertion.1] assertion result == 0 || result < 0: FAILURE`.
 Traced: the stub `neuron_copy_from_user_stub` returns a nondet
 `unsigned long` (its inferred post-contract is `condition: 1`,
-trivially true). `ncdev_bar_rw` then forwards that value:
+trivially true). `<embargoed-caller-fn>` then forwards that value:
 ``` c
 ret = neuron_copy_from_user(...);
 if (ret) return ret;  // can be positive
@@ -131,7 +131,7 @@ if (ret) return ret;  // can be positive
 This matches real Linux kernel semantics: `copy_from_user` returns
 the byte-count *not* copied — non-negative, possibly positive on
 partial copy. Many real drivers don't convert it to `-EFAULT`, so
-`ncdev_bar_rw` legitimately can return a small positive integer.
+`<embargoed-caller-fn>` legitimately can return a small positive integer.
 
 It's not a memory-safety bug or a crash; it's the LLM-emitted POST
 being over-tight (assumes the kernel convention of "0 or negative

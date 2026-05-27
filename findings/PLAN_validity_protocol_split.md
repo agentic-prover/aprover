@@ -2,9 +2,9 @@
 
 **Created:** 2026-05-22, end of session.
 **Status:** plan only, no code changes yet. Pick up here next session.
-**Motivation:** the `ncdev_bar_read` "caller-contract slip" documented in
+**Motivation:** the `<embargoed-callee-fn>` "caller-contract slip" documented in
 `findings/methodology_insight_2026-05-22.md`. LLM-spec mode verifies the
-bug clean because the LLM-emitted PRE (`valid_range(reg_addresses, 0,
+bug clean because the LLM-emitted PRE (`valid_range(<addr-array>, 0,
 data_count)`) is the very contract the buggy caller violates, and
 bmc-agent stubs the callee by *assuming* that PRE — so the mismatch
 disappears from both verifications.
@@ -96,7 +96,7 @@ Introduce **two-clause-class specs** end-to-end:
     but the CALL gets prefixed with assertions on the actual arguments.
   - Translate `pre_validity` clauses by substituting formal parameter
     names with the actual call-site argument expressions
-    (`reg_addresses` → caller's `reg_addresses` local, etc.). Re-use
+    (`<addr-array>` → caller's `<addr-array>` local, etc.). Re-use
     the existing `precond_to_assume` machinery but emit `__CPROVER_assert`
     instead, and run argument substitution.
 - **Mode flag:** wire a `spec_mode` arg through `pipeline.py` →
@@ -118,13 +118,13 @@ Introduce **two-clause-class specs** end-to-end:
   remain green when `spec_mode=functional` (default for back-compat in
   tests).
 - **Caller-contract slip:** add an integration test using a
-  miniaturised `ncdev_bar_rw` / `ncdev_bar_read` pair. Assert that in
+  miniaturised `<embargoed-caller-fn>` / `<embargoed-callee-fn>` pair. Assert that in
   `bug-hunt` mode bmc-agent flags the caller (CBMC reports the PRE
   assertion failure at the call site). In `functional` mode it
   remains clean.
 - **Empirical:** re-run the 2026-05-22 Neuron P2 sweep on
-  `neuron_cdev.c` with `--spec-mode=both`. Expect `ncdev_bar_read`
-  call site in `ncdev_bar_rw` to surface as `real_bug` again, while
+  `neuron_cdev.c` with `--spec-mode=both`. Expect `<embargoed-callee-fn>`
+  call site in `<embargoed-caller-fn>` to surface as `real_bug` again, while
   the rest of the file's clean verdicts (47 functions) stay clean.
   Compare to the trivial-spec sweep's 54/118 — bug-hunt mode should
   recover or exceed that bug while keeping the LLM-spec precision
@@ -145,7 +145,7 @@ Introduce **two-clause-class specs** end-to-end:
 ## Risk / gotchas
 
 1. **Argument substitution is fragile.** A PRE like
-   `valid_range(reg_addresses, 0, data_count)` uses callee formal
+   `valid_range(<addr-array>, 0, data_count)` uses callee formal
    parameter names. At the call site, those become the caller's actual
    argument expressions. We need a robust substitution pass — re-use
    the source_parser machinery or build a small AST-level substitution
@@ -202,7 +202,7 @@ into an "architectural feature" of bmc-agent:
 > split recovers both.
 
 Promote from Discussion section (current placement) to a concrete
-Method-section contribution backed by the `ncdev_bar_read` case study
+Method-section contribution backed by the `<embargoed-callee-fn>` case study
 showing all three modes — trivial-spec catches it, LLM-spec misses it,
 validity/protocol split catches it AND keeps the functional-correctness
 checks on the other 84 clean functions.

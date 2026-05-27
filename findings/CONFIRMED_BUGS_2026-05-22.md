@@ -59,19 +59,14 @@ completeness of the seed mapping):
 
 ### AWS Neuron driver (1)
 
-- **N1.** `ncdev_bar_read` heap-OOB-read via `ncdev_bar_rw`.
-  - Trigger: `NEURON_IOCTL_BAR_READ` with `arg.bar != 0 && arg.count > 1`.
-  - Cause: caller allocates `address_count = 1` u64 when `arg.bar != 0`,
-    then passes `arg.count` as `data_count` to the callee, which loops
-    `for(i=0; i<data_count; i++) reg_addresses[i]`.
-  - Triple-corroborated static signal (trivial-spec sweep, LLM-spec
-    bug-hunt mode at caller, bug-hunt at parallel `ncdev_bar_write`
-    path).
+- **N1.** One heap-OOB-read candidate identified via IOCTL path. Source-
+  audit case is substantive (triple-corroborated static signal: trivial-spec
+  sweep, LLM-spec bug-hunt mode at caller, bug-hunt at the parallel
+  write-path). Details, trigger, and PoC sketch are embargoed in
+  `agentic-prover/aprover-findings-embargoed` under
+  `findings/aws_neuron_driver/unconfirmed/`.
   - Status: UNCONFIRMED. Path to PoC: KASAN reproducer on a Trainium /
     Inferentia host or QEMU + neuron driver build.
-  - Documented in: `findings/aws_neuron_driver/POTENTIAL_BUG_ncdev_bar_read.md`,
-    `findings/aws_neuron_driver/ncdev_bar_read_poc.c`,
-    `findings/aws_neuron_driver/DISCLOSURE_DRAFT.md`.
 
 ### libarchive @ b_start (16)
 
@@ -162,9 +157,9 @@ share a "caller-controlled offset reads past block boundary" shape.
 
 ## Disclosure status
 
-- **Neuron:** N1 has a draft disclosure template at
-  `findings/aws_neuron_driver/DISCLOSURE_DRAFT.md`. Pending KASAN
-  PoC before sending to AWS security.
+- **Neuron:** N1 has a draft disclosure template (embargoed in the
+  private companion repo). Pending KASAN PoC before sending to AWS
+  security.
 - **libarchive latents (L1–L16):** No disclosures drafted. Each
   needs per-finding diff-check (does the fix really not exist?) +
   manual code-level triage + ideally a fuzzing reproducer before

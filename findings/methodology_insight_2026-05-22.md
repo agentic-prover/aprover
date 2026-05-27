@@ -5,35 +5,38 @@ Discovered today (2026-05-22) during the P2 hybrid sweep on
 
 ## The observation
 
-Yesterday's trivial-spec sweep flagged `ncdev_bar_read` as a heap-OOB-read
-candidate (`findings/aws_neuron_driver/POTENTIAL_BUG_ncdev_bar_read.md`):
+Yesterday's trivial-spec sweep flagged a kernel-driver IOCTL handler
+function (details embargoed — see `aprover-findings-embargoed` under
+`findings/aws_neuron_driver/unconfirmed/`) as a heap-OOB-read candidate.
+The shape:
 
-- Caller `ncdev_bar_rw` allocates a 1-element `u64 *reg_addresses` when
-  `arg.bar != 0`, but then passes `arg.count` (potentially > 1) as the
-  `data_count` argument to `ncdev_bar_read`.
-- `ncdev_bar_read` iterates `for (i = 0; i < data_count; i++)` reading
-  `reg_addresses[i]`, walking off the end of the 1-element buffer.
+- Caller `the_caller_function` allocates a 1-element `u64 *addr_array`
+  when one branch of an IOCTL flag is taken, but then passes the
+  user-controlled `arg.count` (potentially > 1) as the `data_count`
+  argument to the callee.
+- The callee iterates `for (i = 0; i < data_count; i++)` reading
+  `addr_array[i]`, walking off the end of the 1-element buffer.
 
 Today's LLM-spec sweep (P2, full pipeline w/ realism + feedback)
-**verifies `ncdev_bar_read` clean** — confidence: 0 real_bug.
+**verifies the same callee function clean** — confidence: 0 real_bug.
 
 ## What happened
 
-The Phase 1 spec generator emitted for `ncdev_bar_read`:
+The Phase 1 spec generator emitted for the callee:
 
 ```
-PRE: ... && valid_range(reg_addresses, 0, data_count) ...
+PRE: ... && valid_range(addr_array, 0, data_count) ...
 POST: (result == 0 || result < 0) && (result == 0 implies ...)
 ```
 
-That precondition declares the caller's obligation: pass a
-`reg_addresses` array sized to at least `data_count` elements. With
-this in the harness's `__CPROVER_assume`, CBMC's bounds-check never
-fires because the spec excludes the violating state.
+That precondition declares the caller's obligation: pass an
+`addr_array` sized to at least `data_count` elements. With this in the
+harness's `__CPROVER_assume`, CBMC's bounds-check never fires because
+the spec excludes the violating state.
 
-The caller `ncdev_bar_rw` is *also* verified clean. The bmc-agent stubs
-`ncdev_bar_read` using its LLM-generated spec (the over-permissive
-one), so when ncdev_bar_rw passes a 1-element array with data_count=N,
+The caller `the_caller_function` is *also* verified clean. The bmc-
+agent stubs the callee using its LLM-generated spec (the over-permissive
+one), so when the caller passes a 1-element array with data_count=N,
 the stub spec says "any data_count consistent with the size cap is
 fine" — the actual mismatch never surfaces.
 
@@ -79,7 +82,7 @@ functional-correctness verification of well-behaved leaf functions.
 For paper section 2 (Architecture) and 5 (Discussion): make this trade
 explicit. The hybrid sweep on Neuron driver files this session
 demonstrates the case study end-to-end — yesterday's trivial-spec on
-neuron_cdev surfaced the ncdev_bar_read OOB, today's LLM-spec on
+neuron_cdev surfaced the embargoed OOB candidate, today's LLM-spec on
 the same file verifies the function clean *given its inferred
 precondition*.
 

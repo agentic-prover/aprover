@@ -56,8 +56,8 @@ Top error classes (sampled): missing LHS before `>=` (22), before
 
 | Function | stub-PRE failures | Classification |
 |---|---:|---|
-| `ncdev_bar_rw` | 9 | **Real bug** — the known `ncdev_bar_read` OOB, now flagged at the *caller* call site |
-| `ncdev_bar_write` | 6 | **Same root-cause bug** — `ncdev_bar_rw → ncdev_bar_write → ncdev_bar_write_data` chains the same misallocated `reg_addresses` to one more callee |
+| (embargoed caller function A) | 9 | **Real bug** — the known embargoed OOB, now flagged at the *caller* call site |
+| (embargoed sibling-callee function) | 6 | **Same root-cause bug** — caller → sibling-callee → write-data chains the same misallocated address-array to one more callee |
 | `ncdev_create_device_node` | 2 | **Defensive-coding gap** — `&devnodes[minor]` accessed without bounds check on `minor = ndev->device_index`; in practice PCI subsystem bounds it, so not exploitable |
 | `ncdev_post_metric` | 2 | FP — `copy_from_user` PRE the over-tight class (LLM emits `valid(from)` for a userspace pointer that doesn't require kernel-readability) |
 | `ncdev_read_hw_counters` | 2 | FP — same `copy_from_user` PRE class as above |
@@ -67,10 +67,9 @@ Top error classes (sampled): missing LHS before `>=` (22), before
 **No new distinct real bugs in `neuron_cdev.c`.** The bug-hunt mode
 surfaces 5 caller-contract candidates, but careful triage gives:
 
-- **1 root-cause real bug** (the known `ncdev_bar_read` OOB) — now
-  visible at **3 vantage points** (the original `ncdev_bar_read`
-  internal flag, the new `ncdev_bar_rw` caller flag, and the
-  `ncdev_bar_write` → `ncdev_bar_write_data` chained flag). Better
+- **1 root-cause real bug** (the embargoed OOB candidate) — now
+  visible at **3 vantage points** (the original internal flag, the
+  new caller flag, and the sibling-callee chained flag). Better
   localisation for disclosure, no new disclosure target.
 - **1 defensive-coding gap** in `ncdev_create_device_node` (worth
   noting to AWS but not crash-class).
@@ -95,7 +94,7 @@ surfaces 5 caller-contract candidates, but careful triage gives:
   either: (a) fix the DSL paren handling so all 118 functions
   compile, then re-run bug-hunt mode; or (b) accept that the headline
   result is "found exactly the bug it was designed to find" with the
-  ncdev_bar_rw walkthrough as the demonstration.
+  embargoed caller walkthrough as the demonstration.
 
 ## Update: paren-fix landed, sweep re-run (same autonomous session)
 
@@ -171,7 +170,7 @@ the new 5:
 
 **Same headline real-bug count.** No new distinct disclosure-quality
 bug. The prototype now sees ~all of the file and the answer is still
-"1 root-cause bug (`ncdev_bar_read` OOB)". v7 log persisted at
+"1 root-cause bug (embargoed OOB candidate)". v7 log persisted at
 `bug_hunt_sweep_neuron_cdev_v7_2026-05-22.log`.
 
 **Final follow-on (v8): parser fix for `void*name` shape.**

@@ -111,12 +111,12 @@ HTTP 504 mid-sweep. K2 has since recovered.
 | `spurious` | 35 |
 | Wall clock | ~2h 40min (started 17:34, done 20:14) |
 
-`ncdev_bar_read` (yesterday's trivial-spec bug candidate) **verified
-clean** here — root-cause is documented in `methodology_insight_2026-05-22.md`
-as a "caller-contract slip" case study: the LLM-generated callee
-precondition encodes the obligation the bug-triggering caller
-violates, so both functions verify clean against the (over-permissive)
-inferred contract. **Paper-track methodology insight**: trivial-spec
+The embargoed bug candidate (yesterday's trivial-spec finding)
+**verified clean** here — root-cause is documented in
+`methodology_insight_2026-05-22.md` as a "caller-contract slip" case
+study: the LLM-generated callee precondition encodes the obligation
+the bug-triggering caller violates, so both functions verify clean
+against the (over-permissive) inferred contract. **Paper-track methodology insight**: trivial-spec
 is the recall floor, LLM-spec adds precision; the right deployment
 runs both modes per target.
 
@@ -214,6 +214,6 @@ sweeps. Triage tool: `findings/find_unfiltered_real_bugs.py`.
 - Re-run the 3 timed-out P2 files (`dma`, `mempool`, `metrics`) with
   the patched code — the cbmc.py / llm.py / 504-retry fixes should
   let them complete within budget.
-- Paper section update: fold the `ncdev_bar_read` caller-contract-slip
-  case study into the Discussion section (see
+- Paper section update: fold the embargoed caller-contract-slip case
+  study into the Discussion section (see
   `methodology_insight_2026-05-22.md`).

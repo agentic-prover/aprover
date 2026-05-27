@@ -53,7 +53,7 @@ yielding `unwind.4` FAIL.
 **For bug-finding on attack-surface kernel code, trivial-spec mode
 is the right call.** CBMC's built-in pointer-check / bounds-check
 property set catches the bug classes that matter (the
-ncdev_bar_read OOB earlier was found this way) without needing
+<embargoed-callee-fn> OOB earlier was found this way) without needing
 LLM-generated postconditions.
 
 **Where the LLM pipeline would shine:** functional correctness on

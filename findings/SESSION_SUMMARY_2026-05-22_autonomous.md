@@ -75,7 +75,7 @@ moving the burden off iterative training:
   static-function returns don't trip CBMC's "expected constant
   expression" check.
 
-## Empirical: `ncdev_bar_rw` progression
+## Empirical: `<embargoed-caller-fn>` progression
 
 | Run | Relaxations | Failures | Real-bug manifestations | FPs |
 |-----|------------|---------|----|-----|
@@ -87,8 +87,8 @@ moving the burden off iterative training:
 | bug-hunt **after root-cause fixes**, NO relax | none | **3** | 2 | 1 |
 
 The two real-bug manifestations are the same root-cause heap-OOB-read
-in `ncdev_bar_rw`'s call to `ncdev_bar_read` / `ncdev_bar_write` (line
-1648/1650): `address_count = 1` when `arg.bar != 0`, but `arg.count`
+in `<embargoed-caller-fn>`'s call to `<embargoed-callee-fn>` / `<embargoed-sibling-callee-fn>` (line
+1648/1650): `<element-count> = 1` when `<flag-arg> != 0`, but `<count-arg>`
 is forwarded as `data_count` — the callee's loop walks past the
 1-element allocation.
 
@@ -133,7 +133,7 @@ Plus 7 new test files and 4 new findings files (this summary +
 
 ## What's not done
 
-- **Disclosure-quality PoC.** The `ncdev_bar_read` heap-OOB-read is
+- **Disclosure-quality PoC.** The `<embargoed-callee-fn>` heap-OOB-read is
   triple-confirmed statically (trivial-spec sweep, functional LLM-spec
   hidden-then-resurfaced, bug-hunt mode). No KASAN PoC executed on a
   Trainium/Inferentia host or QEMU+driver build yet — required for

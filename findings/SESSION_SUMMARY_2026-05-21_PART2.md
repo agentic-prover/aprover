@@ -8,9 +8,9 @@ Part 1 summary at `findings/SESSION_SUMMARY_2026-05-21.md`.
 ### AWS Neuron driver coverage expansion
 - **20 → 30+ files swept** with bmc-agent kernel-mode harnesses
 - **427+ functions verified clean** across the entire driver
-- **1 real-bug candidate** identified: heap OOB read in
-  `ncdev_bar_read` via `NEURON_IOCTL_BAR_READ`
-  (`findings/aws_neuron_driver/POTENTIAL_BUG_ncdev_bar_read.md`)
+- **1 real-bug candidate** identified (details embargoed —
+  see `agentic-prover/aprover-findings-embargoed` under
+  `findings/aws_neuron_driver/unconfirmed/`)
 - v3/neuron_pelect.c flipped from 0/54 → 43/54 after the 2D-array
   harness-gen fix landed
 
@@ -64,8 +64,8 @@ to "unrealistic" by recognizing that real callers never produce
 the violating state.
 
 ### 3. Trivial-spec mode is sufficient for memory-safety bug-finding
-The single real-bug candidate from this session
-(`ncdev_bar_read` OOB) was found by CBMC's built-in
+The single real-bug candidate from this session (heap-OOB read,
+details embargoed) was found by CBMC's built-in
 `--bounds-check --pointer-check` against a trivial-spec harness.
 LLM-augmented specs didn't surface additional bugs.
 
@@ -86,9 +86,10 @@ is what makes most FAILs vacuous.
 
 ## Next moves (for user to choose)
 
-1. **Confirm the `ncdev_bar_read` bug** via KASAN reproducer on
-   a Trainium/Inferentia host or QEMU+Neuron-driver build, then
-   private disclosure to security@aws.amazon.com.
+1. **Confirm the AWS Neuron driver bug candidate** (details embargoed)
+   via KASAN reproducer on a Trainium/Inferentia host or
+   QEMU+Neuron-driver build, then private disclosure to
+   security@aws.amazon.com.
 
 2. **Scale hybrid mode to more files** — at ~$0.05-0.25 per file,
    running the full pipeline on every AWS Neuron driver file would
