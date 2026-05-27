@@ -272,6 +272,28 @@ BMC-Agent is an active research prototype. The pipeline and all confidence tiers
 
 **Partial / planned:** spec-quality analysis at scale; evaluation corpus beyond VibeOS; manual precision audit of sampled findings; constructor-pattern precondition inference (planned for ML-kernel targets); loop-invariant generation in spec gen.
 
+## Real-world findings
+
+Bugs discovered by BMC-Agent in widely-deployed open-source C projects, in order of discovery.
+
+| Project | Bug class | Affected versions | AProver finding | Upstream status |
+|---|---|---|---|---|
+| **libarchive** | Heap buffer overflow in `archive_acl_to_text_l/_w` for nameless NFSv4 USER/GROUP ACL entries | **3.3.0 – 3.8.7** (latest stable) | [`findings/libarchive_archive_acl_to_text_heap_overflow_nfsv4_2026-05-27.md`](findings/libarchive_archive_acl_to_text_heap_overflow_nfsv4_2026-05-27.md) | Reproducer + patch ready for upstream filing |
+| **libarchive** | Multiple variants of size-calculator/writer divergence in the same code path: non-compact NFSv4 perm/flag output overrun; calculator/writer disagree on NFS4 type detection; Solaris-style 2-colon-write vs 1-colon-budget logic inversion | 3.3.0 – 3.8.7 | [`findings/postfix8_archive_acl_triage_real_bugs_2026-05-27.md`](findings/postfix8_archive_acl_triage_real_bugs_2026-05-27.md) | Identified by the TriageAgent; needs ASAN reproducer per variant |
+| **libarchive** | `archive_acl_copy` silently drops entries when `acl_new_entry` rejects a malformed-tag entry — data-integrity / ACL-replication-correctness bug | 3.3.0 – 3.8.7 | [`findings/postfix8_archive_acl_triage_real_bugs_2026-05-27.md`](findings/postfix8_archive_acl_triage_real_bugs_2026-05-27.md) | Code-review confirmed; no reproducer needed for upstream filing |
+
+### How findings are reached
+
+Every finding above starts as a CBMC counterexample on an internal helper function, classified `UNRESOLVED` by the pipeline because the LLM-generated public-API reproducer can't drive the witness state. The triage path then is either:
+
+1. **Human audit** — read the size-calculator and the writer side-by-side, byte-count the writes vs the budget. This is how the first finding (the user's manual triage of `append_id.pointer_dereference.11`) was confirmed and reduced to ASAN-confirmed reproducer + patch.
+
+2. **`TriageToolsAgent` v3** ([`bmc_agent/agents/triage_tools.py`](bmc_agent/agents/triage_tools.py)) — independently re-discovered finding #1 from the raw CBMC artifacts AND found the additional variants in finding #2. The agent walks the call chain via `lookup_function` / `find_more_callers` / `grep_corpus` tools, builds an explicit write-vs-budget audit table, and votes `REAL_BUG` with reasoning that cites specific source lines. Run via [`scripts/triage_unresolved.py`](scripts/triage_unresolved.py).
+
+The pipeline's `UNRESOLVED` verdict is intentional: it would be unsound to mark these `REAL_BUG` automatically without the upstream code-review step. The triage agent fills that step at scale.
+
+For comparison, the user previously landed [`jqlang/jq` `df924eae`](https://github.com/jqlang/jq/commit/df924eae91af10cc236a907cdadd97813827aa1f) (fixing `GHSA-ggc9-rpv2-xgpm` + `GHSA-gvwx-xj9r-3frq`) — the libarchive findings above are intended for the same upstream-filing path.
+
 ## License
 
 4-clause BSD. See [LICENSE](LICENSE).
