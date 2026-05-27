@@ -5443,6 +5443,208 @@ def _strip_static_inline_defs(
     return ''.join(result)
 
 
+def _replace_function_bodies_with_stubs(
+    text: str, fn_names: set[str]
+) -> tuple[str, set[str]]:
+    """For each function name in ``fn_names``, locate its DEFINITION in
+    ``text`` and replace the body with a nondet stub.
+
+    Returns (modified_text, stubbed_set) where ``stubbed_set`` is the
+    subset of ``fn_names`` whose definition was found and stubbed. A
+    name in fn_names that has no definition in text (only declarations,
+    or not present at all) is returned in fn_names - stubbed_set so the
+    caller can log or escalate.
+
+    The stub body is ``{ <return-type> _amc_nondet; return _amc_nondet; }``
+    for non-void return types, or ``{ return; }`` for void. CBMC treats
+    ``_amc_nondet`` (uninitialized local) as nondeterministic.
+
+    Comment / string-literal aware so braces inside ``/* { */`` or
+    ``"foo}bar"`` don't confuse the depth tracking. Reuses the same
+    scanner shape as ``_strip_static_inline_defs``.
+
+    Conservative parsing: when the return-type extraction is uncertain
+    (multi-token type with attributes, etc.), the body is replaced with
+    ``{ __CPROVER_assume(0); /* AMC stub: unknown rettype */ }`` — this
+    is still safe because CBMC reaches the assume(0) before exiting the
+    stub, so the callee contributes no symbolic state. It does mean any
+    POST-call code that depended on the return value sees nondet (which
+    is the intended behavior anyway).
+    """
+    if not fn_names:
+        return text, set()
+    stubbed: set[str] = set()
+    n = len(text)
+
+    def _scan_forward_skipping_literals(t: str, start: int, stop_predicate) -> int:
+        i = start
+        depth = 0
+        L = len(t)
+        while i < L:
+            ch = t[i]
+            if ch == '/' and i + 1 < L and t[i + 1] == '*':
+                end = t.find('*/', i + 2)
+                i = L if end == -1 else end + 2
+                continue
+            if ch == '/' and i + 1 < L and t[i + 1] == '/':
+                end = t.find('\n', i + 2)
+                i = L if end == -1 else end
+                continue
+            if ch == '"':
+                k = i + 1
+                while k < L:
+                    if t[k] == '\\' and k + 1 < L:
+                        k += 2; continue
+                    if t[k] == '"':
+                        k += 1; break
+                    k += 1
+                i = k; continue
+            if ch == "'":
+                k = i + 1
+                while k < L:
+                    if t[k] == '\\' and k + 1 < L:
+                        k += 2; continue
+                    if t[k] == "'":
+                        k += 1; break
+                    k += 1
+                i = k; continue
+            ret = stop_predicate(i, ch, depth)
+            if ret is not None:
+                return ret
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            i += 1
+        return L
+
+    # Process each target function. We scan from the start each time so
+    # earlier replacements don't shift positions for later searches.
+    for fn_name in fn_names:
+        # Locate ``\b<fn_name>\s*\(`` not preceded by struct/union/->/.
+        # The simplest robust pattern: find ``\b<fn>\s*\(``, then look
+        # backwards from the name to confirm it's a definition (not a
+        # call, not a struct field).
+        pat = re.compile(r'\b' + re.escape(fn_name) + r'\s*\(')
+        for m in pat.finditer(text):
+            name_start = m.start()
+            paren_start = m.end() - 1  # the '('
+
+            # Confirm this is a function definition:
+            #   1. Walk forward from the matching ')' — next non-whitespace,
+            #      non-attribute token must be '{' (definition) not ';' (decl)
+            #   2. Walk backward from name_start — preceding char must NOT be
+            #      ``.`` ``-`` ``>`` (struct field access) or alphanumeric
+            #      (would suggest the match is a substring of a longer name)
+
+            # Backward check: the ``\b`` in the regex already prevents
+            # substring matches (e.g. ``myappend_id`` won't match
+            # ``append_id``), so we only need to reject struct-field
+            # access here. Skip whitespace; if the preceding non-ws is
+            # ``.`` or ``->``, this is a call through a struct field,
+            # not a definition.
+            j = name_start - 1
+            while j >= 0 and text[j] in ' \t\n\r':
+                j -= 1
+            if j >= 0:
+                prev = text[j]
+                if prev == '.':
+                    continue  # ``foo.bar(`` — field access
+                if prev == '>' and j > 0 and text[j - 1] == '-':
+                    continue  # ``foo->bar(`` — field access
+
+            # Forward check: find matching ')' (literal-aware), then next
+            # non-whitespace must be '{'.
+            paren_end = _scan_forward_skipping_literals(
+                text, paren_start + 1,
+                lambda idx, ch, d: idx if d == 0 and ch == ')' else None,
+            )
+            if paren_end >= n:
+                continue
+            # Skip whitespace + attributes/comments after ')'.
+            k = paren_end + 1
+            while k < n:
+                ch = text[k]
+                if ch in ' \t\n\r':
+                    k += 1; continue
+                if ch == '/' and k + 1 < n and text[k + 1] == '*':
+                    e = text.find('*/', k + 2)
+                    k = n if e == -1 else e + 2
+                    continue
+                break
+            if k >= n or text[k] != '{':
+                continue  # forward declaration, not a definition
+
+            # We have a definition. Find the closing brace.
+            body_open = k
+            body_close = _scan_forward_skipping_literals(
+                text, body_open + 1,
+                lambda idx, ch, d: idx + 1 if d == 0 and ch == '}' else None,
+            )
+            if body_close >= n:
+                continue
+
+            # Walk backwards from name_start to find the start of the
+            # declarator (i.e., where the return type begins). For
+            # single-line declarators (the overwhelming common case),
+            # the start is the latest of:
+            #   * the start of the current line (so #include /
+            #     preceding decls don't bleed in),
+            #   * the position right after the last ``;`` (so a prior
+            #     statement on the same line doesn't bleed in),
+            #   * the position right after the last ``}`` (so the
+            #     previous function's closing brace doesn't bleed in).
+            line_start = text.rfind('\n', 0, name_start) + 1
+            last_semi = text.rfind(';', 0, name_start)
+            last_brace = text.rfind('}', 0, name_start)
+            decl_start = max(line_start, last_semi + 1, last_brace + 1)
+            # Trim leading whitespace so the return-type extraction
+            # doesn't pick up indentation.
+            while decl_start < name_start and text[decl_start] in ' \t\n\r':
+                decl_start += 1
+
+            # Extract and clean the return type: everything between
+            # decl_start and name_start, minus the storage-class and
+            # inline qualifiers. Handle pointer types by keeping ``*``.
+            head_raw = text[decl_start:name_start].strip()
+            # Drop storage / inline qualifiers.
+            tokens = head_raw.split()
+            keep = [t for t in tokens if t not in (
+                'static', 'inline', '__inline__', 'extern', '__extern_inline'
+            )]
+            rettype = ' '.join(keep).strip()
+            # Heuristic: if rettype is empty or contains an attribute
+            # spec we don't want to copy ad-hoc, fall back to assume(0).
+            uncertain = (
+                not rettype
+                or '__attribute__' in rettype
+                or rettype.startswith('__')
+            )
+
+            if uncertain:
+                stub_body = (
+                    "{ __CPROVER_assume(0); "
+                    f"/* AMC stub: unknown rettype for {fn_name} */ }}"
+                )
+            elif rettype == 'void':
+                stub_body = f"{{ /* AMC stub: {fn_name} */ return; }}"
+            else:
+                stub_body = (
+                    f"{{ /* AMC stub: {fn_name} */ "
+                    f"{rettype} _amc_nondet; return _amc_nondet; }}"
+                )
+
+            # Splice: keep everything up through the opening paren of
+            # the parameter list + the params + ')' + whitespace + new
+            # stub body, drop original body.
+            text = text[:body_open] + stub_body + text[body_close:]
+            n = len(text)
+            stubbed.add(fn_name)
+            break  # only stub the first definition we find for this name
+
+    return text, stubbed
+
+
 # Standard C / POSIX functions that kernel headers may re-declare with
 # non-standard signatures (e.g. VibeOS printf.h uses int size for snprintf).
 # Any forward declaration (no body) whose name is in this set is stripped from

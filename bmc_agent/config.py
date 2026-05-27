@@ -470,6 +470,21 @@ class Config:
     # present in struct_definitions. Driven by RetryAction.FORCE_OPAQUE_PARAM.
     session_opaque_param_structs: list[str] = field(default_factory=list)
 
+    # Local function names whose BODY should be replaced with a nondet
+    # stub during harness emit. Driven by RetryAction.STUB_CALLEE — when
+    # CBMC times out on a function whose state space is dominated by an
+    # inlined callee, replacing the callee's body with a nondet return
+    # cuts the state space dramatically. In ``--real-libc`` mode the
+    # harness includes the whole preprocessed source, so all callee
+    # bodies live in the same translation unit; this set drives the
+    # source post-processing that replaces selected bodies with stubs.
+    # Tradeoff vs. NO stubbing: a stubbed callee can hide a bug that
+    # lives inside it (the verifier no longer explores that code). The
+    # auto-retry path only stubs as a recovery from TIMEOUT — without
+    # this, the timed-out function is silently dropped, which is
+    # strictly worse than partial coverage.
+    session_stub_functions: list[str] = field(default_factory=list)
+
     # Max number of CBMC-error retry rounds the autonomous-mode Phase 2b
     # loop will run before giving up. Each round can resolve many
     # functions if they share an error identifier — empirically on
