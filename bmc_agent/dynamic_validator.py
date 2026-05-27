@@ -392,108 +392,33 @@ class DynamicValidator:
         compile error. Returns the corrected C source, or None if the
         LLM declined / errored.
 
-        Mirrors the constraints of cex_validator's REPRODUCER_PROMPT
-        (must #include the project public header, no inline reimpl,
-        UNREPRODUCIBLE marker is an acceptable honest answer) — the
-        cex_validator's downstream ``_reproducer_uses_public_api`` gate
-        re-runs on whatever we return, so a regression to a synthetic
-        stub is caught at the caller boundary. We don't re-implement
-        the gate here.
+        Delegates to ``DynamicReproAgent`` (C2 step 9, commit 68c815d).
+        The agent owns the prompt template, the response parser, and
+        the routing role (``dynamic_repro`` — previously this call
+        piggybacked on ``role="realism"`` which conflated two distinct
+        LLM tasks under a single env-var override). The cex_validator's
+        downstream ``_reproducer_uses_public_api`` gate still re-runs
+        on whatever we return; UNREPRODUCIBLE marker pass-through is
+        preserved by the agent's parse path.
         """
         if self._llm is None:
             return None
-        from bmc_agent.llm import LLMError
-
-        # Trim error to keep prompt budget reasonable — first 1500 chars
-        # are almost always enough (multi-line GCC errors repeat once
-        # the first symbol fails to resolve).
-        err_snippet = (compile_error or "")[:1500]
-
-        system_prompt = (
-            "You are a formal verification expert for C programs. Your "
-            "task is to fix a C reproducer that failed to compile. "
-            "Return only valid JSON."
+        from bmc_agent.agents.dynamic_repro import DynamicReproAgent
+        agent = DynamicReproAgent(config=self.config, llm=self._llm)
+        result = agent.run(
+            previous_reproducer=previous_reproducer,
+            compile_error=compile_error,
+            func_name=func_name,
         )
-        user_prompt = (
-            "A previous reproducer attempt for the buggy function "
-            f"`{func_name}` failed to compile. Your task: emit a "
-            "CORRECTED version of the C source that compiles.\n\n"
-            "=== PREVIOUS REPRODUCER (failed to compile) ===\n"
-            "```c\n"
-            f"{previous_reproducer[:4000]}\n"
-            "```\n\n"
-            "=== COMPILER ERROR ===\n"
-            "```\n"
-            f"{err_snippet}\n"
-            "```\n\n"
-            "HARD RULES:\n"
-            "  1. Same constraints as the original prompt: MUST "
-            "     #include the project's public-API header, MUST use "
-            "     only public-API calls, NO inline reimplementation of "
-            "     project functions, NO fabricated copies of opaque "
-            "     structs.\n"
-            "  2. Fix the specific error reported. Typical fixes: "
-            "     missing #include, wrong function name (typo or "
-            "     misremembered API), wrong argument count, "
-            "     header-order conflict.\n"
-            "  3. If the error is a LINKER 'undefined reference' to a "
-            "     project API call you correctly used, the source is "
-            "     already correct — the build is missing -l<libname>. "
-            "     In that case respond with the UNREPRODUCIBLE marker.\n"
-            "  4. If you cannot honestly fix the source at the LLM "
-            "     level, respond with the UNREPRODUCIBLE marker.\n\n"
-            "Respond with ONLY this JSON:\n"
-            '{\n'
-            '  "reproducer_code": "<corrected C source OR '
-            '// UNREPRODUCIBLE: <reason>>"\n'
-            '}'
-        )
-
-        try:
-            response = self._llm.complete(
-                system_prompt, user_prompt, role="realism",
-            )
-        except LLMError as exc:
-            logger.warning(
-                "LLM reproducer regeneration failed for '%s': %s",
-                func_name, exc,
-            )
+        if not result.ok:
+            if result.error:
+                logger.warning(
+                    "DynamicReproAgent reproducer regeneration failed for "
+                    "'%s': %s",
+                    func_name, result.error,
+                )
             return None
-
-        # Parse JSON; tolerate fenced markdown like the original
-        # _build_reproducer parser. Avoid importing the private helper —
-        # do a small inline extraction.
-        import json as _json
-        text = (response or "").strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            inner: list[str] = []
-            in_fence = False
-            for line in lines:
-                if line.startswith("```"):
-                    in_fence = not in_fence
-                    continue
-                if in_fence:
-                    inner.append(line)
-            text = "\n".join(inner).strip()
-        try:
-            data = _json.loads(text)
-        except Exception:
-            # Try to find an embedded JSON object
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m is None:
-                return None
-            try:
-                data = _json.loads(m.group(0))
-            except Exception:
-                return None
-
-        code = (data.get("reproducer_code") or "").strip()
-        if not code:
-            return None
-        # UNREPRODUCIBLE marker honoured verbatim — the outer loop will
-        # see it doesn't differ in a useful way and exit. Pass-through.
-        return code
+        return result.output
 
     def _compile(
         self, harness_src: str, cc: str, extra_flags: "list[str] | None" = None
