@@ -803,6 +803,61 @@ def _is_param_style_ident(ident: str) -> bool:
     return len(ident) <= 4 or ident.startswith("_")
 
 
+_CLAUSE_FN_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z_0-9]*)\s*\(")
+
+# CBMC's parser accepts these in clauses without needing the function
+# to be declared in the TU.
+_CLAUSE_SAFE_CALL_PREFIXES = ("__CPROVER_",)
+
+# Stdlib functions that have a fixed, universally-agreed-on signature
+# and are always safe to call from any TU. Anything not in this set
+# is rejected from project-scope clauses to avoid arity mismatches
+# across TUs (see issue: archive_mstring_get_mbs(NULL, NULL) was
+# distilled from a TU where the function had 2 args, then emitted
+# into cab/cpio/iso/rar5 harnesses where the real header declares 3
+# args, causing CONVERSION ERROR on every harness).
+_CLAUSE_SAFE_CALL_NAMES = frozenset({
+    "strlen", "wcslen", "strcmp", "wcscmp", "memcmp",
+    "sizeof",  # not technically a call but parses similarly
+})
+
+
+def _clause_contains_unsafe_function_call(clause: str) -> "tuple[bool, str]":
+    """Return (True, fn_name) when the clause contains a function call
+    that's not a CBMC builtin or a fixed-signature stdlib function.
+
+    Project-scope clauses must not contain calls to project-defined
+    functions because the declared signature can differ across TUs.
+    The clause is distilled from one TU and re-emitted across all of
+    them — if the function takes 2 args in TU-A but 3 args in TU-B,
+    CBMC's type-checker rejects the harness with CONVERSION ERROR.
+
+    Function-scope clauses are NOT subject to this check — they bind
+    to a single function whose TU is known at distillation time.
+    """
+    for m in _CLAUSE_FN_CALL_RE.finditer(clause):
+        name = m.group(1)
+        # CBMC builtins (__CPROVER_*) parse against CBMC's own signature
+        # table, not the TU's declarations.
+        if any(name.startswith(p) for p in _CLAUSE_SAFE_CALL_PREFIXES):
+            continue
+        # Reserved C keywords that take parenthesized arguments
+        # (sizeof, _Alignof, typeof) — parse universally.
+        if name in _CLAUSE_RESERVED_IDENTS:
+            continue
+        # Fixed-signature stdlib functions.
+        if name in _CLAUSE_SAFE_CALL_NAMES:
+            continue
+        # Cast expressions look like calls but the "name" is a type.
+        # Heuristic: cast-target identifiers are usually uppercase or
+        # contain underscores in a type-ish way. Conservative pass:
+        # treat anything that looks like a known type qualifier as safe.
+        if name in ("struct", "union", "enum", "const", "volatile"):
+            continue
+        return True, name
+    return False, ""
+
+
 def _clause_references_only_known_idents(
     clause: str, param_names: set[str],
 ) -> bool:
@@ -934,6 +989,27 @@ def _emit_learned_clauses(
                 scope, func_name, c[:160],
             )
     clauses = syntactic_filtered
+
+    if scope == "project":
+        # Project-scope clauses MUST NOT contain calls to project-defined
+        # functions. The declared signature can differ across TUs and a
+        # 2-arg vs 3-arg mismatch produces CONVERSION ERROR on every
+        # harness in the affected TUs. Stdlib + CBMC builtins are
+        # exempted.
+        sig_filtered: list[str] = []
+        for c in clauses:
+            unsafe, fn = _clause_contains_unsafe_function_call(c)
+            if unsafe:
+                from bmc_agent.logger import get_logger
+                get_logger("harness").debug(
+                    "Skipping project clause for '%s' — contains call to "
+                    "project-defined function '%s()' whose signature may "
+                    "vary across TUs: %s",
+                    func_name, fn, c[:120],
+                )
+                continue
+            sig_filtered.append(c)
+        clauses = sig_filtered
 
     if scope == "project" and param_names is not None:
         filtered: list[str] = []

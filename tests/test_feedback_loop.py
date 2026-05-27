@@ -295,6 +295,65 @@ def test_harness_emit_learned_clauses_project_skips_bare_ident_collision(tmp_pat
     assert "__CPROVER_assume(acl != NULL);" in out_self
 
 
+def test_harness_emit_learned_clauses_project_skips_fn_call_arity_mismatch(tmp_path: Path):
+    """Regression: postfix9 sweep (2026-05-27 night) had every CBMC
+    verification on cab/cpio/iso9660/rar5 die with CONVERSION ERROR
+    because the project_clauses store held a clause calling
+    ``archive_mstring_get_mbs(NULL, NULL)`` — a 2-arg call distilled
+    from a TU where the function had a 2-arg stub — emitted into
+    cab/cpio/iso9660/rar5 harnesses where ``archive_mstring_get_mbs``
+    is declared with 3 args per ``archive_string.h``. CBMC reported
+    "wrong number of function arguments: expected 3, but got 2" and
+    the entire TU's harness died at type-check.
+
+    Project-scope clauses must NOT contain calls to project-defined
+    functions because the declared signature can vary across TUs.
+    Only CBMC builtins (``__CPROVER_*``), reserved C keywords
+    (``sizeof``), and fixed-signature stdlib calls are exempted.
+    """
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+    from bmc_agent.harness_generator import _emit_learned_clauses
+    from bmc_agent.config import Config
+
+    bad_store = {
+        "version": LearnedConstraintsStore.SCHEMA_VERSION,
+        "function_clauses": {},
+        "project_clauses": [
+            # The actual postfix9 problem clause:
+            "archive_mstring_get_mbs(NULL, NULL) == NULL || "
+            "((uintptr_t)archive_mstring_get_mbs(NULL, NULL) >= 4096)",
+            # A safe sibling that should survive:
+            "p == NULL || __CPROVER_r_ok(p, 8)",
+            # Stdlib calls should also survive:
+            "len <= strlen(input)",
+        ],
+        "code_change_todos": [],
+    }
+    (tmp_path / LearnedConstraintsStore.FILENAME).write_text(json.dumps(bad_store))
+
+    config = Config()
+    config.artifact_dir = str(tmp_path)
+    config.enable_feedback_loop = True
+
+    # Any function should drop the archive_mstring_get_mbs clause but
+    # keep the __CPROVER_r_ok one. param_names={"p"} so the param-name
+    # gate doesn't drop the safe ones for unrelated reasons.
+    out = _emit_learned_clauses(
+        config, "some_fn", "project", param_names={"p", "input", "len"},
+    )
+    assert all("archive_mstring_get_mbs" not in c for c in out), (
+        f"archive_mstring_get_mbs clause must be dropped, got {out}"
+    )
+    assert any("__CPROVER_r_ok" in c for c in out), (
+        f"__CPROVER_r_ok clause should survive (CBMC builtin), got {out}"
+    )
+    assert any("strlen" in c for c in out), (
+        f"strlen clause should survive (fixed-signature stdlib), got {out}"
+    )
+
+
 def test_store_refuses_to_promote_function_local_clause(tmp_path: Path):
     """Write-time gate (companion to ed48fb9 read-time filter). When the
     LLM emits scope=project-invariant with a clause that references a
