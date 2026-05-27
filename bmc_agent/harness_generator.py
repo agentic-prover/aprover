@@ -863,6 +863,22 @@ def _clause_references_only_known_idents(
     return True
 
 
+def clause_has_param_style_ident(clause: str) -> bool:
+    """Return True if the clause contains any param-style identifier
+    (struct-deref root or bare ident). Used by feedback_loop.py as a
+    write-time gate: a clause that references function-local-style
+    identifiers should never be promoted to project scope, because
+    sibling functions in the same module often share parameter names
+    by convention (e.g. ``acl`` across archive_acl.c) — the clause
+    only happens to be true for one function, not the whole project.
+
+    Implemented as the negation of ``_clause_references_only_known_idents``
+    against an empty param set: any param-style ident "not in {}" trips
+    the False, meaning the clause has a function-local-style reference.
+    """
+    return not _clause_references_only_known_idents(clause, set())
+
+
 def _emit_learned_clauses(
     config: "Config", func_name: str, scope: str,
     param_names: "set[str] | None" = None,

@@ -154,12 +154,15 @@ def test_store_persists_across_instances(tmp_path: Path):
 
 def test_store_auto_promotes_when_threshold_reached(tmp_path: Path):
     """When ≥PROMOTION_THRESHOLD functions independently learn the same
-    clause, it auto-migrates from function_clauses to project_clauses."""
+    clause, it auto-migrates from function_clauses to project_clauses.
+    Uses a non-param-style ident (xmlGlobalParser) so the write-time
+    gate (param-style block, see test_store_refuses_auto_promote_*)
+    doesn't kick in — that gate has its own coverage."""
     from bmc_agent.feedback_loop import (
         LearnedConstraintsStore, Remediation, RemediationScope,
     )
     store = LearnedConstraintsStore(tmp_path)
-    clause = "ctxt != NULL"
+    clause = "xmlGlobalParser != NULL"
     r = Remediation(scope=RemediationScope.FUNCTION_SPEC, clause=clause)
     store.record("fnA", r)
     store.record("fnB", r)
@@ -177,15 +180,19 @@ def test_store_auto_promotes_when_threshold_reached(tmp_path: Path):
 
 def test_store_does_not_double_promote(tmp_path: Path):
     """Re-recording the same clause for additional functions after
-    promotion shouldn't duplicate the project entry."""
+    promotion shouldn't duplicate the project entry. Uses
+    ``xmlGlobalSize > 0`` — a non-param-style ident so the write-time
+    gate lets the auto-promotion through."""
     from bmc_agent.feedback_loop import (
         LearnedConstraintsStore, Remediation, RemediationScope,
     )
     store = LearnedConstraintsStore(tmp_path)
-    r = Remediation(scope=RemediationScope.FUNCTION_SPEC, clause="x > 0")
+    r = Remediation(
+        scope=RemediationScope.FUNCTION_SPEC, clause="xmlGlobalSize > 0",
+    )
     for fn in ("a", "b", "c", "d", "e"):
         store.record(fn, r)
-    assert store.project_clauses().count("x > 0") == 1
+    assert store.project_clauses().count("xmlGlobalSize > 0") == 1
 
 
 def test_store_ignores_unknown_schema_version(tmp_path: Path):
@@ -249,25 +256,29 @@ def test_harness_emit_learned_clauses_project_skips_bare_ident_collision(tmp_pat
     from bmc_agent.harness_generator import _emit_learned_clauses
     from bmc_agent.config import Config
 
-    store = LearnedConstraintsStore(tmp_path)
-    # Both clauses came from archive_acl.c's ``acl`` parameter.
-    store.record("archive_acl_clear", Remediation(
-        scope=RemediationScope.PROJECT_INVARIANT,
-        clause="acl != NULL",
-        confidence="high",
-    ))
-    store.record("archive_acl_clear", Remediation(
-        scope=RemediationScope.PROJECT_INVARIANT,
-        clause="!(acl != NULL && (acl->acl_types & ARCHIVE_ENTRY_ACL_TYPE_NFS4))",
-        confidence="high",
-    ))
+    # The write-time gate (test_store_refuses_to_promote_*) prevents
+    # these clauses from entering project_clauses via the normal record()
+    # API now — so simulate a legacy / on-disk-contaminated store by
+    # writing the bad data directly to the JSON file. This emulates the
+    # postfix8 sweep artifact that triggered this regression and verifies
+    # the read-time filter still defends against pre-fix data.
+    bad_store = {
+        "version": LearnedConstraintsStore.SCHEMA_VERSION,
+        "function_clauses": {},
+        "project_clauses": [
+            "acl != NULL",
+            "!(acl != NULL && (acl->acl_types & ARCHIVE_ENTRY_ACL_TYPE_NFS4))",
+        ],
+        "code_change_todos": [],
+    }
+    (tmp_path / LearnedConstraintsStore.FILENAME).write_text(json.dumps(bad_store))
 
     config = Config()
     config.artifact_dir = str(tmp_path)
     config.enable_feedback_loop = True
 
     # rar5_cleanup's only param is ``a`` (struct archive_read *). Both
-    # ``acl``-rooted clauses must be filtered out.
+    # ``acl``-rooted clauses must be filtered out at emission time.
     out_other = _emit_learned_clauses(
         config, "rar5_cleanup", "project", param_names={"a"},
     )
@@ -275,11 +286,95 @@ def test_harness_emit_learned_clauses_project_skips_bare_ident_collision(tmp_pat
         f"both acl-rooted clauses should be filtered for rar5_cleanup, got {out_other}"
     )
 
-    # For an archive_acl function (param ``acl``), both should survive.
+    # For an archive_acl function (param ``acl``), the bare-ident
+    # clause should survive emission. The dereference-form clause has
+    # ``acl->acl_types`` so its root resolves too.
     out_self = _emit_learned_clauses(
         config, "archive_acl_clear", "project", param_names={"acl"},
     )
     assert "__CPROVER_assume(acl != NULL);" in out_self
+
+
+def test_store_refuses_to_promote_function_local_clause(tmp_path: Path):
+    """Write-time gate (companion to ed48fb9 read-time filter). When the
+    LLM emits scope=project-invariant with a clause that references a
+    param-style identifier (``acl != NULL`` from the archive_acl.c sweep),
+    the store should refuse to add it to project_clauses and instead
+    record it as function-spec for the source function — so other
+    functions' harnesses don't get contaminated."""
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+
+    store = LearnedConstraintsStore(tmp_path)
+    # The exact clause that caused 701 CBMC parse failures in postfix8.
+    store.record("archive_acl_clear", Remediation(
+        scope=RemediationScope.PROJECT_INVARIANT,
+        clause="acl != NULL",
+        confidence="high",
+    ))
+
+    assert store.project_clauses() == [], (
+        "function-local-style clause must not enter project_clauses"
+    )
+    assert "acl != NULL" in store.function_clauses("archive_acl_clear"), (
+        "demoted clause must survive as function-spec on the source function"
+    )
+
+
+def test_store_refuses_auto_promote_function_local_clause(tmp_path: Path):
+    """Auto-promotion path (3+ functions independently learning the
+    same clause). Sibling functions in the same module often share
+    parameter names — that's a naming convention coincidence, not a
+    project-wide truth. The auto-promotion must skip param-style
+    clauses even when the threshold is hit."""
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+
+    store = LearnedConstraintsStore(tmp_path)
+    # 3 archive_acl functions all learn ``acl != NULL`` as function-spec.
+    for fn in ("archive_acl_clear", "archive_acl_add_entry",
+               "archive_acl_from_text_w"):
+        store.record(fn, Remediation(
+            scope=RemediationScope.FUNCTION_SPEC,
+            clause="acl != NULL",
+            confidence="high",
+        ))
+
+    assert store.project_clauses() == [], (
+        "auto-promotion threshold met but param-style clause must still "
+        "be blocked from project_clauses"
+    )
+    # The clause stays as function-spec on each owner.
+    for fn in ("archive_acl_clear", "archive_acl_add_entry",
+               "archive_acl_from_text_w"):
+        assert "acl != NULL" in store.function_clauses(fn), (
+            f"{fn} should still own the function-spec clause"
+        )
+
+
+def test_store_still_promotes_genuine_project_clause(tmp_path: Path):
+    """Sanity check: a long-name clause (xmlMalloc != NULL) is the
+    canonical project-wide invariant and must still auto-promote."""
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+
+    store = LearnedConstraintsStore(tmp_path)
+    for fn in ("xmlFoo", "xmlBar", "xmlBaz"):
+        store.record(fn, Remediation(
+            scope=RemediationScope.FUNCTION_SPEC,
+            clause="xmlMalloc != NULL",
+            confidence="high",
+        ))
+
+    assert "xmlMalloc != NULL" in store.project_clauses(), (
+        "genuine project invariant must still auto-promote"
+    )
+    # Auto-promotion retires per-function copies.
+    for fn in ("xmlFoo", "xmlBar", "xmlBaz"):
+        assert "xmlMalloc != NULL" not in store.function_clauses(fn)
 
 
 def test_harness_emit_learned_clauses_project_keeps_global_bare_ident(tmp_path: Path):
@@ -314,20 +409,22 @@ def test_harness_emit_learned_clauses_project_keeps_global_bare_ident(tmp_path: 
 def test_harness_emit_learned_clauses_project_keeps_macro_constants(tmp_path: Path):
     """ALL_CAPS and UpperCamel_WITH_UNDERSCORE identifiers (macros,
     enum constants like SIZE_MAX or ARCHIVE_OK) must pass through the
-    bare-ident filter even when the rest of the clause's identifiers
-    match the param set."""
-    from bmc_agent.feedback_loop import (
-        LearnedConstraintsStore, Remediation, RemediationScope,
-    )
+    bare-ident filter when the surrounding param-style ident matches
+    the function's params. Uses the legacy bypass because the write-
+    time gate (more conservative; runs without per-function context)
+    would refuse to promote a clause containing a param-style ident."""
+    import json
+    from bmc_agent.feedback_loop import LearnedConstraintsStore
     from bmc_agent.harness_generator import _emit_learned_clauses
     from bmc_agent.config import Config
 
-    store = LearnedConstraintsStore(tmp_path)
-    store.record("acl_new_entry", Remediation(
-        scope=RemediationScope.PROJECT_INVARIANT,
-        clause="size < SIZE_MAX",
-        confidence="high",
-    ))
+    bad_store = {
+        "version": LearnedConstraintsStore.SCHEMA_VERSION,
+        "function_clauses": {},
+        "project_clauses": ["size < SIZE_MAX"],
+        "code_change_todos": [],
+    }
+    (tmp_path / LearnedConstraintsStore.FILENAME).write_text(json.dumps(bad_store))
 
     config = Config()
     config.artifact_dir = str(tmp_path)

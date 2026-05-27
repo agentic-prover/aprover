@@ -443,11 +443,31 @@ class LearnedConstraintsStore:
                 if self._maybe_promote_to_project(r.clause):
                     changed = True
         elif r.scope == RemediationScope.PROJECT_INVARIANT and r.clause:
-            slot = self._data.setdefault("project_clauses", [])
-            if r.clause not in slot:
-                slot.append(r.clause)
-                changed = True
-                logger.info("Learned project invariant: %s", r.clause[:100])
+            # Write-time gate: a clause that references function-local-style
+            # identifiers (short names, `_`-prefixed) cannot be a genuine
+            # project-wide invariant — those names are parameter conventions
+            # in a single module, not project-global symbols. Demote to
+            # function-spec scope for the source function so the data isn't
+            # lost, but keep it out of project_clauses where it would
+            # contaminate every other function's harness. Companion to
+            # the read-time filter in harness_generator (ed48fb9).
+            from bmc_agent.harness_generator import clause_has_param_style_ident
+            if clause_has_param_style_ident(r.clause):
+                logger.info(
+                    "Refusing to promote project_invariant with function-local-"
+                    "style ident; demoting to function-spec for '%s': %s",
+                    func_name, r.clause[:100],
+                )
+                slot = self._data.setdefault("function_clauses", {}).setdefault(func_name, [])
+                if r.clause not in slot:
+                    slot.append(r.clause)
+                    changed = True
+            else:
+                slot = self._data.setdefault("project_clauses", [])
+                if r.clause not in slot:
+                    slot.append(r.clause)
+                    changed = True
+                    logger.info("Learned project invariant: %s", r.clause[:100])
         elif r.scope == RemediationScope.FUNCTION_POST_RELAX and r.clause:
             slot = (
                 self._data.setdefault("function_post_relaxations", {})
@@ -497,6 +517,19 @@ class LearnedConstraintsStore:
         functions have learned it. Returns True if a promotion happened.
         """
         if not clause:
+            return False
+        # Write-time gate (mirrors the direct-PROJECT_INVARIANT path):
+        # ≥3 sibling functions in the same module often share parameter
+        # names (e.g. archive_acl_*'s ``acl`` first param), which makes
+        # the auto-promotion threshold a false signal for project-wide
+        # invariants. Keep the clause in per-function slots — they're
+        # still useful there.
+        from bmc_agent.harness_generator import clause_has_param_style_ident
+        if clause_has_param_style_ident(clause):
+            logger.debug(
+                "Skipping project_clauses promotion — clause references "
+                "function-local-style identifier: %s", clause[:100],
+            )
             return False
         per_fn = self._data.get("function_clauses", {}) or {}
         owners = [fn for fn, cs in per_fn.items() if clause in cs]
