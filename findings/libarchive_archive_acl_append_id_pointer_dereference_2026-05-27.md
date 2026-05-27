@@ -1,3 +1,11 @@
+> **RESOLVED 2026-05-27: this CEx points at a real heap-buffer-overflow bug.**
+> Manual triage (the exact `archive_acl_text_len` byte-for-byte audit recommended
+> below in "Replication path") found the under-budget at the trailing `:id` write
+> for NFSv4 USER/GROUP entries with `name == NULL`. ASAN-confirmed reproducer +
+> patch in `findings/libarchive_archive_acl_to_text_heap_overflow_nfsv4_2026-05-27.md`.
+> The CBMC CEx documented here was the *pointer* to the bug; the bug itself lives
+> one frame up the caller chain in `archive_acl_text_len` vs `append_entry`.
+
 # libarchive `archive_acl.c::append_id` — pointer-dereference CEx (CBMC, UNRESOLVED)
 
 **Source**: libarchive `archive_acl.c`, function `append_id`

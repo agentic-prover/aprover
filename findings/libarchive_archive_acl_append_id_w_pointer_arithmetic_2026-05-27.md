@@ -1,3 +1,11 @@
+> **RESOLVED 2026-05-27: same FP class as `append_id.pointer_arithmetic.5`** —
+> harness-pointer-offset-unconstrained. The TriageAgent (`bmc_agent/agents/triage.py`)
+> independently confirmed this CEx is `likely_fp` (high confidence).
+> Crucially, **the related `append_id.pointer_dereference.11` UNRESOLVED CEx
+> in the sibling finding DID point at a real bug** — heap buffer overflow in
+> `archive_acl_to_text_l/_w` for nameless NFSv4 USER/GROUP entries. See
+> `findings/libarchive_archive_acl_to_text_heap_overflow_nfsv4_2026-05-27.md`.
+
 # libarchive `archive_acl.c::append_id_w` — pointer-arithmetic CEx (CBMC, REAL_BUG candidate)
 
 **Source**: libarchive `archive_acl.c`, function `append_id_w`
