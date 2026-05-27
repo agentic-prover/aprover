@@ -27,6 +27,7 @@ from bmc_agent.agents.refinement import RefinementAgent
 from bmc_agent.agents.spec_gen import SpecGenAgent
 from bmc_agent.agents.spec_gen_tools import SpecGenWithToolsAgent
 from bmc_agent.agents.triage import TriageAgent, TriageResult, TriageVerdict
+from bmc_agent.agents.triage_tools import TriageToolsAgent
 
 __all__ = [
     "AdjacentBugAgent",
@@ -42,5 +43,6 @@ __all__ = [
     "SpecGenWithToolsAgent",
     "TriageAgent",
     "TriageResult",
+    "TriageToolsAgent",
     "TriageVerdict",
 ]

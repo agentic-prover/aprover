@@ -35,6 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from bmc_agent.agents.triage import TriageAgent, TriageResult, TriageVerdict
+from bmc_agent.agents.triage_tools import TriageToolsAgent
 from bmc_agent.config import Config
 from bmc_agent.llm import LLMClient
 
@@ -136,6 +137,10 @@ def main() -> int:
     ap.add_argument("--only", default="", help="comma-separated function names")
     ap.add_argument("--include-real-bug", action="store_true",
                     help="also triage outcomes already classified real_bug")
+    ap.add_argument("--no-tools", action="store_true",
+                    help="use the one-shot TriageAgent (v1) instead of the "
+                         "tool-using TriageToolsAgent (v2). v2 walks the "
+                         "call chain to catch upstream size/write mismatches.")
     args = ap.parse_args()
 
     sweep_dir = args.sweep_dir
@@ -148,7 +153,59 @@ def main() -> int:
 
     cfg = Config.from_env()
     llm = LLMClient(cfg)
-    agent = TriageAgent(cfg, llm)
+    if args.no_tools:
+        agent = TriageAgent(cfg, llm)
+        print("# Using TriageAgent (v1, one-shot, function-source-only)",
+              flush=True)
+    else:
+        # Build the parsed corpus once so the TriageToolsAgent can
+        # walk the call graph via lookup_function / find_more_callers.
+        from bmc_agent.parser import parse_c_file
+        from bmc_agent.preprocessor import preprocess
+        corpus_paths = sorted(args.corpus_dir.glob("*.c"))
+        if not corpus_paths:
+            print(f"ERROR: no .c files under {args.corpus_dir}", file=sys.stderr)
+            return 2
+        # Parse the LARGEST .c (heuristic: the one that contains the
+        # function being triaged). The triage script processes one
+        # function at a time so re-parsing per-function is feasible
+        # but wasteful; for v1 of the script, parse the first .c
+        # whose basename matches the file_stem in the driver path
+        # (driver_dir / file_stem / fn_name / classifications).
+        # If parsing fails, fall back to v1.
+        parsed = None
+        for cp in corpus_paths:
+            try:
+                expanded = preprocess(
+                    cp,
+                    include_dirs=[
+                        "/tmp/libarchive_bench/libarchive/build",
+                        "/tmp/libarchive_bench/libarchive/libarchive",
+                    ],
+                    defines=["HAVE_CONFIG_H"],
+                )
+                parsed = parse_c_file(cp, source_text=expanded)
+                if parsed and parsed.functions:
+                    print(f"# Parsed corpus root: {cp} ({len(parsed.functions)} fns)",
+                          flush=True)
+                    break
+            except Exception as exc:
+                print(f"# Parse failed for {cp}: {exc}", file=sys.stderr)
+        if parsed is None:
+            print("# WARN: corpus parse failed; falling back to v1 TriageAgent",
+                  file=sys.stderr, flush=True)
+            agent = TriageAgent(cfg, llm)
+        else:
+            agent = TriageToolsAgent(
+                cfg, llm,
+                parsed_file=parsed,
+                corpus_paths=corpus_paths,
+                all_specs={},
+            )
+            print(f"# Using TriageToolsAgent (v2, tool-use, "
+                  f"max_iterations={agent.max_iterations_param}, "
+                  f"max_tool_calls={agent.max_tool_calls_param})",
+                  flush=True)
 
     results: list[dict] = []
     summary_counts: Counter = Counter()
