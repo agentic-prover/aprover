@@ -170,10 +170,13 @@ def test_is_link_only_error_empty_returns_false():
 # ---------------------------------------------------------------------------
 
 def _make_validator_for_regen(llm):
-    """Skip __init__ — we only need self._llm + self._reproducer_retry_max."""
+    """Skip __init__ — we only need self._llm, self.config, and
+    self._reproducer_retry_max for the regen path."""
     from bmc_agent.dynamic_validator import DynamicValidator
+    from bmc_agent.config import Config
     v = object.__new__(DynamicValidator)
     v._llm = llm
+    v.config = Config(llm_api_key="test")
     v._reproducer_retry_max = 2
     return v
 
