@@ -843,6 +843,144 @@ def test_feasibility_harness_return_var_collision_fallback(tmp_path):
     )
 
 
+def test_real_libc_harness_return_var_collision_fallback(tmp_path):
+    """Same collision but on the ``--real-libc`` harness path.
+
+    Discovered 2026-05-27 in postfix8: the real-libc path emitted
+    ``int result = isint(start, end, result);`` while the param
+    ``int *result`` was already in scope, producing CBMC's
+    ``CONVERSION ERROR: symbol 'main::1::result' redefined with a
+    different type — Original: signed int * — New: signed int``.
+    Both isint and isint_w errored on every libarchive sweep
+    (UNKNOWN error-class → NO_ACTION recovery → silently dropped
+    from Phase 3). The default and feasibility-harness paths
+    already had the rename guard; this extends it to real-libc.
+
+    The fix lives at the TOP of ``_generate_real_libc`` so the
+    rename also threads through ``postcond_to_assert`` — the
+    captured variable AND every ``\\result`` reference in the
+    postcondition land on the same renamed identifier.
+    """
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+
+    fut_sig = FunctionSignature(
+        name="isint", return_type="int",
+        parameters=[
+            ("const char *", "start"),
+            ("const char *", "end"),
+            ("int *", "result"),
+        ],
+    )
+    fut = FunctionInfo(
+        name="isint", signature=fut_sig,
+        body="{\n    *result = 0;\n    return start < end ? 1 : 0;\n}",
+        callees=set(),
+        source_file=str(tmp_path / "archive_acl.c"),
+    )
+    # The real-libc path #include's func.source_file, so the file
+    # must exist with at least the function body.
+    (tmp_path / "archive_acl.c").write_text(
+        "int isint(const char *start, const char *end, int *result) {\n"
+        "    *result = 0;\n"
+        "    return start < end ? 1 : 0;\n"
+        "}\n"
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "archive_acl.c"),
+        functions={"isint": fut_sig},
+        function_bodies={"isint": fut.body},
+        call_graph={"isint": set()},
+    )
+    # Postcondition references \result to exercise the
+    # postcond_to_assert rewrite path: it should also land on
+    # ``_amc_ret`` after the rename guard fires.
+    spec = Spec(
+        function_name="isint", precondition="true",
+        postcondition="\\result == 0 || \\result == 1",
+        status=SpecStatus.GENERATED,
+    )
+
+    config = Config(llm_api_key="test")
+    config.cbmc_real_libc = True
+    gen = HarnessGenerator(config)
+    text = gen._generate_real_libc(
+        func=fut, spec=spec, parsed_file=parsed, all_funcs=None,
+    )
+
+    # Param 'result' already declared — return capture renamed
+    assert "int _amc_ret = isint(" in text, (
+        f"real-libc return-capture collision fallback not applied:\n"
+        f"{text[-2000:]}"
+    )
+    # Importantly, the buggy form ``int result = isint(`` MUST NOT
+    # appear — that's what redefined the parameter and triggered the
+    # CBMC CONVERSION ERROR.
+    assert "int result = isint(" not in text, (
+        f"real-libc still emits the colliding declaration:\n{text[-2000:]}"
+    )
+    # And the postcondition assert must reference the same renamed
+    # variable (proves postcond_to_assert got the return_var kwarg).
+    assert "_amc_ret == 0 || _amc_ret == 1" in text or \
+           "_amc_ret == 0" in text and "_amc_ret == 1" in text, (
+        f"postcondition didn't rewrite \\result to _amc_ret:\n"
+        f"{text[-2000:]}"
+    )
+
+
+def test_real_libc_harness_uses_result_when_no_collision(tmp_path):
+    """Negative case: when the function has no parameter literally
+    named ``result``, the historical ``int result = fn(...)`` form is
+    preserved. The rename guard must NOT fire spuriously."""
+    from bmc_agent.parser import (
+        FunctionInfo, FunctionSignature, ParsedCFile,
+    )
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.config import Config
+    from bmc_agent.spec import Spec, SpecStatus
+
+    fut_sig = FunctionSignature(
+        name="compute", return_type="int",
+        parameters=[("int", "x"), ("int", "y")],
+    )
+    fut = FunctionInfo(
+        name="compute", signature=fut_sig,
+        body="{\n    return x + y;\n}",
+        callees=set(),
+        source_file=str(tmp_path / "demo.c"),
+    )
+    (tmp_path / "demo.c").write_text(
+        "int compute(int x, int y) { return x + y; }\n"
+    )
+    parsed = ParsedCFile(
+        path=str(tmp_path / "demo.c"),
+        functions={"compute": fut_sig},
+        function_bodies={"compute": fut.body},
+        call_graph={"compute": set()},
+    )
+    spec = Spec(
+        function_name="compute", precondition="true",
+        postcondition="\\result >= 0", status=SpecStatus.GENERATED,
+    )
+
+    config = Config(llm_api_key="test")
+    config.cbmc_real_libc = True
+    gen = HarnessGenerator(config)
+    text = gen._generate_real_libc(
+        func=fut, spec=spec, parsed_file=parsed, all_funcs=None,
+    )
+
+    # No collision — use the historical ``result`` name
+    assert "int result = compute(" in text
+    assert "_amc_ret" not in text  # rename guard did NOT spuriously fire
+    # Postcondition still references ``result`` (since no rename)
+    assert "result >= 0" in text
+
+
 # ---------------------------------------------------------------------------
 # Witness-value sanitization for comment embedding
 # ---------------------------------------------------------------------------

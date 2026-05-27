@@ -4708,7 +4708,20 @@ class HarnessGenerator:
         # Precondition assume + postcondition assert via existing DSL.
         param_names = [pname for _, pname in sig.parameters if pname]
         assume_stmts = precond_to_assume(spec.precondition, param_names)
-        assert_stmts = postcond_to_assert(spec.postcondition, param_names)
+        # Name-collision guard for the return-value variable: if the
+        # function has a parameter literally named ``result``
+        # (libarchive isint/isint_w take a ``int *result`` output
+        # param), we can't use ``result`` as the captured return-var
+        # — CBMC trips ``CONVERSION ERROR: symbol 'main::1::result'
+        # redefined with a different type``. Rename to ``_amc_ret``
+        # and thread that through both the call site AND the
+        # postcondition's ``\result`` placeholder rewrite.
+        _ret_var = "result"
+        if any(pn == _ret_var for _, pn in sig.parameters):
+            _ret_var = "_amc_ret"
+        assert_stmts = postcond_to_assert(
+            spec.postcondition, param_names, return_var=_ret_var,
+        )
 
         # Filter out lone "void" params — `f(void)` means no params in C.
         real_params = [(pt, pn) for pt, pn in sig.parameters
@@ -4806,13 +4819,17 @@ class HarnessGenerator:
                 "",
                 ret_type,
             ).strip()
-            body_lines.append(f"    {result_ret} result = {fn_name}({call_args});")
+            # ``_ret_var`` was computed at the top of the function
+            # alongside ``assert_stmts``, so postcond_to_assert already
+            # rewrote ``\result`` placeholders to match.
+            body_lines.append(f"    {result_ret} {_ret_var} = {fn_name}({call_args});")
             result_line_present = True
 
-        # Step 3.5: when the postcondition will dereference `result` (e.g.
-        # ``result->doc == doc``) and the function returns a pointer, the
-        # extern callees we don't have a stub contract for can return a
-        # NON-NULL but invalid pointer. The deref then trips a spurious
+        # Step 3.5: when the postcondition will dereference the
+        # return value (e.g. ``result->doc == doc``) and the function
+        # returns a pointer, extern callees we don't have a stub
+        # contract for can return a NON-NULL but invalid pointer.
+        # The deref then trips a spurious
         # `main.pointer_dereference.*` failure that no real caller would
         # ever hit because they NULL-check first. Mirror that real-caller
         # pattern: assume the returned pointer is either NULL or a
@@ -4821,14 +4838,14 @@ class HarnessGenerator:
         if (
             result_line_present
             and "*" in ret_type
-            and any("result->" in s for s in (assert_stmts or []))
+            and any(f"{_ret_var}->" in s for s in (assert_stmts or []))
         ):
             body_lines.append(
                 "    /* Step 3.5: harness-safe NULL-check on returned pointer "
                 "(prevents spurious main.pointer_dereference.* on extern returns) */"
             )
             body_lines.append(
-                "    __CPROVER_assume(result == NULL || __CPROVER_r_ok(result, 1));"
+                f"    __CPROVER_assume({_ret_var} == NULL || __CPROVER_r_ok({_ret_var}, 1));"
             )
 
         if assert_stmts:
@@ -4836,11 +4853,11 @@ class HarnessGenerator:
             body_lines.extend(f"    {s}" for s in assert_stmts)
 
         # Silence unused-variable warnings if the postcondition didn't
-        # reference `result` (e.g. trivial postcondition).
+        # reference the return value (e.g. trivial postcondition).
         if result_line_present and not any(
-            "result" in s for s in assert_stmts
+            _ret_var in s for s in assert_stmts
         ):
-            body_lines.append("    (void)result;")
+            body_lines.append(f"    (void){_ret_var};")
 
         # Top-level stub-function declarations for library-init function
         # pointer overrides (Step 1.5b). Must precede main() and the
