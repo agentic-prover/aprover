@@ -138,6 +138,16 @@ class DynamicValidationResult:
     run_error: Optional[str] = None
     reasoning: str = ""
     harness_source: Optional[str] = None  # the C source that was compiled and run
+    # Step A — fault-site classification. Possible values:
+    #   "in_fut"      — fault fired inside or after the FUT call
+    #                   (real-bug-shaped signal)
+    #   "in_setup"    — fault fired in harness setup BEFORE the FUT was
+    #                   reached (harness-artifact; NOT a real-bug signal)
+    #   "unknown"     — fault site could not be determined (e.g., process
+    #                   killed by OS signal without our handler running,
+    #                   or stripped binary)
+    #   None          — no fault fired; field not applicable
+    fault_site: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -147,6 +157,7 @@ class DynamicValidationResult:
             "run_error": self.run_error,
             "reasoning": self.reasoning,
             "harness_source": self.harness_source,
+            "fault_site": self.fault_site,
         }
 
 
@@ -498,15 +509,53 @@ class DynamicValidator:
             )
 
         stdout = proc.stdout or ""
+        # Step A — observe the fut_called checkpoint marker as it's printed
+        # to stdout BEFORE the FUT call. If the line "DYNAMIC:CHECKPOINT" is
+        # ever required as a separate marker, this scan supports it; for
+        # the in-process signal-handler path we extract the fut_called=N
+        # token from the CONFIRMED line directly.
         for line in stdout.splitlines():
             if line.startswith("DYNAMIC:CONFIRMED"):
                 sig_name = None
                 if "signal=" in line:
-                    sig_name = line.split("signal=", 1)[1].strip()
+                    # signal=<NAME> may be followed by additional tokens
+                    tail = line.split("signal=", 1)[1]
+                    sig_name = tail.split()[0].strip() if tail.split() else tail.strip()
+                # Parse fut_called=0/1 — emitted by the Step A
+                # instrumented signal handler. Absent on older harnesses,
+                # in which case we default to "unknown".
+                fault_site: Optional[str] = "unknown"
+                if "fut_called=" in line:
+                    flag = line.split("fut_called=", 1)[1].split()[0].strip()
+                    if flag == "1":
+                        fault_site = "in_fut"
+                    elif flag == "0":
+                        fault_site = "in_setup"
+                outcome = DynamicOutcome.CONFIRMED
+                reasoning = f"Dynamic harness confirmed fault: {line.strip()}"
+                # Step A reclassification: signal fired in harness setup
+                # (the FUT was never reached) → not a real-bug-shaped
+                # signal. Reclassify as INCONCLUSIVE with a tagged reason.
+                # Feature-flagged via the BMC_AGENT_DYNVAL_STRICT_FAULT_SITE
+                # env var (default: "1" — on, since the cost is negligible
+                # and the FP-reduction is direct).
+                strict = os.environ.get(
+                    "BMC_AGENT_DYNVAL_STRICT_FAULT_SITE", "1"
+                ).lower() not in ("0", "false", "off", "")
+                if strict and fault_site == "in_setup":
+                    outcome = DynamicOutcome.INCONCLUSIVE
+                    reasoning = (
+                        f"Signal {sig_name} fired in harness setup before the "
+                        f"function under test was called (fut_called=0). "
+                        f"This is a harness-artifact signal, not a real-bug "
+                        f"signal — reclassified from CONFIRMED to INCONCLUSIVE. "
+                        f"Raw line: {line.strip()}"
+                    )
                 return DynamicValidationResult(
-                    outcome=DynamicOutcome.CONFIRMED,
+                    outcome=outcome,
                     signal_name=sig_name,
-                    reasoning=f"Dynamic harness confirmed fault: {line.strip()}",
+                    reasoning=reasoning,
+                    fault_site=fault_site,
                 )
             if "DYNAMIC:NOT_TRIGGERED" in line:
                 return DynamicValidationResult(
@@ -517,15 +566,20 @@ class DynamicValidator:
         # On Linux/macOS, a process killed by signal N exits with returncode = -N
         # in Python subprocess.  Detect this as a confirmed fault even when the
         # in-process signal handler did not fire (e.g. bare-metal signal() stub).
+        # When this branch fires, we don't know the fault-site value (the
+        # handler that prints fut_called was bypassed); record as "unknown".
         _sig_names = {-11: "SIGSEGV", -6: "SIGABRT", -8: "SIGFPE", -4: "SIGILL"}
         if proc.returncode in _sig_names:
             sig = _sig_names[proc.returncode]
             return DynamicValidationResult(
                 outcome=DynamicOutcome.CONFIRMED,
                 signal_name=sig,
+                fault_site="unknown",
                 reasoning=(
                     f"Process killed by {sig} (exit code {proc.returncode}); "
-                    "fault confirmed at runtime."
+                    "fault confirmed at runtime. (fault_site unknown — in-process "
+                    "signal handler did not run, so the Step A checkpoint marker "
+                    "was not emitted.)"
                 ),
             )
 

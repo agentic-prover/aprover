@@ -4047,16 +4047,29 @@ class HarnessGenerator:
         # for testing.  We also use numeric signal values (11/6/8/4) so the
         # handler compiles even when the preprocessed source has already
         # re-defined SIGSEGV etc. as different constants.
+        #
+        # Step A — fault-site classification (commit 40ea2df+):
+        # `_amc_fut_called` is set to 1 immediately before the function under
+        # test is invoked. The signal handler prints this flag alongside
+        # the signal name, so the dyn-val parser can distinguish:
+        #   fut_called=0 — fault fired in the harness setup; the FUT was
+        #                  never called → reclassify as harness-setup-fault
+        #                  (not a real-bug-shaped signal)
+        #   fut_called=1 — fault fired inside (or after) the FUT call →
+        #                  real-bug-shaped signal
+        # The marker is async-signal-safe (just a volatile int) and adds
+        # negligible runtime overhead.
         sections.append(
             "/* AMC signal handler */\n"
             "static volatile const char *_amc_signal_name = \"UNKNOWN\";\n"
+            "static volatile sig_atomic_t _amc_fut_called = 0;\n"
             "static void _amc_handler(int sig) {\n"
             "    if (sig == 11) _amc_signal_name = \"SIGSEGV\";\n"
             "    else if (sig == 6)  _amc_signal_name = \"SIGABRT\";\n"
             "    else if (sig == 8)  _amc_signal_name = \"SIGFPE\";\n"
             "    else if (sig == 4)  _amc_signal_name = \"SIGILL\";\n"
-            "    printf(\"DYNAMIC:CONFIRMED signal=%s\\n\","
-            " (const char *)_amc_signal_name);\n"
+            "    printf(\"DYNAMIC:CONFIRMED signal=%s fut_called=%d\\n\","
+            " (const char *)_amc_signal_name, (int)_amc_fut_called);\n"
             "    fflush(stdout);\n"
             "    _Exit(1);\n"
             "}"
@@ -4087,6 +4100,10 @@ class HarnessGenerator:
             "    _amc_setup_state();",
         ]
         main_lines.extend(call_arg_lines)
+        # Step A fault-site checkpoint: set the flag immediately before
+        # invoking the function under test. If the signal handler fires
+        # later, it can report fut_called=1; if earlier, fut_called=0.
+        main_lines.append("    _amc_fut_called = 1;  /* Step A checkpoint */")
         if ret_entry == "void":
             main_lines.append(f"    {fn_name}({call_expr_args});")
         else:

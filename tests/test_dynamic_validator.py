@@ -598,6 +598,92 @@ int main(void) {
 
 
 # ---------------------------------------------------------------------------
+# Step A: fault-site classification via fut_called checkpoint
+# ---------------------------------------------------------------------------
+
+
+def test_run_confirmed_with_fut_called_1_marks_in_fut():
+    """CONFIRMED line with fut_called=1 → fault_site='in_fut'."""
+    dv = _make_dv()
+    stdout = "DYNAMIC:CONFIRMED signal=SIGSEGV fut_called=1\n"
+    with patch("subprocess.run", return_value=_make_fake_proc(1, stdout)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGSEGV"
+    assert result.fault_site == "in_fut"
+
+
+def test_run_confirmed_with_fut_called_0_reclassifies_to_inconclusive():
+    """CONFIRMED line with fut_called=0 → reclassified as INCONCLUSIVE.
+
+    This is the Step A defense against harness-setup signals being
+    misreported as real bugs. The fault fired before the FUT was even
+    called, so the signal is a harness artifact, not a real-bug signal.
+    """
+    import os as _os
+    # Default (strict mode on) — reclassify
+    _saved = _os.environ.pop("BMC_AGENT_DYNVAL_STRICT_FAULT_SITE", None)
+    try:
+        dv = _make_dv()
+        stdout = "DYNAMIC:CONFIRMED signal=SIGSEGV fut_called=0\n"
+        with patch("subprocess.run", return_value=_make_fake_proc(1, stdout)):
+            result = dv._run("/fake/binary")
+        assert result.outcome == DynamicOutcome.INCONCLUSIVE
+        assert result.signal_name == "SIGSEGV"
+        assert result.fault_site == "in_setup"
+        assert "harness setup" in result.reasoning
+    finally:
+        if _saved is not None:
+            _os.environ["BMC_AGENT_DYNVAL_STRICT_FAULT_SITE"] = _saved
+
+
+def test_run_confirmed_with_fut_called_0_strict_off_keeps_confirmed():
+    """When BMC_AGENT_DYNVAL_STRICT_FAULT_SITE=0, the reclassification
+    is disabled and the CONFIRMED outcome is preserved (fault_site
+    still recorded for downstream consumers).
+    """
+    import os as _os
+    _saved = _os.environ.get("BMC_AGENT_DYNVAL_STRICT_FAULT_SITE")
+    _os.environ["BMC_AGENT_DYNVAL_STRICT_FAULT_SITE"] = "0"
+    try:
+        dv = _make_dv()
+        stdout = "DYNAMIC:CONFIRMED signal=SIGSEGV fut_called=0\n"
+        with patch("subprocess.run", return_value=_make_fake_proc(1, stdout)):
+            result = dv._run("/fake/binary")
+        assert result.outcome == DynamicOutcome.CONFIRMED
+        assert result.fault_site == "in_setup"
+    finally:
+        if _saved is None:
+            _os.environ.pop("BMC_AGENT_DYNVAL_STRICT_FAULT_SITE", None)
+        else:
+            _os.environ["BMC_AGENT_DYNVAL_STRICT_FAULT_SITE"] = _saved
+
+
+def test_run_confirmed_no_fut_called_token_defaults_to_unknown():
+    """Older harness without the fut_called marker → fault_site='unknown';
+    treated as in_fut for backward-compat (no reclassification)."""
+    dv = _make_dv()
+    stdout = "DYNAMIC:CONFIRMED signal=SIGSEGV\n"  # no fut_called=
+    with patch("subprocess.run", return_value=_make_fake_proc(1, stdout)):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.fault_site == "unknown"
+
+
+def test_run_negative_exit_records_unknown_fault_site():
+    """Process killed by OS signal (signal handler bypassed) → fault_site
+    is recorded as 'unknown' because the checkpoint marker was never
+    emitted. The CONFIRMED outcome is preserved (this is the bare-metal
+    / async-signal-died-fast path that's still a real bug signal)."""
+    dv = _make_dv()
+    with patch("subprocess.run", return_value=_make_fake_proc(-11, "")):
+        result = dv._run("/fake/binary")
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.signal_name == "SIGSEGV"
+    assert result.fault_site == "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Unit: _strip_glibc_internal_typedefs
 # ---------------------------------------------------------------------------
 
