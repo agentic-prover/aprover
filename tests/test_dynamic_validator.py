@@ -598,6 +598,437 @@ int main(void) {
 
 
 # ---------------------------------------------------------------------------
+# Step B: DynValTriageAgent input-realism reclassification
+# ---------------------------------------------------------------------------
+
+
+def _make_dv_with_llm(monkeypatch=None) -> DynamicValidator:
+    """DynamicValidator with a non-None LLM and Step B enabled."""
+    import os
+    config = Config(enable_dynamic_validation=True)
+    dv = DynamicValidator(config, MagicMock(), llm=MagicMock())
+    dv._input_triage_enabled = True
+    return dv
+
+
+def _make_fake_counterexample():
+    from bmc_agent.cbmc import Counterexample
+    return Counterexample(
+        failing_property="foo.pointer_dereference.1",
+        variable_assignments={"__CPROVER_dead": "NULL", "p": "0", "len": "10"},
+    )
+
+
+def _make_fake_func(name: str = "foo"):
+    sig = FunctionSignature(name=name, return_type="int", parameters=[("int", "x")])
+    return FunctionInfo(
+        name=name,
+        signature=sig,
+        body="int foo(int x) { return x; }",
+        callees=set(),
+        source_file="dummy.c",
+    )
+
+
+def test_step_b_passthrough_when_disabled():
+    """Step B is opt-in. With the flag off, CONFIRMED stays CONFIRMED
+    regardless of what the agent might have said."""
+    dv = _make_dv()
+    dv._input_triage_enabled = False
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+    )
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+    assert out is in_result
+    assert out.outcome == DynamicOutcome.CONFIRMED
+
+
+def test_step_b_passthrough_for_inconclusive_outcome():
+    """Step B only runs on CONFIRMED — pass through INCONCLUSIVE / NOT_TRIGGERED
+    untouched even with the flag on."""
+    dv = _make_dv_with_llm()
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.INCONCLUSIVE,
+        fault_site=None,
+    )
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+    assert out.outcome == DynamicOutcome.INCONCLUSIVE
+
+
+def test_step_b_skips_when_step_a_already_reclassified():
+    """If Step A's fault_site is 'in_setup' (already reclassified to
+    INCONCLUSIVE upstream), Step B is a no-op — no need to spend an LLM
+    call to double-check."""
+    dv = _make_dv_with_llm()
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.INCONCLUSIVE,
+        signal_name="SIGSEGV",
+        fault_site="in_setup",
+    )
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+    # No reclassification (already done by Step A) and no agent call expected.
+    assert out is in_result
+
+
+def test_step_b_reclassifies_harness_artifact_to_inconclusive(monkeypatch):
+    """Agent verdict harness_artifact → CONFIRMED reclassified to
+    INCONCLUSIVE with the artifact tag in reasoning."""
+    from bmc_agent.agents.dyn_val_triage import (
+        DynValTriageResult, DynValTriageVerdict,
+    )
+
+    dv = _make_dv_with_llm()
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+        harness_source="int main(void) { return 0; }",
+    )
+
+    # Patch the agent's run() to return a harness_artifact verdict.
+    fake_triage = DynValTriageResult(
+        verdict=DynValTriageVerdict.HARNESS_ARTIFACT,
+        confidence="high",
+        reasoning="The harness lets p be NULL but real callers check it.",
+        artifact_class="caller-checks-nonnull",
+    )
+
+    class _FakeAgentOutcome:
+        output = fake_triage
+
+    import bmc_agent.agents.dyn_val_triage as m
+    monkeypatch.setattr(
+        m.DynValTriageAgent, "run",
+        lambda self, **kw: _FakeAgentOutcome(),
+    )
+
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+
+    assert out.outcome == DynamicOutcome.INCONCLUSIVE
+    assert "Step B" in out.reasoning
+    assert "harness_artifact" in out.reasoning
+    assert "caller-checks-nonnull" in out.reasoning
+
+
+def test_step_b_keeps_confirmed_on_real_bug_shaped(monkeypatch):
+    """Agent verdict real_bug_shaped → CONFIRMED preserved, but the
+    verdict is recorded in reasoning so downstream can see the audit
+    ran and agreed."""
+    from bmc_agent.agents.dyn_val_triage import (
+        DynValTriageResult, DynValTriageVerdict,
+    )
+
+    dv = _make_dv_with_llm()
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+        harness_source="int main(void) { return 0; }",
+    )
+
+    fake_triage = DynValTriageResult(
+        verdict=DynValTriageVerdict.REAL_BUG_SHAPED,
+        confidence="high",
+        reasoning="Witness values consistent with in-tree caller inputs.",
+    )
+
+    class _FakeAgentOutcome:
+        output = fake_triage
+
+    import bmc_agent.agents.dyn_val_triage as m
+    monkeypatch.setattr(
+        m.DynValTriageAgent, "run",
+        lambda self, **kw: _FakeAgentOutcome(),
+    )
+
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+
+    assert out.outcome == DynamicOutcome.CONFIRMED  # preserved
+    assert "Step B" in out.reasoning
+    assert "real_bug_shaped" in out.reasoning
+
+
+def test_step_b_keeps_confirmed_on_uncertain(monkeypatch):
+    """Agent verdict uncertain → keep CONFIRMED (preserve recall);
+    record the uncertain audit in reasoning."""
+    from bmc_agent.agents.dyn_val_triage import (
+        DynValTriageResult, DynValTriageVerdict,
+    )
+
+    dv = _make_dv_with_llm()
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="unknown",
+        harness_source="int main(void) { return 0; }",
+    )
+
+    fake_triage = DynValTriageResult(
+        verdict=DynValTriageVerdict.UNCERTAIN,
+        confidence="low",
+        reasoning="Witness has unusual values but I'm not sure.",
+    )
+
+    class _FakeAgentOutcome:
+        output = fake_triage
+
+    import bmc_agent.agents.dyn_val_triage as m
+    monkeypatch.setattr(
+        m.DynValTriageAgent, "run",
+        lambda self, **kw: _FakeAgentOutcome(),
+    )
+
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+
+    assert out.outcome == DynamicOutcome.CONFIRMED
+
+
+def test_step_b_tolerates_agent_exception(monkeypatch):
+    """When the agent raises, the original CONFIRMED is preserved
+    (the audit is best-effort, never a hard dependency)."""
+    dv = _make_dv_with_llm()
+    in_result = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+        harness_source="int main(void) { return 0; }",
+    )
+
+    def _raise(self, **kw):
+        raise RuntimeError("simulated LLM failure")
+
+    import bmc_agent.agents.dyn_val_triage as m
+    monkeypatch.setattr(m.DynValTriageAgent, "run", _raise)
+
+    out = dv._post_confirm_triage(
+        in_result, _make_fake_func(), _make_fake_counterexample(),
+    )
+    assert out.outcome == DynamicOutcome.CONFIRMED
+
+
+# ---------------------------------------------------------------------------
+# Step C — iterative regen on harness-artifact verdicts
+# ---------------------------------------------------------------------------
+
+
+def test_step_c_artifact_regen_prompt_has_diagnosis():
+    """Verify DynamicReproAgent's artifact-mode prompt includes the
+    artifact class + triage reasoning."""
+    from bmc_agent.agents.dynamic_repro import DynamicReproAgent
+
+    agent = DynamicReproAgent(config=MagicMock(), llm=MagicMock())
+    prompt = agent.build_prompt(
+        previous_reproducer="int main(void) {}",
+        func_name="foo",
+        artifact_class="caller-checks-nonnull",
+        triage_reasoning="The harness lets p be NULL but every in-tree caller checks it.",
+        signal_name="SIGSEGV",
+    )
+    assert "caller-checks-nonnull" in prompt
+    assert "every in-tree caller" in prompt
+    assert "SIGSEGV" in prompt
+    # The compile-error template must NOT be active
+    assert "failed to compile" not in prompt
+
+
+def test_step_c_compile_error_mode_still_works():
+    """Verify the original compile-error mode is preserved when
+    artifact_class is not supplied."""
+    from bmc_agent.agents.dynamic_repro import DynamicReproAgent
+
+    agent = DynamicReproAgent(config=MagicMock(), llm=MagicMock())
+    prompt = agent.build_prompt(
+        previous_reproducer="int main(void) {}",
+        func_name="foo",
+        compile_error="error: 'foo' undeclared",
+    )
+    assert "failed to compile" in prompt
+    assert "'foo' undeclared" in prompt
+    # Artifact-mode template must NOT be active
+    assert "artifact_class" not in prompt
+    assert "HARNESS-ARTIFACT" not in prompt
+
+
+def test_step_c_regen_on_artifact_then_real_bug_preserves_confirmed(monkeypatch):
+    """Scenario: original harness fires + Step B says artifact, regen
+    produces a new harness that also fires, Step B on the new harness
+    says real_bug_shaped. Final outcome stays CONFIRMED with the new
+    harness recorded.
+    """
+    from bmc_agent.agents.dyn_val_triage import (
+        DynValTriageResult, DynValTriageVerdict,
+    )
+    from bmc_agent.agents.base import AgentResult
+
+    dv = _make_dv_with_llm()
+    dv._artifact_regen_max = 2
+
+    initial = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+        harness_source="/* harness v1 */ int main(void) { return 0; }",
+    )
+
+    # Two-call sequence for DynValTriageAgent: artifact, then real_bug.
+    triage_responses = iter([
+        DynValTriageResult(
+            verdict=DynValTriageVerdict.HARNESS_ARTIFACT,
+            confidence="high",
+            reasoning="harness lets p be NULL",
+            artifact_class="caller-checks-nonnull",
+        ),
+        DynValTriageResult(
+            verdict=DynValTriageVerdict.REAL_BUG_SHAPED,
+            confidence="high",
+            reasoning="regenerated harness reaches the bug with realistic inputs",
+        ),
+    ])
+    import bmc_agent.agents.dyn_val_triage as m_t
+    monkeypatch.setattr(
+        m_t.DynValTriageAgent, "run",
+        lambda self, **kw: AgentResult(output=next(triage_responses)),
+    )
+
+    # DynamicReproAgent returns a new harness in artifact mode.
+    import bmc_agent.agents.dynamic_repro as m_r
+    new_harness = "/* harness v2 — tighter inputs */"
+    monkeypatch.setattr(
+        m_r.DynamicReproAgent, "run",
+        lambda self, **kw: AgentResult(output=new_harness),
+    )
+
+    # Mock compile + run to succeed on the regen and produce a
+    # CONFIRMED outcome (so the loop re-triages and the new triage
+    # returns real_bug_shaped).
+    monkeypatch.setattr(
+        dv, "_compile",
+        lambda src, cc, extra_flags=None: ("/fake/bin", None),
+    )
+    monkeypatch.setattr(
+        dv, "_run",
+        lambda binary: DynamicValidationResult(
+            outcome=DynamicOutcome.CONFIRMED,
+            signal_name="SIGSEGV",
+            fault_site="in_fut",
+            harness_source=None,  # set by Step C wrapper
+        ),
+    )
+
+    out = dv._post_confirm_triage(
+        initial, _make_fake_func(), _make_fake_counterexample(),
+    )
+
+    assert out.outcome == DynamicOutcome.CONFIRMED
+    # The new harness source should have been written into the result
+    assert out.harness_source == new_harness
+    assert "real_bug_shaped" in out.reasoning
+
+
+def test_step_c_regen_unreproducible_falls_through_to_reclassify(monkeypatch):
+    """When the regen agent says UNREPRODUCIBLE, we fall through to
+    reclassification on the original artifact verdict."""
+    from bmc_agent.agents.dyn_val_triage import (
+        DynValTriageResult, DynValTriageVerdict,
+    )
+    from bmc_agent.agents.base import AgentResult
+
+    dv = _make_dv_with_llm()
+    dv._artifact_regen_max = 2
+
+    initial = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+        harness_source="/* harness v1 */",
+    )
+
+    import bmc_agent.agents.dyn_val_triage as m_t
+    monkeypatch.setattr(
+        m_t.DynValTriageAgent, "run",
+        lambda self, **kw: AgentResult(output=DynValTriageResult(
+            verdict=DynValTriageVerdict.HARNESS_ARTIFACT,
+            confidence="high",
+            reasoning="harness lets p be NULL",
+            artifact_class="caller-checks-nonnull",
+        )),
+    )
+    import bmc_agent.agents.dynamic_repro as m_r
+    monkeypatch.setattr(
+        m_r.DynamicReproAgent, "run",
+        lambda self, **kw: AgentResult(
+            output="// UNREPRODUCIBLE: cannot tighten without losing the trigger"
+        ),
+    )
+
+    out = dv._post_confirm_triage(
+        initial, _make_fake_func(), _make_fake_counterexample(),
+    )
+    assert out.outcome == DynamicOutcome.INCONCLUSIVE
+    assert "harness_artifact" in out.reasoning
+
+
+def test_step_c_regen_compile_failure_falls_through_to_reclassify(monkeypatch):
+    """When the regenerated harness fails to compile, fall through to
+    reclassification (don't lose data on transient compile issues)."""
+    from bmc_agent.agents.dyn_val_triage import (
+        DynValTriageResult, DynValTriageVerdict,
+    )
+    from bmc_agent.agents.base import AgentResult
+
+    dv = _make_dv_with_llm()
+    dv._artifact_regen_max = 1
+
+    initial = DynamicValidationResult(
+        outcome=DynamicOutcome.CONFIRMED,
+        signal_name="SIGSEGV",
+        fault_site="in_fut",
+        harness_source="/* harness v1 */",
+    )
+
+    import bmc_agent.agents.dyn_val_triage as m_t
+    monkeypatch.setattr(
+        m_t.DynValTriageAgent, "run",
+        lambda self, **kw: AgentResult(output=DynValTriageResult(
+            verdict=DynValTriageVerdict.UNBOUNDED_INPUT,
+            confidence="high",
+            reasoning="length parameter exceeds buffer",
+            artifact_class="unbounded_input",
+        )),
+    )
+    import bmc_agent.agents.dynamic_repro as m_r
+    monkeypatch.setattr(
+        m_r.DynamicReproAgent, "run",
+        lambda self, **kw: AgentResult(output="/* new harness */"),
+    )
+    # Compile fails on the regen
+    monkeypatch.setattr(
+        dv, "_compile",
+        lambda src, cc, extra_flags=None: (None, "regen compile error"),
+    )
+
+    out = dv._post_confirm_triage(
+        initial, _make_fake_func(), _make_fake_counterexample(),
+    )
+    assert out.outcome == DynamicOutcome.INCONCLUSIVE
+    assert "unbounded_input" in out.reasoning
+
+
+# ---------------------------------------------------------------------------
 # Step A: fault-site classification via fut_called checkpoint
 # ---------------------------------------------------------------------------
 

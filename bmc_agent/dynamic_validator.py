@@ -187,6 +187,19 @@ class DynamicValidator:
         self._reproducer_retry_max = int(
             os.environ.get("BMC_AGENT_DYN_REPRODUCER_RETRY_MAX", "2")
         )
+        # Step B — input-realism triage on CONFIRMED outcomes. Off by
+        # default because it costs one LLM call per CONFIRMED CEx. Set
+        # BMC_AGENT_DYNVAL_INPUT_TRIAGE=1 to enable.
+        self._input_triage_enabled = (
+            os.environ.get("BMC_AGENT_DYNVAL_INPUT_TRIAGE", "0")
+            .lower() not in ("0", "false", "off", "")
+        )
+        # Step C — iterative regen on harness-artifact signals. Off by
+        # default; depends on Step B's triage signal. Capped to keep
+        # cost bounded.
+        self._artifact_regen_max = int(
+            os.environ.get("BMC_AGENT_DYNVAL_ARTIFACT_REGEN_MAX", "2")
+        )
 
     def validate(
         self,
@@ -356,13 +369,251 @@ class DynamicValidator:
             _unlink(binary_path)
 
         result.harness_source = winning_harness
+        # Step B — input-realism triage on CONFIRMED outcomes. Off by
+        # default; gate via BMC_AGENT_DYNVAL_INPUT_TRIAGE=1. Catches
+        # cases that Step A's fault_site check couldn't (the FUT WAS
+        # called and the signal fired in or after it, but the witness
+        # inputs are unreachable from real callers).
+        result = self._post_confirm_triage(
+            result=result,
+            entry_func=entry_func,
+            counterexample=counterexample,
+        )
         logger.info(
-            "Dynamic validation for '%s': %s%s",
+            "Dynamic validation for '%s': %s%s%s",
             entry_func.name,
             result.outcome.value,
             f" signal={result.signal_name}" if result.signal_name else "",
+            f" fault_site={result.fault_site}" if result.fault_site else "",
         )
         return result
+
+    def _post_confirm_triage(
+        self,
+        result: DynamicValidationResult,
+        entry_func: FunctionInfo,
+        counterexample: "Counterexample",
+    ) -> DynamicValidationResult:
+        """Step B + C: when a CONFIRMED outcome's fault_site is not
+        already disqualified by Step A, optionally run an LLM-driven
+        input-realism audit (Step B). If the agent flags the witness
+        as harness-artifact / unbounded-input AND retries remain,
+        regenerate the harness with the artifact diagnosis as
+        guidance, re-compile, re-run, and re-triage (Step C). After
+        the regen budget is exhausted with the artifact verdict
+        unchanged, reclassify CONFIRMED → INCONCLUSIVE.
+
+        Returns the final result after up to ``_artifact_regen_max``
+        regeneration attempts. Pass-through when
+        - the feature flag is off,
+        - no LLM client is configured,
+        - the outcome isn't CONFIRMED, or
+        - Step A already disqualified the signal.
+        """
+        if not self._input_triage_enabled:
+            return result
+        if self._llm is None:
+            return result
+        if result.outcome != DynamicOutcome.CONFIRMED:
+            return result
+        if result.fault_site == "in_setup":
+            # Step A has already reclassified upstream; nothing to do.
+            return result
+
+        # ---------------- triage / regen loop ----------------
+        # attempt=0 is the initial triage on the existing harness.
+        # attempts 1..N are post-regen re-triage.
+        last_triage = None
+        for attempt in range(self._artifact_regen_max + 1):
+            triage = self._run_dynval_triage(
+                result=result,
+                entry_func=entry_func,
+                counterexample=counterexample,
+            )
+            if triage is None:
+                # Agent failure → keep original CONFIRMED verdict.
+                return result
+            last_triage = triage
+
+            from bmc_agent.agents.dyn_val_triage import DynValTriageVerdict
+            if triage.verdict == DynValTriageVerdict.REAL_BUG_SHAPED:
+                result.reasoning = (
+                    (result.reasoning or "")
+                    + f"\n[Step B attempt {attempt}] DynValTriageAgent: "
+                    + f"real_bug_shaped ({triage.confidence}). "
+                    + f"{triage.reasoning[:200]}"
+                )
+                return result
+            if triage.verdict == DynValTriageVerdict.UNCERTAIN:
+                # Don't reclassify on uncertain — preserves recall.
+                result.reasoning = (
+                    (result.reasoning or "")
+                    + f"\n[Step B attempt {attempt}] DynValTriageAgent: "
+                    + f"uncertain ({triage.confidence}). "
+                    + f"{triage.reasoning[:200]}"
+                )
+                return result
+
+            # HARNESS_ARTIFACT or UNBOUNDED_INPUT.
+            # If we have regen retries remaining (Step C), try to fix
+            # the harness with the artifact diagnosis. Otherwise fall
+            # through to reclassification below.
+            if attempt >= self._artifact_regen_max:
+                break
+
+            new_result = self._regen_harness_with_artifact_diagnosis(
+                result=result,
+                triage=triage,
+                entry_func=entry_func,
+            )
+            if new_result is None:
+                # Regen failed (UNREPRODUCIBLE, no change, compile
+                # error). Fall through to reclassification.
+                break
+            if new_result.outcome != DynamicOutcome.CONFIRMED:
+                # The regenerated harness didn't fire — record and
+                # return. This is *evidence* the original signal was
+                # a harness artifact (a tighter input doesn't reach
+                # the fault). The new outcome tells the consumer what
+                # the tightened harness actually did.
+                new_result.reasoning = (
+                    (new_result.reasoning or "")
+                    + f"\n[Step C attempt {attempt + 1}] Regenerated "
+                    + f"harness with artifact diagnosis "
+                    + f"({triage.artifact_class}); new outcome="
+                    + f"{new_result.outcome.value}. Original CONFIRMED "
+                    + f"signal was likely a harness artifact."
+                )
+                return new_result
+            # Still CONFIRMED. Update result and loop to re-triage.
+            new_result.reasoning = (
+                (new_result.reasoning or "")
+                + f"\n[Step C attempt {attempt + 1}] Regenerated harness "
+                + f"with artifact diagnosis ({triage.artifact_class}); "
+                + f"new harness ALSO fires. Re-triaging."
+            )
+            result = new_result
+
+        # Exhausted regen budget with artifact verdict still standing.
+        # Reclassify CONFIRMED → INCONCLUSIVE.
+        triage = last_triage
+        tag = triage.verdict.value
+        cls = triage.artifact_class or "unspecified"
+        logger.info(
+            "Step B/C reclassified '%s' CONFIRMED → INCONCLUSIVE after %d "
+            "regen attempt(s) (triage=%s class=%s)",
+            entry_func.name, self._artifact_regen_max, tag, cls,
+        )
+        result.outcome = DynamicOutcome.INCONCLUSIVE
+        result.reasoning = (
+            (result.reasoning or "")
+            + f"\n[Step B+C] DynValTriageAgent: {tag} "
+            + f"(class={cls}, conf={triage.confidence}) persists after "
+            + f"{self._artifact_regen_max} regen attempt(s). "
+            + f"Reclassified CONFIRMED → INCONCLUSIVE. "
+            + f"Final triage: {triage.reasoning[:300]}"
+        )
+        return result
+
+    def _run_dynval_triage(
+        self,
+        result: DynamicValidationResult,
+        entry_func: FunctionInfo,
+        counterexample: "Counterexample",
+    ) -> "Optional[Any]":
+        """Helper: invoke DynValTriageAgent on the current result.
+        Returns the DynValTriageResult or None on agent failure.
+        """
+        try:
+            from bmc_agent.agents.dyn_val_triage import DynValTriageAgent
+            agent = DynValTriageAgent(config=self.config, llm=self._llm)
+            va = (counterexample.variable_assignments or {})
+            witness_lines = []
+            for k, v in va.items():
+                if k.startswith("__CPROVER_"):
+                    continue
+                if k.startswith("rb_ops"):
+                    continue
+                witness_lines.append(f"  {k} = {v}")
+                if len(witness_lines) > 60:
+                    witness_lines.append("  ...")
+                    break
+            witness_text = "\n".join(witness_lines)
+            outcome = agent.run(
+                func_name=entry_func.name,
+                func_source=(entry_func.body or "")[:3000],
+                harness=(result.harness_source or "")[:3000],
+                witness=witness_text,
+                run_output=(result.reasoning or "")[:1000],
+                signal_name=result.signal_name or "unknown",
+                fault_site=result.fault_site or "unknown",
+            )
+            if outcome is None:
+                return None
+            return outcome.output
+        except Exception as exc:
+            logger.debug(
+                "DynValTriageAgent raised on '%s': %s — pass-through",
+                entry_func.name, exc,
+            )
+            return None
+
+    def _regen_harness_with_artifact_diagnosis(
+        self,
+        result: DynamicValidationResult,
+        triage,
+        entry_func: FunctionInfo,
+    ) -> "Optional[DynamicValidationResult]":
+        """Step C: ask DynamicReproAgent to regenerate the harness with
+        the artifact diagnosis as guidance, then compile + run.
+        Returns the new DynamicValidationResult, or None when:
+          - the agent returned UNREPRODUCIBLE / no change
+          - the regenerated harness failed to compile
+        """
+        try:
+            from bmc_agent.agents.dynamic_repro import DynamicReproAgent
+            agent = DynamicReproAgent(config=self.config, llm=self._llm)
+            outcome = agent.run(
+                previous_reproducer=(result.harness_source or ""),
+                func_name=entry_func.name,
+                artifact_class=triage.artifact_class or "unspecified",
+                triage_reasoning=triage.reasoning,
+                signal_name=result.signal_name or "unknown",
+            )
+        except Exception as exc:
+            logger.debug(
+                "DynamicReproAgent (artifact mode) raised on '%s': %s",
+                entry_func.name, exc,
+            )
+            return None
+
+        if outcome is None or not outcome.output:
+            return None
+        new_src = outcome.output
+        if new_src == result.harness_source:
+            return None
+        if "UNREPRODUCIBLE" in new_src:
+            logger.debug(
+                "Step C: agent returned UNREPRODUCIBLE for '%s'",
+                entry_func.name,
+            )
+            return None
+
+        # Compile + run the regenerated harness.
+        cc = self.config.dynamic_cc_path
+        binary_path, compile_err = self._compile(new_src, cc)
+        if binary_path is None:
+            logger.debug(
+                "Step C: regenerated harness for '%s' failed to compile: %s",
+                entry_func.name, (compile_err or "")[:200],
+            )
+            return None
+        try:
+            new_result = self._run(binary_path)
+        finally:
+            _unlink(binary_path)
+        new_result.harness_source = new_src
+        return new_result
 
     # ------------------------------------------------------------------
     # Internal helpers

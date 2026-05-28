@@ -70,6 +70,56 @@ _USER_PROMPT_TEMPLATE = (
 )
 
 
+# Step C — artifact-diagnosis regen prompt. Used when Step B (dyn-val
+# triage) has flagged a CONFIRMED dyn-val signal as a harness-artifact
+# (e.g., the harness allowed inputs no in-tree caller would produce).
+# The job is to regenerate the harness with TIGHTER input constraints
+# that match in-tree caller invariants, so the new run either:
+#   (a) reproduces the signal under realistic inputs → confirms it's a
+#       real bug after all, or
+#   (b) doesn't fire → confirms the original signal was a harness
+#       artifact.
+_ARTIFACT_REGEN_PROMPT_TEMPLATE = (
+    "A previous dynamic-validation harness for `{func_name}` compiled "
+    "and ran, and it DID fire a signal ({signal_name}). However, the "
+    "input-realism triage agent classified the signal as a "
+    "HARNESS-ARTIFACT, not a real-bug signal:\n\n"
+    "=== TRIAGE DIAGNOSIS ===\n"
+    "  artifact_class:  {artifact_class}\n"
+    "  triage_reasoning: {triage_reasoning}\n\n"
+    "Your task: regenerate the C reproducer with TIGHTER input "
+    "constraints that match in-tree caller invariants, so the next "
+    "run is a fair test. Specifically, address the diagnosed artifact "
+    "class above — for example, if the diagnosis is "
+    "'caller-checks-nonnull', the regenerated harness must initialize "
+    "the offending parameter to a non-NULL valid pointer; if "
+    "'calloc-zero-init-violation', the harness must calloc its setup "
+    "structs instead of leaving fields uninitialized; if "
+    "'unbounded_input', the harness must bound length / size / count "
+    "parameters to values consistent with the accompanying buffer's "
+    "actual size.\n\n"
+    "=== PREVIOUS REPRODUCER ===\n"
+    "```c\n"
+    "{previous_reproducer}\n"
+    "```\n\n"
+    "HARD RULES:\n"
+    "  1. Same public-API constraints as the original prompt: MUST "
+    "     #include the project's public-API header, use only public "
+    "     API calls, no inline reimplementation of project functions.\n"
+    "  2. Do NOT loosen any in-tree invariants — the regen exists to "
+    "     TIGHTEN inputs to match caller reality, never to relax them.\n"
+    "  3. If you cannot honestly tighten the inputs while keeping the "
+    "     harness exercising the same code path, respond with the "
+    "     UNREPRODUCIBLE marker — the original signal really was a "
+    "     harness artifact and no realistic harness reproduces it.\n\n"
+    "Respond with ONLY this JSON:\n"
+    "{{\n"
+    '  "reproducer_code": "<corrected C source OR '
+    '// UNREPRODUCIBLE: <reason>>"\n'
+    "}}"
+)
+
+
 class DynamicReproAgent(BaseAgent[str]):
     """Returns the corrected reproducer C source as a string, or the
     UNREPRODUCIBLE marker verbatim (the caller's outer loop treats the
@@ -91,17 +141,33 @@ class DynamicReproAgent(BaseAgent[str]):
         self,
         *,
         previous_reproducer: str,
-        compile_error: str,
         func_name: str,
+        # Mode 1: compile-error regen (the original use-case).
+        compile_error: Optional[str] = None,
+        # Mode 2 (Step C): artifact-diagnosis regen. When set, switches
+        # the prompt to the "tighten inputs to match in-tree caller
+        # invariants" template. Both modes share the same JSON output
+        # schema and parse path.
+        artifact_class: Optional[str] = None,
+        triage_reasoning: Optional[str] = None,
+        signal_name: Optional[str] = None,
         **_: Any,
     ) -> str:
+        prev = (previous_reproducer or "")[:4000]
+        if artifact_class is not None:
+            return _ARTIFACT_REGEN_PROMPT_TEMPLATE.format(
+                func_name=func_name,
+                previous_reproducer=prev,
+                artifact_class=artifact_class,
+                triage_reasoning=(triage_reasoning or "")[:800],
+                signal_name=signal_name or "unknown",
+            )
         # Trim error to keep prompt budget reasonable — first 1500 chars
         # are almost always enough (multi-line GCC errors repeat once
         # the first symbol fails to resolve). Match the call-site's
         # historical truncation byte-for-byte so the agent and the
         # pre-migration code agree on the prompt.
         err_snippet = (compile_error or "")[:1500]
-        prev = (previous_reproducer or "")[:4000]
         return _USER_PROMPT_TEMPLATE.format(
             func_name=func_name,
             previous_reproducer=prev,
