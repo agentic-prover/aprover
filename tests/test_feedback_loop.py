@@ -295,6 +295,62 @@ def test_harness_emit_learned_clauses_project_skips_bare_ident_collision(tmp_pat
     assert "__CPROVER_assume(acl != NULL);" in out_self
 
 
+def test_harness_emit_learned_clauses_project_skips_long_struct_deref_root(tmp_path: Path):
+    """Regression: postfix9b sweep (2026-05-28) — rar5.c failed because
+    a learned project clause referenced ``iso9660`` (a 7-char param
+    name distilled from iso9660.c functions) as a struct-deref root:
+
+        iso9660 == NULL || iso9660->use_files == NULL || ...
+
+    The old gate's ``_is_param_style_ident`` heuristic only flagged
+    identifiers as param-style when len ≤ 4 OR _-prefixed. ``iso9660``
+    is 7 chars, no underscore prefix — it slipped through. CBMC then
+    rejected all 101 rar5 harnesses with ``failed to find symbol
+    'iso9660'``.
+
+    Fix: struct-deref roots (``X->field``) are always treated as
+    locals — by construction you can't dereference a macro. So we
+    drop the length filter for struct-deref roots specifically.
+    Bare-identifier checks (``X != NULL``) keep the length heuristic
+    because long bare names CAN be global macros.
+    """
+    from bmc_agent.feedback_loop import (
+        LearnedConstraintsStore, Remediation, RemediationScope,
+    )
+    from bmc_agent.harness_generator import _emit_learned_clauses
+    from bmc_agent.config import Config
+
+    # Simulate a legacy / on-disk-contaminated store with the exact
+    # rar5 problem clause.
+    bad_store = {
+        "version": LearnedConstraintsStore.SCHEMA_VERSION,
+        "function_clauses": {},
+        "project_clauses": [
+            # The actual postfix9b problem clause:
+            "iso9660 == NULL || iso9660->use_files == NULL "
+            "|| iso9660->use_files->utf16be_name == NULL",
+            # A safe sibling that should survive:
+            "archive_match != NULL",  # bare-ident long-name; assumed global-like
+        ],
+        "code_change_todos": [],
+    }
+    (tmp_path / LearnedConstraintsStore.FILENAME).write_text(json.dumps(bad_store))
+
+    config = Config()
+    config.artifact_dir = str(tmp_path)
+    config.enable_feedback_loop = True
+
+    # rar5 functions have params like ``rar``, ``a``, ``arg`` — never
+    # ``iso9660``. The iso9660-rooted clause must be dropped.
+    out = _emit_learned_clauses(
+        config, "rar5_cleanup", "project",
+        param_names={"a", "rar"},
+    )
+    assert all("iso9660" not in c for c in out), (
+        f"iso9660-rooted clause must be dropped for rar5 function, got {out}"
+    )
+
+
 def test_harness_emit_learned_clauses_project_skips_fn_call_arity_mismatch(tmp_path: Path):
     """Regression: postfix9 sweep (2026-05-27 night) had every CBMC
     verification on cab/cpio/iso9660/rar5 die with CONVERSION ERROR

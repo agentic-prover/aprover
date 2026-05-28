@@ -876,15 +876,50 @@ def _clause_references_only_known_idents(
     libarchive postfix8 sweep: a single bad bare-ident clause caused
     701 CBMC parse failures across 6 files.
 
-    The check rejects only parameter-style identifiers (see
-    ``_is_param_style_ident``). UPPER_CASE macros, function-call
-    identifiers (followed by ``(``), and longer names are passed
-    through. Skipping a clause is always preferable to crashing the
-    harness — the clause is an OPTIMIZATION, not a soundness invariant.
+    The check rejects parameter-style identifiers (see
+    ``_is_param_style_ident``) for BARE identifiers, but applies a
+    STRICTER rule for struct-deref roots: any struct-deref root that
+    isn't in the current function's params or a known builtin / type
+    is rejected, regardless of length.
+
+    Why the length asymmetry: a bare identifier like
+    ``ARCHIVE_MATCH_MAGIC`` could be a global macro that resolves in
+    every TU, so we need the length heuristic to avoid over-rejecting
+    project-defined constants. But ``X->field`` is by construction a
+    pointer to a struct — you can't dereference a macro — so the root
+    MUST be a local variable / parameter. If the root isn't in the
+    current function's params and isn't a known builtin, the clause
+    will fail to compile in this TU. Reject it.
+
+    Regression that motivated the asymmetry: postfix9b's rar5.c
+    sweep emitted a learned clause referencing ``iso9660`` (a 7-char
+    param name from iso9660.c's functions) as a struct-deref root.
+    The old "≤4 chars or _-prefixed" length filter let it pass; CBMC
+    then rejected all 101 rar5 harnesses with
+    ``failed to find symbol 'iso9660'``. Dropping the length filter
+    for struct-deref roots closes that variant.
+
+    UPPER_CASE macros, function-call identifiers (followed by ``(``),
+    and longer names are still passed through in the BARE-identifier
+    check. Skipping a clause is always preferable to crashing the
+    harness — the clause is an OPTIMIZATION, not a soundness
+    invariant.
     """
-    # Pattern 1: struct-deref roots (``X->field``).
+    # Pattern 1: struct-deref roots (``X->field``). Strict — by
+    # construction a struct-deref root is a local variable, so any
+    # root not in the current function's params is a guaranteed
+    # parse failure in this TU.
     for root in _CLAUSE_STRUCT_DEREF_RE.findall(clause):
-        if _is_param_style_ident(root) and root not in param_names:
+        # Allow CBMC builtins (e.g. ``__CPROVER_<thing>->field``).
+        if root.startswith("__CPROVER_"):
+            continue
+        # Allow well-known globals / types that legitimately have
+        # struct shape (the ``struct`` keyword itself, or stdlib
+        # globals). None known for now, but the slot is here for
+        # future extension.
+        if root in _CLAUSE_RESERVED_IDENTS:
+            continue
+        if root not in param_names:
             return False
 
     # Pattern 2: bare identifier references (``X != NULL``, ``X > 0``).
