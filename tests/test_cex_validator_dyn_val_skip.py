@@ -200,3 +200,29 @@ def test_returns_when_entry_func_not_found_in_either_source():
     vr = _make_validation_result(reproducer="real reproducer")
     v._try_dynamic_validation(vr, _make_func("fn"), {}, {}, pf)
     dyn.validate.assert_not_called()
+
+
+def test_target_backend_runs_when_entry_func_missing():
+    """For full-system target/QEMU validation, a system entry may live outside
+    the current ParsedCFile. Missing entry metadata must not skip the target
+    replay hook."""
+    expected = MagicMock(name="dyn_result")
+    dyn = MagicMock()
+    dyn.config = SimpleNamespace(dynamic_validation_backend="both")
+    dyn.validate.return_value = expected
+    v = _make_validator(dynamic_validator=dyn)
+    pf = SimpleNamespace(get_function_info=MagicMock(return_value=None))
+    func = _make_func("console_clear")
+    vr = _make_validation_result(
+        reproducer="#include <stdint.h>\nint main(void){ return 0; }",
+        caller_path=["kernel_main", "console_clear"],
+    )
+
+    v._try_dynamic_validation(vr, func, {}, {}, pf)
+
+    dyn.validate.assert_called_once()
+    kwargs = dyn.validate.call_args.kwargs
+    assert kwargs["entry_func"] is func
+    assert kwargs["caller_path"] == ["kernel_main", "console_clear"]
+    assert kwargs["system_entry_reproducer"] == vr.system_entry_input
+    assert vr.dynamic_result is expected

@@ -2028,10 +2028,26 @@ class CExValidator:
         entry_name = caller_path[0] if caller_path else func.name
         entry_func = all_funcs.get(entry_name) or parsed_file.get_function_info(entry_name)
         if entry_func is None:
-            logger.warning(
-                "Dynamic validation: entry function '%s' not found", entry_name
+            backend_value = getattr(
+                getattr(self._dynamic_validator, "config", None),
+                "dynamic_validation_backend",
+                getattr(getattr(self, "config", None), "dynamic_validation_backend", "host"),
             )
-            return
+            backend = str(backend_value or "host").strip().lower()
+            if backend in {"qemu", "both", "target", "emulator"}:
+                logger.warning(
+                    "Dynamic validation: entry function '%s' not found; "
+                    "continuing target/QEMU validation with '%s' as the "
+                    "metadata/harness fallback",
+                    entry_name,
+                    func.name,
+                )
+                entry_func = func
+            else:
+                logger.warning(
+                    "Dynamic validation: entry function '%s' not found", entry_name
+                )
+                return
 
         logger.info(
             "Running dynamic validation for '%s' (entry: '%s')",
