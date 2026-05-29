@@ -266,6 +266,13 @@ class DynamicValidator:
                     f" signal={qemu_result.signal_name}" if qemu_result.signal_name else "",
                 )
                 return qemu_result
+            if not getattr(self.config, "dynamic_qemu_fallback_to_host", True):
+                logger.info(
+                    "Target/QEMU dynamic validation for '%s' was inconclusive; "
+                    "host fallback is disabled, keeping target result",
+                    entry_func.name,
+                )
+                return qemu_result
             logger.info(
                 "Target/QEMU dynamic validation for '%s' was inconclusive; "
                 "falling back to host GCC harness",

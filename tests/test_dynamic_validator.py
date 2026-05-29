@@ -251,6 +251,40 @@ def test_qemu_backend_not_triggered_from_target_runner(tmp_path):
     assert result.backend == "qemu"
 
 
+def test_both_backend_can_keep_inconclusive_target_result_without_host_fallback(tmp_path):
+    runner = tmp_path / "runner.py"
+    runner.write_text(
+        'print("VALIDATION:INCONCLUSIVE unsupported VibeOS replay entry: console_init")\n',
+        encoding="utf-8",
+    )
+    harness_gen = MagicMock()
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="both",
+        dynamic_qemu_command=f"{sys.executable} {runner}",
+        dynamic_qemu_fallback_to_host=False,
+        dynamic_cc_path="__host_fallback_must_not_run__",
+        artifact_dir=str(tmp_path / "artifacts"),
+    )
+    dv = DynamicValidator(config, harness_gen)
+
+    result = dv.validate(
+        _make_func("console_init", "{ }"),
+        _make_cex(),
+        _make_parsed_file(),
+        {},
+        {},
+        caller_path=["kernel_main", "console_init"],
+        system_entry_reproducer="int main(void) { return 0; }",
+    )
+
+    assert result.outcome == DynamicOutcome.INCONCLUSIVE
+    assert result.backend == "qemu"
+    assert result.artifact_dir is not None
+    assert "unsupported VibeOS replay entry" in result.target_output_snippet
+    harness_gen.generate_dynamic_harness.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Integration: harness generation + compile + run
 # ---------------------------------------------------------------------------

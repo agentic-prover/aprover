@@ -387,6 +387,7 @@ class Config:
     dynamic_validation_backend: str = "host"
     dynamic_qemu_command: str = ""           # shell command for target/QEMU replay
     dynamic_qemu_timeout: int = 120          # seconds for target/QEMU replay
+    dynamic_qemu_fallback_to_host: bool = True  # in 'both', allow host fallback after target inconclusive
     dynamic_qemu_confirm_regex: str = (
         r"DYNAMIC:CONFIRMED|VALIDATION:CONFIRMED|KERNEL PANIC|PANIC:|panic:|BUG:|UBSAN|ASAN|"
         r"SIG(SEGV|ABRT|FPE|ILL)|division by zero"
@@ -705,6 +706,11 @@ class Config:
                 or os.environ.get("BMC_AGENT_DYNAMIC_TARGET_TIMEOUT")
                 or "120"
             ),
+            dynamic_qemu_fallback_to_host=(
+                os.environ.get("BMC_AGENT_DYNAMIC_QEMU_FALLBACK_TO_HOST")
+                or os.environ.get("BMC_AGENT_DYNAMIC_TARGET_FALLBACK_TO_HOST")
+                or "true"
+            ).lower() != "false",
             dynamic_qemu_confirm_regex=(
                 os.environ.get("BMC_AGENT_DYNAMIC_QEMU_CONFIRM_REGEX")
                 or os.environ.get("BMC_AGENT_DYNAMIC_TARGET_CONFIRM_REGEX")
