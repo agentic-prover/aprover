@@ -239,7 +239,15 @@ def run_verify_dir(
         "--output", str(artifact_dir),
         "--enable-realism-check",
         "--enable-dynamic-validation",
-        "--enable-phase-3e-triage",
+        # OPTION 3 (K2-only): disable tool-use code paths. K2 Think does
+        # not support OpenAI-format tool_calls, so we route every role
+        # to K2 (see ~/.config/bmc-agent/env) and skip the tool-use
+        # agents. Tradeoff: lose the in-pipeline G1-G5 triage audit;
+        # rely on realism + dyn-val for FP filtering. Manual re-audit
+        # of the audit list is the same workflow used for postfix9c.
+        "--no-realism-tools",
+        "--no-spec-gen-tools",
+        "--no-phase-3e-triage",
     ]
     # Auto-add include directories: the source dir itself, plus any
     # sibling dir that holds .h files (libpng has png*.h next to png*.c;
