@@ -131,23 +131,80 @@ def prepare_corpus(project_name: str, project_root: Path) -> None:
             )
             target.write_text(text)
             print(f"[oss_fuzz_sweep] libpng: synthesized pnglibconf.h (no SIMD)")
+        # Nuke the test / utility / contrib subdirs so verify-dir's
+        # source discovery cannot pick them up. These contain test
+        # programs (readpng2.c, etc.), CLI utilities (pngfix, pngcp),
+        # and arch-specific shim files that explode the symbol space.
+        # We also remove standalone test/utility .c files at the root.
+        import shutil
+        for noise in [
+            "contrib", "tests",
+            # Architecture-specific SIMD subdirs — bmc-agent's source
+            # discovery walks into them; each has its own .c files
+            # implementing the per-arch hooks. CBMC verifies them safe
+            # trivially, no value to sweep.
+            "arm", "intel", "mips", "powerpc", "loongarch", "riscv",
+            # Build / metadata subdirs that may also contain .c.
+            "ci", "scripts", "projects", "manuals", "LICENSES",
+        ]:
+            d = project_root / noise
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
+                print(f"[oss_fuzz_sweep] libpng: removed {noise}/")
+        for noise_c in [
+            "example.c", "pngtest.c", "makepng.c", "pngsimd.c",
+            "pnggetset.c", "pngvalid.c", "pngstest.c", "pngimage.c",
+            "pngcp.c", "pngfix.c",
+        ]:
+            p = project_root / noise_c
+            if p.exists():
+                p.unlink()
+                print(f"[oss_fuzz_sweep] libpng: removed {noise_c}")
     elif project_name == "libtiff":
         # libtiff: ship a minimal tif_config.h / tiffconf.h via cmake or
         # copy from the bundled templates. Both live under libtiff/.
+        import re
         for tmpl, dest in [
             ("tif_config.h.cmake.in", "tif_config.h"),
             ("tiffconf.h.cmake.in", "tiffconf.h"),
+            ("tiffvers.h.cmake.in", "tiffvers.h"),
         ]:
             src = project_root / "libtiff" / tmpl
             dst = project_root / "libtiff" / dest
-            if src.exists() and not dst.exists():
-                # Strip @CMAKE_*@ substitutions to neutral defaults; this
-                # is best-effort and may need refinement for tricky bugs.
+            if src.exists():
                 text = src.read_text()
-                for tok in ("HAVE_FCNTL_H", "HAVE_GLIBC_MEMMEM", "HAVE_STRINGS_H",
-                            "HAVE_SYS_TYPES_H", "HAVE_UNISTD_H"):
-                    text = text.replace(f"#cmakedefine {tok} 1", f"#define {tok} 1")
-                text = text.replace("#cmakedefine ", "// #cmakedefine ")
+                # #cmakedefine01 FOO  -> #define FOO 1
+                text = re.sub(r"^#cmakedefine01\s+(\S+).*$",
+                              r"#define \1 1", text, flags=re.M)
+                # #cmakedefine FOO @VAR@  -> /* (left out) */
+                text = re.sub(r"^#cmakedefine\s+(\S+)\s+.*$",
+                              r"/* #define \1 (omitted) */", text, flags=re.M)
+                # #cmakedefine FOO  -> #define FOO 1 for the safe defaults
+                for tok in ("HAVE_FCNTL_H", "HAVE_STRINGS_H",
+                            "HAVE_SYS_TYPES_H", "HAVE_UNISTD_H",
+                            "HAVE_STRING_H", "HAVE_STDLIB_H"):
+                    text = re.sub(rf"^#cmakedefine\s+{tok}\s*$",
+                                  f"#define {tok} 1", text, flags=re.M)
+                # Anything remaining: comment out
+                text = re.sub(r"^#cmakedefine\s+",
+                              "// #cmakedefine ", text, flags=re.M)
+                # @VAR@ substitutions -> safe defaults
+                text = text.replace("@TIFF_INT8_FORMAT@", "\"%hhd\"")
+                text = text.replace("@TIFF_UINT8_FORMAT@", "\"%hhu\"")
+                text = text.replace("@TIFF_INT16_FORMAT@", "\"%hd\"")
+                text = text.replace("@TIFF_UINT16_FORMAT@", "\"%hu\"")
+                text = text.replace("@TIFF_INT32_FORMAT@", "\"%d\"")
+                text = text.replace("@TIFF_UINT32_FORMAT@", "\"%u\"")
+                text = text.replace("@TIFF_INT64_FORMAT@", "\"%lld\"")
+                text = text.replace("@TIFF_UINT64_FORMAT@", "\"%llu\"")
+                # Size-of types — we run on x86_64 Linux, all 64-bit.
+                for sz_key in ("SIZEOF_SIZE_T", "SIZEOF_VOIDP",
+                               "SIZEOF_UNSIGNED_LONG", "SIZEOF_LONG"):
+                    text = text.replace(f"@{sz_key}@", "8")
+                for sz_key in ("SIZEOF_INT", "SIZEOF_UNSIGNED_INT"):
+                    text = text.replace(f"@{sz_key}@", "4")
+                # Catch-all for any other @VAR@ left
+                text = re.sub(r"@[A-Z_]+@", "0", text)
                 dst.write_text(text)
                 print(f"[oss_fuzz_sweep] libtiff: synthesized {dest}")
     elif project_name == "expat":
@@ -167,6 +224,46 @@ def prepare_corpus(project_name: str, project_root: Path) -> None:
     # Else: unknown project — let the smoke test surface what's missing.
 
 
+# Per-project file filters. The key files we want to sweep are the
+# library's actual public-API implementation; OSS-Fuzz projects also
+# ship test harnesses, CLI utilities, and code generators that produce
+# spec-gen / harness-gen noise because their public API isn't what
+# downstream users call.
+EXCLUDE_PATTERNS: dict[str, list[str]] = {
+    "libpng": [
+        "example.c",       # canonical library-usage example
+        "pngtest.c",       # libpng's own regression test
+        "makepng.c",       # PNG generator utility (test fixtures)
+        "pngsimd.c",       # SIMD dispatcher with target-specific code
+        "pnggetset.c",     # not a real source file — sketched stub
+        "pngvalid.c",      # validation test program
+        "pngstest.c",      # secondary test program
+        "pngimage.c",      # image conversion CLI
+        "pngcp.c",         # PNG copy utility
+        "pngfix.c",        # PNG repair utility
+        "contrib/*",
+    ],
+    "libtiff": [
+        "tools/*",         # CLI utilities (tiffcp, tiff2pdf, etc.)
+        "test/*",
+        "tif_predict.c",   # uses runtime function pointers; harness gen
+                           # produces parse errors on the dispatch table
+    ],
+    "expat": [
+        "tests/*",
+        "xmlwf/*",         # CLI utility
+        "examples/*",
+    ],
+    "zstd": [
+        "programs/*",      # CLI (zstd, zstdcli)
+        "tests/*",
+        "contrib/*",
+        "lib/legacy/*",    # older format-compat code; OSS-Fuzz doesn't
+                           # treat these as primary targets
+    ],
+}
+
+
 def discover_sources(project_root: Path) -> Path:
     """Pick the directory that holds the .c sources we want to sweep.
 
@@ -178,11 +275,13 @@ def discover_sources(project_root: Path) -> Path:
     Returns the directory bmc-agent should sweep.
     """
     candidates = [
-        project_root,                  # libpng layout
-        project_root / "libtiff",      # libtiff layout
-        project_root / "expat" / "lib",
-        project_root / "lib",          # zstd, generic
+        project_root / "libtiff",                  # libtiff layout
+        project_root / "expat" / "lib",            # expat layout
+        project_root / "lib" / "decompress",       # zstd: the parser side (attack surface)
+        project_root / "lib" / "common",           # zstd common (fallback)
+        project_root / "lib",                      # generic
         project_root / "src",
+        project_root,                              # libpng layout — last so subdirs win
     ]
     for cand in candidates:
         if cand.is_dir() and any(cand.glob("*.c")):
@@ -190,6 +289,11 @@ def discover_sources(project_root: Path) -> Path:
     raise SystemExit(
         f"OSS-Fuzz {project_root.name}: no .c sources discovered in known layouts"
     )
+
+
+def excludes_for(project_name: str) -> list[str]:
+    """Return the source-file glob patterns to skip during verify-dir."""
+    return EXCLUDE_PATTERNS.get(project_name, [])
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -248,18 +352,36 @@ def run_verify_dir(
         "--no-realism-tools",
         "--no-spec-gen-tools",
         "--no-phase-3e-triage",
+        # K2's responses don't reliably parse as the JSON format the v2
+        # spec generator expects (observed 100% parse-fail in the first
+        # libpng iteration). The legacy template-based spec generator
+        # doesn't need an LLM at all — harness quality goes up.
+        "--legacy-spec-gen",
     ]
-    # Auto-add include directories: the source dir itself, plus any
-    # sibling dir that holds .h files (libpng has png*.h next to png*.c;
-    # libtiff splits headers under libtiff/; expat under expat/lib/).
-    # Pass --include-dir <dir> for each unique directory containing .h.
-    seen_includes: set[Path] = {source_dir}
+    # Skip test / utility files for the current project (set by caller).
+    for pat in extra_env.pop("__BMC_AGENT_EXCLUDE_PATS__", "").split("|"):
+        if pat:
+            cmd.extend(["--exclude", pat])
+    # Add include directories: just the source dir itself + any
+    # *direct* subdir of the project root that holds public headers.
+    # We DO NOT rglob the whole tree because OSS-Fuzz projects' contrib/,
+    # tests/, and arch-specific subdirs pollute the symbol space and
+    # cause spec-gen to discover non-library functions (e.g. libpng's
+    # contrib/gregbook/readpng2.c was being processed via the wide
+    # include scan). The per-project corpus_prep should have already
+    # placed any required generated headers in the source dir.
     cmd.extend(["--include-dir", str(source_dir)])
-    for hdr in source_dir.rglob("*.h"):
-        parent = hdr.parent
-        if parent not in seen_includes:
-            seen_includes.add(parent)
-            cmd.extend(["--include-dir", str(parent)])
+    # One sibling of source_dir as a header location, max — for
+    # libtiff (libtiff/) and expat (expat/lib/) the source_dir IS the
+    # subdir; for libpng / zstd source_dir IS the project root.
+    parent_root = source_dir.parent if source_dir.parent != source_dir else source_dir
+    for subdir in sorted(parent_root.iterdir()) if parent_root.is_dir() else []:
+        if subdir == source_dir or not subdir.is_dir():
+            continue
+        # Only direct subdirs whose name suggests headers/config.
+        if subdir.name in {"include", "config", "build"}:
+            if any(subdir.glob("*.h")):
+                cmd.extend(["--include-dir", str(subdir)])
     if minimal:
         cmd.append("--minimal")
     if extra_args:
@@ -273,34 +395,82 @@ def run_verify_dir(
 
 
 def iter_bug_reports(artifact_dir: Path) -> Iterable[tuple[Path, dict]]:
-    """Walk all bug_report*.json files under ``artifact_dir``."""
-    for path in artifact_dir.rglob("bug_report*.json"):
+    """Walk per-CEx bug reports under ``artifact_dir``.
+
+    bmc-agent writes TWO levels of report:
+
+      <fn>/bug_report.json          — CBMC-stage summary, NO confidence /
+                                      realism / triage. Only 6 fields.
+      <fn>/bug_reports/<name>.json  — per-CEx detailed report AFTER realism
+                                      + dynamic + confidence stages. THIS is
+                                      what we want for the triage gate.
+
+    The per-CEx schema (observed 2026-05-29):
+      {
+        "saved_at": "...",
+        "report": {
+          "function_name": "...",
+          "driver_name": "...",
+          "bug_type": "...",
+          "violated_property": "...",
+          "counterexample": {...},
+          "call_chain": [...],
+          "confidence": "confirmed_dynamic|...|likely|unlikely|null",
+          "realism_check": {"verdict": "realistic|unrealistic|uncertain", "reasoning": "..."},
+          "cex_outcome": "...",
+          "dynamic_outcome": "...",
+          "dynamic_signal": "..."
+        }
+      }
+    """
+    for path in artifact_dir.rglob("bug_reports/*.json"):
         try:
             data = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        yield path, data
+        payload = data.get("report") if isinstance(data, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        yield path, payload
 
 
 def passes_triage(report: dict) -> bool:
-    """Apply the full triage gate.
+    """Apply the triage gate.
+
+    Per-CEx report (from bug_reports/<name>.json) is keyed differently
+    than the CBMC-stage bug_report.json: there's no `verified` field,
+    just a `counterexample` (singular). The pipeline only writes these
+    AFTER realism + dynamic + confidence stages run.
 
     Keep a bug iff:
-      * confidence ∈ confirmed_* tiers (real_bug + reachable signal)
-      * realism_check.verdict == "realistic"
+      * confidence ∈ confirmed_* tiers
+      * realism_check verdict is "realistic" OR is "uncertain" because of
+        an LLM-error (which happens under K2 rate-limiting and shouldn't
+        suppress real findings)
     """
     confidence = report.get("confidence", "")
     if confidence not in CONFIRMED_TIERS:
         return False
     realism = report.get("realism_check") or {}
     verdict = (realism.get("verdict") or "").lower()
-    return verdict == "realistic"
+    if verdict == "realistic":
+        return True
+    if verdict == "uncertain":
+        reasoning = (realism.get("reasoning") or "").lower()
+        # An "uncertain" verdict caused by an LLM transport error
+        # (HTTP 429, network) is not a confidence-bearing rejection —
+        # surface it for manual audit rather than silently dropping.
+        if "llm call failed" in reasoning or "http 429" in reasoning or "llmerror" in reasoning:
+            return True
+    return False
 
 
 def render_finding(report: dict, source_path: Path, run_id: str, meta: ProjectMeta) -> str:
-    """Render a minimal but human-reviewable markdown finding from a bug report."""
-    fn = report.get("function", "<unknown>")
-    cprop = report.get("cbmc_property", "<unknown>")
+    """Render a minimal but human-reviewable markdown finding from a per-CEx report."""
+    fn = report.get("function_name", "<unknown>")
+    # Per-CEx schema uses singular "counterexample" + "violated_property"
+    cex = report.get("counterexample") or {}
+    cprop = report.get("violated_property") or cex.get("property") or "<unknown>"
     conf = report.get("confidence", "<unknown>")
     realism = report.get("realism_check") or {}
     realism_verdict = realism.get("verdict", "")
@@ -421,6 +591,11 @@ def sweep_one_project(args: argparse.Namespace) -> int:
 
     extra_env = load_env_file(Path("/home/syc/.config/bmc-agent/env"))
     extra_env.setdefault("BMC_AGENT_K2_NOTE", f"run_id={run_id}")
+    # Smuggle per-project exclude globs through extra_env so the
+    # run_verify_dir() helper can stitch them into --exclude flags.
+    excl = excludes_for(meta.name)
+    if excl:
+        extra_env["__BMC_AGENT_EXCLUDE_PATS__"] = "|".join(excl)
 
     if args.corpus_only:
         print("[oss_fuzz_sweep] --corpus-only: skipping verify-dir")
