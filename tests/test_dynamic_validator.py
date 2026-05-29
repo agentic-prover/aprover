@@ -11,7 +11,9 @@ DynamicValidator can:
 
 from __future__ import annotations
 
+import json
 import subprocess
+import sys
 import tempfile
 import types
 from pathlib import Path
@@ -162,6 +164,91 @@ def test_dynamic_validator_missing_compiler_returns_inconclusive():
     result = dv.validate(func, cex, _make_parsed_file(), {}, {})
     assert result.outcome == DynamicOutcome.INCONCLUSIVE
     assert "__no_such_compiler__" in result.reasoning
+
+
+def test_qemu_backend_without_command_is_inconclusive_even_without_gcc():
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="qemu",
+        dynamic_qemu_command="",
+        dynamic_cc_path="__no_such_compiler__",
+    )
+    harness_gen = MagicMock()
+    dv = DynamicValidator(config, harness_gen)
+    func = _make_func("foo", "{ }")
+    cex = _make_cex()
+    result = dv.validate(func, cex, _make_parsed_file(), {}, {})
+    assert result.outcome == DynamicOutcome.INCONCLUSIVE
+    assert result.backend == "qemu"
+    assert "BMC_AGENT_DYNAMIC_QEMU_COMMAND" in result.reasoning
+    harness_gen.generate_dynamic_harness.assert_not_called()
+
+
+def test_qemu_backend_confirmed_from_target_runner(tmp_path):
+    runner = tmp_path / "runner.py"
+    runner.write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+metadata = json.loads(Path(os.environ["BMC_AGENT_DYN_QEMU_METADATA"]).read_text())
+assert metadata["entry_function"] == "foo"
+assert Path(os.environ["BMC_AGENT_DYN_QEMU_REPRODUCER"]).exists()
+assert Path(os.environ["BMC_AGENT_DYN_QEMU_HARNESS"]).exists()
+print("booted target")
+print("DYNAMIC:CONFIRMED signal=SIGSEGV")
+""".strip(),
+        encoding="utf-8",
+    )
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="qemu",
+        dynamic_qemu_command=f"{sys.executable} {runner}",
+        artifact_dir=str(tmp_path / "artifacts"),
+    )
+    dv = DynamicValidator(config, MagicMock())
+    func = _make_func("foo", "{ }")
+    cex = _make_cex({"x": "1"})
+    result = dv.validate(
+        func,
+        cex,
+        _make_parsed_file(),
+        {},
+        {},
+        caller_path=["kernel_main", "foo"],
+        system_entry_reproducer="int main(void) { return 0; }",
+    )
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.backend == "qemu"
+    assert result.signal_name == "SIGSEGV"
+    assert result.artifact_dir is not None
+    assert Path(result.target_stdout_path).read_text(encoding="utf-8").count("DYNAMIC:CONFIRMED") == 1
+    metadata = json.loads((Path(result.artifact_dir) / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["caller_path"] == ["kernel_main", "foo"]
+    assert metadata["variable_assignments"] == {"x": "1"}
+
+
+def test_qemu_backend_not_triggered_from_target_runner(tmp_path):
+    runner = tmp_path / "runner.py"
+    runner.write_text('print("VALIDATION:PASS")\n', encoding="utf-8")
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="qemu",
+        dynamic_qemu_command=f"{sys.executable} {runner}",
+        artifact_dir=str(tmp_path / "artifacts"),
+    )
+    dv = DynamicValidator(config, MagicMock())
+    result = dv.validate(
+        _make_func("foo", "{ }"),
+        _make_cex(),
+        _make_parsed_file(),
+        {},
+        {},
+        system_entry_reproducer="int main(void) { return 0; }",
+    )
+    assert result.outcome == DynamicOutcome.NOT_TRIGGERED
+    assert result.backend == "qemu"
 
 
 # ---------------------------------------------------------------------------

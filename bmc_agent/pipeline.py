@@ -27,6 +27,11 @@ from bmc_agent.harness_generator import HarnessGenerator
 from bmc_agent.llm import LLMClient
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
+from bmc_agent.progress import (
+    append_progress_event,
+    progress_file_paths,
+    write_progress_summary,
+)
 from bmc_agent.source_parser import detect_language, parse_source_file
 from bmc_agent.realism_checker import RealismChecker
 from bmc_agent.spec import Spec, SpecStatus
@@ -383,6 +388,12 @@ class AMCPipeline:
         List of confirmed BugReport objects.
         """
         logger.info("=== AMC Pipeline START: %s (driver=%s) ===", source_file, driver_name)
+        append_progress_event(
+            self.config,
+            "file_pipeline_start",
+            driver=driver_name,
+            source_file=source_file,
+        )
 
         # ------------------------------------------------------------------
         # Phase 1: Parse + Generate specs
@@ -436,6 +447,14 @@ class AMCPipeline:
             source_text=preprocessed_source,
         )
         logger.info("Phase 1 complete: %d specs generated", len(specs))
+        append_progress_event(
+            self.config,
+            "file_phase_complete",
+            phase="spec_generation",
+            driver=driver_name,
+            source_file=source_file,
+            specs_generated=len(specs),
+        )
 
         # Build all_funcs mapping
         all_funcs: dict[str, FunctionInfo] = {}
@@ -446,6 +465,14 @@ class AMCPipeline:
 
         if not all_funcs:
             logger.warning("No functions found in '%s'; aborting pipeline", source_file)
+            append_progress_event(
+                self.config,
+                "file_pipeline_end",
+                driver=driver_name,
+                source_file=source_file,
+                status="skipped",
+                reason="no_functions_found",
+            )
             return []
 
         # Build callee → callers reverse-dependency map
@@ -484,6 +511,17 @@ class AMCPipeline:
             flag_selections=flag_selections if flag_selections else None,
         )
         logger.info("Phase 2 complete: %d verdicts", len(verdicts))
+        append_progress_event(
+            self.config,
+            "file_phase_complete",
+            phase="cbmc",
+            driver=driver_name,
+            source_file=source_file,
+            functions_checked=len(verdicts),
+            verified=sum(1 for v in verdicts.values() if v.verified),
+            with_counterexamples=sum(1 for v in verdicts.values() if v.counterexamples),
+            cbmc_errors=sum(1 for v in verdicts.values() if v.error and not v.counterexamples),
+        )
 
         # ------------------------------------------------------------------
         # Phase 2b: Autonomous-mode CBMC-error auto-retry (Phase 1 of the
@@ -566,6 +604,12 @@ class AMCPipeline:
 
                 # Always persist the classification result for this counterexample
                 self.store.save_classification(driver_name, fn_name, validation)
+                self._emit_validation_progress(
+                    driver_name=driver_name,
+                    fn_name=fn_name,
+                    validation=validation,
+                    phase="phase3",
+                )
 
                 if validation.outcome == CExOutcome.UNRESOLVED:
                     logger.info(
@@ -759,6 +803,12 @@ class AMCPipeline:
                         parsed_file=parsed,
                         driver_name=driver_name,
                     )
+                    self._emit_validation_progress(
+                        driver_name=driver_name,
+                        fn_name=fn_name,
+                        validation=validation,
+                        phase="phase3c",
+                    )
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
@@ -848,6 +898,12 @@ class AMCPipeline:
                         all_specs=current_specs,
                         parsed_file=parsed,
                         driver_name=driver_name,
+                    )
+                    self._emit_validation_progress(
+                        driver_name=driver_name,
+                        fn_name=fn_name,
+                        validation=validation,
+                        phase="phase3b_recheck",
                     )
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
@@ -975,6 +1031,16 @@ class AMCPipeline:
             len(latent_reports),
             len(self.reporter._unresolved),
         )
+        append_progress_event(
+            self.config,
+            "file_pipeline_end",
+            driver=driver_name,
+            source_file=source_file,
+            status="completed",
+            confirmed_reports=len(bug_reports),
+            latent_reports=len(latent_reports),
+            unresolved_counterexamples=len(self.reporter._unresolved),
+        )
         # Stash latent reports on the pipeline so the CLI can access them
         # without changing the long-stable return type. Callers that don't
         # care (eval scripts, tests) keep working unchanged.
@@ -984,6 +1050,68 @@ class AMCPipeline:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _emit_validation_progress(
+        self,
+        *,
+        driver_name: str,
+        fn_name: str,
+        validation: ValidationResult,
+        phase: str,
+    ) -> None:
+        """Persist a compact counterexample-validation progress event."""
+
+        dynamic = validation.dynamic_result.to_dict() if validation.dynamic_result else None
+        append_progress_event(
+            self.config,
+            "cex_validation",
+            phase=phase,
+            driver=driver_name,
+            function=fn_name,
+            failing_property=getattr(validation.counterexample, "failing_property", ""),
+            outcome=getattr(validation.outcome, "value", str(validation.outcome)),
+            is_real_bug=validation.is_real_bug,
+            is_latent_bug=validation.is_latent_bug,
+            system_entry_reached=validation.system_entry_reached,
+            dynamic_outcome=(dynamic or {}).get("outcome"),
+            dynamic_backend=(dynamic or {}).get("backend"),
+            dynamic_signal=(dynamic or {}).get("signal_name"),
+            dynamic_artifact_dir=(dynamic or {}).get("artifact_dir"),
+            dynamic_stdout_path=(dynamic or {}).get("target_stdout_path"),
+            dynamic_stderr_path=(dynamic or {}).get("target_stderr_path"),
+        )
+
+    def _coverage_progress_digest(self, driver_name: str) -> dict:
+        """Load the compact coverage diagnostic for a driver, if present."""
+
+        import json as _json
+
+        path = Path(self.config.artifact_dir) / driver_name / "coverage_diagnostics.json"
+        if not path.exists():
+            return {"coverage_diagnostics_path": str(path), "coverage_diagnostics": "missing"}
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {
+                "coverage_diagnostics_path": str(path),
+                "coverage_diagnostics": "unreadable",
+                "coverage_diagnostics_error": str(exc),
+            }
+        total = int(data.get("total_cbmc_runs") or 0)
+        failed = int(data.get("failed_before_verdict") or 0)
+        undefined = data.get("undefined_symbols") or {}
+        top_undefined = dict(
+            sorted(undefined.items(), key=lambda kv: int(kv[1]), reverse=True)[:8]
+        )
+        return {
+            "coverage_diagnostics_path": str(path),
+            "coverage_diagnostics": "ok",
+            "total_cbmc_runs": total,
+            "produced_verdict": int(data.get("produced_verdict") or 0),
+            "failed_before_verdict": failed,
+            "blocked_by_parse_or_conversion": failed >= max(5, int(total * 0.5)) if total else False,
+            "undefined_symbols_top": top_undefined,
+        }
 
     def _diagnose_oracle_disagreements(
         self, driver_name: str, fn_name: str,
@@ -2565,6 +2693,27 @@ class AMCPipeline:
         logger.info(
             "=== run_directory: %d files in '%s' ===", len(c_files), source_dir
         )
+        directory_progress = {
+            "driver": driver_name,
+            "source_dir": str(source_dir),
+            "files_total": len(c_files),
+            "files_started": 0,
+            "files_completed": 0,
+            "files_error": 0,
+            "files_skipped": 0,
+            "total_confirmed_reports": 0,
+            "progress_files": progress_file_paths(self.config),
+            "files": {},
+        }
+        append_progress_event(
+            self.config,
+            "run_directory_start",
+            driver=driver_name,
+            source_dir=str(source_dir),
+            files_total=len(c_files),
+            progress_files=progress_file_paths(self.config),
+        )
+        write_progress_summary(self.config, directory_progress)
 
         # v2 spec-gen: corpus = all .c files in the sweep; boundary headers
         # = autodiscovered from source_dir. Set once for the whole sweep.
@@ -2615,8 +2764,46 @@ class AMCPipeline:
                     parsed_pass1 = parse_c_file(c_file)
             except Exception as exc:
                 logger.warning("Pass 1: failed for %s: %s — skipping", c_file.name, exc)
+                directory_progress["files"][c_file.name] = {
+                    "path": str(c_file),
+                    "status": "skipped",
+                    "pass1": "failed",
+                    "error": str(exc),
+                }
+                directory_progress["files_skipped"] = sum(
+                    1 for f in directory_progress["files"].values()
+                    if f.get("status") == "skipped"
+                )
+                append_progress_event(
+                    self.config,
+                    "pass1_file",
+                    driver=driver_name,
+                    source_file=str(c_file),
+                    status="skipped",
+                    error=str(exc),
+                )
+                write_progress_summary(self.config, directory_progress)
                 continue
             if not parsed_pass1.functions:
+                directory_progress["files"][c_file.name] = {
+                    "path": str(c_file),
+                    "status": "skipped",
+                    "pass1": "empty",
+                    "functions": 0,
+                }
+                directory_progress["files_skipped"] = sum(
+                    1 for f in directory_progress["files"].values()
+                    if f.get("status") == "skipped"
+                )
+                append_progress_event(
+                    self.config,
+                    "pass1_file",
+                    driver=driver_name,
+                    source_file=str(c_file),
+                    status="skipped",
+                    reason="no_functions_found",
+                )
+                write_progress_summary(self.config, directory_progress)
                 continue
             stem = c_file.stem
             file_expanded[stem] = expanded
@@ -2625,6 +2812,23 @@ class AMCPipeline:
             file_callees[stem] = set().union(
                 *parsed_pass1.call_graph.values()
             ) if parsed_pass1.call_graph else set()
+            directory_progress["files"][c_file.name] = {
+                "path": str(c_file),
+                "status": "pass1_parsed",
+                "pass1": "parsed",
+                "functions": len(parsed_pass1.functions),
+                "artifact_driver": f"{driver_name}/{stem}",
+            }
+            append_progress_event(
+                self.config,
+                "pass1_file",
+                driver=driver_name,
+                source_file=str(c_file),
+                status="parsed",
+                functions=len(parsed_pass1.functions),
+                artifact_driver=f"{driver_name}/{stem}",
+            )
+            write_progress_summary(self.config, directory_progress)
 
         # Global set: all functions that have callers in at least one other file.
         global_cross_file_callers: set[str] = set()
@@ -2698,6 +2902,30 @@ class AMCPipeline:
 
             file_driver = f"{driver_name}/{stem}"
             logger.info("--- Processing %s (driver=%s) ---", c_file.name, file_driver)
+            current_file_progress = directory_progress["files"].setdefault(
+                c_file.name,
+                {"path": str(c_file), "artifact_driver": file_driver},
+            )
+            current_file_progress.update(
+                {
+                    "status": "running",
+                    "artifact_driver": file_driver,
+                    "artifact_dir": str(Path(self.config.artifact_dir) / file_driver),
+                }
+            )
+            directory_progress["files_started"] = sum(
+                1 for f in directory_progress["files"].values()
+                if f.get("status") in {"running", "completed", "error"}
+            )
+            append_progress_event(
+                self.config,
+                "source_file_start",
+                driver=driver_name,
+                file_driver=file_driver,
+                source_file=str(c_file),
+                artifact_dir=str(Path(self.config.artifact_dir) / file_driver),
+            )
+            write_progress_summary(self.config, directory_progress)
 
             expanded = file_expanded[stem]
 
@@ -2709,18 +2937,66 @@ class AMCPipeline:
                 tmp_path = tmp.name
 
             try:
-                bugs = self.run(
-                    source_file=tmp_path,
-                    driver_name=file_driver,
-                    domain_knowledge=domain_knowledge,
-                    cross_file_callers=global_cross_file_callers,
-                    cross_file_caller_contexts=global_cross_file_caller_contexts,
-                )
+                try:
+                    bugs = self.run(
+                        source_file=tmp_path,
+                        driver_name=file_driver,
+                        domain_knowledge=domain_knowledge,
+                        cross_file_callers=global_cross_file_callers,
+                        cross_file_caller_contexts=global_cross_file_caller_contexts,
+                    )
+                except Exception as exc:
+                    current_file_progress.update(
+                        {
+                            "status": "error",
+                            "error": str(exc),
+                            **self._coverage_progress_digest(file_driver),
+                        }
+                    )
+                    directory_progress["files_error"] = sum(
+                        1 for f in directory_progress["files"].values()
+                        if f.get("status") == "error"
+                    )
+                    append_progress_event(
+                        self.config,
+                        "source_file_end",
+                        driver=driver_name,
+                        file_driver=file_driver,
+                        source_file=str(c_file),
+                        status="error",
+                        error=str(exc),
+                        **self._coverage_progress_digest(file_driver),
+                    )
+                    write_progress_summary(self.config, directory_progress)
+                    raise
             finally:
                 os.unlink(tmp_path)
 
             all_results[c_file.name] = bugs
             total_bugs += len(bugs)
+            current_file_progress.update(
+                {
+                    "status": "completed",
+                    "confirmed_reports": len(bugs),
+                    **self._coverage_progress_digest(file_driver),
+                }
+            )
+            directory_progress["files_completed"] = sum(
+                1 for f in directory_progress["files"].values()
+                if f.get("status") == "completed"
+            )
+            directory_progress["total_confirmed_reports"] = total_bugs
+            append_progress_event(
+                self.config,
+                "source_file_end",
+                driver=driver_name,
+                file_driver=file_driver,
+                source_file=str(c_file),
+                status="completed",
+                confirmed_reports=len(bugs),
+                **self._coverage_progress_digest(file_driver),
+            )
+            write_progress_summary(self.config, directory_progress)
             logger.info(
                 "Finished %s: %d bug(s) confirmed", c_file.name, len(bugs)
             )
@@ -2731,4 +3007,13 @@ class AMCPipeline:
             "=== run_directory DONE: %d files, %d total bug(s) ===",
             len(all_results), total_bugs,
         )
+        append_progress_event(
+            self.config,
+            "run_directory_end",
+            driver=driver_name,
+            source_dir=str(source_dir),
+            files_processed=len(all_results),
+            total_confirmed_reports=total_bugs,
+        )
+        write_progress_summary(self.config, directory_progress)
         return all_results

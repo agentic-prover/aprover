@@ -23,6 +23,7 @@ from bmc_agent.config import Config
 from bmc_agent.harness_generator import HarnessGenerator
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile
+from bmc_agent.progress import append_progress_event, summarize_cbmc_result
 from bmc_agent.spec import Spec
 
 logger = get_logger("bmc_engine")
@@ -83,6 +84,14 @@ class BMCEngine:
         """
         fn_name = func.name
         logger.info("Checking function '%s' (driver '%s')", fn_name, driver_name)
+        append_progress_event(
+            self.config,
+            "function_start",
+            phase="cbmc",
+            driver=driver_name,
+            function=fn_name,
+            source=getattr(parsed_file, "path", ""),
+        )
 
         # ---- Step 1: generate harness ----
         try:
@@ -101,12 +110,32 @@ class BMCEngine:
                     fn_name,
                     ", ".join(exc.unresolved_types),
                 )
+                append_progress_event(
+                    self.config,
+                    "function_end",
+                    phase="harness_generation",
+                    driver=driver_name,
+                    function=fn_name,
+                    status="skipped",
+                    error_kind="unresolvable_types",
+                    error=f"harness-skipped-unresolvable-types: {', '.join(exc.unresolved_types)}",
+                )
                 return BMCVerdict(
                     function_name=fn_name,
                     verified=False,
                     error=f"harness-skipped-unresolvable-types: {', '.join(exc.unresolved_types)}",
                 )
             logger.error("Harness generation failed for '%s': %s", fn_name, exc)
+            append_progress_event(
+                self.config,
+                "function_end",
+                phase="harness_generation",
+                driver=driver_name,
+                function=fn_name,
+                status="error",
+                error_kind="harness_generation",
+                error=str(exc),
+            )
             return BMCVerdict(
                 function_name=fn_name,
                 verified=False,
@@ -311,6 +340,22 @@ class BMCEngine:
             self.store.save_bug_report(driver_name, fn_name, verdict.to_dict())
         except Exception as exc:
             logger.warning("Failed to save artifacts for '%s': %s", fn_name, exc)
+        cbmc_summary = summarize_cbmc_result(cbmc_result)
+        append_progress_event(
+            self.config,
+            "function_end",
+            phase="cbmc",
+            driver=driver_name,
+            function=fn_name,
+            harness_path=str(harness_path),
+            cbmc_result_path=str(
+                Path(self.config.artifact_dir)
+                / driver_name
+                / fn_name
+                / "cbmc_result.json"
+            ),
+            **cbmc_summary,
+        )
 
         return verdict
 

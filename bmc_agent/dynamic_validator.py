@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import shutil
 import subprocess
 import tempfile
@@ -148,6 +149,14 @@ class DynamicValidationResult:
     #                   or stripped binary)
     #   None          — no fault fired; field not applicable
     fault_site: Optional[str] = None
+    # Backend/artifact metadata. ``host`` is the existing GCC harness path.
+    # ``qemu`` means a configured target replay command produced the result.
+    backend: str = "host"
+    artifact_dir: Optional[str] = None
+    target_command: Optional[str] = None
+    target_stdout_path: Optional[str] = None
+    target_stderr_path: Optional[str] = None
+    target_output_snippet: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -158,6 +167,12 @@ class DynamicValidationResult:
             "reasoning": self.reasoning,
             "harness_source": self.harness_source,
             "fault_site": self.fault_site,
+            "backend": self.backend,
+            "artifact_dir": self.artifact_dir,
+            "target_command": self.target_command,
+            "target_stdout_path": self.target_stdout_path,
+            "target_stderr_path": self.target_stderr_path,
+            "target_output_snippet": self.target_output_snippet,
         }
 
 
@@ -225,6 +240,36 @@ class DynamicValidator:
             return DynamicValidationResult(
                 outcome=DynamicOutcome.SKIPPED,
                 reasoning="Dynamic validation is disabled (enable_dynamic_validation=False).",
+            )
+
+        backend = _normalize_dynamic_backend(
+            getattr(self.config, "dynamic_validation_backend", "host")
+        )
+        if backend in ("qemu", "both"):
+            qemu_result = self._run_qemu_validation(
+                entry_func=entry_func,
+                counterexample=counterexample,
+                parsed_file=parsed_file,
+                all_funcs=all_funcs,
+                all_specs=all_specs,
+                caller_path=caller_path,
+                system_entry_reproducer=system_entry_reproducer,
+            )
+            if backend == "qemu" or qemu_result.outcome in (
+                DynamicOutcome.CONFIRMED,
+                DynamicOutcome.NOT_TRIGGERED,
+            ):
+                logger.info(
+                    "Target/QEMU dynamic validation for '%s': %s%s",
+                    entry_func.name,
+                    qemu_result.outcome.value,
+                    f" signal={qemu_result.signal_name}" if qemu_result.signal_name else "",
+                )
+                return qemu_result
+            logger.info(
+                "Target/QEMU dynamic validation for '%s' was inconclusive; "
+                "falling back to host GCC harness",
+                entry_func.name,
             )
 
         cc = self.config.dynamic_cc_path
@@ -644,6 +689,204 @@ class DynamicValidator:
             )
             return None
 
+    def _run_qemu_validation(
+        self,
+        *,
+        entry_func: FunctionInfo,
+        counterexample: "Counterexample",
+        parsed_file: ParsedCFile,
+        all_funcs: Optional[dict],
+        all_specs: Optional[dict],
+        caller_path: Optional[list[str]],
+        system_entry_reproducer: Optional[str],
+    ) -> DynamicValidationResult:
+        """Run a configured target/QEMU replay command.
+
+        This is an integration hook, not a VibeOS-specific emulator. The
+        command receives a persistent artifact directory plus environment
+        variables pointing at the BMC witness metadata, the system-entry
+        reproducer if one exists, and a generated host-style harness source
+        when available. A project-specific script can use those artifacts to
+        patch/build/boot a full-system image and print one of the configured
+        verdict markers.
+        """
+        command = (getattr(self.config, "dynamic_qemu_command", "") or "").strip()
+        if not command:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                reasoning=(
+                    "Dynamic validation backend is qemu, but no target replay "
+                    "command is configured. Set BMC_AGENT_DYNAMIC_QEMU_COMMAND "
+                    "to a script that builds/boots the target and emits a "
+                    "configured verdict marker."
+                ),
+            )
+        recorded_command = _redact_command(command)
+
+        try:
+            root = Path(getattr(self.config, "artifact_dir", "artifacts")) / "dynamic_target"
+            root.mkdir(parents=True, exist_ok=True)
+            workdir = Path(
+                tempfile.mkdtemp(
+                    prefix=f"{_safe_artifact_name(entry_func.name)}-",
+                    dir=str(root),
+                )
+            )
+        except Exception as exc:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                reasoning=f"Could not create target dynamic-validation artifact dir: {exc}",
+            )
+
+        reproducer_path: Optional[Path] = None
+        if system_entry_reproducer and _looks_like_c_code(system_entry_reproducer):
+            reproducer_path = workdir / "system_entry_reproducer.c"
+            reproducer_path.write_text(system_entry_reproducer, encoding="utf-8")
+
+        harness_src: Optional[str] = None
+        if system_entry_reproducer and _looks_like_c_code(system_entry_reproducer):
+            harness_src = _wrap_reproducer_with_signal_handlers(system_entry_reproducer)
+        else:
+            harness_src = self._generate(
+                entry_func=entry_func,
+                counterexample=counterexample,
+                parsed_file=parsed_file,
+                all_funcs=all_funcs,
+                all_specs=all_specs,
+                with_globals=True,
+            )
+        harness_path: Optional[Path] = None
+        if harness_src:
+            harness_path = workdir / "host_style_harness.c"
+            harness_path.write_text(harness_src, encoding="utf-8")
+
+        metadata_path = workdir / "metadata.json"
+        metadata = {
+            "backend": "qemu",
+            "entry_function": entry_func.name,
+            "caller_path": caller_path or [],
+            "failing_property": getattr(counterexample, "failing_property", ""),
+            "variable_assignments": getattr(counterexample, "variable_assignments", {}),
+            "reproducer_path": str(reproducer_path) if reproducer_path else "",
+            "harness_path": str(harness_path) if harness_path else "",
+        }
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+
+        stdout_path = workdir / "stdout.log"
+        stderr_path = workdir / "stderr.log"
+        env = os.environ.copy()
+        _set_env_if(env, "BMC_AGENT_DYN_QEMU_WORKDIR", str(workdir))
+        _set_env_if(env, "BMC_AGENT_DYN_QEMU_METADATA", str(metadata_path))
+        _set_env_if(env, "BMC_AGENT_DYN_QEMU_REPRODUCER", str(reproducer_path) if reproducer_path else "")
+        _set_env_if(env, "BMC_AGENT_DYN_QEMU_HARNESS", str(harness_path) if harness_path else "")
+        _set_env_if(env, "BMC_AGENT_DYN_QEMU_ENTRY", entry_func.name)
+        _set_env_if(env, "BMC_AGENT_DYN_QEMU_PROPERTY", getattr(counterexample, "failing_property", "") or "")
+        # Generic aliases let non-QEMU target runners reuse the same hook.
+        _set_env_if(env, "BMC_AGENT_DYN_TARGET_WORKDIR", str(workdir))
+        _set_env_if(env, "BMC_AGENT_DYN_TARGET_METADATA", str(metadata_path))
+        _set_env_if(env, "BMC_AGENT_DYN_TARGET_REPRODUCER", str(reproducer_path) if reproducer_path else "")
+        _set_env_if(env, "BMC_AGENT_DYN_TARGET_HARNESS", str(harness_path) if harness_path else "")
+        _set_env_if(env, "BMC_AGENT_DYN_TARGET_ENTRY", entry_func.name)
+        _set_env_if(env, "BMC_AGENT_DYN_TARGET_PROPERTY", getattr(counterexample, "failing_property", "") or "")
+
+        timeout = int(getattr(self.config, "dynamic_qemu_timeout", 120) or 120)
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
+            returncode: Optional[int] = proc.returncode
+        except subprocess.TimeoutExpired as exc:
+            stdout = _coerce_output(exc.stdout)
+            stderr = _coerce_output(exc.stderr)
+            stdout_path.write_text(stdout, encoding="utf-8", errors="replace")
+            stderr_path.write_text(stderr, encoding="utf-8", errors="replace")
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                run_error="target replay timed out",
+                reasoning=f"Target/QEMU dynamic validation timed out after {timeout}s.",
+                harness_source=harness_src,
+                artifact_dir=str(workdir),
+                target_command=recorded_command,
+                target_stdout_path=str(stdout_path),
+                target_stderr_path=str(stderr_path),
+                target_output_snippet=_snippet(stdout + "\n" + stderr),
+            )
+        except Exception as exc:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                run_error=str(exc),
+                reasoning=f"Target/QEMU dynamic validation raised: {exc}",
+                harness_source=harness_src,
+                artifact_dir=str(workdir),
+                target_command=recorded_command,
+                target_stdout_path=str(stdout_path),
+                target_stderr_path=str(stderr_path),
+            )
+
+        stdout_path.write_text(stdout, encoding="utf-8", errors="replace")
+        stderr_path.write_text(stderr, encoding="utf-8", errors="replace")
+        combined = stdout + "\n" + stderr
+        confirm_re = getattr(self.config, "dynamic_qemu_confirm_regex", "") or ""
+        not_triggered_re = getattr(self.config, "dynamic_qemu_not_triggered_regex", "") or ""
+        common = {
+            "backend": "qemu",
+            "harness_source": harness_src,
+            "artifact_dir": str(workdir),
+            "target_command": recorded_command,
+            "target_stdout_path": str(stdout_path),
+            "target_stderr_path": str(stderr_path),
+            "target_output_snippet": _snippet(combined),
+        }
+        if confirm_re and re.search(confirm_re, combined, re.IGNORECASE | re.MULTILINE):
+            sig = _extract_signal_name(combined)
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.CONFIRMED,
+                signal_name=sig,
+                fault_site="unknown",
+                reasoning=(
+                    "Target/QEMU dynamic validation matched the confirmation "
+                    f"regex for '{entry_func.name}'. See artifact logs for "
+                    "full target output."
+                ),
+                **common,
+            )
+        if not_triggered_re and re.search(not_triggered_re, combined, re.IGNORECASE | re.MULTILINE):
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.NOT_TRIGGERED,
+                reasoning=(
+                    "Target/QEMU dynamic validation matched the not-triggered "
+                    f"regex for '{entry_func.name}'."
+                ),
+                **common,
+            )
+
+        return DynamicValidationResult(
+            outcome=DynamicOutcome.INCONCLUSIVE,
+            run_error=f"target replay exit code {returncode}",
+            reasoning=(
+                "Target/QEMU dynamic validation completed but emitted no "
+                "configured verdict marker. Set "
+                "BMC_AGENT_DYNAMIC_QEMU_CONFIRM_REGEX or "
+                "BMC_AGENT_DYNAMIC_QEMU_NOT_TRIGGERED_REGEX to match the "
+                "target runner's output."
+            ),
+            **common,
+        )
+
     def _regenerate_reproducer_with_error(
         self,
         previous_reproducer: str,
@@ -854,6 +1097,69 @@ class DynamicValidator:
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+
+
+def _normalize_dynamic_backend(value: str) -> str:
+    backend = (value or "host").strip().lower()
+    aliases = {
+        "gcc": "host",
+        "native": "host",
+        "target": "qemu",
+        "emulator": "qemu",
+    }
+    backend = aliases.get(backend, backend)
+    if backend not in {"host", "qemu", "both"}:
+        logger.warning(
+            "Unknown dynamic validation backend '%s'; falling back to host", value
+        )
+        return "host"
+    return backend
+
+
+def _safe_artifact_name(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "dynamic")
+    safe = safe.strip("._-") or "dynamic"
+    return safe[:80]
+
+
+def _set_env_if(env: dict[str, str], key: str, value: str) -> None:
+    if value:
+        env[key] = value
+
+
+def _coerce_output(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _snippet(text: str, limit: int = 2000) -> str:
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...<truncated>..."
+
+
+def _extract_signal_name(text: str) -> Optional[str]:
+    m = re.search(r"\bsignal=(SIG[A-Z0-9]+)\b", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(SIGSEGV|SIGABRT|SIGFPE|SIGILL)\b", text)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _redact_command(command: str) -> str:
+    # Dynamic target commands are meant for QEMU/build scripts, but avoid
+    # persisting accidental credentials if a caller passes KEY=... inline.
+    return re.sub(
+        r"(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)=([^ \t\n]+)",
+        r"\1=<redacted>",
+        command or "",
+    )
 
 
 def _unlink(path: str) -> None:

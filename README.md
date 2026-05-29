@@ -29,7 +29,7 @@ Confirmed real bugs are assigned one of four evidence tiers:
 
 | Tier | Meaning |
 |---|---|
-| `confirmed_dynamic` | Runtime fault (SIGSEGV/SIGABRT/SIGILL) directly observed in a GCC-compiled harness |
+| `confirmed_dynamic` | Runtime fault directly observed by dynamic validation: the default host GCC harness, or an explicitly configured target/QEMU replay runner |
 | `confirmed_system_entry` | Full call chain traced back to a function with no callers anywhere in the corpus |
 | `confirmed_bmc` | Input reachability confirmed from at least one immediate caller via CBMC |
 | `likely` | Over-refinement guard triggered |
@@ -99,7 +99,7 @@ uv run bmc-agent verify-dir \
   --output artifacts/cross_file_demo
 ```
 
-Artifacts — generated specs, CBMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and can be inspected or diffed.
+Artifacts — generated specs, CBMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and can be inspected or diffed. Long `verify-dir` runs also write `progress.jsonl` and `progress_summary.json` under `--output` so partial sweeps can be checked while still running.
 
 ### Web chat (no setup)
 
@@ -122,13 +122,21 @@ All settings are available as environment variables or `Config` dataclass fields
 | `BMC_AGENT_CBMC_PATH` | `cbmc` | CBMC binary path |
 | `BMC_AGENT_CBMC_UNWIND` | `4` | Loop unwinding bound |
 | `BMC_AGENT_CBMC_TIMEOUT` | `120` | Solver timeout per function (seconds) |
+| `BMC_AGENT_ENABLE_PROGRESS_ARTIFACTS` | `true` | Write append-only progress events and a latest progress summary under `--output` |
+| `BMC_AGENT_PROGRESS_JSONL` | empty | Override the default progress event path (`<artifact_dir>/progress.jsonl`) |
+| `BMC_AGENT_PROGRESS_SUMMARY_JSON` | empty | Override the default latest-summary path (`<artifact_dir>/progress_summary.json`) |
 | `BMC_AGENT_MAX_REFINEMENT_ITERS` | `5` | Maximum CEGAR refinement iterations |
 | `BMC_AGENT_ENABLE_DUAL_SPEC` | `true` | Generate each spec twice, flag disagreements |
 | `BMC_AGENT_ENABLE_SPEC_QUALITY` | `false` | Phase 4 spec-quality checks (mutation, coverage) |
 | `BMC_AGENT_SKIP_REFINEMENT` | `false` | FilteringOnly mode: classify but don't refine |
-| `BMC_AGENT_ENABLE_DYNAMIC_VALIDATION` | `false` | Phase 3 S3: compile + run a GCC harness |
+| `BMC_AGENT_ENABLE_DYNAMIC_VALIDATION` | `true` | Phase 3 S3: run dynamic validation |
+| `BMC_AGENT_DYNAMIC_VALIDATION_BACKEND` | `host` | Dynamic backend: `host` runs the existing GCC harness; `qemu` runs the configured target replay command; `both` tries target replay first and falls back to host when target replay is inconclusive |
 | `BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT` | `30` | GCC harness run timeout (seconds) |
 | `BMC_AGENT_DYNAMIC_CC_PATH` | `gcc` | C compiler for dynamic harness |
+| `BMC_AGENT_DYNAMIC_QEMU_COMMAND` | empty | Shell command for target/QEMU replay. The command receives `BMC_AGENT_DYN_QEMU_WORKDIR`, `BMC_AGENT_DYN_QEMU_METADATA`, `BMC_AGENT_DYN_QEMU_REPRODUCER`, `BMC_AGENT_DYN_QEMU_HARNESS`, `BMC_AGENT_DYN_QEMU_ENTRY`, and `BMC_AGENT_DYN_QEMU_PROPERTY` |
+| `BMC_AGENT_DYNAMIC_QEMU_TIMEOUT` | `120` | Target/QEMU replay timeout (seconds) |
+| `BMC_AGENT_DYNAMIC_QEMU_CONFIRM_REGEX` | `DYNAMIC:CONFIRMED|...` | Regex matched against target stdout/stderr for confirmed target faults |
+| `BMC_AGENT_DYNAMIC_QEMU_NOT_TRIGGERED_REGEX` | `DYNAMIC:NOT_TRIGGERED|...` | Regex matched against target stdout/stderr for clean target replay |
 | `BMC_AGENT_ENABLE_REALISM_CHECK` | `false` | Phase 3 S4: LLM realism audit on every REAL_BUG finding |
 | `BMC_AGENT_ENABLE_REALISM_THINKING` | `false` | Use extended thinking in the realism checker (higher quality, slower) |
 | `BMC_AGENT_CBMC_UNSIGNED_OVERFLOW_CHECK` | `false` | Pass `--unsigned-overflow-check` to CBMC — detects integer overflow bugs (e.g. `calloc` `nmemb*size` wrap, CWE-190) |
@@ -148,6 +156,18 @@ All settings are available as environment variables or `Config` dataclass fields
 | `BMC_AGENT_ENABLE_FLAG_SELECTION` | `false` | Let the LLM select CBMC flags per function based on observed properties |
 
 `BMC_AGENT_SKIP_REFINEMENT=true` is the FilteringOnly ablation: running the same input with and without this flag measures whether the refinement loop adds value beyond simple counterexample filtering.
+
+### VibeOS target replay
+
+For VibeOS, the QEMU backend can call the project-specific adapter:
+
+```bash
+export BMC_AGENT_DYNAMIC_VALIDATION_BACKEND=qemu
+export BMC_AGENT_VIBEOS_REPO=/path/to/VibeOS
+export BMC_AGENT_DYNAMIC_QEMU_COMMAND="scripts/vibeos_qemu_dynamic_replay.py --repo $BMC_AGENT_VIBEOS_REPO --case auto"
+```
+
+The adapter copies the VibeOS checkout to the dynamic-validation artifact directory, injects a small replay call for supported cases (`net_get_mac`, `kapi_file_size`, `hal_dma_fb_copy`), builds `build/vibeos.bin`, boots it with `qemu-system-aarch64`, and maps serial output containing `KERNEL PANIC` / abort text or a replay-emitted `DYNAMIC:CONFIRMED` semantic marker to a confirmed dynamic result. Use `--build-only` to validate the patch/build path on machines without QEMU; that mode intentionally returns an inconclusive target result because no target execution happened.
 
 ## Specification DSL
 
