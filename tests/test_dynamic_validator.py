@@ -1279,6 +1279,15 @@ def test_dynamic_harness_compiles_without_fsid_conflict():
     )
     cex = _make_cex()
     dv = DynamicValidator(config, hg)
+    harness_src = hg.generate_dynamic_harness(
+        entry_func=func,
+        counterexample=cex,
+        parsed_file=pf,
+        all_funcs={"safe_nop": func},
+        all_specs={},
+    )
+    assert "sig_atomic_t" not in harness_src
+    assert "static volatile int _amc_fut_called = 0;" in harness_src
 
     result = dv.validate(
         entry_func=func,

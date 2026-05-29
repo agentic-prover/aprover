@@ -4097,7 +4097,7 @@ class HarnessGenerator:
         sections.append(
             "/* AMC signal handler */\n"
             "static volatile const char *_amc_signal_name = \"UNKNOWN\";\n"
-            "static volatile sig_atomic_t _amc_fut_called = 0;\n"
+            "static volatile int _amc_fut_called = 0;\n"
             "static void _amc_handler(int sig) {\n"
             "    if (sig == 11) _amc_signal_name = \"SIGSEGV\";\n"
             "    else if (sig == 6)  _amc_signal_name = \"SIGABRT\";\n"
