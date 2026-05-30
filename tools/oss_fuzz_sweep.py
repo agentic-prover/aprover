@@ -30,7 +30,8 @@ import os
 import subprocess
 import sys
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import ClassVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
@@ -53,6 +54,13 @@ class ProjectMeta:
     homepage: str
     primary_contact: str
 
+    # Some OSS-Fuzz projects don't carry `main_repo` in project.yaml
+    # because their build.sh fetches the source via a custom URL. Hardcode
+    # the canonical repo URL for these so the orchestrator can clone.
+    REPO_FALLBACKS: ClassVar[dict[str, str]] = {
+        "bzip2": "https://gitlab.com/bzip2/bzip2.git",
+    }
+
     @classmethod
     def fetch(cls, name: str) -> "ProjectMeta":
         url = PROJECT_YAML_URL.format(name=name)
@@ -67,7 +75,11 @@ class ProjectMeta:
                     value = line[len(prefix):].strip().strip("'\"")
                     meta[key] = value
         if not meta["main_repo"]:
-            raise SystemExit(f"OSS-Fuzz {name}: project.yaml is missing main_repo")
+            fallback = cls.REPO_FALLBACKS.get(name, "")
+            if fallback:
+                meta["main_repo"] = fallback
+            else:
+                raise SystemExit(f"OSS-Fuzz {name}: project.yaml is missing main_repo")
         return cls(name=name, **meta)
 
 
@@ -161,6 +173,14 @@ def prepare_corpus(project_name: str, project_root: Path) -> None:
                 p.unlink()
                 print(f"[oss_fuzz_sweep] libpng: removed {noise_c}")
     elif project_name == "libtiff":
+        # Delete libtiff debug / build utility files that have main() and
+        # confuse bmc-agent's harness gen (verified CONVERSION ERROR on
+        # mkspans.c during the OpenRouter sweep 2026-05-29).
+        for noise_c in ["mkspans.c", "mkg3states.c"]:
+            p = project_root / "libtiff" / noise_c
+            if p.exists():
+                p.unlink()
+                print(f"[oss_fuzz_sweep] libtiff: removed libtiff/{noise_c}")
         # libtiff: ship a minimal tif_config.h / tiffconf.h via cmake or
         # copy from the bundled templates. Both live under libtiff/.
         import re
@@ -197,6 +217,12 @@ def prepare_corpus(project_name: str, project_root: Path) -> None:
                 text = text.replace("@TIFF_UINT32_FORMAT@", "\"%u\"")
                 text = text.replace("@TIFF_INT64_FORMAT@", "\"%lld\"")
                 text = text.replace("@TIFF_UINT64_FORMAT@", "\"%llu\"")
+                # The signed/unsigned size-type and the per-type sizes.
+                # On x86_64 Linux these are: ssize_t = signed long, size_t = unsigned long.
+                text = text.replace("@TIFF_SIZE_T@", "unsigned long")
+                text = text.replace("@TIFF_SSIZE_T@", "signed long")
+                text = text.replace("@TIFF_SIZE_FORMAT@", "\"%lu\"")
+                text = text.replace("@TIFF_SSIZE_FORMAT@", "\"%ld\"")
                 # Size-of types — we run on x86_64 Linux, all 64-bit.
                 for sz_key in ("SIZEOF_SIZE_T", "SIZEOF_VOIDP",
                                "SIZEOF_UNSIGNED_LONG", "SIZEOF_LONG"):
@@ -220,6 +246,57 @@ def prepare_corpus(project_name: str, project_root: Path) -> None:
             print(f"[oss_fuzz_sweep] expat: synthesized expat_config.h")
     elif project_name == "zstd":
         # zstd: headers are inline, no autogen needed for the lib/ tree.
+        pass
+    elif project_name == "bzip2":
+        # bzip2: synthesize bz_version.h from the .in template, delete
+        # CLI/test files so verify-dir only sweeps the library code.
+        bz_ver_in = project_root / "bz_version.h.in"
+        bz_ver = project_root / "bz_version.h"
+        if bz_ver_in.exists() and not bz_ver.exists():
+            bz_ver.write_text(bz_ver_in.read_text().replace("@BZ_VERSION@", "1.0.8-bmc-agent"))
+            print(f"[oss_fuzz_sweep] bzip2: synthesized bz_version.h")
+        for noise_c in ["bzip2.c", "bzip2recover.c", "dlltest.c",
+                        "mk251.c", "spewG.c", "unzcrash.c"]:
+            p = project_root / noise_c
+            if p.exists():
+                p.unlink()
+                print(f"[oss_fuzz_sweep] bzip2: removed {noise_c}")
+    elif project_name == "cmark":
+        # cmark: CMake generates cmark_version.h (from .in) and
+        # cmark_export.h (via generate_export_header). Synthesize both so
+        # the src/ tree compiles standalone. No config.h is required by
+        # this version (0.31.x dropped it). Drop main.c (CLI entry point).
+        src = project_root / "src"
+        ver_in = src / "cmark_version.h.in"
+        ver = src / "cmark_version.h"
+        if ver_in.exists():
+            ver.write_text(
+                ver_in.read_text()
+                .replace("@PROJECT_VERSION_MAJOR@", "0")
+                .replace("@PROJECT_VERSION_MINOR@", "31")
+                .replace("@PROJECT_VERSION_PATCH@", "2")
+            )
+            print("[oss_fuzz_sweep] cmark: synthesized cmark_version.h")
+        export_h = src / "cmark_export.h"
+        if not export_h.exists():
+            # Static-analysis build: all visibility/deprecation macros empty.
+            export_h.write_text(
+                "#ifndef CMARK_EXPORT_H\n#define CMARK_EXPORT_H\n"
+                "#define CMARK_EXPORT\n#define CMARK_NO_EXPORT\n"
+                "#define CMARK_DEPRECATED\n#define CMARK_DEPRECATED_EXPORT\n"
+                "#define CMARK_DEPRECATED_NO_EXPORT\n#define CMARK_NO_DEPRECATED\n"
+                "#endif\n"
+            )
+            print("[oss_fuzz_sweep] cmark: synthesized cmark_export.h")
+        main_c = src / "main.c"
+        if main_c.exists():
+            main_c.unlink()
+            print("[oss_fuzz_sweep] cmark: removed src/main.c")
+    elif project_name == "brotli":
+        # brotli: decoder sources in c/dec are the attack surface. Headers
+        # live under c/include/brotli/ and c/common/ (wired via
+        # EXTRA_INCLUDE_DIRS). Nothing to synthesize; the encoder (c/enc)
+        # and fuzz/ dirs are simply not the swept source_dir.
         pass
     # Else: unknown project — let the smoke test surface what's missing.
 
@@ -246,8 +323,40 @@ EXCLUDE_PATTERNS: dict[str, list[str]] = {
     "libtiff": [
         "tools/*",         # CLI utilities (tiffcp, tiff2pdf, etc.)
         "test/*",
-        "tif_predict.c",   # uses runtime function pointers; harness gen
-                           # produces parse errors on the dispatch table
+        "tif_predict.c",   # uses runtime function pointers
+        # PRIORITY focus: drop low-bug-density files so bmc-agent's LLM
+        # budget concentrates on tif_dirread.c, tif_ojpeg.c, tif_lzw.c,
+        # tif_fax3.c, tif_jpeg.c, tif_pixarlog.c (the CVE hotspots from
+        # the domain_knowledge doc).
+        "tif_aux.c",       # clamp helpers, already audited (G3 patterns)
+        "tif_close.c",     # bookkeeping
+        "tif_codec.c",     # codec table, bookkeeping
+        "tif_compress.c",  # codec registration, no parser
+        "tif_color.c",     # colorspace helpers
+        "tif_extension.c", # extension registration
+        "tif_flush.c",     # bookkeeping
+        "tif_open.c",      # only TIFFOpen — well-trodden
+        "tif_print.c",     # debug printing
+        "tif_strip.c",     # strip bookkeeping
+        "tif_swab.c",      # byte-swap helpers
+        "tif_tile.c",      # tile bookkeeping
+        "tif_unix.c",      # OS abstraction
+        "tif_version.c",   # version constants
+        "tif_warning.c",   # warning helpers
+        "tif_error.c",     # error helpers
+        "tif_jbig.c",      # JBIG codec — external library dep
+        "tif_zip.c",       # ZIP codec — uses zlib (external)
+        "tif_zstd.c",      # ZSTD codec — uses zstd (external)
+        "tif_lerc.c",      # LERC codec, audited
+        "tif_webp.c",      # WebP codec, audited
+        "tif_next.c",      # NeXT codec, audited
+        "tif_pixarlog.c",  # PixarLog, audited
+        "tif_packbits.c",  # PackBits, simple RLE
+        "tif_thunder.c",   # Thunder, simple RLE
+        "tif_dirinfo.c",   # tag metadata tables
+        "tif_dir.c",       # tag setters
+        "tif_getimage.c",  # high-level read helpers
+        "tif_dumpmode.c",  # null codec
     ],
     "expat": [
         "tests/*",
@@ -279,8 +388,9 @@ def discover_sources(project_root: Path) -> Path:
         project_root / "expat" / "lib",            # expat layout
         project_root / "lib" / "decompress",       # zstd: the parser side (attack surface)
         project_root / "lib" / "common",           # zstd common (fallback)
+        project_root / "c" / "dec",                # brotli: decoder = attack surface
         project_root / "lib",                      # generic
-        project_root / "src",
+        project_root / "src",                      # cmark layout
         project_root,                              # libpng layout — last so subdirs win
     ]
     for cand in candidates:
@@ -294,6 +404,25 @@ def discover_sources(project_root: Path) -> Path:
 def excludes_for(project_name: str) -> list[str]:
     """Return the source-file glob patterns to skip during verify-dir."""
     return EXCLUDE_PATTERNS.get(project_name, [])
+
+
+# Extra header search dirs (relative to the *project root*) that the
+# auto-include logic in run_verify_dir() can't infer. Needed when public
+# headers live in a nested dir (brotli: c/include holds brotli/*.h, so the
+# direct-*.h sibling heuristic misses it) or sit beside a shared-code dir.
+EXTRA_INCLUDE_DIRS: dict[str, list[str]] = {
+    "brotli": ["c/include", "c/common", "c/dec"],
+}
+
+
+def extra_includes_for(project_name: str, project_root: Path) -> list[Path]:
+    """Resolve EXTRA_INCLUDE_DIRS entries to existing absolute dirs."""
+    out: list[Path] = []
+    for rel in EXTRA_INCLUDE_DIRS.get(project_name, []):
+        cand = project_root / rel
+        if cand.is_dir():
+            out.append(cand)
+    return out
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -343,21 +472,21 @@ def run_verify_dir(
         "--output", str(artifact_dir),
         "--enable-realism-check",
         "--enable-dynamic-validation",
-        # OPTION 3 (K2-only): disable tool-use code paths. K2 Think does
-        # not support OpenAI-format tool_calls, so we route every role
-        # to K2 (see ~/.config/bmc-agent/env) and skip the tool-use
-        # agents. Tradeoff: lose the in-pipeline G1-G5 triage audit;
-        # rely on realism + dyn-val for FP filtering. Manual re-audit
-        # of the audit list is the same workflow used for postfix9c.
-        "--no-realism-tools",
-        "--no-spec-gen-tools",
-        "--no-phase-3e-triage",
-        # K2's responses don't reliably parse as the JSON format the v2
-        # spec generator expects (observed 100% parse-fail in the first
-        # libpng iteration). The legacy template-based spec generator
-        # doesn't need an LLM at all — harness quality goes up.
-        "--legacy-spec-gen",
+        # OpenRouter mixed-stack: tool-use works via Haiku 4.5.
+        # Re-enable Phase 3e in-pipeline triage agent (G1-G5 audit).
+        "--enable-phase-3e-triage",
+        # Use v2 spec generator now that Haiku produces parseable JSON.
     ]
+    # Per-project domain knowledge — hand-curated docs covering format
+    # invariants, public-API entry points, historical CVE classes, and
+    # known-FP suppression hints. Providing this also short-circuits
+    # bmc-agent's Pass 1.5 LLM-driven domain analysis (saves time + cost).
+    project_name = extra_env.pop("__BMC_AGENT_PROJECT__", "")
+    if project_name:
+        dk_path = Path(__file__).parent / "domain_knowledge" / f"{project_name}.md"
+        if dk_path.exists():
+            cmd.extend(["--domain-knowledge", str(dk_path)])
+            print(f"[oss_fuzz_sweep] using domain knowledge: {dk_path}")
     # Skip test / utility files for the current project (set by caller).
     for pat in extra_env.pop("__BMC_AGENT_EXCLUDE_PATS__", "").split("|"):
         if pat:
@@ -382,6 +511,10 @@ def run_verify_dir(
         if subdir.name in {"include", "config", "build"}:
             if any(subdir.glob("*.h")):
                 cmd.extend(["--include-dir", str(subdir)])
+    # Explicit per-project header dirs the heuristic above can't infer.
+    for inc in extra_env.pop("__BMC_AGENT_EXTRA_INCLUDES__", "").split("|"):
+        if inc:
+            cmd.extend(["--include-dir", inc])
     if minimal:
         cmd.append("--minimal")
     if extra_args:
@@ -435,34 +568,50 @@ def iter_bug_reports(artifact_dir: Path) -> Iterable[tuple[Path, dict]]:
 
 
 def passes_triage(report: dict) -> bool:
-    """Apply the triage gate.
+    """Apply the STRICT triage gate.
 
-    Per-CEx report (from bug_reports/<name>.json) is keyed differently
-    than the CBMC-stage bug_report.json: there's no `verified` field,
-    just a `counterexample` (singular). The pipeline only writes these
-    AFTER realism + dynamic + confidence stages run.
-
-    Keep a bug iff:
+    Per-CEx report (from bug_reports/<name>.json). Keep iff:
       * confidence ∈ confirmed_* tiers
-      * realism_check verdict is "realistic" OR is "uncertain" because of
-        an LLM-error (which happens under K2 rate-limiting and shouldn't
-        suppress real findings)
+      * realism_check.verdict == "realistic"
+      * the in-pipeline TriageToolsAgent verdict (if it ran) is NOT
+        LIKELY_FP — that gate applies the G1-G5 audit and catches the
+        FPs the realism agent (Gemini Flash) sometimes mis-judges.
+
+    Background: observed 2026-05-29 that Gemini Flash flagged 3
+    tif_readproc/tif_diroff cases as "realistic" that are textbook
+    G4-FP (caller-established precondition via TIFFOpen) and
+    G5-structural-invariant-bound (overflow trio in TIFFFetchDirectory).
+    The G1-G5 triage agent on Haiku is the precision backstop —
+    require its verdict before auto-pushing.
     """
+    # (C) Accuracy filter — count only genuine memory-safety violations.
+    # Two inaccuracy classes observed 2026-05-30 that must never reach the
+    # "confirmed bug" gate:
+    #   * unwinding-assertion artifacts (e.g. cmark_chunk_rtrim.unwind.0):
+    #     these mean "the loop bound was too small", NOT a bug.
+    #   * semantic / spec-violation properties: high FP rate, not a crash.
+    # Keep memory_safety (OOB read/write, NULL/invalid deref) — the classes
+    # the ASan-replay oracle can confirm as real crashes.
+    prop = (report.get("violated_property") or report.get("cbmc_property") or "").lower()
+    if ".unwind." in prop or "unwinding" in prop:
+        return False
+    bug_type = (report.get("bug_type") or "").lower()
+    if bug_type and bug_type != "memory_safety":
+        return False
+
     confidence = report.get("confidence", "")
     if confidence not in CONFIRMED_TIERS:
         return False
     realism = report.get("realism_check") or {}
     verdict = (realism.get("verdict") or "").lower()
-    if verdict == "realistic":
-        return True
-    if verdict == "uncertain":
-        reasoning = (realism.get("reasoning") or "").lower()
-        # An "uncertain" verdict caused by an LLM transport error
-        # (HTTP 429, network) is not a confidence-bearing rejection —
-        # surface it for manual audit rather than silently dropping.
-        if "llm call failed" in reasoning or "http 429" in reasoning or "llmerror" in reasoning:
-            return True
-    return False
+    if verdict != "realistic":
+        return False
+    # Don't auto-push if triage downgraded.
+    triage = report.get("triage") or report.get("triage_result") or {}
+    triage_verdict = (triage.get("verdict") or "").lower()
+    if triage_verdict in ("likely_fp", "needs_human"):
+        return False
+    return True
 
 
 def render_finding(report: dict, source_path: Path, run_id: str, meta: ProjectMeta) -> str:
@@ -589,6 +738,20 @@ def sweep_one_project(args: argparse.Namespace) -> int:
     artifact_dir = args.artifact_root / meta.name / run_id
     log_path = Path("/home/syc/AProver/findings") / "oss_fuzz" / f"{meta.name}_{run_id}.log"
 
+    # Bound /tmp growth under 24/7 operation: keep only the 2 newest prior
+    # run dirs for this project before starting a new one. Findings are
+    # already uploaded to the embargoed repo, so old artifact trees are
+    # disposable. Runs as a fresh process each project, so this self-prune
+    # takes effect without restarting the continuous loop.
+    proj_artifacts = args.artifact_root / meta.name
+    if proj_artifacts.is_dir():
+        prior = sorted((d for d in proj_artifacts.iterdir() if d.is_dir()),
+                       key=lambda d: d.name)
+        for stale in prior[:-2]:
+            import shutil
+            shutil.rmtree(stale, ignore_errors=True)
+            print(f"[oss_fuzz_sweep] pruned old artifacts: {stale}")
+
     extra_env = load_env_file(Path("/home/syc/.config/bmc-agent/env"))
     extra_env.setdefault("BMC_AGENT_K2_NOTE", f"run_id={run_id}")
     # Smuggle per-project exclude globs through extra_env so the
@@ -596,6 +759,13 @@ def sweep_one_project(args: argparse.Namespace) -> int:
     excl = excludes_for(meta.name)
     if excl:
         extra_env["__BMC_AGENT_EXCLUDE_PATS__"] = "|".join(excl)
+    # Smuggle project name for domain-knowledge lookup.
+    extra_env["__BMC_AGENT_PROJECT__"] = meta.name
+    # Smuggle explicit header dirs for projects whose public headers live
+    # in a nested layout (brotli: c/include/brotli/*.h).
+    extra_inc = extra_includes_for(meta.name, project_root)
+    if extra_inc:
+        extra_env["__BMC_AGENT_EXTRA_INCLUDES__"] = "|".join(str(p) for p in extra_inc)
 
     if args.corpus_only:
         print("[oss_fuzz_sweep] --corpus-only: skipping verify-dir")

@@ -305,7 +305,12 @@ class LLMClient:
         # reasoning model has comfortable room for both the trace and a
         # full algebraic spec. Cheaper non-reasoning models on the same
         # endpoint simply stop earlier on finish_reason=stop.
-        effective_max_tokens = max(max_tokens, 24576)
+        # Ceiling: the 24576 floor above is for reasoning models, but it must
+        # never exceed the active model's completion-token limit. gpt-4o-mini
+        # caps at 16384 and 400s ("max_tokens is too large: 24576") otherwise.
+        # Configurable via BMC_AGENT_LLM_MAX_TOKENS_CAP for models that allow more.
+        _cap = int(os.environ.get("BMC_AGENT_LLM_MAX_TOKENS_CAP", "16384"))
+        effective_max_tokens = min(max(max_tokens, 24576), _cap)
         payload = {
             "model": self.config.llm_model,
             "messages": [

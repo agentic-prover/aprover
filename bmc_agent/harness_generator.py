@@ -568,6 +568,47 @@ def _should_inline_callee(
     return True, "eligible"
 
 
+_STUB_OUT_BOUND = 16  # bound for stubbed-callee output counts; buffer = bound*16 bytes
+
+
+def _emit_stub_output_param_init(params) -> list[str]:
+    """D(i)/G5 structural invariant: model a stubbed callee's OUTPUT params as if
+    the callee behaved correctly, instead of leaving them nondeterministic.
+
+    - output count/size (``T *len``, name looks like a length): bound to
+      ``[0, _STUB_OUT_BOUND]`` so a caller loop driven by it stays in range.
+    - output buffer (``T **out``): hand back a generously-sized allocation so a
+      count-bounded copy loop in the caller cannot run past it.
+
+    This kills the dominant array-reader false-positive class (e.g. a havoc'd
+    ``TIFFReadDirEntryArray`` returned an unbounded count + an independent
+    buffer, so the caller's ``*mb++ = *ma++`` loop read OOB). It is an
+    UNDER-approximation (assumes the callee is correct), so it adds no false
+    positives; bugs *inside* the stubbed callee are covered by its own harness.
+    """
+    out: list[str] = []
+    n = _STUB_OUT_BOUND
+    for ptype, pname in params:
+        if not pname:
+            continue
+        t = ptype.strip()
+        pointee = t.split("*", 1)[0]
+        if "const" in pointee:  # const pointee = input-only param
+            continue
+        stars = t.count("*")
+        if stars >= 2:
+            out.append(
+                f"    if ({pname}) {{ *{pname} = __CPROVER_allocate((size_t)({n}) * 16 + 16, 0); }}"
+                f"  /* D-i: sized output buffer */"
+            )
+        elif stars == 1 and _is_likely_length_field(pname) and _looks_like_integer_type(t[:-1]):
+            out.append(
+                f"    if ({pname}) {{ __CPROVER_assume(*{pname} >= 0 && *{pname} <= (long)({n})); }}"
+                f"  /* D-i: bounded output count */"
+            )
+    return out
+
+
 def _generate_stub(
     callee_name: str,
     callee_spec: Optional[Spec],
@@ -637,6 +678,13 @@ def _generate_stub(
             lines.append("    /* Assume callee precondition */")
             for stmt in assume_stmts:
                 lines.append(f"    {stmt}")
+
+    # D(i)/G5: model output params (bounded count, sized buffer) so the stub
+    # respects the structural invariant the real callee enforces.
+    out_init = _emit_stub_output_param_init(params)
+    if out_init:
+        lines.append("    /* D-i: structural-invariant output-param modeling */")
+        lines.extend(out_init)
 
     ret_type_bare = _ret_type_bare(ret_type)
     if ret_type_bare == "void":
@@ -2443,6 +2491,91 @@ def _emit_cast_chain_init(
     return out
 
 
+_FUNCPTR_TYPE_SUFFIXES = ("proc", "func", "callback", "handler", "hook")
+
+
+def _is_funcptr_field_type(t: str) -> bool:
+    """Heuristic: does this struct-field type denote a function pointer?
+
+    Matches explicit ``ret (*)(...)`` syntax and conventional callback
+    typedef names (``*Proc``, ``*Func``, ``*Callback``, ``*Handler``,
+    ``*Hook`` — e.g. libtiff's ``TIFFReadWriteProc``/``TIFFSeekProc``).
+    Deliberately conservative: a wrong match only suppresses an
+    (almost always spurious) NULL-call dereference, it never invents a bug.
+    Ambiguous suffixes like ``_ptr``/``fn``/``cb`` are excluded so we don't
+    over-assume on data-pointer typedefs and hide a real NULL-data deref.
+    """
+    s = t.strip().lower()
+    if "(*" in s:  # explicit function-pointer declarator
+        return True
+    ident = re.sub(r"\bconst\b", "", s).strip()
+    if " " in ident or "*" in ident or not ident:
+        return False  # not a bare typedef name
+    return ident.endswith(_FUNCPTR_TYPE_SUFFIXES)
+
+
+def _funcptr_stub_def(typedef_name: str, source_text: str) -> Optional[str]:
+    """Resolve ``typedef RET (*NAME)(PARAMS);`` from source and emit a matching
+    CBMC stub ``static RET _cbmc_fpstub_NAME(PARAMS){ RET _r; return _r; }``.
+
+    A callback struct field assigned this stub gives CBMC a signature-matched
+    call candidate. Proven necessary: an ``__CPROVER_assume(field != NULL)``
+    alone leaves CBMC with "no candidates for dereferenced function pointer"
+    and the call deref still FAILs (2026-05-30). Params are copied verbatim
+    (CBMC accepts unnamed params in a definition). Returns None if the typedef
+    can't be resolved (caller then falls back to the non-NULL assume).
+    """
+    m = re.search(
+        r"typedef\s+(?P<ret>[A-Za-z_][\w\s\*]*?)\(\s*\*\s*"
+        + re.escape(typedef_name)
+        + r"\s*\)\s*\((?P<params>[^;{}]*)\)\s*;",
+        source_text,
+    )
+    if not m:
+        return None
+    ret = re.sub(r"\s+", " ", m.group("ret").strip())
+    params = m.group("params").strip() or "void"
+    name = f"_cbmc_fpstub_{typedef_name}"
+    if ret == "void":
+        return f"static void {name}({params}) {{ (void)0; }}"
+    return f"static {ret} {name}({params}) {{ {ret} _r; return _r; }}"
+
+
+def _inject_funcptr_stubs(harness_text: str, source_text: str) -> str:
+    """Post-pass: for every ``_cbmc_fpstub_<NAME>`` referenced in the harness,
+    inject a signature-matched stub definition (resolved from source) at file
+    scope. Any NAME whose typedef can't be resolved has its assignment line
+    rewritten to the harmless ``__CPROVER_assume(<lhs> != NULL)`` fallback."""
+    refs = set(re.findall(r"_cbmc_fpstub_(\w+)", harness_text))
+    if not refs:
+        return harness_text
+    # Resolve typedefs from the harness itself first (it embeds the type
+    # declarations, so it is self-contained even when source_text is only the
+    # .c file and the callback typedefs live in an included header), then fall
+    # back to source_text.
+    resolve_src = harness_text + "\n" + (source_text or "")
+    defs: list[str] = []
+    for nm in sorted(refs):
+        d = _funcptr_stub_def(nm, resolve_src)
+        if d:
+            defs.append(d)
+        else:
+            harness_text = re.sub(
+                r"([ \t]*)([\w.\[\]>-]+)\s*=\s*_cbmc_fpstub_" + re.escape(nm) + r"\s*;[^\n]*",
+                r"\1__CPROVER_assume(\2 != NULL);",
+                harness_text,
+            )
+    if not defs:
+        return harness_text
+    block = (
+        "/* --- D-ii: signature-matched callback stubs (assigned to nondet\n"
+        "   function-pointer struct fields so CBMC has a valid call candidate) --- */\n"
+        + "\n".join(defs) + "\n\n"
+    )
+    idx = harness_text.rfind("void main(void)")
+    return block + harness_text if idx == -1 else harness_text[:idx] + block + harness_text[idx:]
+
+
 def _emit_struct_field_init(
     obj_name: str, ftype: str, fname: str, cbmc_unwind: int,
     enclosing_struct_tag: Optional[str] = None,
@@ -2476,6 +2609,26 @@ def _emit_struct_field_init(
     """
     out: list[str] = []
     t = ftype.strip()
+    # Function-pointer / callback fields (D-ii: caller-established precondition).
+    # A handle's callback fields are installed by its constructor/open routine
+    # before any method runs — e.g. TIFF.tif_readproc/tif_seekproc are set by
+    # TIFFClientOpen (tif_open.c) before any directory read, and TIFFClientOpen
+    # rejects a NULL readproc. Leaving them nondet lets CBMC explore the
+    # impossible NULL state and report a spurious NULL-call dereference — the
+    # dominant G4 false positive (tif_readproc trio adjudicated FP 2026-05-29).
+    # Assume non-NULL. Conservative: a wrong match only suppresses an
+    # (almost always spurious) NULL-call deref, it can never invent a bug.
+    if _is_funcptr_field_type(t):
+        ts = re.sub(r"\bconst\b", "", t).strip()
+        # Bare typedef name -> assign a signature-matched stub (defined at file
+        # scope by _inject_funcptr_stubs). An `!= NULL` assume is INSUFFICIENT
+        # for a called function pointer (CBMC: "no candidates"). Explicit
+        # `(*)(...)` / qualified forms fall back to the harmless assume.
+        if re.fullmatch(r"[A-Za-z_]\w*", ts):
+            return [f"    {obj_name}.{fname} = _cbmc_fpstub_{ts};"
+                    f"  /* D-ii: matched callback stub */"]
+        return [f"    __CPROVER_assume({obj_name}.{fname} != NULL);"
+                f"  /* callback field non-NULL (D-ii precondition) */"]
     # Pointer fields
     if t.endswith("*"):
         stars = t.count("*")
@@ -4409,6 +4562,10 @@ class HarnessGenerator:
                 f"/* Sibling placeholder (referenced by TU-scope dispatch table): {sib_name} */",
                 f"{sib_ret} {sib_name}({sib_params}) {{",
             ]
+            # D(i)/G5: model output params (bounded count, sized buffer) so a
+            # havoc'd sibling (e.g. TIFFReadDirEntryArrayWithLimit) doesn't hand
+            # the caller an unbounded count + undersized buffer -> spurious OOB.
+            body_lines.extend(_emit_stub_output_param_init(sib_sig.parameters))
             if sib_ret_bare == "void":
                 body_lines.append("    /* void sibling — no return */")
             else:
@@ -4804,7 +4961,10 @@ class HarnessGenerator:
             + harness_main
         )
 
-        return "\n\n".join(sections) + "\n"
+        harness = "\n\n".join(sections) + "\n"
+        # D-ii: inject signature-matched stubs for any assigned callback fields.
+        harness = _inject_funcptr_stubs(harness, source_text)
+        return harness
 
     # ------------------------------------------------------------------
     # Real-libc harness mode

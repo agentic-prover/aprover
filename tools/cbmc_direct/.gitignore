@@ -1,0 +1,5 @@
+# compiled ASan replay binaries + CBMC run logs (regenerated)
+cmark_replay
+cmark_utf8_replay
+*.out
+*.log

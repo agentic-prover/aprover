@@ -26,7 +26,14 @@ else
     exit 1
 fi
 
-PROJECTS=(libpng libtiff expat zstd)
+# Parser-focused rotation. Buffer-oriented parsers (cmark/brotli/bzip2/zstd/
+# expat/libpng) take (bytes,len) as the attack surface, so generated harnesses
+# model reality closely → far fewer precondition-FPs than handle-heavy formats.
+# libtiff dir-read is intentionally dropped from the active rotation: it needs a
+# fully-initialized TIFF* (mmap/readproc/flags), so permissive harnesses
+# manufacture impossible states (all 12 of its "confirmed+realistic" candidates
+# were adjudicated FALSE_POSITIVE on 2026-05-29).
+PROJECTS=(cmark brotli bzip2 zstd expat libpng)
 DRY_RUN_FLAG=""
 if [[ "${1:-}" == "--dry-run" ]]; then
     DRY_RUN_FLAG="--dry-run"
