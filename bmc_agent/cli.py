@@ -114,6 +114,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
     config = Config.from_env()
     if hasattr(args, "output") and args.output:
         config.artifact_dir = args.output
+    # Thread build include-dirs / defines into CBMC so the per-function harness
+    # can preprocess build-config headers (config.h, etc.) — mirrors `verify`.
+    # Without this, `check --function X` fails on missing config.h.
+    if getattr(args, "include_dir", None):
+        config.include_dirs = args.include_dir
+        config.preprocess = True
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)
 
     store = ArtifactStore(config.artifact_dir)
     # Pick CBMC for .c/.h and Kani for .rs; both implement BMCEngine's
@@ -1258,6 +1266,21 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("--driver", required=True, help="Driver name")
     chk.add_argument("--output", default="artifacts", help="Artifact directory")
     chk.add_argument("--function", default="", help="Specific function to check (optional)")
+    chk.add_argument(
+        "--include-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Add an include directory for C preprocessing (repeatable). Required when "
+             "the harness pulls in build-config headers (e.g. config.h).",
+    )
+    chk.add_argument(
+        "-D", "--define",
+        action="append",
+        default=[],
+        dest="defines",
+        help="Pass a preprocessor define to CBMC (repeatable), e.g. -D HAVE_CONFIG_H.",
+    )
     chk.set_defaults(func=_cmd_check)
 
     # --- verify ---
