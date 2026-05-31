@@ -96,6 +96,10 @@ def main():
     ap.add_argument("--setup-only", action="store_true")
     ap.add_argument("--list-hints", action="store_true",
                     help="just print the FP-hint worklist from existing artifacts")
+    ap.add_argument("--check-functions", default=None,
+                    help="comma-separated function names: run bmc-agent on JUST these "
+                         "audit-flagged functions (gen specs -> check --function each), "
+                         "not the whole file. Output = caller-reachability worklist.")
     args = ap.parse_args()
 
     proj = CORPORA / args.project
@@ -136,6 +140,13 @@ def main():
     env = os.environ.copy()
     env.update(load_env())
 
+    # Function-granular Direction A: audit flagged specific high-risk functions ->
+    # run bmc-agent on JUST those (gen specs -> check --function each), not whole file.
+    if args.check_functions:
+        funcs = [f.strip() for f in args.check_functions.split(",") if f.strip()]
+        check_functions_flow(targets, out, env, cc, funcs, args.timeout)
+        return
+
     for e in targets:
         src = e["file"]
         incs, defs = flags_for(e)
@@ -159,6 +170,79 @@ def main():
                            stdout=fh, stderr=subprocess.STDOUT)
 
     emit_hints(out)
+
+
+def check_functions_flow(targets, out: Path, env, cc: Path, funcs, timeout: int):
+    """Run bmc-agent on JUST the audit-flagged functions (not whole files).
+
+    Per file: gen specs (Phase 1) -> `check --function X` (Phase 2) for each
+    requested function present in that file. The per-function precondition that
+    bmc-agent uses is CALLER-DERIVED (specs aggregated from each callee's callers),
+    which narrows over-approximation but does NOT prove the function is reachable
+    on an attacker path from the entry point. So the output below is a
+    CALLER-REACHABILITY WORKLIST, not a bug list: every FAILED function is a
+    Direction-B FP-hint whose real call path must be adjudicated by the audit and
+    then ASan-confirmed before it counts.
+    """
+    wanted = set(funcs)
+    results = []  # (file, func, verdict, n_cex)
+    for e in targets:
+        src = e["file"]
+        incs, defs = flags_for(e)
+        incs = list(dict.fromkeys(incs + [str(Path(src).parent), str(cc.parent)]))
+        odir = str(out / Path(src).stem)
+        common = []
+        for d in incs:
+            common += ["--include-dir", d]
+        for d in defs:
+            common += ["-D", d]
+
+        # Phase 1: generate specs for the file (needed before check) — but SKIP
+        # if every requested function already has a spec on disk (check loads
+        # specs from there), so we don't re-run the expensive whole-file LLM gen.
+        spec_dir = Path(odir) / "ossfz"
+        have = {p.parent.name for p in spec_dir.glob("*/spec.json")} if spec_dir.is_dir() else set()
+        missing = [fn for fn in wanted if fn not in have]
+        if missing:
+            gen = (["uv", "run", "python", "-m", "bmc_agent.cli", "generate",
+                    "--source", src, "--driver", "ossfz", "--output", odir] + common)
+            glog = out / f"{Path(src).stem}.gen.log"
+            print(f"[oss-bmc] gen specs for {Path(src).name} "
+                  f"({len(missing)} flagged fn missing specs) -> {glog.name}")
+            with glog.open("w") as fh:
+                subprocess.run(["timeout", str(timeout)] + gen, env=env,
+                               stdout=fh, stderr=subprocess.STDOUT)
+        else:
+            print(f"[oss-bmc] specs present for all flagged fn in {Path(src).name} — skipping gen")
+
+        # Phase 2: check ONLY each flagged function present in this file.
+        for fn in sorted(wanted):
+            chk = (["uv", "run", "python", "-m", "bmc_agent.cli", "check",
+                    "--source", src, "--driver", "ossfz", "--output", odir,
+                    "--function", fn] + common)
+            clog = out / f"{Path(src).stem}.{fn}.check.log"
+            r = subprocess.run(["timeout", str(timeout)] + chk, env=env,
+                               capture_output=True, text=True)
+            txt = (r.stdout or "") + (r.stderr or "")
+            clog.write_text(txt)
+            if "not found in" in txt:
+                continue  # function isn't in this file
+            m = re.search(r"verified=(True|False),\s*counterexamples=(\d+)", txt)
+            if m:
+                verdict = "FAILED" if m.group(1) == "False" else "verified"
+                results.append((Path(src).name, fn, verdict, int(m.group(2))))
+                print(f"[oss-bmc] check {fn} @ {Path(src).name}: {verdict} "
+                      f"({m.group(2)} counterexample(s)) -> {clog.name}")
+
+    print("\n[oss-bmc] === CALLER-REACHABILITY WORKLIST (per-function CBMC verdicts) ===")
+    print("[oss-bmc] NOTE: FAILED = a per-function counterexample under a CALLER-DERIVED")
+    print("[oss-bmc] precondition. NOT a bug. Adjudicate the real call path from the fuzz/")
+    print("[oss-bmc] public entry (reachable with the offending input?), then ASan-confirm.")
+    for fname, fn, verdict, n in results:
+        flag = "ADJUDICATE" if verdict == "FAILED" else "clean"
+        print(f"  {flag:11s} {fn:28s} | {verdict:8s} | {n:3d} cex | {fname}")
+    if not results:
+        print("  (no flagged function produced a verdict — check names / file selection)")
 
 
 def emit_hints(out: Path):

@@ -74,6 +74,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     config = Config.from_env()
     if args.output:
         config.artifact_dir = args.output
+    if getattr(args, "include_dir", None):
+        config.include_dirs = args.include_dir
+        config.preprocess = True
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)
     _apply_model_arg(config, args)
 
     store = ArtifactStore(config.artifact_dir)
@@ -1253,6 +1258,20 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         metavar="TEXT_OR_FILE",
         help="Domain knowledge string or path to a file containing domain knowledge",
+    )
+    gen.add_argument(
+        "--include-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Add an include directory for C preprocessing (repeatable).",
+    )
+    gen.add_argument(
+        "-D", "--define",
+        action="append",
+        default=[],
+        dest="defines",
+        help="Pass a preprocessor define (repeatable), e.g. -D HAVE_CONFIG_H.",
     )
     _add_model_arg(gen)
     gen.set_defaults(func=_cmd_generate)
