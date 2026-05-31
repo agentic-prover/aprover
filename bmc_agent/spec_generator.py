@@ -874,6 +874,7 @@ class SpecGenerator:
         driver_name: str,
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
+        cross_file_caller_contexts: Optional[dict] = None,
     ) -> dict[str, Spec]:
         """
         Generate specs for all functions in source_file.
@@ -986,6 +987,7 @@ class SpecGenerator:
                 all_specs=all_specs,
                 is_entry_layer=is_entry_layer,
                 domain_knowledge=domain_knowledge,
+                cross_file_caller_contexts=cross_file_caller_contexts,
             )
             all_specs.update(layer_specs)
 
@@ -1026,6 +1028,7 @@ class SpecGenerator:
         all_specs: dict[str, Spec],
         is_entry_layer: bool,
         domain_knowledge: str,
+        cross_file_caller_contexts: Optional[dict] = None,
     ) -> dict[str, Spec]:
         """Generate specs for all functions in a layer, concurrently."""
 
@@ -1057,19 +1060,35 @@ class SpecGenerator:
             struct_context = self._extract_struct_context(func_info, parsed)
 
             callers = callers_map.get(fn_name, [])
-            if not callers or is_entry_layer:
+            # Cross-file callers: (caller FunctionInfo, caller's ParsedCFile)
+            # tuples for callers of fn_name that live in OTHER source files.
+            # Without these, a function whose only (or only dangerous) callers
+            # are in another file is treated as an entry function and gets an
+            # over-approximate precondition — the intra-file blind spot that
+            # makes e.g. a sink reachable from another file look like an FP.
+            xcallers = list((cross_file_caller_contexts or {}).get(fn_name, []))
+            if (not callers and not xcallers) or (is_entry_layer and not xcallers):
                 if self.config.enable_dual_spec:
                     spec = self._generate_dual_spec(func_info, domain_knowledge, struct_context)
                 else:
                     spec = self._generate_entry_spec(func_info, domain_knowledge, struct_context)
             else:
-                # Collect expected specs from all callers
+                # Collect expected specs from all callers — intra-file AND cross-file.
                 expected: list[Spec] = []
                 for caller_name in callers:
                     caller_info = parsed.get_function_info(caller_name)
                     if caller_info is not None:
                         exp = self._generate_expected_spec(caller_info, fn_name)
                         expected.append(exp)
+                for xcaller in xcallers:
+                    # tuple (FunctionInfo, ParsedCFile) — be tolerant of shape
+                    xcaller_info = xcaller[0] if isinstance(xcaller, (tuple, list)) else xcaller
+                    if xcaller_info is not None:
+                        try:
+                            expected.append(self._generate_expected_spec(xcaller_info, fn_name))
+                        except Exception as exc:  # cross-file caller parse hiccup
+                            logger.debug("cross-file expected-spec for '%s' from '%s' failed: %s",
+                                         fn_name, getattr(xcaller_info, "name", "?"), exc)
                 spec = self._generate_internal_spec(func_info, expected, domain_knowledge, struct_context)
 
             spec.status = SpecStatus.GENERATED

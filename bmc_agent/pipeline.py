@@ -434,6 +434,7 @@ class AMCPipeline:
             driver_name=driver_name,
             domain_knowledge=domain_knowledge,
             source_text=preprocessed_source,
+            cross_file_caller_contexts=cross_file_caller_contexts,
         )
         logger.info("Phase 1 complete: %d specs generated", len(specs))
 
@@ -522,6 +523,11 @@ class AMCPipeline:
         recheck_triggered_by: dict[str, set[str]] = {}
         # Global re-queue bound: tracks how many times each function has been re-queued
         requeue_counts: dict[str, int] = {}
+        # Cross-file callers (in OTHER files) of functions refined in THIS run.
+        # They cannot be re-verified here (run() is per-file), but their refined
+        # callee spec is persisted (save_spec) so they pick it up when their own
+        # file is processed; record + log them for run_directory propagation.
+        cross_file_recheck_needed: set[str] = set()
         # Tracks (fn_name, prop_type) pairs already confirmed as real bugs so
         # CEGAR re-runs don't re-validate and re-report the same root bug.
         confirmed_real_bugs: set[tuple[str, str]] = set()
@@ -663,6 +669,14 @@ class AMCPipeline:
                                         "Re-queue cap reached for '%s' (count=%d) — skipping",
                                         caller_name, count,
                                     )
+                        # Cross-file callers: can't re-verify them in this per-file
+                        # run, but record them so run_directory can re-process their
+                        # files against the now-refined callee spec (persisted above).
+                        for xcaller in (cross_file_caller_contexts or {}).get(fn_name, []):
+                            xinfo = xcaller[0] if isinstance(xcaller, (tuple, list)) else xcaller
+                            xname = getattr(xinfo, "name", None)
+                            if xname and xname not in all_funcs:
+                                cross_file_recheck_needed.add(xname)
                         # Also re-run CBMC on the function itself under the
                         # refined precondition — the spurious CEx may have
                         # masked a real bug (CEGAR: tighten abstract domain,
@@ -979,6 +993,17 @@ class AMCPipeline:
         # without changing the long-stable return type. Callers that don't
         # care (eval scripts, tests) keep working unchanged.
         self.latent_reports = latent_reports
+        # Cross-file callers (in other files) whose verification should be
+        # re-run against specs refined in this file. Stashed for run_directory
+        # to propagate; the refined callee specs are already persisted.
+        self.cross_file_recheck_needed = cross_file_recheck_needed
+        if cross_file_recheck_needed:
+            logger.info(
+                "Cross-file propagation: %d caller(s) in other files affected by "
+                "refinements here (re-run their files to pick up refined specs): %s",
+                len(cross_file_recheck_needed),
+                ", ".join(sorted(cross_file_recheck_needed)[:20]),
+            )
         return bug_reports
 
     # ------------------------------------------------------------------
