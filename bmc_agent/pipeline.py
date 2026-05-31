@@ -365,6 +365,7 @@ class AMCPipeline:
         cross_file_callers: set[str] | None = None,
         cross_file_caller_contexts: dict[str, list[tuple[FunctionInfo, ParsedCFile]]] | None = None,
         function_hints: dict[str, str] | None = None,
+        only_functions: set[str] | None = None,
     ) -> list[BugReport]:
         """
         Run the full AMC pipeline.
@@ -468,7 +469,20 @@ class AMCPipeline:
         # ------------------------------------------------------------------
         # Phase 2: Run BMC on all functions
         # ------------------------------------------------------------------
-        logger.info("--- Phase 2: Running BMC on %d functions ---", len(all_funcs))
+        # only_functions restricts WHICH functions get verified (CBMC +
+        # refinement), while all_funcs stays complete so spec context and
+        # cross-file reachability still see the whole call graph. This is how
+        # the audit-flagged-function path (coaudit --check-functions) gets full
+        # cross-file gen + refinement without verifying the whole file.
+        funcs_to_check = all_funcs
+        if only_functions:
+            funcs_to_check = {n: f for n, f in all_funcs.items() if n in only_functions}
+            missing = [n for n in only_functions if n not in all_funcs]
+            if missing:
+                logger.warning("only_functions not found in %s: %s", source_file, ", ".join(missing))
+            logger.info("only_functions: restricting Phase 2 to %d of %d functions",
+                        len(funcs_to_check), len(all_funcs))
+        logger.info("--- Phase 2: Running BMC on %d functions ---", len(funcs_to_check))
         # Stash on self so the feedback-loop re-invocations of check_function
         # can pass the same per-function selection back through. Without this,
         # the iter-1 CBMC run drops --unsigned-overflow-check (and friends)
@@ -477,7 +491,7 @@ class AMCPipeline:
         self._flag_selections = flag_selections if flag_selections else {}
 
         verdicts = self.bmc_engine.check_all(
-            funcs=all_funcs,
+            funcs=funcs_to_check,
             specs=specs,
             parsed_file=parsed,
             driver_name=driver_name,
@@ -2543,6 +2557,7 @@ class AMCPipeline:
         include_dirs: Optional[list[str]] = None,
         domain_knowledge: str = "",
         exclude_patterns: Optional[list[str]] = None,
+        only_functions: Optional[set[str]] = None,
     ) -> dict[str, list[BugReport]]:
         """
         Run AMC on every ``.c`` file in *source_dir*.
@@ -2740,6 +2755,7 @@ class AMCPipeline:
                     domain_knowledge=domain_knowledge,
                     cross_file_callers=global_cross_file_callers,
                     cross_file_caller_contexts=global_cross_file_caller_contexts,
+                    only_functions=only_functions,
                 )
             finally:
                 os.unlink(tmp_path)

@@ -728,12 +728,18 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         print(f"Excluded patterns:   {exclude}")
 
     pipeline = AMCPipeline(config)
+    only_functions = None
+    _fns = getattr(args, "functions", "") or ""
+    if _fns.strip():
+        only_functions = {f.strip() for f in _fns.split(",") if f.strip()}
+        print(f"Only functions:      {sorted(only_functions)} (cross-file gen+refinement)")
     results = pipeline.run_directory(
         source_dir=args.source_dir,
         driver_name=args.driver,
         include_dirs=include_dirs,
         domain_knowledge=domain_knowledge,
         exclude_patterns=exclude,
+        only_functions=only_functions,
     )
 
     # Filter out reports the realism check downgraded to "unlikely" —
@@ -1514,6 +1520,12 @@ def build_parser() -> argparse.ArgumentParser:
     vd.add_argument("--source-dir", required=True, help="Directory containing .c files")
     vd.add_argument("--driver", required=True, help="Driver name prefix")
     vd.add_argument("--output", default="artifacts", help="Artifact directory")
+    vd.add_argument(
+        "--functions", default="",
+        help="Comma-separated function names: build the cross-file call graph over the "
+             "whole dir but VERIFY only these functions (coaudit audit-flagged path with "
+             "full cross-file spec gen + refinement). Empty = verify all.",
+    )
     vd.add_argument(
         "--include-dir",
         action="append",

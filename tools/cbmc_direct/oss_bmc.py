@@ -100,6 +100,11 @@ def main():
                     help="comma-separated function names: run bmc-agent on JUST these "
                          "audit-flagged functions (gen specs -> check --function each), "
                          "not the whole file. Output = caller-reachability worklist.")
+    ap.add_argument("--cross-file", action="store_true",
+                    help="with --check-functions: run the flagged functions IN-PROCESS via "
+                         "verify-dir (builds the cross-file call graph over the source dir, "
+                         "so spec gen + refinement see callers in OTHER files). Slower "
+                         "(whole-dir graph) but full cross-file accuracy.")
     args = ap.parse_args()
 
     proj = CORPORA / args.project
@@ -144,7 +149,10 @@ def main():
     # run bmc-agent on JUST those (gen specs -> check --function each), not whole file.
     if args.check_functions:
         funcs = [f.strip() for f in args.check_functions.split(",") if f.strip()]
-        check_functions_flow(targets, out, env, cc, funcs, args.timeout)
+        if args.cross_file:
+            cross_file_check_flow(targets, out, env, cc, funcs, args.timeout)
+        else:
+            check_functions_flow(targets, out, env, cc, funcs, args.timeout)
         return
 
     for e in targets:
@@ -170,6 +178,49 @@ def main():
                            stdout=fh, stderr=subprocess.STDOUT)
 
     emit_hints(out)
+
+
+def cross_file_check_flow(targets, out: Path, env, cc: Path, funcs, timeout: int):
+    """Cross-file audit-flagged path: run the flagged functions IN-PROCESS via
+    `verify-dir --functions`, which builds the global cross-file call graph over
+    the source dir, so spec gen + refinement see callers in OTHER files (unlike
+    the shell-based gen+check path, which is intra-file only).
+
+    Unlike check_functions_flow, this gives full cross-file gen + refinement +
+    reachability — at the cost of building the whole-dir call graph. Output is
+    still a worklist (FAILED = adjudicate the real call path + ASan-confirm).
+    """
+    # source dir = common parent of selected files (the project's parser dir)
+    dirs = {str(Path(e["file"]).parent) for e in targets}
+    src_dir = sorted(dirs, key=len)[0] if dirs else str(cc.parent)
+    incs, defs = (flags_for(targets[0]) if targets else ([], []))
+    incs = list(dict.fromkeys(incs + [src_dir, str(cc.parent)]))
+    cmd = ["uv", "run", "python", "-m", "bmc_agent.cli", "verify-dir",
+           "--source-dir", src_dir, "--driver", "ossfz",
+           "--output", str(out / "_xfile"),
+           "--functions", ",".join(funcs)]
+    for d in incs:
+        cmd += ["--include-dir", d]
+    for d in defs:
+        cmd += ["-D", d]
+    log = out / "cross_file_check.log"
+    print(f"[oss-bmc] CROSS-FILE check of {funcs} over {src_dir}")
+    print(f"[oss-bmc]   (building whole-dir call graph; spec gen + refinement see other files)")
+    print(f"[oss-bmc]   verify-dir -> {log.name}")
+    with log.open("w") as fh:
+        subprocess.run(["timeout", str(timeout)] + cmd, env=env,
+                       stdout=fh, stderr=subprocess.STDOUT)
+    # surface the verdicts from the log
+    txt = log.read_text(errors="replace") if log.exists() else ""
+    print("\n[oss-bmc] === CROSS-FILE WORKLIST (verdicts; cross-file gen+refinement active) ===")
+    shown = 0
+    for line in txt.splitlines():
+        if re.search(r"(FAILED|confirmed|bug|Total bugs|VERIFICATION)", line, re.I):
+            print("  " + line.strip()); shown += 1
+            if shown > 40:
+                break
+    if not shown:
+        print(f"  (see {log} for full verify-dir output)")
 
 
 def check_functions_flow(targets, out: Path, env, cc: Path, funcs, timeout: int):
