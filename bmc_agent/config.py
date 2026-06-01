@@ -377,6 +377,13 @@ class Config:
     enable_dynamic_validation: bool = True   # compile and run a GCC harness to confirm real faults
     dynamic_validation_timeout: int = 30     # seconds to allow the compiled harness to run
     dynamic_cc_path: str = "gcc"             # C compiler for dynamic harness compilation
+    # Dynamic validation backend. "host" preserves the existing GCC-harness
+    # behavior. "qemu" delegates selected bare-metal targets to an external
+    # target replay command that emits DYNAMIC:/VALIDATION: markers.
+    dynamic_validation_backend: str = "host"
+    dynamic_qemu_command: str = ""
+    dynamic_qemu_timeout: int = 300
+    dynamic_qemu_entries: tuple[str, ...] = ()
 
     # Flag selector settings (Phase 1.5: per-function CBMC flag selection)
     enable_flag_selection: bool = True       # LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check)
@@ -670,6 +677,30 @@ class Config:
             enable_dynamic_validation=(os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION") or os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION") or "true").lower() == "true",
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
+            dynamic_validation_backend=(
+                os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_BACKEND")
+                or os.environ.get("BMC_AGENT_DYNAMIC_BACKEND")
+                or "host"
+            ).lower(),
+            dynamic_qemu_command=(
+                os.environ.get("BMC_AGENT_DYNAMIC_QEMU_COMMAND")
+                or os.environ.get("BMC_AGENT_DYNAMIC_TARGET_COMMAND")
+                or ""
+            ),
+            dynamic_qemu_timeout=int(
+                os.environ.get("BMC_AGENT_DYNAMIC_QEMU_TIMEOUT")
+                or os.environ.get("BMC_AGENT_DYNAMIC_TARGET_TIMEOUT")
+                or "300"
+            ),
+            dynamic_qemu_entries=tuple(
+                item.strip()
+                for item in (
+                    os.environ.get("BMC_AGENT_DYNAMIC_QEMU_ENTRIES")
+                    or os.environ.get("BMC_AGENT_DYNAMIC_TARGET_ENTRIES")
+                    or ""
+                ).split(",")
+                if item.strip()
+            ),
             enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",

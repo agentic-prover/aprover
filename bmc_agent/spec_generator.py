@@ -54,6 +54,23 @@ _FALLBACK_PRECONDITION = "true"
 _FALLBACK_POSTCONDITION = "true"
 
 
+def _target_with_local_callee_closure(
+    targets: set[str],
+    call_graph: dict[str, set[str]],
+    defined_funcs: set[str],
+) -> set[str]:
+    """Return requested functions plus their transitive in-file callees."""
+    closure = {fn for fn in targets if fn in defined_funcs}
+    stack = list(closure)
+    while stack:
+        fn_name = stack.pop()
+        for callee in call_graph.get(fn_name, set()) & defined_funcs:
+            if callee not in closure:
+                closure.add(callee)
+                stack.append(callee)
+    return closure
+
+
 def _fallback_spec(func_name: str, reason: str = "") -> Spec:
     """Return a trivially weak spec and log a warning."""
     msg = f"Falling back to weak spec for '{func_name}'"
@@ -875,6 +892,7 @@ class SpecGenerator:
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
+        only_functions: Optional[set[str]] = None,
     ) -> dict[str, Spec]:
         """
         Generate specs for all functions in source_file.
@@ -942,18 +960,39 @@ class SpecGenerator:
 
         # Only include functions defined in this file in the call graph
         defined_funcs = set(parsed.functions.keys())
+        generation_funcs = defined_funcs
+        requested_functions = {fn.strip() for fn in (only_functions or set()) if fn.strip()}
+        if requested_functions:
+            missing = sorted(requested_functions - defined_funcs)
+            if missing:
+                logger.warning("only_functions not found in %s: %s", source_file, ", ".join(missing))
+            closure = _target_with_local_callee_closure(
+                requested_functions,
+                parsed.call_graph,
+                defined_funcs,
+            )
+            if closure:
+                generation_funcs = closure
+                logger.info(
+                    "only_functions limits spec generation to %d of %d functions "
+                    "(requested=%s, with in-file callees=%s)",
+                    len(generation_funcs),
+                    len(defined_funcs),
+                    sorted(requested_functions),
+                    sorted(generation_funcs),
+                )
 
         # Filter call graph to only include callees that are defined in source
         # (external callees get stub specs)
         filtered_call_graph: dict[str, set[str]] = {}
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             raw_callees = parsed.call_graph.get(fn_name, set())
-            filtered_call_graph[fn_name] = raw_callees & defined_funcs
+            filtered_call_graph[fn_name] = raw_callees & generation_funcs
 
         logger.info(
             "Found %d functions: %s",
-            len(defined_funcs),
-            sorted(defined_funcs),
+            len(generation_funcs),
+            sorted(generation_funcs),
         )
 
         # Build the generation order
@@ -962,10 +1001,10 @@ class SpecGenerator:
 
         # Generate stub specs for external callees
         all_specs: dict[str, Spec] = {}
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             raw_callees = parsed.call_graph.get(fn_name, set())
             for callee in raw_callees:
-                if callee not in defined_funcs and callee not in all_specs:
+                if callee not in generation_funcs and callee not in all_specs:
                     all_specs[callee] = _stub_spec(callee)
 
         # Process layer by layer (top-down: entry functions first)
@@ -976,7 +1015,7 @@ class SpecGenerator:
             # Determine which functions in this layer are true entry functions
             # (no callers among defined functions)
             callers_map: dict[str, list[str]] = defaultdict(list)
-            for fn_name in defined_funcs:
+            for fn_name in generation_funcs:
                 for callee in filtered_call_graph.get(fn_name, set()):
                     callers_map[callee].append(fn_name)
 
@@ -993,24 +1032,24 @@ class SpecGenerator:
 
             # Save specs for this layer
             for fn_name, spec in layer_specs.items():
-                if fn_name in defined_funcs:
+                if fn_name in generation_funcs:
                     self.store.save_spec(driver_name, fn_name, spec)
 
         # Ensure every defined function has a spec (fallback for any missed)
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             if fn_name not in all_specs:
                 logger.warning("Function '%s' has no spec; using fallback", fn_name)
                 all_specs[fn_name] = _fallback_spec(fn_name, "not reached in layer ordering")
                 self.store.save_spec(driver_name, fn_name, all_specs[fn_name])
 
         # Attach callee specs to each function's spec
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             spec = all_specs[fn_name]
             for callee in parsed.call_graph.get(fn_name, set()):
                 if callee in all_specs:
                     spec.callee_specs[callee] = all_specs[callee]
 
-        return {fn: all_specs[fn] for fn in defined_funcs}
+        return {fn: all_specs[fn] for fn in generation_funcs}
 
     def _build_generation_order(self, call_graph: dict[str, set[str]]) -> list[list[str]]:
         """Return layers: [[entry_funcs], [layer2_funcs], ...]"""

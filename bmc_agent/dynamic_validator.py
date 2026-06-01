@@ -15,8 +15,10 @@ Outcomes:
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -124,10 +126,11 @@ def _detect_link_flags(source: str, config: "Config") -> list[str]:
 
 
 class DynamicOutcome(Enum):
-    CONFIRMED     = "confirmed"
-    NOT_TRIGGERED = "not_triggered"
-    INCONCLUSIVE  = "inconclusive"
-    SKIPPED       = "skipped"
+    CONFIRMED               = "confirmed"
+    OBSERVED_SAFETY_CONCERN = "observed_safety_concern"
+    NOT_TRIGGERED           = "not_triggered"
+    INCONCLUSIVE            = "inconclusive"
+    SKIPPED                 = "skipped"
 
 
 @dataclass
@@ -138,6 +141,11 @@ class DynamicValidationResult:
     run_error: Optional[str] = None
     reasoning: str = ""
     harness_source: Optional[str] = None  # the C source that was compiled and run
+    backend: str = "host"                 # "host" or "qemu"
+    target_event: Optional[str] = None
+    artifact_dir: Optional[str] = None
+    target_stdout_path: Optional[str] = None
+    target_stderr_path: Optional[str] = None
     # Step A — fault-site classification. Possible values:
     #   "in_fut"      — fault fired inside or after the FUT call
     #                   (real-bug-shaped signal)
@@ -157,6 +165,11 @@ class DynamicValidationResult:
             "run_error": self.run_error,
             "reasoning": self.reasoning,
             "harness_source": self.harness_source,
+            "backend": self.backend,
+            "target_event": self.target_event,
+            "artifact_dir": self.artifact_dir,
+            "target_stdout_path": self.target_stdout_path,
+            "target_stderr_path": self.target_stderr_path,
             "fault_site": self.fault_site,
         }
 
@@ -227,10 +240,37 @@ class DynamicValidator:
                 reasoning="Dynamic validation is disabled (enable_dynamic_validation=False).",
             )
 
+        backend = (getattr(self.config, "dynamic_validation_backend", "host") or "host").lower()
+        qemu_entries = {
+            str(item).strip()
+            for item in getattr(self.config, "dynamic_qemu_entries", ()) or ()
+            if str(item).strip()
+        }
+        qemu_selected = (
+            backend in {"hybrid", "qemu-hybrid", "targeted-qemu"}
+            and entry_func.name in qemu_entries
+        )
+        if backend == "qemu" or qemu_selected:
+            return self._validate_qemu(
+                entry_func=entry_func,
+                counterexample=counterexample,
+                parsed_file=parsed_file,
+                caller_path=caller_path,
+            )
+        if backend in {"hybrid", "qemu-hybrid", "targeted-qemu"}:
+            backend = "host"
+        if backend != "host":
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend=backend,
+                reasoning=f"Unknown dynamic validation backend: {backend!r}.",
+            )
+
         cc = self.config.dynamic_cc_path
         if not shutil.which(cc):
             return DynamicValidationResult(
                 outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="host",
                 reasoning=f"C compiler '{cc}' not found on PATH — skipping dynamic validation.",
             )
 
@@ -619,6 +659,126 @@ class DynamicValidator:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _validate_qemu(
+        self,
+        entry_func: FunctionInfo,
+        counterexample: "Counterexample",
+        parsed_file: ParsedCFile,
+        caller_path: Optional[list[str]],
+    ) -> DynamicValidationResult:
+        """Delegate target-side validation to an external QEMU adapter.
+
+        The adapter is intentionally outside the generic host harness path. It
+        receives metadata via files/env vars, runs target-specific build/boot
+        logic, and reports only marker lines:
+
+          DYNAMIC:CONFIRMED target_event=...
+          DYNAMIC:OBSERVED_SAFETY_CONCERN target_event=...
+          DYNAMIC:NOT_TRIGGERED ...
+          VALIDATION:PASS ...
+          VALIDATION:INCONCLUSIVE ...
+
+        No shell code is generated here; the command is configured by the user.
+        """
+
+        command = (getattr(self.config, "dynamic_qemu_command", "") or "").strip()
+        if not command:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                reasoning=(
+                    "QEMU dynamic validation requested, but "
+                    "BMC_AGENT_DYNAMIC_QEMU_COMMAND is not configured."
+                ),
+            )
+
+        base_dir = Path(getattr(self.config, "artifact_dir", "artifacts")) / "dynamic_qemu"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", entry_func.name)[:80] or "case"
+        workdir = Path(tempfile.mkdtemp(prefix=f"{safe_name}-", dir=str(base_dir)))
+        metadata_path = workdir / "metadata.json"
+        stdout_path = workdir / "stdout.log"
+        stderr_path = workdir / "stderr.log"
+        metadata = {
+            "entry_function": entry_func.name,
+            "failing_property": counterexample.failing_property,
+            "variable_assignments": counterexample.variable_assignments,
+            "caller_path": caller_path or [],
+            "source_file": parsed_file.path,
+        }
+        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True, default=str), encoding="utf-8")
+
+        env = os.environ.copy()
+        env["BMC_AGENT_DYN_QEMU_WORKDIR"] = str(workdir)
+        env["BMC_AGENT_DYN_QEMU_METADATA"] = str(metadata_path)
+        env["BMC_AGENT_DYN_QEMU_ENTRY"] = entry_func.name
+        env["BMC_AGENT_DYN_QEMU_PROPERTY"] = counterexample.failing_property
+
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                artifact_dir=str(workdir),
+                reasoning=f"Invalid QEMU dynamic validation command: {exc}",
+            )
+        if not argv:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                artifact_dir=str(workdir),
+                reasoning="QEMU dynamic validation command is empty.",
+            )
+
+        timeout = int(getattr(self.config, "dynamic_qemu_timeout", 300) or 300)
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = _coerce_output(exc.stdout)
+            stderr = _coerce_output(exc.stderr)
+            stdout_path.write_text(stdout, encoding="utf-8", errors="replace")
+            stderr_path.write_text(stderr, encoding="utf-8", errors="replace")
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                run_error="execution timed out",
+                artifact_dir=str(workdir),
+                target_stdout_path=str(stdout_path),
+                target_stderr_path=str(stderr_path),
+                reasoning=f"QEMU dynamic validation timed out after {timeout}s.",
+            )
+        except Exception as exc:
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                run_error=str(exc),
+                artifact_dir=str(workdir),
+                target_stdout_path=str(stdout_path),
+                target_stderr_path=str(stderr_path),
+                reasoning=f"QEMU dynamic validation command failed to start: {exc}",
+            )
+
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        stdout_path.write_text(stdout, encoding="utf-8", errors="replace")
+        stderr_path.write_text(stderr, encoding="utf-8", errors="replace")
+        combined = stdout + "\n" + stderr
+        parsed = _parse_target_validation_output(combined)
+        parsed.backend = "qemu"
+        parsed.artifact_dir = str(workdir)
+        parsed.target_stdout_path = str(stdout_path)
+        parsed.target_stderr_path = str(stderr_path)
+        if parsed.outcome == DynamicOutcome.INCONCLUSIVE and proc.returncode != 0:
+            parsed.run_error = parsed.run_error or f"exit code {proc.returncode}"
+        return parsed
+
     def _generate(
         self,
         entry_func: FunctionInfo,
@@ -861,6 +1021,62 @@ def _unlink(path: str) -> None:
         Path(path).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def _coerce_output(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _parse_target_validation_output(output: str) -> DynamicValidationResult:
+    """Parse marker output from a target/QEMU validation adapter."""
+
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("DYNAMIC:CONFIRMED"):
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.CONFIRMED,
+                backend="qemu",
+                target_event=_extract_marker_value(stripped, "target_event"),
+                reasoning=f"QEMU target validation confirmed: {stripped}",
+            )
+        if stripped.startswith("DYNAMIC:OBSERVED_SAFETY_CONCERN"):
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.OBSERVED_SAFETY_CONCERN,
+                backend="qemu",
+                target_event=_extract_marker_value(stripped, "target_event"),
+                reasoning=f"QEMU target replay observed a safety concern: {stripped}",
+            )
+        if stripped.startswith("DYNAMIC:NOT_TRIGGERED") or stripped.startswith("VALIDATION:PASS"):
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.NOT_TRIGGERED,
+                backend="qemu",
+                target_event=_extract_marker_value(stripped, "target_event"),
+                reasoning=f"QEMU target validation did not trigger: {stripped}",
+            )
+        if stripped.startswith("VALIDATION:INCONCLUSIVE"):
+            return DynamicValidationResult(
+                outcome=DynamicOutcome.INCONCLUSIVE,
+                backend="qemu",
+                target_event=_extract_marker_value(stripped, "target_event"),
+                reasoning=f"QEMU target validation was inconclusive: {stripped}",
+            )
+    return DynamicValidationResult(
+        outcome=DynamicOutcome.INCONCLUSIVE,
+        backend="qemu",
+        reasoning="QEMU target validation produced no recognizable marker.",
+    )
+
+
+def _extract_marker_value(line: str, key: str) -> Optional[str]:
+    marker = f"{key}="
+    if marker not in line:
+        return None
+    tail = line.split(marker, 1)[1].strip()
+    return tail.split()[0] if tail else None
 
 
 def _looks_like_c_code(text: str) -> bool:

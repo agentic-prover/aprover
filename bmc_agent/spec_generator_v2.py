@@ -52,6 +52,23 @@ DEFAULT_CONTEXT_RADIUS = 8
 MAX_PARSE_RETRIES = 1   # one extra retry on JSON parse failure
 
 
+def _target_with_local_callee_closure(
+    targets: set[str],
+    call_graph: dict[str, set[str]],
+    defined_funcs: set[str],
+) -> set[str]:
+    """Return requested functions plus their transitive in-file callees."""
+    closure = {fn for fn in targets if fn in defined_funcs}
+    stack = list(closure)
+    while stack:
+        fn_name = stack.pop()
+        for callee in call_graph.get(fn_name, set()) & defined_funcs:
+            if callee not in closure:
+                closure.add(callee)
+                stack.append(callee)
+    return closure
+
+
 # ---------- structured-output parser -----------------------------------------
 
 # The prompt asks for a single JSON object. LLMs sometimes wrap it in a
@@ -566,12 +583,16 @@ class SpecGeneratorV2:
         driver_name: str,
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
+        cross_file_caller_contexts: Optional[dict] = None,
+        only_functions: Optional[set[str]] = None,
     ) -> dict[str, Spec]:
         """Generate specs for every function defined in ``source_file``.
 
         Output shape: same as v1 — dict mapping function name → Spec.
         Each Spec's ``evidence`` field is populated with per-clause
-        provenance tags.
+        provenance tags. When ``only_functions`` is supplied, generate specs
+        only for the requested functions plus their transitive in-file callees;
+        the verifier still restricts CBMC to the explicitly requested roots.
         """
         from bmc_agent.source_parser import parse_source_file as _parse  # type: ignore
 
@@ -601,12 +622,33 @@ class SpecGeneratorV2:
         self.store.init_driver(driver_name)
 
         defined_funcs = set(parsed.functions.keys())
+        generation_funcs = defined_funcs
+        requested_functions = {fn.strip() for fn in (only_functions or set()) if fn.strip()}
+        if requested_functions:
+            missing = sorted(requested_functions - defined_funcs)
+            if missing:
+                logger.warning("v2: only_functions not found in %s: %s", source_file, ", ".join(missing))
+            closure = _target_with_local_callee_closure(
+                requested_functions,
+                parsed.call_graph,
+                defined_funcs,
+            )
+            if closure:
+                generation_funcs = closure
+                logger.info(
+                    "v2: only_functions limits spec generation to %d of %d functions "
+                    "(requested=%s, with in-file callees=%s)",
+                    len(generation_funcs),
+                    len(defined_funcs),
+                    sorted(requested_functions),
+                    sorted(generation_funcs),
+                )
 
         # Filtered call graph: callees defined in this TU only.
         filtered_call_graph: dict[str, set[str]] = {}
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             raw_callees = parsed.call_graph.get(fn_name, set())
-            filtered_call_graph[fn_name] = raw_callees & defined_funcs
+            filtered_call_graph[fn_name] = raw_callees & generation_funcs
 
         # Bottom-up layers: leaves first.
         layers = _build_bottom_up_layers(filtered_call_graph)
@@ -614,9 +656,9 @@ class SpecGeneratorV2:
 
         # Stub specs for external callees (matches v1).
         all_specs: dict[str, Spec] = {}
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             for callee in parsed.call_graph.get(fn_name, set()):
-                if callee not in defined_funcs and callee not in all_specs:
+                if callee not in generation_funcs and callee not in all_specs:
                     all_specs[callee] = _trivial_spec(callee, "external_stub")
 
         # Corpus paths default: just the source file under spec.
@@ -637,11 +679,11 @@ class SpecGeneratorV2:
                     corpus_paths=corpus,
                 )
                 all_specs[fn_name] = spec
-                if fn_name in defined_funcs:
+                if fn_name in generation_funcs:
                     self.store.save_spec(driver_name, fn_name, spec)
 
         # Attach callee specs (matches v1 finalisation).
-        for fn_name in defined_funcs:
+        for fn_name in generation_funcs:
             spec = all_specs.get(fn_name)
             if spec is None:
                 spec = _trivial_spec(fn_name, "not_reached")
@@ -650,7 +692,7 @@ class SpecGeneratorV2:
                 if callee in all_specs:
                     spec.callee_specs[callee] = all_specs[callee]
 
-        return {fn: all_specs[fn] for fn in defined_funcs}
+        return {fn: all_specs[fn] for fn in generation_funcs}
 
     # -- per-function flow ---------------------------------------------------
 

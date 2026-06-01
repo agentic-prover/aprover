@@ -1,0 +1,15 @@
+{
+  "catalog_supported_rows": 9,
+  "counts": {
+    "inconclusive": 24,
+    "llm_marked_unsupported": 24,
+    "observed_safety_concern": 6,
+    "qemu_confirmed": 6
+  },
+  "expected_checked": 9,
+  "expected_matched": 9,
+  "llm_generated_rows": 51,
+  "total_rows": 60,
+  "unsupported_rows": 0,
+  "validation_attempted_rows": 60
+}

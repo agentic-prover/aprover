@@ -1881,6 +1881,13 @@ class CExValidator:
         parsed_file: ParsedCFile,
     ) -> str:
         """Generate a C test case that triggers the bug from the system entry point."""
+        entry_name = call_chain[0] if call_chain else ""
+        if self._qemu_dynamic_selected(entry_name):
+            return (
+                "// UNREPRODUCIBLE: host C reproducer skipped because QEMU "
+                f"dynamic validation is configured for entry {entry_name}"
+            )
+
         state_str = ", ".join(
             f"{k} = {v}"
             for k, v in counterexample.variable_assignments.items()
@@ -1980,6 +1987,9 @@ class CExValidator:
         if self._dynamic_validator is None:
             return
 
+        caller_path = validation_result.caller_path
+        entry_name = caller_path[0] if caller_path else func.name
+
         # When BOTH static checks (reachability + callee feasibility)
         # errored, the historical policy was to SKIP dynamic validation
         # entirely, on the theory that a blind harness on a guessed
@@ -2008,13 +2018,19 @@ class CExValidator:
                 or reproducer.startswith("// UNREPRODUCIBLE")
             )
             if is_unreproducible:
+                if not self._qemu_dynamic_selected(entry_name):
+                    logger.info(
+                        "Skipping dynamic validation for '%s' — both CBMC checks "
+                        "errored AND reproducer is UNREPRODUCIBLE-marked; no "
+                        "ground-truth oracle available",
+                        func.name,
+                    )
+                    return
                 logger.info(
-                    "Skipping dynamic validation for '%s' — both CBMC checks "
-                    "errored AND reproducer is UNREPRODUCIBLE-marked; no "
-                    "ground-truth oracle available",
-                    func.name,
+                    "QEMU dynamic validation selected for '%s'; continuing despite "
+                    "UNREPRODUCIBLE host C reproducer marker",
+                    entry_name,
                 )
-                return
             logger.info(
                 "CBMC reachability + feasibility errored for '%s' — leaning "
                 "on dynamic validation as the only remaining ground-truth "
@@ -2024,8 +2040,6 @@ class CExValidator:
             )
             # Fall through to run dyn-val.
 
-        caller_path = validation_result.caller_path
-        entry_name = caller_path[0] if caller_path else func.name
         entry_func = all_funcs.get(entry_name) or parsed_file.get_function_info(entry_name)
         if entry_func is None:
             logger.warning(
@@ -2109,6 +2123,24 @@ class CExValidator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _qemu_dynamic_selected(self, entry_name: str) -> bool:
+        """Return whether dynamic validation will route this entry to QEMU."""
+        if not entry_name or not getattr(self.config, "enable_dynamic_validation", False):
+            return False
+        backend = (
+            getattr(self.config, "dynamic_validation_backend", "host") or "host"
+        ).lower()
+        if backend == "qemu":
+            return True
+        if backend not in {"hybrid", "qemu-hybrid", "targeted-qemu"}:
+            return False
+        entries = {
+            str(item).strip()
+            for item in getattr(self.config, "dynamic_qemu_entries", ()) or ()
+            if str(item).strip()
+        }
+        return entry_name in entries
 
     def _find_callers(
         self,

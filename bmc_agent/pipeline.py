@@ -436,6 +436,7 @@ class AMCPipeline:
             domain_knowledge=domain_knowledge,
             source_text=preprocessed_source,
             cross_file_caller_contexts=cross_file_caller_contexts,
+            only_functions=only_functions,
         )
         logger.info("Phase 1 complete: %d specs generated", len(specs))
 
@@ -568,6 +569,15 @@ class AMCPipeline:
                 verdict.counterexamples,
                 max_per_type=self.config.dedup_max_per_type,
             ):
+                bug_key = (fn_name, _prop_type(cex.failing_property))
+                if bug_key in confirmed_real_bugs:
+                    logger.debug(
+                        "Skipping duplicate counterexample for '%s' before validation "
+                        "(property type '%s' already confirmed at non-downgraded confidence)",
+                        fn_name,
+                        bug_key[1],
+                    )
+                    continue
                 logger.info(
                     "Validating counterexample for '%s' (property=%s)",
                     fn_name, cex.failing_property,
@@ -594,7 +604,6 @@ class AMCPipeline:
                     )
                     self.reporter._unresolved.append(validation)
                 elif validation.is_real_bug:
-                    bug_key = (fn_name, _prop_type(cex.failing_property))
                     if bug_key in confirmed_real_bugs:
                         logger.debug(
                             "Skipping duplicate real bug for '%s' (property type '%s' already confirmed at non-downgraded confidence)",
@@ -774,6 +783,15 @@ class AMCPipeline:
                     verdict.counterexamples,
                     max_per_type=self.config.dedup_max_per_type,
                 ):
+                    bug_key = (fn_name, _prop_type(cex.failing_property))
+                    if bug_key in confirmed_real_bugs:
+                        logger.debug(
+                            "Phase 3c: skipping duplicate counterexample for '%s' before validation "
+                            "(type '%s' already confirmed)",
+                            fn_name,
+                            bug_key[1],
+                        )
+                        continue
                     logger.info(
                         "Phase 3c: new counterexample for '%s' (property=%s)",
                         fn_name, cex.failing_property,
@@ -790,7 +808,6 @@ class AMCPipeline:
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
-                        bug_key = (fn_name, _prop_type(cex.failing_property))
                         if bug_key in confirmed_real_bugs:
                             logger.debug(
                                 "Phase 3c: skipping duplicate real bug for '%s' (type '%s')",
@@ -864,6 +881,15 @@ class AMCPipeline:
                     verdict.counterexamples,
                     max_per_type=self.config.dedup_max_per_type,
                 ):
+                    bug_key = (fn_name, _prop_type(cex.failing_property))
+                    if bug_key in confirmed_real_bugs:
+                        logger.debug(
+                            "Recheck: skipping duplicate counterexample for '%s' before validation "
+                            "(type '%s' already confirmed)",
+                            fn_name,
+                            bug_key[1],
+                        )
+                        continue
                     logger.info(
                         "Recheck: validating counterexample for '%s' (property=%s)",
                         fn_name, cex.failing_property,
@@ -880,7 +906,6 @@ class AMCPipeline:
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
-                        bug_key = (fn_name, _prop_type(cex.failing_property))
                         if bug_key in confirmed_real_bugs:
                             logger.debug(
                                 "Recheck: skipping duplicate real bug for '%s' (type '%s')",

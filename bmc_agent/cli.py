@@ -407,9 +407,21 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
+    only_functions: set[str] | None = None
+    requested_functions: set[str] = set()
+    if getattr(args, "function", ""):
+        requested_functions.add(args.function.strip())
+    _fns = getattr(args, "functions", "") or ""
+    if _fns.strip():
+        requested_functions.update(f.strip() for f in _fns.split(",") if f.strip())
+    if requested_functions:
+        only_functions = requested_functions
+
     print(f"Full verification pipeline for: {args.source}")
     print(f"Driver: {args.driver}")
     print(f"Artifact dir: {config.artifact_dir}")
+    if only_functions:
+        print(f"Only functions: {sorted(only_functions)}")
     if config.skip_refinement:
         print("Mode: FilteringOnly (skip_refinement=True) — RQ3 ablation baseline")
     if config.preprocess:
@@ -421,6 +433,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         source_file=args.source,
         driver_name=args.driver,
         domain_knowledge=domain_knowledge,
+        only_functions=only_functions,
     )
 
     # Filter out bug_reports whose realism check returned UNREALISTIC
@@ -1316,6 +1329,16 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
     ver.add_argument("--driver", required=True, help="Driver name")
     ver.add_argument("--output", default="artifacts", help="Artifact directory")
+    ver.add_argument(
+        "--function",
+        default="",
+        help="Verify only this function in the source file. Spec generation is limited to this function and its in-file callees.",
+    )
+    ver.add_argument(
+        "--functions",
+        default="",
+        help="Comma-separated function names to verify. Spec generation is limited to these functions and their in-file callees.",
+    )
     ver.add_argument(
         "--domain-knowledge",
         default="",

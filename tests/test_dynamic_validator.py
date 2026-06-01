@@ -12,6 +12,7 @@ DynamicValidator can:
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import types
 from pathlib import Path
@@ -26,6 +27,7 @@ from bmc_agent.dynamic_validator import (
     DynamicValidationResult,
     DynamicValidator,
     _looks_like_c_code,
+    _parse_target_validation_output,
     _wrap_reproducer_with_signal_handlers,
 )
 from bmc_agent.harness_generator import HarnessGenerator, _strip_glibc_internal_typedefs, _strip_inline_asm, _strip_static_inline_defs
@@ -111,6 +113,7 @@ def _make_cex(var_assignments: dict | None = None) -> Counterexample:
 
 def test_dynamic_outcome_values():
     assert DynamicOutcome.CONFIRMED.value == "confirmed"
+    assert DynamicOutcome.OBSERVED_SAFETY_CONCERN.value == "observed_safety_concern"
     assert DynamicOutcome.NOT_TRIGGERED.value == "not_triggered"
     assert DynamicOutcome.INCONCLUSIVE.value == "inconclusive"
     assert DynamicOutcome.SKIPPED.value == "skipped"
@@ -135,6 +138,40 @@ def test_dynamic_validation_result_defaults():
     assert r.compile_error is None
     assert r.run_error is None
     assert r.reasoning == ""
+    assert r.backend == "host"
+
+
+def test_parse_qemu_target_confirmed_marker():
+    r = _parse_target_validation_output(
+        "boot log\nDYNAMIC:CONFIRMED target_event=TARGET_PANIC detail\n"
+    )
+    assert r.outcome == DynamicOutcome.CONFIRMED
+    assert r.backend == "qemu"
+    assert r.target_event == "TARGET_PANIC"
+
+
+def test_parse_qemu_target_pass_marker():
+    r = _parse_target_validation_output("VALIDATION:PASS replay reached marker\n")
+    assert r.outcome == DynamicOutcome.NOT_TRIGGERED
+    assert r.backend == "qemu"
+
+
+def test_parse_qemu_target_observed_safety_concern_marker():
+    r = _parse_target_validation_output(
+        "DYNAMIC:OBSERVED_SAFETY_CONCERN target_event=UNGUARDED_NULL_POINTER detail\n"
+    )
+    assert r.outcome == DynamicOutcome.OBSERVED_SAFETY_CONCERN
+    assert r.backend == "qemu"
+    assert r.target_event == "UNGUARDED_NULL_POINTER"
+
+
+def test_parse_qemu_target_no_fault_is_inconclusive():
+    r = _parse_target_validation_output(
+        "VALIDATION:INCONCLUSIVE target_event=NO_TARGET_FAULT replay reached no-crash marker\n"
+    )
+    assert r.outcome == DynamicOutcome.INCONCLUSIVE
+    assert r.backend == "qemu"
+    assert r.target_event == "NO_TARGET_FAULT"
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +198,80 @@ def test_dynamic_validator_missing_compiler_returns_inconclusive():
     cex = _make_cex()
     result = dv.validate(func, cex, _make_parsed_file(), {}, {})
     assert result.outcome == DynamicOutcome.INCONCLUSIVE
+    assert "__no_such_compiler__" in result.reasoning
+
+
+def test_dynamic_validator_qemu_missing_command_returns_inconclusive(tmp_path):
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="qemu",
+        dynamic_qemu_command="",
+        artifact_dir=str(tmp_path),
+    )
+    harness_gen = MagicMock()
+    dv = DynamicValidator(config, harness_gen)
+    func = _make_func("foo", "{ }")
+    result = dv.validate(func, _make_cex(), _make_parsed_file(), {}, {})
+    assert result.outcome == DynamicOutcome.INCONCLUSIVE
+    assert result.backend == "qemu"
+    harness_gen.generate_dynamic_harness.assert_not_called()
+
+
+def test_dynamic_validator_qemu_command_confirmed(tmp_path):
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        "import json, os, pathlib\n"
+        "meta = pathlib.Path(os.environ['BMC_AGENT_DYN_QEMU_METADATA'])\n"
+        "assert json.loads(meta.read_text())['entry_function'] == 'foo'\n"
+        "print('DYNAMIC:CONFIRMED target_event=TARGET_REPLAY_MARKER')\n",
+        encoding="utf-8",
+    )
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="qemu",
+        dynamic_qemu_command=f"{sys.executable} {adapter}",
+        dynamic_qemu_timeout=10,
+        artifact_dir=str(tmp_path / "artifacts"),
+    )
+    dv = DynamicValidator(config, MagicMock())
+    func = _make_func("foo", "{ }")
+    result = dv.validate(func, _make_cex(), _make_parsed_file(), {}, {})
+    assert result.outcome == DynamicOutcome.CONFIRMED
+    assert result.backend == "qemu"
+    assert result.target_event == "TARGET_REPLAY_MARKER"
+    assert result.artifact_dir
+    assert Path(result.target_stdout_path or "").exists()
+
+
+def test_dynamic_validator_hybrid_uses_qemu_for_allowed_entry(tmp_path):
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="hybrid",
+        dynamic_qemu_entries=("foo",),
+        dynamic_qemu_command="",
+        artifact_dir=str(tmp_path),
+    )
+    harness_gen = MagicMock()
+    dv = DynamicValidator(config, harness_gen)
+    result = dv.validate(_make_func("foo", "{ }"), _make_cex(), _make_parsed_file(), {}, {})
+    assert result.outcome == DynamicOutcome.INCONCLUSIVE
+    assert result.backend == "qemu"
+    harness_gen.generate_dynamic_harness.assert_not_called()
+
+
+def test_dynamic_validator_hybrid_falls_back_to_host_for_other_entries(tmp_path):
+    config = Config(
+        enable_dynamic_validation=True,
+        dynamic_validation_backend="hybrid",
+        dynamic_qemu_entries=("target_only",),
+        dynamic_qemu_command="",
+        dynamic_cc_path="__no_such_compiler__",
+        artifact_dir=str(tmp_path),
+    )
+    dv = DynamicValidator(config, MagicMock())
+    result = dv.validate(_make_func("foo", "{ }"), _make_cex(), _make_parsed_file(), {}, {})
+    assert result.outcome == DynamicOutcome.INCONCLUSIVE
+    assert result.backend == "host"
     assert "__no_such_compiler__" in result.reasoning
 
 

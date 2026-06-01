@@ -85,6 +85,9 @@ class BugReport:
     cex_outcome: CExOutcome | None = None
     dynamic_outcome: DynamicOutcome | None = None
     dynamic_signal: str | None = None
+    dynamic_backend: str | None = None
+    dynamic_target_event: str | None = None
+    dynamic_artifact_dir: str | None = None
     realism_check: RealismCheckResult | None = None  # None when check is disabled
 
     def to_dict(self) -> dict:
@@ -105,6 +108,9 @@ class BugReport:
             "cex_outcome": self.cex_outcome.value if self.cex_outcome else None,
             "dynamic_outcome": self.dynamic_outcome.value if self.dynamic_outcome else None,
             "dynamic_signal": self.dynamic_signal,
+            "dynamic_backend": self.dynamic_backend,
+            "dynamic_target_event": self.dynamic_target_event,
+            "dynamic_artifact_dir": self.dynamic_artifact_dir,
             "realism_check": self.realism_check.to_dict() if self.realism_check else None,
         }
 
@@ -240,6 +246,9 @@ class BugReporter:
             cex_outcome=validation_result.outcome,
             dynamic_outcome=dynamic.outcome if dynamic else None,
             dynamic_signal=dynamic.signal_name if dynamic else None,
+            dynamic_backend=dynamic.backend if dynamic else None,
+            dynamic_target_event=dynamic.target_event if dynamic else None,
+            dynamic_artifact_dir=dynamic.artifact_dir if dynamic else None,
             realism_check=realism_check,
         )
         return report

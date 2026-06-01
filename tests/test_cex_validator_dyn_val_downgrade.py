@@ -175,6 +175,23 @@ def test_no_downgrade_when_dyn_val_inconclusive():
     assert vr.outcome == CExOutcome.REAL_BUG
 
 
+def test_no_downgrade_when_target_observed_safety_concern():
+    """Target replay reached an unsafe operation without a target-visible
+    fault. This is additional safety evidence, not a clean execution signal,
+    so it must not take the REAL_BUG classifier down to UNRESOLVED."""
+    from bmc_agent.cex_validator import CExOutcome
+    dyn = MagicMock()
+    dyn.validate.return_value = _make_dyn_result("observed_safety_concern")
+    v = _make_validator(dyn)
+    entry = _make_func("entry_fn")
+    vr = _make_validation_result(
+        outcome=CExOutcome.REAL_BUG,
+        failing_property="f.pointer_dereference.1",
+    )
+    v._try_dynamic_validation(vr, _make_func("fn"), {"entry_fn": entry}, {}, _make_parsed(entry))
+    assert vr.outcome == CExOutcome.REAL_BUG
+
+
 def test_no_downgrade_on_silent_ub_property_even_when_not_triggered():
     """Silent-UB classes (overflow, conversion, pointer_arithmetic) do
     NOT manifest as runtime crashes without instrumentation. A
