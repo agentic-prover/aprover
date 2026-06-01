@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bmc_agent.config import Config
+from bmc_agent.llm import LLMClient
 from bmc_agent.llm_tool_loop import LLMToolClient
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile
@@ -398,6 +399,65 @@ _TOOLS = [
 ]
 
 
+# --- Claude Code agent harness path -----------------------------------------
+
+SYSTEM_PROMPT_CLAUDE_CODE = (
+    "You are a CBMC harness engineer. You write a single self-contained C harness "
+    "(int main(void)) that lets CBMC verify one function for MEMORY SAFETY. You "
+    "have read-only tools (Read/Grep/Glob) and the project source on disk — use "
+    "them to get the REAL struct/type/header definitions right. You output ONLY a "
+    "C harness in a fenced ```c block, nothing else."
+)
+
+_CLAUDE_CODE_HARNESS_PROMPT = """\
+Write a complete, self-contained CBMC harness for the function below. The
+project's deterministic harness generator FAILED to build a harness for it
+(usually an opaque/incomplete type or a header it modelled wrong), so model the
+types correctly yourself.
+
+Tools: you may Read/Grep/Glob the project source under `{add_dir}` to find the
+exact struct/typedef/header definitions this function and its parameters need.
+
+CRITICAL — SOUNDNESS (this is the whole point; a harness that hides the bug is
+worse than none):
+  * Make every ATTACKER-CONTROLLED INPUT fully nondeterministic (nondet bytes /
+    sizes / fields). Do NOT pin input data to specific values or narrow ranges.
+  * Only __CPROVER_assume STRUCTURAL validity the function genuinely requires
+    (a pointer is non-null, a backing buffer is N bytes). NEVER assume away a
+    data value the function reads from its input — that is exactly where bugs
+    live, and over-constraining produces a false `VERIFICATION SUCCESSFUL`.
+  * Keep the harness small: model the bytes directly over a bounded symbolic
+    buffer; avoid pulling in opaque types by value (forward-declare + nondet a
+    small concrete stand-in if needed).
+  * Define `int main(void)` and call the function on the symbolic inputs.
+
+FUNCTION:
+```c
+{fn_signature}
+```
+BODY:
+```c
+{fn_body}
+```
+
+Prior CBMC compile error to fix:
+{prior_error}
+
+Output ONLY the harness as a single ```c ... ``` block.
+"""
+
+
+def _extract_c_code(text: str) -> str:
+    """Pull the C harness out of a claude-code response (fenced ```c block if
+    present, else the whole text)."""
+    if not text:
+        return ""
+    m = re.search(r"```(?:c|cpp|cc)?\s*\n(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
 @dataclass
 class HarnessResult:
     harness: str
@@ -480,6 +540,81 @@ class AgenticHarnessGen:
             {"role": "user", "content": initial_ctx},
         ]
         return self._run_emit_loop(messages)
+
+    # ------------------------------------------------------------------
+    # Claude Code agent path (stronger harness; reads real code itself)
+    # ------------------------------------------------------------------
+
+    def generate_via_claude_code(
+        self,
+        func: FunctionInfo,
+        all_funcs_global: dict,
+        include_dirs: Optional[list[str]] = None,
+        defines: Optional[list[str]] = None,
+    ) -> HarnessResult:
+        """Build the harness with the Claude Code agent instead of bmc's
+        in-process tool loop. Claude Code runs its OWN Read/Grep loop over the
+        source tree to get the real struct/type definitions right; bmc keeps the
+        compile-check + retry loop (sound, deterministic). The prompt enforces
+        the soundness discipline — keep attacker-controlled inputs nondet so the
+        repaired harness can't quietly assume the bug away.
+        """
+        import copy
+        self._include_dirs = list(include_dirs or [])
+        self._defines = list(defines or [])
+
+        # Force the claude-code provider + agentic tools for THIS call, scoped to
+        # the source tree. role=None so role overrides don't redirect us.
+        cc_cfg = copy.copy(self.config)
+        cc_cfg.llm_provider = "claude-code"
+        cc_cfg.claude_code_agentic = True
+        dirs = list(getattr(self.config, "claude_code_add_dirs", None) or [])
+        dirs.append(str(self.corpus_root))
+        dirs.extend(self._include_dirs)
+        seen: set[str] = set()
+        cc_cfg.claude_code_add_dirs = [d for d in dirs if d and not (d in seen or seen.add(d))]
+        client = LLMClient(cc_cfg)
+
+        sig = self._format_sig(func)
+        body = (func.body or "")[:4000]
+        last_err = ""
+        harness = ""
+        for attempt in range(MAX_RETRIES + 1):
+            prompt = _CLAUDE_CODE_HARNESS_PROMPT.format(
+                fn_signature=sig,
+                fn_body=body,
+                add_dir=(cc_cfg.claude_code_add_dirs[0] if cc_cfg.claude_code_add_dirs else "(cwd)"),
+                prior_error=last_err or "(none — first attempt)",
+            )
+            try:
+                resp = client.complete(SYSTEM_PROMPT_CLAUDE_CODE, prompt, max_tokens=4096)
+            except Exception as exc:
+                logger.warning(
+                    "claude-code harness gen [%s] attempt %d: LLM error: %s",
+                    func.name, attempt, exc,
+                )
+                last_err = f"LLM error: {exc}"
+                continue
+            harness = _extract_c_code(resp)
+            ok, cerr = self._compile_check(harness)
+            if ok:
+                logger.info(
+                    "claude-code harness gen [%s]: compiles after %d retr%s",
+                    func.name, attempt, "y" if attempt == 1 else "ies",
+                )
+                return HarnessResult(
+                    harness=harness, retries=attempt, last_compile_error="",
+                    rationale="claude-code agent",
+                )
+            last_err = cerr
+        logger.info(
+            "claude-code harness gen [%s]: still failing to compile after %d attempts",
+            func.name, MAX_RETRIES + 1,
+        )
+        return HarnessResult(
+            harness=harness, retries=MAX_RETRIES, last_compile_error=last_err,
+            rationale="claude-code agent",
+        )
 
     # ------------------------------------------------------------------
     # Refinement: rewrite the harness given a judge's UNREALISTIC verdict

@@ -419,12 +419,19 @@ class BMCEngine:
                 parsed_files=parsed_files,
                 corpus_root=corpus_root,
             )
-            res = agen.generate(
+            gen_kwargs = dict(
                 func=func,
                 all_funcs_global=all_funcs or {},
                 include_dirs=list(getattr(self.config, "include_dirs", None) or []),
                 defines=list(getattr(self.config, "cbmc_defines", None) or []),
             )
+            # Prefer the Claude Code agent (stronger code-reading harness) when
+            # agentic mode is on; else fall back to bmc's in-process tool loop.
+            if getattr(self.config, "claude_code_agentic", False):
+                logger.info("agentic harness repair: using Claude Code agent for '%s'", func.name)
+                res = agen.generate_via_claude_code(**gen_kwargs)
+            else:
+                res = agen.generate(**gen_kwargs)
             harness = getattr(res, "harness", None)
             if harness and not getattr(res, "last_compile_error", None):
                 return str(self._save_harness(driver_name, func.name, harness))

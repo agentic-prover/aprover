@@ -59,3 +59,42 @@ def test_repair_flag_env(monkeypatch):
     monkeypatch.setenv("BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR", "1")
     from bmc_agent.config import Config
     assert Config.from_env().enable_agentic_harness_repair is True
+
+
+# --- claude-code harness path -----------------------------------------------
+
+def test_extract_c_code():
+    from bmc_agent.agentic_harness_gen import _extract_c_code
+    assert _extract_c_code("x\n```c\nint main(void){return 0;}\n```\ny") == "int main(void){return 0;}"
+    assert _extract_c_code("int main(void){return 1;}") == "int main(void){return 1;}"
+    assert _extract_c_code("") == ""
+
+
+def test_generate_via_claude_code_forces_provider_and_scopes_dirs(monkeypatch):
+    from pathlib import Path
+    import bmc_agent.agentic_harness_gen as m
+    from bmc_agent.agentic_harness_gen import AgenticHarnessGen
+    from bmc_agent.config import Config
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+
+    g = AgenticHarnessGen.__new__(AgenticHarnessGen)
+    g.config = Config(); g.config.llm_provider = "openai"; g.config.claude_code_add_dirs = []
+    g.corpus_root = Path("/tmp/some/src")
+
+    seen = {}
+    def fake_complete(self, sysp, prompt, **kw):
+        seen["provider"] = self.config.llm_provider
+        seen["agentic"] = self.config.claude_code_agentic
+        seen["dirs"] = list(self.config.claude_code_add_dirs)
+        return "```c\nint main(void){return 0;}\n```"
+    monkeypatch.setattr(m.LLMClient, "complete", fake_complete)
+    g._compile_check = lambda h: (True, "")
+
+    sig = FunctionSignature(return_type="int", name="f", parameters=[])
+    fi = FunctionInfo(name="f", signature=sig, body="int f(){return 0;}", callees=set(), source_file="x.c")
+    res = g.generate_via_claude_code(fi, {}, include_dirs=["/tmp/inc"], defines=["NDEBUG"])
+
+    assert "int main(void)" in res.harness
+    assert seen["provider"] == "claude-code"   # forced for this call
+    assert seen["agentic"] is True
+    assert "/tmp/some/src" in seen["dirs"] and "/tmp/inc" in seen["dirs"]
