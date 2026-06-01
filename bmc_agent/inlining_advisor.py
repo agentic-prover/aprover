@@ -179,8 +179,10 @@ class InliningAdvisor:
 
         try:
             from bmc_agent.prompts import SPEC_SYSTEM_PROMPT
+            from bmc_agent.llm import agentic_system_prompt
             raw = self.llm.complete(
-                SPEC_SYSTEM_PROMPT, prompt,
+                agentic_system_prompt(self.config, "refinement", SPEC_SYSTEM_PROMPT),
+                prompt,
                 max_tokens=2048, thinking=False,
                 role="refinement",
             )

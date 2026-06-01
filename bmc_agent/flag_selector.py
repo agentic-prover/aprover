@@ -321,8 +321,12 @@ class FlagSelector:
         )
 
         try:
+            from bmc_agent.llm import agentic_system_prompt
             raw = self.llm.complete(
-                system_prompt="You are a formal verification expert. Respond with only valid JSON.",
+                system_prompt=agentic_system_prompt(
+                    self.config, "spec_gen",
+                    "You are a formal verification expert. Respond with only valid JSON.",
+                ),
                 user_prompt=prompt,
                 max_tokens=256,
                 thinking=False,

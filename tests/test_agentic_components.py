@@ -63,3 +63,23 @@ def test_classifier_off_short_circuits_validate_to_unresolved():
     res = v.validate(_Func(), _Spec(), cex, {}, {}, None, "drv")
     assert res.outcome == CExOutcome.UNRESOLVED
     assert res.counterexample is cex
+
+
+def test_agentic_enables_cbmc_driver_agents():
+    # --agentic keeps the agentic CBMC driver on: flag selection (checks+unwind)
+    # and the inlining advisor (which callee to inline vs stub), both code-reading.
+    _, c = _cfg(_BASE + ["--agentic"])
+    assert c.enable_flag_selection is True
+    assert c.enable_inlining_advisor is True
+
+
+def test_flag_selector_and_inliner_get_investigation_framing():
+    # Under --agentic (claude-code), both CBMC-config agents' system prompts get
+    # the investigation directive so they READ the code (callee bodies) to decide.
+    from bmc_agent.llm import agentic_system_prompt
+    from bmc_agent.config import Config
+    c = Config(); c.claude_code_agentic = True; c.claude_code_add_dirs = ["/p/src"]
+    c.llm_role_overrides = {"spec_gen": {"provider": "claude-code"},
+                            "refinement": {"provider": "claude-code"}}
+    assert "[Agentic mode]" in agentic_system_prompt(c, "spec_gen", "x")     # flag selector
+    assert "[Agentic mode]" in agentic_system_prompt(c, "refinement", "x")   # inlining advisor

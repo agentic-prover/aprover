@@ -139,6 +139,16 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
             config.enable_realism_check = False  # type: ignore[attr-defined]
         if not getattr(args, "enable_triage", False):
             config.enable_phase_3e_triage = False  # type: ignore[attr-defined]
+        # Agentic CBMC driver: the agent decides how to configure CBMC by reading
+        # the code — per-function checks + unwind (flag selector) and which callees
+        # to inline vs stub (inlining advisor). Both become code-reading agents
+        # under --agentic (their system prompts get the investigation framing) and
+        # CBMC keeps --unwinding-assertions on, so an agent-chosen unwind that's
+        # too low is FLAGGED, not silently unsound.
+        if not getattr(args, "no_flag_selection", False):
+            config.enable_flag_selection = True  # type: ignore[attr-defined]
+        if not getattr(args, "no_inlining_advisor", False):
+            config.enable_inlining_advisor = True  # type: ignore[attr-defined]
 
 
 def _print_ai_layers(config) -> None:
