@@ -130,15 +130,17 @@ Deploy as a Hugging Face Space with `web/deploy_to_space.sh` — see `web/README
 `--agentic` makes every LLM step an investigating agent (Claude Code by default;
 re-point any one with `BMC_AGENT_LLM_<ROLE>_PROVIDER`), while the conventional core
 (tree-sitter parse, CBMC, deterministic harness translation, compile+run) stays
-conventional. Under `--agentic` the **dynamic reproducer is on** and the **LLM
-judgment layers are off by default** and independently opt-in:
+conventional. Under `--agentic` the **classifier + spurious→refinement→soundness-gate
+loop stays on** (the sound core) and the **dynamic reproducer is on**; only the noisy
+LLM judgment layers — **realism** (exploitability downgrade) and **triage** (severity
+tiering) — are **off by default** and independently opt-in:
 
 ```bash
-# spec-gen + refinement + soundness gate + harness-repair are agentic;
-# classifier / realism / triage are OFF (dynamic reproducer is the gate)
+# spec-gen + refinement + soundness gate + harness-repair + classifier are agentic/on;
+# realism + triage are OFF; the dynamic reproducer confirms.
 uv run bmc-agent verify-dir --source-dir SRC --driver d --output OUT --agentic
-# opt any judgment layer back in (independent of each other):
-#   --enable-classifier   --enable-realism-check   --enable-triage
+# opt a judgment layer back in (independent of each other):
+#   --enable-realism-check   --enable-triage
 # lean batch variant (spec-gen stays on the fast default LLM): --agentic-refine
 ```
 

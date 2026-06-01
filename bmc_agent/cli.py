@@ -126,14 +126,15 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         config.enable_split_spec_gen = True  # type: ignore[attr-defined]
 
     if agentic:
-        # Component gating (--agentic only): the dynamic reproducer is ON; the
-        # LLM judgment layers — classifier, realism, triage — are OFF by default
-        # and each independently opt-in. An explicit --enable-* (or --no-* for
-        # dyn-val) wins via these arg guards, regardless of flag order.
+        # Component gating (--agentic only). The CLASSIFIER stays ON: it drives
+        # the spurious→refinement→soundness-gate loop (the agentic centerpiece),
+        # so it must NOT be disabled by default. The dynamic reproducer is ON.
+        # Only the noisy LLM judgment layers — realism (exploitability downgrade)
+        # and triage (severity tiering) — are OFF by default. Each is
+        # independently opt-in; an explicit --enable-* (or --no- for dyn-val)
+        # wins via these arg guards, regardless of flag order.
         if not getattr(args, "no_dynamic_validation", False):
             config.enable_dynamic_validation = True  # type: ignore[attr-defined]
-        if not getattr(args, "enable_classifier", False):
-            config.enable_classifier = False  # type: ignore[attr-defined]
         if not getattr(args, "enable_realism_check", False):
             config.enable_realism_check = False  # type: ignore[attr-defined]
         if not getattr(args, "enable_triage", False):
@@ -1684,9 +1685,10 @@ def build_parser() -> argparse.ArgumentParser:
                           "generator and re-run. Fires only on build errors.")
     ver.add_argument("--enable-classifier", action="store_true", default=False,
                      dest="enable_classifier",
-                     help="Re-enable the CEx classifier (REAL/SPURIOUS/UNRESOLVED + "
-                          "refinement). Default ON normally, but --agentic turns it OFF; "
-                          "use this to opt it back in under --agentic.")
+                     help="Force the CEx classifier ON (REAL/SPURIOUS/UNRESOLVED + the "
+                          "spurious->refinement->soundness-gate loop). On by default, "
+                          "including under --agentic; this overrides "
+                          "BMC_AGENT_ENABLE_CLASSIFIER=false.")
     ver.add_argument("--enable-triage", action="store_true", default=False,
                      dest="enable_triage",
                      help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "
@@ -1909,9 +1911,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "generator and re-run. Fires only on build errors.")
     vd.add_argument("--enable-classifier", action="store_true", default=False,
                     dest="enable_classifier",
-                    help="Re-enable the CEx classifier (REAL/SPURIOUS/UNRESOLVED + "
-                         "refinement). Default ON normally, but --agentic turns it OFF; "
-                         "use this to opt it back in under --agentic.")
+                    help="Force the CEx classifier ON (REAL/SPURIOUS/UNRESOLVED + the "
+                         "spurious->refinement->soundness-gate loop). On by default, "
+                         "including under --agentic; this overrides "
+                         "BMC_AGENT_ENABLE_CLASSIFIER=false.")
     vd.add_argument("--enable-triage", action="store_true", default=False,
                     dest="enable_triage",
                     help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "

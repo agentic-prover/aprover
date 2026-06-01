@@ -18,21 +18,22 @@ def _cfg(argv):
 _BASE = ["verify-dir", "--source-dir", "x", "--driver", "d"]
 
 
-def test_agentic_turns_off_the_three_keeps_dynval():
+def test_agentic_keeps_classifier_off_realism_triage_keeps_dynval():
+    # The classifier drives the spurious->refinement->soundness-gate loop, so it
+    # MUST stay on under --agentic. Only realism (exploitability downgrade) and
+    # triage are off by default. Dynamic reproducer on.
     _, c = _cfg(_BASE + ["--agentic"])
-    assert c.enable_classifier is False
+    assert c.enable_classifier is True           # refinement + soundness gate stay live
     assert c.enable_realism_check is False
     assert c.enable_phase_3e_triage is False
     assert c.enable_dynamic_validation is True   # reproducer on
 
 
 def test_per_component_optin_wins_under_agentic():
-    # --enable-classifier opts the classifier back in (the arg-guard leaves the
-    # default True in place; the inline enable-block also sets True).
-    _, c = _cfg(_BASE + ["--agentic", "--enable-classifier"])
-    assert c.enable_classifier is True
+    # realism opts back in; classifier already on (refinement intact).
     _, c2 = _cfg(_BASE + ["--agentic", "--enable-realism-check"])
     assert c2.enable_realism_check is True
+    assert c2.enable_classifier is True
 
 
 def test_components_independent_no_agentic_defaults_on():
