@@ -451,6 +451,15 @@ class Config:
 
     # Realism checker settings (Phase 3 post-validation LLM audit)
     enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
+
+    # Counterexample classifier (Phase 3 S1 = CExValidator): the LLM+conventional
+    # step that labels each CBMC cex REAL_BUG / SPURIOUS / UNRESOLVED (and drives
+    # the SPURIOUS→refinement→soundness-gate loop). Default on. When OFF, every cex
+    # is surfaced as a raw UNRESOLVED lead with no LLM classification and no
+    # refinement — so under --agentic (which defaults it off) the dynamic
+    # reproducer becomes the gate. Independent of realism/triage. Toggle:
+    # ``--enable-classifier`` (re-enable under --agentic) / ``BMC_AGENT_ENABLE_CLASSIFIER``.
+    enable_classifier: bool = True
     enable_realism_thinking: bool = False    # use extended thinking in the realism checker (slower, higher quality)
 
     # Phase 3e — in-pipeline TriageToolsAgent oracle. After Phase 3b
@@ -732,6 +741,7 @@ class Config:
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
             enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
+            enable_classifier=(os.environ.get("BMC_AGENT_ENABLE_CLASSIFIER") or "true").lower() == "true",
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",

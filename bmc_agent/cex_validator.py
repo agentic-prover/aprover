@@ -259,6 +259,28 @@ class CExValidator:
         spurious (with a refined spec).
         """
         func_name = func.name
+
+        # Classifier gate. When the classifier is disabled (e.g. --agentic
+        # default), do NOT spend LLM judgment on REAL/SPURIOUS — surface the cex
+        # as a raw UNRESOLVED lead. This also skips the SPURIOUS→refinement loop
+        # (it is triggered by a SPURIOUS verdict), so the dynamic reproducer
+        # becomes the gate downstream. Independent of realism/triage.
+        if not getattr(self.config, "enable_classifier", True):
+            logger.info(
+                "classifier disabled — '%s' counterexample surfaced as UNRESOLVED lead",
+                func_name,
+            )
+            return ValidationResult(
+                function_name=func_name,
+                counterexample=counterexample,
+                caller_path=[],
+                system_entry_input=None,
+                refinement_history=[],
+                final_precondition=spec.precondition,
+                reasoning="classifier disabled; counterexample surfaced as a raw lead",
+                outcome=CExOutcome.UNRESOLVED,
+            )
+
         logger.info("Validating counterexample for '%s'", func_name)
 
         # Per-CEx error flags for the gate in _try_dynamic_validation.

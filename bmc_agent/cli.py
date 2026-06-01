@@ -125,6 +125,20 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # --agentic-refine; the contract POLICY applies either way).
         config.enable_split_spec_gen = True  # type: ignore[attr-defined]
 
+    if agentic:
+        # Component gating (--agentic only): the dynamic reproducer is ON; the
+        # LLM judgment layers — classifier, realism, triage — are OFF by default
+        # and each independently opt-in. An explicit --enable-* (or --no-* for
+        # dyn-val) wins via these arg guards, regardless of flag order.
+        if not getattr(args, "no_dynamic_validation", False):
+            config.enable_dynamic_validation = True  # type: ignore[attr-defined]
+        if not getattr(args, "enable_classifier", False):
+            config.enable_classifier = False  # type: ignore[attr-defined]
+        if not getattr(args, "enable_realism_check", False):
+            config.enable_realism_check = False  # type: ignore[attr-defined]
+        if not getattr(args, "enable_triage", False):
+            config.enable_phase_3e_triage = False  # type: ignore[attr-defined]
+
 
 def _print_ai_layers(config) -> None:
     """Print the active AI layers so the operator can see what's running.
@@ -473,6 +487,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_soundness_gate = True
     if getattr(args, "enable_agentic_harness_repair", False):
         config.enable_agentic_harness_repair = True
+    if getattr(args, "enable_classifier", False):
+        config.enable_classifier = True
+    if getattr(args, "enable_triage", False):
+        config.enable_phase_3e_triage = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
     # --no-<flag> escape hatches (override the default-on AI layers).
@@ -776,6 +794,10 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_soundness_gate = True
     if getattr(args, "enable_agentic_harness_repair", False):
         config.enable_agentic_harness_repair = True
+    if getattr(args, "enable_classifier", False):
+        config.enable_classifier = True
+    if getattr(args, "enable_triage", False):
+        config.enable_phase_3e_triage = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
     if getattr(args, "enable_phase_3e_triage", False):
@@ -1660,6 +1682,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="On a CBMC harness BUILD error (conversion / incomplete-type / "
                           "parse), rebuild the harness with the agentic code-reading "
                           "generator and re-run. Fires only on build errors.")
+    ver.add_argument("--enable-classifier", action="store_true", default=False,
+                     dest="enable_classifier",
+                     help="Re-enable the CEx classifier (REAL/SPURIOUS/UNRESOLVED + "
+                          "refinement). Default ON normally, but --agentic turns it OFF; "
+                          "use this to opt it back in under --agentic.")
+    ver.add_argument("--enable-triage", action="store_true", default=False,
+                     dest="enable_triage",
+                     help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "
+                          "(independent of classifier/realism).")
     ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
                      help="Disable LLM inline-vs-stub advisor.")
     ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,
@@ -1876,6 +1907,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="On a CBMC harness BUILD error (conversion / incomplete-type / "
                          "parse), rebuild the harness with the agentic code-reading "
                          "generator and re-run. Fires only on build errors.")
+    vd.add_argument("--enable-classifier", action="store_true", default=False,
+                    dest="enable_classifier",
+                    help="Re-enable the CEx classifier (REAL/SPURIOUS/UNRESOLVED + "
+                         "refinement). Default ON normally, but --agentic turns it OFF; "
+                         "use this to opt it back in under --agentic.")
+    vd.add_argument("--enable-triage", action="store_true", default=False,
+                    dest="enable_triage",
+                    help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "
+                         "(independent of classifier/realism).")
     vd.add_argument("--no-inlining-advisor", action="store_true", default=False,
                     help="Disable LLM inline-vs-stub advisor.")
     vd.add_argument("--no-spec-gen-tools", action="store_true", default=False,
