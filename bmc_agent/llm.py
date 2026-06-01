@@ -92,6 +92,32 @@ def agentic_system_prompt(config, role, system_prompt: str) -> str:
     return system_prompt + _AGENTIC_INVESTIGATION.format(dirs=dirs)
 
 
+def _supports_explicit_prompt_cache(base_url: "str | None") -> bool:
+    """Anthropic / OpenRouter honour an explicit ``cache_control: ephemeral``
+    breakpoint on a content block. OpenAI auto-caches long prefixes with no
+    param (and may reject the unknown field), so we only emit it for the former.
+    """
+    b = (base_url or "").lower()
+    return "anthropic" in b or "openrouter" in b
+
+
+def _system_msg_with_cache(system_prompt: str, base_url: "str | None") -> dict:
+    """Build the system message, marking it as a cache breakpoint when the
+    endpoint supports explicit caching. Caching the (large, stable) system
+    prefix means it's reused across the multi-turn tool loop AND across calls
+    with the same system prompt (5-min TTL) instead of re-billed every turn.
+    """
+    if _supports_explicit_prompt_cache(base_url):
+        return {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": system_prompt,
+                 "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+    return {"role": "system", "content": system_prompt}
+
+
 class LLMError(Exception):
     """Raised when the LLM client cannot fulfil a request."""
 
@@ -765,8 +791,12 @@ def _add_complete_with_tools_to_llm():
             ) from exc
 
         tool_schemas = _tools_to_openai_schema(tools)
+        # Cache the (stable) system prefix across the tool loop's turns and across
+        # calls (Anthropic/OpenRouter). The corpus the agent reads via tools lands
+        # in later messages; the conversation grows behind this cached prefix so
+        # each turn re-pays only for the new tool results, not the whole prefix.
         messages: list[dict] = [
-            {"role": "system", "content": system_prompt},
+            _system_msg_with_cache(system_prompt, getattr(self.config, "llm_base_url", "")),
             {"role": "user", "content": user_prompt},
         ]
 

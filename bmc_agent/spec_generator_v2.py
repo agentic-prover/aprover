@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -642,20 +643,55 @@ class SpecGeneratorV2:
         # Corpus paths default: just the source file under spec.
         corpus = self.corpus_paths or [Path(source_file)]
 
-        # Process layer by layer (leaves → roots).
+        # Process layer by layer (leaves → roots). Functions WITHIN a layer are
+        # independent — they only read lower-layer specs (already in all_specs,
+        # not mutated during the layer) — so generate them CONCURRENTLY. Layers
+        # stay sequential (a caller needs its callees' specs). This is the big
+        # Phase-1 speedup, especially when spec-gen is agentic (each call is a
+        # slow claude-code / API round-trip): N functions in a layer run in
+        # parallel instead of serially.
+        max_workers = max(1, min(self.config.batch_size, 8))
         for layer_idx, layer in enumerate(layers):
             logger.info("v2: layer %d/%d: %s", layer_idx + 1, len(layers), layer)
+            todo = []
             for fn_name in layer:
                 func_info = parsed.get_function_info(fn_name)
                 if func_info is None:
                     all_specs[fn_name] = _trivial_spec(fn_name, "missing_info")
-                    continue
-                spec = self._generate_one(
-                    func_info=func_info,
-                    parsed=parsed,
-                    all_specs_so_far=all_specs,
-                    corpus_paths=corpus,
+                else:
+                    todo.append((fn_name, func_info))
+            if not todo:
+                continue
+            # all_specs is read-only during this layer (we merge after); safe to
+            # share across threads.
+            results: dict[str, Spec] = {}
+            if len(todo) == 1:
+                fn_name, func_info = todo[0]
+                results[fn_name] = self._generate_one(
+                    func_info=func_info, parsed=parsed,
+                    all_specs_so_far=all_specs, corpus_paths=corpus,
                 )
+            else:
+                with ThreadPoolExecutor(max_workers=min(len(todo), max_workers)) as pool:
+                    fut_to_fn = {
+                        pool.submit(
+                            self._generate_one,
+                            func_info=fi, parsed=parsed,
+                            all_specs_so_far=all_specs, corpus_paths=corpus,
+                        ): fn
+                        for fn, fi in todo
+                    }
+                    for fut in as_completed(fut_to_fn):
+                        fn = fut_to_fn[fut]
+                        try:
+                            results[fn] = fut.result()
+                        except Exception as exc:
+                            logger.warning(
+                                "v2 [%s]: spec-gen raised (%r) — seed-only fallback", fn, exc,
+                            )
+                            results[fn] = _trivial_spec(fn, "gen_exception")
+            # Merge this layer's results (single-threaded) before the next layer.
+            for fn_name, spec in results.items():
                 all_specs[fn_name] = spec
                 if fn_name in defined_funcs:
                     self.store.save_spec(driver_name, fn_name, spec)
