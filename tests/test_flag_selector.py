@@ -203,13 +203,12 @@ def test_select_all_global_unwind_included_in_prompt():
     assert "GLOBAL UNWIND DEFAULT: 8" in prompt
 
 
-def test_select_one_passes_role_spec_gen():
-    """Regression for the missing-role bug found during the v2.2
-    calibration sweep: flag_selector's llm.complete() must include
-    role='spec_gen' so per-role overrides (BMC_AGENT_LLM_SPEC_GEN_*)
-    route the call. Without this, the call falls through to the
-    global config which is unset in hybrid setups, and every
-    function silently falls back to default flags.
+def test_select_one_passes_role_cbmc_driver():
+    """The flag selector is part of the CBMC driver, so it routes on its OWN
+    role 'cbmc_driver' (NOT 'spec_gen' anymore) — that decoupling lets it be
+    agentic independently of spec-gen (e.g. spec-gen fast, CBMC driver agentic).
+    The call must still pass a role so per-role overrides
+    (BMC_AGENT_LLM_CBMC_DRIVER_*) route it.
     """
     cfg = _mock_config()
     llm = MagicMock()
@@ -217,9 +216,9 @@ def test_select_one_passes_role_spec_gen():
     sel = FlagSelector(cfg, llm)
     sel.select_all({"foo": _func_info("foo")})
     _, kwargs = llm.complete.call_args
-    assert kwargs.get("role") == "spec_gen", (
-        "flag_selector.complete() must pass role='spec_gen' so per-role "
-        "overrides apply (see the v2.2 calibration sweep regression)."
+    assert kwargs.get("role") == "cbmc_driver", (
+        "flag_selector.complete() must pass role='cbmc_driver' (its own role, "
+        "decoupled from spec_gen) so per-role overrides apply."
     )
 
 

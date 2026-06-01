@@ -324,13 +324,13 @@ class FlagSelector:
             from bmc_agent.llm import agentic_system_prompt
             raw = self.llm.complete(
                 system_prompt=agentic_system_prompt(
-                    self.config, "spec_gen",
+                    self.config, "cbmc_driver",
                     "You are a formal verification expert. Respond with only valid JSON.",
                 ),
                 user_prompt=prompt,
                 max_tokens=256,
                 thinking=False,
-                role="spec_gen",
+                role="cbmc_driver",
             )
         except LLMError as exc:
             logger.warning("LLM flag selection call failed for '%s': %s", func.name, exc)

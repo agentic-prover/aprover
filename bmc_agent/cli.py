@@ -70,7 +70,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     ALL_AGENT_ROLES = (
         "spec_gen", "refinement", "realism", "triage",
         "disagreement_diagnose", "feedback_distill", "classifier",
-        "dynamic_repro", "dynval_triage",
+        "dynamic_repro", "dynval_triage", "cbmc_driver",
     )
     # Which roles route to the Claude Code CLI:
     #   --agentic         -> EVERY agent role (full; the "all agentic" preset — slow)

@@ -77,6 +77,10 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
         "realism",
         "classifier",
         "disagreement_diagnose",
+        "triage",
+        "dynamic_repro",
+        "dynval_triage",
+        "cbmc_driver",
     ):
         ru = role.upper()
         model = os.environ.get(f"BMC_AGENT_LLM_{ru}_MODEL", "")

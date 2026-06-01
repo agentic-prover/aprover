@@ -73,13 +73,23 @@ def test_agentic_enables_cbmc_driver_agents():
     assert c.enable_inlining_advisor is True
 
 
-def test_flag_selector_and_inliner_get_investigation_framing():
-    # Under --agentic (claude-code), both CBMC-config agents' system prompts get
-    # the investigation directive so they READ the code (callee bodies) to decide.
-    from bmc_agent.llm import agentic_system_prompt
-    from bmc_agent.config import Config
-    c = Config(); c.claude_code_agentic = True; c.claude_code_add_dirs = ["/p/src"]
-    c.llm_role_overrides = {"spec_gen": {"provider": "claude-code"},
-                            "refinement": {"provider": "claude-code"}}
-    assert "[Agentic mode]" in agentic_system_prompt(c, "spec_gen", "x")     # flag selector
-    assert "[Agentic mode]" in agentic_system_prompt(c, "refinement", "x")   # inlining advisor
+def test_cbmc_driver_role_decoupled_and_agentic():
+    # The CBMC-config agents (flag selector + inlining advisor) have their OWN
+    # role `cbmc_driver`, so they can be agentic INDEPENDENTLY of spec_gen — e.g.
+    # spec-gen fast on OpenRouter while the CBMC driver reads the code.
+    import os
+    for k in list(os.environ):
+        if k.startswith("BMC_AGENT_LLM") or k == "BMC_AGENT_ENABLE_CLASSIFIER":
+            os.environ.pop(k, None)
+    os.environ["BMC_AGENT_LLM_SPEC_GEN_PROVIDER"] = "openai"   # keep spec-gen fast/flat
+    try:
+        from bmc_agent.cli import build_parser, _apply_provider_args
+        from bmc_agent.config import Config
+        from bmc_agent.llm import agentic_system_prompt
+        a = build_parser().parse_args(_BASE + ["--agentic"])
+        c = Config.from_env(); _apply_provider_args(c, a)
+        assert c.role_settings("spec_gen")["provider"] == "openai"        # fast
+        assert c.role_settings("cbmc_driver")["provider"] == "claude-code"  # agentic, independent
+        assert "[Agentic mode]" in agentic_system_prompt(c, "cbmc_driver", "x")
+    finally:
+        os.environ.pop("BMC_AGENT_LLM_SPEC_GEN_PROVIDER", None)
