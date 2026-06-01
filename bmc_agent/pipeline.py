@@ -2790,6 +2790,31 @@ class AMCPipeline:
                 user_domain_knowledge=domain_knowledge,
             )
 
+            # Auto-derive an ATTACKER-SURFACE-ONLY trust-boundary note when the
+            # user supplied none AND we're agentic (the model reads real code).
+            # It only lists what IS attacker-controlled and asserts nothing
+            # trusted, so it can only sharpen the conservative default — never
+            # mask a bug. A user-supplied --threat-model-context always wins
+            # (it may legitimately assert trusted inputs, which a human owns).
+            if (
+                getattr(self.config, "claude_code_agentic", False)
+                and not (getattr(self.config, "threat_model_context", "") or "").strip()
+            ):
+                from bmc_agent.domain_analyzer import derive_attacker_surface
+                surface = derive_attacker_surface(
+                    source_dir=source_dir,
+                    include_dirs=include_dirs,
+                    file_parsed_c=file_parsed_c,
+                    file_expanded=file_expanded,
+                    llm=self.llm,
+                )
+                if surface:
+                    self.config.threat_model_context = surface
+                    logger.info(
+                        "Pass 1.5: attacker-surface note auto-derived and wired "
+                        "into trust-deciding roles (%d chars)", len(surface),
+                    )
+
         # ------------------------------------------------------------------
         # Pass 2: run the full AMC pipeline per file using cached preprocessed
         # source and cross-file caller information.

@@ -33,9 +33,9 @@ def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
         config.llm_model = model  # type: ignore[attr-defined]
 
 
-def _resolve_threat_model_note(value: "str | None") -> str:
-    """Resolve a ``--threat-model-note`` argument to its text. Accepts either a
-    path to a file (read it) or an inline string (used verbatim). Returns "" for
+def _resolve_threat_model_context(value: "str | None") -> str:
+    """Resolve a ``--threat-model-context`` argument to its text. Accepts either
+    a path to a file (read it) or an inline string (used verbatim). Returns "" for
     a missing/empty value. Keeps the CLI ergonomic: usually a path, occasionally
     a short inline note.
     """
@@ -51,11 +51,11 @@ def _resolve_threat_model_note(value: "str | None") -> str:
     return value.strip()
 
 
-def _apply_threat_model_note(config: "object", args: argparse.Namespace) -> None:
-    """Apply ``--threat-model-note`` (path or inline text) onto the config."""
-    note = _resolve_threat_model_note(getattr(args, "threat_model_note", None))
+def _apply_threat_model_context(config: "object", args: argparse.Namespace) -> None:
+    """Apply ``--threat-model-context`` (path or inline text) onto the config."""
+    note = _resolve_threat_model_context(getattr(args, "threat_model_context", None))
     if note:
-        config.threat_model_note = note  # type: ignore[attr-defined]
+        config.threat_model_context = note  # type: ignore[attr-defined]
 
 
 def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
@@ -513,7 +513,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_dynamic_validation = True
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
-    _apply_threat_model_note(config, args)
+    _apply_threat_model_context(config, args)
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
@@ -821,7 +821,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.cbmc_defines = list(args.defines)
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
-    _apply_threat_model_note(config, args)
+    _apply_threat_model_context(config, args)
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
@@ -1109,7 +1109,7 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
         config.cbmc_defines = list(args.defines)
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
-    _apply_threat_model_note(config, args)
+    _apply_threat_model_context(config, args)
     if getattr(args, "allow_self_patch", None):
         config.allow_self_patch = args.allow_self_patch
     _apply_model_arg(config, args)
@@ -1641,7 +1641,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Threat model: shapes CBMC baseline flags, spec prompts, and realism context (default: security)",
     )
     ver.add_argument(
-        "--threat-model-note",
+        "--threat-model-context",
         default=None,
         metavar="PATH_OR_TEXT",
         help="Trust-boundary note for THIS target (path to a file, or inline text): which inputs are attacker-controlled vs. caller/hardware-guaranteed. Injected into spec-gen, refinement, classifier, dynamic-validation and realism so the precondition is shaped correctly at generation time. Conservative default (treat inputs as attacker-controlled) applies when omitted.",
@@ -1887,7 +1887,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Threat model: shapes CBMC baseline flags, spec prompts, and realism context (default: security)",
     )
     vd.add_argument(
-        "--threat-model-note",
+        "--threat-model-context",
         default=None,
         metavar="PATH_OR_TEXT",
         help="Trust-boundary note for THIS target (path to a file, or inline text): which inputs are attacker-controlled vs. caller/hardware-guaranteed. Injected into spec-gen, refinement, classifier, dynamic-validation and realism so the precondition is shaped correctly at generation time. Conservative default (treat inputs as attacker-controlled) applies when omitted.",
@@ -2072,7 +2072,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Threat model: shapes CBMC baseline flags and realism context (default: security)",
     )
     au.add_argument(
-        "--threat-model-note",
+        "--threat-model-context",
         default=None,
         metavar="PATH_OR_TEXT",
         help="Trust-boundary note for THIS target (path to a file, or inline text): which inputs are attacker-controlled vs. caller/hardware-guaranteed. Injected into spec-gen, refinement, classifier, dynamic-validation and realism so the precondition is shaped correctly at generation time. Conservative default (treat inputs as attacker-controlled) applies when omitted.",

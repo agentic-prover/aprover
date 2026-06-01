@@ -180,3 +180,100 @@ def analyze_codebase(
     if user_domain_knowledge and result:
         return result.strip() + "\n\n## User-supplied additional context\n" + user_domain_knowledge.strip()
     return (result or user_domain_knowledge).strip()
+
+
+# --- Attacker-surface auto-derivation (Pass 1.5, agentic only) --------------
+
+_ATTACK_SURFACE_SYSTEM_PROMPT = """\
+You are a security analyst mapping the ATTACKER SURFACE of a C codebase for a
+formal verification tool. Your output shapes how the verifier treats inputs.
+
+CRITICAL RULES — your note must be additive-to-safety, never bug-masking:
+- Describe ONLY what IS attacker-controlled: the entry points where untrusted
+  data enters, and which parameters / struct fields / globals carry that data
+  (and how it reaches the rest of the code).
+- DO NOT assert that anything is "trusted", "safe", "always valid", or
+  "bounded". Listing something as trusted could mask a real bug, so never do it.
+- Anything you do not mention is assumed attacker-controlled by default, which
+  is the safe assumption — so when unsure, leave it out rather than vouch for it.
+- Be concrete: name the real entry functions, fields, and data-flow you SAW in
+  the code. Do not invent. If you cannot identify any external input surface,
+  say so in one line."""
+
+_ATTACK_SURFACE_USER_TEMPLATE = """\
+Map the attacker surface of this C codebase.
+
+## File names
+{file_names}
+
+## Header files (types, macros, constants)
+{header_content}
+
+## Key type declarations (structs, typedefs, #defines — no function bodies)
+{type_decls}
+
+## Function signatures (all files)
+{signatures}
+
+Produce a short markdown note titled "## Attacker surface (auto-derived)" with:
+- Entry points where untrusted data enters (fuzz harness, syscall/trap handlers,
+  loaders of images/ELF/DTB, network/MMIO reads — whichever actually exist here).
+- Which parameters / fields / globals carry attacker-controlled bytes, including
+  values used as sizes, counts, offsets, or indices.
+- The reach: how that data flows toward the functions that will be verified.
+
+Remember: list ONLY attacker-controlled inputs. Never claim anything is trusted
+or bounded. Keep it under ~12 bullet points.
+"""
+
+
+def derive_attacker_surface(
+    source_dir: Path,
+    include_dirs: list[str],
+    file_parsed_c: dict[str, "ParsedCFile"],
+    file_expanded: dict[str, str],
+    llm: "LLMClient",
+) -> str:
+    """Auto-derive an ATTACKER-SURFACE-ONLY trust-boundary note from the code.
+
+    Returns a markdown note listing only what is attacker-controlled (entry
+    points + tainted fields + reach), asserting NOTHING as trusted — so feeding
+    it into ``config.threat_model_context`` can only sharpen the conservative
+    default, never mask a bug. Returns "" on failure. Intended for --agentic
+    runs where the model reads the real code; the prompt forbids fabrication.
+    """
+    log = _get_logger()
+    log.info("Pass 1.5: auto-deriving attacker surface (trust-boundary context)")
+
+    file_names = ", ".join(f"{s}.c" for s in sorted(file_parsed_c)) or "(none)"
+    header_content = _collect_headers(source_dir, include_dirs)
+    type_decls = _collect_type_decls(file_parsed_c, file_expanded)
+    signatures = _collect_signatures(file_parsed_c)
+
+    user_prompt = _ATTACK_SURFACE_USER_TEMPLATE.format(
+        file_names=file_names,
+        header_content=header_content,
+        type_decls=type_decls,
+        signatures=signatures,
+    )
+
+    from bmc_agent.llm import agentic_system_prompt
+    try:
+        result = llm.complete(
+            system_prompt=agentic_system_prompt(
+                llm.config, "spec_gen", _ATTACK_SURFACE_SYSTEM_PROMPT,
+            ),
+            user_prompt=user_prompt,
+            max_tokens=1024,
+            temperature=0.2,
+            role="spec_gen",
+        )
+    except Exception as exc:
+        log.warning("Attacker-surface derivation failed (%s) — proceeding without", exc)
+        return ""
+
+    result = (result or "").strip()
+    if result:
+        log.info("Pass 1.5: attacker surface derived (%d chars)", len(result))
+        log.debug("Attacker surface:\n%s", result)
+    return result

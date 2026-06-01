@@ -3,20 +3,20 @@ trust-deciding roles' system prompts, conservative-default attached, no-op
 elsewhere, and centrally applied in LLM.complete / complete_with_tools."""
 from bmc_agent.config import Config
 from bmc_agent.llm import (
-    threat_model_context,
+    render_threat_model_context,
     agentic_system_prompt,
-    THREAT_MODEL_NOTE_ROLES,
+    THREAT_MODEL_CONTEXT_ROLES,
 )
 
 
 def _cfg(note=""):
     c = Config()
-    c.threat_model_note = note
+    c.threat_model_context = note
     return c
 
 
 def test_roles_allowlist_is_the_trust_deciding_set():
-    assert THREAT_MODEL_NOTE_ROLES == frozenset({
+    assert THREAT_MODEL_CONTEXT_ROLES == frozenset({
         "spec_gen", "refinement", "classifier",
         "dynamic_repro", "dynval_triage", "realism",
     })
@@ -24,7 +24,7 @@ def test_roles_allowlist_is_the_trust_deciding_set():
 
 def test_note_injected_for_trust_deciding_role_with_conservative_rule():
     c = _cfg("buf/len are attacker-controlled; ctx is init'd by the caller.")
-    block = threat_model_context(c, "spec_gen")
+    block = render_threat_model_context(c, "spec_gen")
     assert "Trust boundary for this target" in block
     assert "attacker-controlled" in block
     assert "ctx is init'd" in block
@@ -35,13 +35,13 @@ def test_note_injected_for_trust_deciding_role_with_conservative_rule():
 
 def test_note_not_injected_for_non_trust_role():
     c = _cfg("some note")
-    assert threat_model_context(c, "cbmc_driver") == ""
-    assert threat_model_context(c, "feedback_distill") == ""
+    assert render_threat_model_context(c, "cbmc_driver") == ""
+    assert render_threat_model_context(c, "feedback_distill") == ""
 
 
 def test_empty_note_is_noop_even_for_trust_role():
-    assert threat_model_context(_cfg(""), "spec_gen") == ""
-    assert threat_model_context(_cfg(""), "realism") == ""
+    assert render_threat_model_context(_cfg(""), "spec_gen") == ""
+    assert render_threat_model_context(_cfg(""), "realism") == ""
 
 
 def test_agentic_system_prompt_does_not_double_inject_note():
@@ -94,3 +94,55 @@ def test_complete_no_note_for_non_trust_role(monkeypatch):
 
     client.complete("BASE", "u", role="cbmc_driver")
     assert captured["sys"] == "BASE"  # untouched
+
+
+# --- attacker-surface-only auto-derivation -----------------------------------
+
+def test_derive_attacker_surface_prompt_forbids_trusted_assertions():
+    """The system prompt must instruct attacker-surface-ONLY (no trusted
+    assertions) — that's the property that makes auto-derivation safe."""
+    from bmc_agent.domain_analyzer import _ATTACK_SURFACE_SYSTEM_PROMPT as P
+    low = P.lower()
+    assert "only what is attacker-controlled" in low
+    assert "do not assert" in low and "trusted" in low
+    assert "attacker-controlled by default" in low
+
+
+def test_derive_attacker_surface_returns_model_text(tmp_path):
+    from bmc_agent import domain_analyzer as da
+
+    captured = {}
+
+    class FakeLLM:
+        def __init__(self):
+            self.config = Config()
+
+        def complete(self, system_prompt, user_prompt, **kw):
+            captured["sys"] = system_prompt
+            captured["role"] = kw.get("role")
+            return "## Attacker surface (auto-derived)\n- LLVMFuzzerTestOneInput(data,size): data/size attacker-controlled"
+
+    out = da.derive_attacker_surface(
+        source_dir=tmp_path, include_dirs=[],
+        file_parsed_c={}, file_expanded={}, llm=FakeLLM(),
+    )
+    assert "Attacker surface" in out
+    assert "attacker-controlled" in out
+    assert captured["role"] == "spec_gen"
+
+
+def test_derive_attacker_surface_swallows_errors(tmp_path):
+    from bmc_agent import domain_analyzer as da
+
+    class BoomLLM:
+        def __init__(self):
+            self.config = Config()
+
+        def complete(self, *a, **k):
+            raise RuntimeError("boom")
+
+    out = da.derive_attacker_surface(
+        source_dir=tmp_path, include_dirs=[],
+        file_parsed_c={}, file_expanded={}, llm=BoomLLM(),
+    )
+    assert out == ""  # failure is non-fatal; falls back to conservative default

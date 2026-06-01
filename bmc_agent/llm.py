@@ -69,19 +69,19 @@ _AGENTIC_INVESTIGATION = (
 
 
 # Roles that make a TRUST decision — whether an input is attacker-controlled or
-# caller/hardware-guaranteed. The threat-model note is injected only for these
-# (it's irrelevant to, e.g., feedback_distill or cbmc_driver). Spec_gen leads
-# because the precondition it writes IS the encoded trust boundary; getting it
-# right there means fewer masked bugs AND fewer spurious cex enter the pipeline.
-THREAT_MODEL_NOTE_ROLES = frozenset({
+# caller/hardware-guaranteed. The trust-boundary context is injected only for
+# these (it's irrelevant to, e.g., feedback_distill or cbmc_driver). Spec_gen
+# leads because the precondition it writes IS the encoded trust boundary; getting
+# it right there means fewer masked bugs AND fewer spurious cex downstream.
+THREAT_MODEL_CONTEXT_ROLES = frozenset({
     "spec_gen", "refinement", "classifier",
     "dynamic_repro", "dynval_triage", "realism",
 })
 
-# Standing conservative-default instruction shipped WITH every note. Shifting the
-# trust boundary left (into spec-gen) is only safe if the bias is "attacker
-# unless proven otherwise" — a too-generous "trusted" list would mask bugs at
-# generation time, before any gate could catch them.
+# Standing conservative-default instruction shipped WITH every context block.
+# Shifting the trust boundary left (into spec-gen) is only safe if the bias is
+# "attacker unless proven otherwise" — a too-generous "trusted" list would mask
+# bugs at generation time, before any gate could catch them.
 _THREAT_MODEL_CONSERVATIVE_RULE = (
     "\n\nDefault assumption: treat EVERY input (parameters, globals, data read "
     "from files/network/syscalls/devices) as ATTACKER-CONTROLLED unless the "
@@ -92,15 +92,16 @@ _THREAT_MODEL_CONSERVATIVE_RULE = (
 )
 
 
-def threat_model_context(config, role) -> str:
+def render_threat_model_context(config, role) -> str:
     """Return the trust-boundary block to append to a system prompt for ``role``,
-    or "" when there is nothing to add. Ungated by --agentic: the note is plain
-    context that helps flat and agentic backends alike. Injected only for the
-    trust-deciding roles in :data:`THREAT_MODEL_NOTE_ROLES`.
+    or "" when there is nothing to add. Ungated by --agentic: the context is
+    plain text that helps flat and agentic backends alike. Injected only for the
+    trust-deciding roles in :data:`THREAT_MODEL_CONTEXT_ROLES`. Reads the raw note
+    from ``config.threat_model_context`` (user-supplied or auto-derived).
     """
-    if role not in THREAT_MODEL_NOTE_ROLES:
+    if role not in THREAT_MODEL_CONTEXT_ROLES:
         return ""
-    note = (getattr(config, "threat_model_note", "") or "").strip()
+    note = (getattr(config, "threat_model_context", "") or "").strip()
     if not note:
         return ""
     return (
@@ -229,7 +230,7 @@ class LLMClient:
         # Trust-boundary note: injected centrally (not at call sites) so every
         # trust-deciding role gets it uniformly — including the unwrapped main
         # spec-gen path. No-op for other roles / when no note is configured.
-        system_prompt = system_prompt + threat_model_context(self.config, role)
+        system_prompt = system_prompt + render_threat_model_context(self.config, role)
 
         # Per-role routing. Resolve effective settings for this call -- when the
         # caller passes a role with an override, we use that backend (model,
@@ -760,7 +761,7 @@ def _add_complete_with_tools_to_llm():
         spec-gen / realism land on the openai path.
         """
         # Trust-boundary note — central injection, mirrors :meth:`complete`.
-        system_prompt = system_prompt + threat_model_context(self.config, role)
+        system_prompt = system_prompt + render_threat_model_context(self.config, role)
 
         # Per-role config swap (mirrors :meth:`complete`).
         role_settings = self.config.role_settings(role) if role else None

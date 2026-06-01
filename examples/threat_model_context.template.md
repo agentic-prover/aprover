@@ -1,7 +1,7 @@
 # Trust-boundary note — TEMPLATE
 
 Copy this file, fill it in for your target, and pass it with
-`--threat-model-note path/to/your_note.md`.
+`--threat-model-context path/to/your_note.md`.
 
 It is injected verbatim into every trust-deciding role (spec generation,
 refinement, classifier, dynamic validation, realism) so the **precondition is
