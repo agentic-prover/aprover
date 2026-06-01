@@ -128,7 +128,8 @@ def test_derive_attacker_surface_returns_model_text(tmp_path):
     )
     assert "Attacker surface" in out
     assert "attacker-controlled" in out
-    assert captured["role"] == "spec_gen"
+    # routed on a claude-code role so it reads code under hybrid --agentic
+    assert captured["role"] == "realism"
 
 
 def test_derive_attacker_surface_swallows_errors(tmp_path):

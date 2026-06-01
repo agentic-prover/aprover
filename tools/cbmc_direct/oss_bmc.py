@@ -105,6 +105,11 @@ def main():
                          "verify-dir (builds the cross-file call graph over the source dir, "
                          "so spec gen + refinement see callers in OTHER files). Slower "
                          "(whole-dir graph) but full cross-file accuracy.")
+    ap.add_argument("--agentic", action="store_true",
+                    help="run the bmc-agent engine in --agentic mode (claude-code agents do "
+                         "spec-gen/refinement/soundness/realism/harness-repair + auto-derive "
+                         "the attacker-surface trust-boundary note). Threaded into the "
+                         "verify-dir / verify / check subprocesses.")
     args = ap.parse_args()
 
     proj = CORPORA / args.project
@@ -150,9 +155,9 @@ def main():
     if args.check_functions:
         funcs = [f.strip() for f in args.check_functions.split(",") if f.strip()]
         if args.cross_file:
-            cross_file_check_flow(targets, out, env, cc, funcs, args.timeout)
+            cross_file_check_flow(targets, out, env, cc, funcs, args.timeout, agentic=args.agentic)
         else:
-            check_functions_flow(targets, out, env, cc, funcs, args.timeout)
+            check_functions_flow(targets, out, env, cc, funcs, args.timeout, agentic=args.agentic)
         return
 
     for e in targets:
@@ -180,7 +185,7 @@ def main():
     emit_hints(out)
 
 
-def cross_file_check_flow(targets, out: Path, env, cc: Path, funcs, timeout: int):
+def cross_file_check_flow(targets, out: Path, env, cc: Path, funcs, timeout: int, agentic: bool = False):
     """Cross-file audit-flagged path: run the flagged functions IN-PROCESS via
     `verify-dir --functions`, which builds the global cross-file call graph over
     the source dir, so spec gen + refinement see callers in OTHER files (unlike
@@ -199,6 +204,8 @@ def cross_file_check_flow(targets, out: Path, env, cc: Path, funcs, timeout: int
            "--source-dir", src_dir, "--driver", "ossfz",
            "--output", str(out / "_xfile"),
            "--functions", ",".join(funcs)]
+    if agentic:
+        cmd += ["--agentic"]
     for d in incs:
         cmd += ["--include-dir", d]
     for d in defs:
@@ -223,7 +230,7 @@ def cross_file_check_flow(targets, out: Path, env, cc: Path, funcs, timeout: int
         print(f"  (see {log} for full verify-dir output)")
 
 
-def check_functions_flow(targets, out: Path, env, cc: Path, funcs, timeout: int):
+def check_functions_flow(targets, out: Path, env, cc: Path, funcs, timeout: int, agentic: bool = False):
     """Run bmc-agent on JUST the audit-flagged functions (not whole files).
 
     Per file: gen specs (Phase 1) -> `check --function X` (Phase 2) for each
@@ -247,6 +254,9 @@ def check_functions_flow(targets, out: Path, env, cc: Path, funcs, timeout: int)
             common += ["--include-dir", d]
         for d in defs:
             common += ["-D", d]
+        # `--agentic` is accepted by `generate` (spec-gen) but NOT by `check`
+        # (pure CBMC). So apply it only to the generate cmd below.
+        gen_agentic = ["--agentic"] if agentic else []
 
         # Phase 1: generate specs for the file (needed before check) — but SKIP
         # if every requested function already has a spec on disk (check loads
@@ -256,7 +266,7 @@ def check_functions_flow(targets, out: Path, env, cc: Path, funcs, timeout: int)
         missing = [fn for fn in wanted if fn not in have]
         if missing:
             gen = (["uv", "run", "python", "-m", "bmc_agent.cli", "generate",
-                    "--source", src, "--driver", "ossfz", "--output", odir] + common)
+                    "--source", src, "--driver", "ossfz", "--output", odir] + gen_agentic + common)
             glog = out / f"{Path(src).stem}.gen.log"
             print(f"[oss-bmc] gen specs for {Path(src).name} "
                   f"({len(missing)} flagged fn missing specs) -> {glog.name}")

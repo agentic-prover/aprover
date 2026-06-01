@@ -257,16 +257,21 @@ def derive_attacker_surface(
         signatures=signatures,
     )
 
+    # Route on the "realism" role: under hybrid --agentic, spec_gen is pinned to
+    # the fast API (flat, no code-reading) while realism runs on claude-code —
+    # and this derivation is only worthwhile if it actually READS the code to map
+    # the attacker surface. realism is claude-code under both hybrid and full
+    # --agentic, so the investigation directive attaches in both.
     from bmc_agent.llm import agentic_system_prompt
     try:
         result = llm.complete(
             system_prompt=agentic_system_prompt(
-                llm.config, "spec_gen", _ATTACK_SURFACE_SYSTEM_PROMPT,
+                llm.config, "realism", _ATTACK_SURFACE_SYSTEM_PROMPT,
             ),
             user_prompt=user_prompt,
             max_tokens=1024,
             temperature=0.2,
-            role="spec_gen",
+            role="realism",
         )
     except Exception as exc:
         log.warning("Attacker-surface derivation failed (%s) — proceeding without", exc)
