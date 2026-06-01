@@ -424,6 +424,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.use_legacy_spec_gen = True
     if getattr(args, "enable_spec_refiner", False):
         config.enable_spec_refiner = True
+    if getattr(args, "enable_soundness_gate", False):
+        config.enable_soundness_gate = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
     # --no-<flag> escape hatches (override the default-on AI layers).
@@ -723,6 +725,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.use_legacy_spec_gen = True
     if getattr(args, "enable_spec_refiner", False):
         config.enable_spec_refiner = True
+    if getattr(args, "enable_soundness_gate", False):
+        config.enable_soundness_gate = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
     if getattr(args, "enable_phase_3e_triage", False):
@@ -1566,6 +1570,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Disable in-sweep realism-driven feedback loop.")
     ver.add_argument("--no-spec-refiner", action="store_true", default=False,
                      help="Disable in-sweep realism-feedback-driven spec refiner.")
+    ver.add_argument("--enable-soundness-gate", action="store_true", default=False,
+                     dest="enable_soundness_gate",
+                     help="Caller-grounded soundness gate on refinement: block a "
+                          "refiner clause that isn't caller-guaranteed (keeps the CEx "
+                          "as a real-bug lead instead of assuming it away). Best with "
+                          "--specs-via-claude-code --claude-code-agentic.")
     ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
                      help="Disable LLM inline-vs-stub advisor.")
     ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,
@@ -1771,6 +1781,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Disable in-sweep realism-driven feedback loop.")
     vd.add_argument("--no-spec-refiner", action="store_true", default=False,
                     help="Disable in-sweep realism-feedback-driven spec refiner.")
+    vd.add_argument("--enable-soundness-gate", action="store_true", default=False,
+                    dest="enable_soundness_gate",
+                    help="Caller-grounded soundness gate on refinement: block a "
+                         "refiner clause that isn't caller-guaranteed (keeps the CEx "
+                         "as a real-bug lead instead of assuming it away). Best with "
+                         "--specs-via-claude-code --claude-code-agentic.")
     vd.add_argument("--no-inlining-advisor", action="store_true", default=False,
                     help="Disable LLM inline-vs-stub advisor.")
     vd.add_argument("--no-spec-gen-tools", action="store_true", default=False,

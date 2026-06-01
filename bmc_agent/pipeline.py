@@ -13,6 +13,7 @@ Component labeling per AMC architecture:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,36 @@ from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.spec_generator import SpecGenerator
 
 logger = get_logger("pipeline")
+
+
+def _cited_caller_is_fabricated(cited: str, func_source_file: str) -> bool:
+    """True iff ``cited`` names a C source file (``*.c``/``*.h``) that does NOT
+    exist anywhere in the function's source tree — i.e. a hallucinated caller.
+
+    Used by the soundness gate to avoid trusting an UNSOUND verdict whose
+    implicated caller was invented (a failure mode of non-agentic backends that
+    can't actually read the callers). When ``cited`` names no file at all (e.g.
+    just a function name), we cannot disprove it, so return False (trust the
+    verdict). When the file basename is found in the tree, also False.
+    """
+    if not cited:
+        return False
+    m = re.search(r"([\w./-]+\.(?:c|h|cc|cpp|cxx))", cited)
+    if not m:
+        return False  # no file cited — nothing to falsify
+    basename = Path(m.group(1)).name
+    try:
+        root = Path(func_source_file).resolve().parent
+    except Exception:
+        return False
+    # Search the function's directory and one level up (covers src/ + include/).
+    for base in {root, root.parent}:
+        try:
+            if any(p.name == basename for p in base.rglob(basename)):
+                return False
+        except Exception:
+            continue
+    return True
 
 
 # CBMC property classes that would manifest as a runtime crash if the bug
@@ -2468,6 +2499,59 @@ class AMCPipeline:
                 func.name, getattr(proposal, "scope", "none"),
             )
             return validation, realism
+
+        # Caller-grounded soundness gate. The refiner's clause is derived from
+        # the function body and reliably excludes the cex — but that does NOT
+        # mean it's guaranteed by the callers. Applying a non-caller-guaranteed
+        # clause assumes the bug away (the libucl FP mechanism). Before we tighten
+        # the precondition, ask an (agentic) auditor whether the clause holds at
+        # every call site. Only a CONFIDENT "UNSOUND" blocks; UNKNOWN/SOUND/agent
+        # error all proceed, so a non-agentic backend degrades to the prior
+        # behaviour. Opt-in via config.enable_soundness_gate.
+        if getattr(self.config, "enable_soundness_gate", False):
+            from bmc_agent.agents.soundness import SoundnessAgent
+            sres = SoundnessAgent(self.config, self.llm).run(
+                func_info=func,
+                proposed_clause=proposal.added_clause,
+                rejected_cex=validation.counterexample,
+            )
+            if sres.ok and sres.output.is_unsound:
+                # Trust an UNSOUND block only if the cited caller is real. A
+                # non-agentic judge can hallucinate a caller (e.g. a file that
+                # doesn't exist) and produce a bogus UNSOUND that would re-flood
+                # a genuine FP as a lead. If the verdict cites a .c/.h file that
+                # isn't in the source tree, treat it as unverified and allow the
+                # refinement instead of blocking on a fabricated caller.
+                cited = sres.output.implicated_caller or ""
+                if _cited_caller_is_fabricated(cited, func.source_file):
+                    logger.info(
+                        "spec_refiner (%s): soundness gate returned UNSOUND but "
+                        "cited a caller that doesn't exist (%r) — treating as "
+                        "unverified and ALLOWING refinement",
+                        func.name, cited,
+                    )
+                else:
+                    logger.warning(
+                        "spec_refiner (%s): SOUNDNESS GATE blocked clause '%s' — "
+                        "NOT caller-guaranteed (%s). Keeping counterexample %s as "
+                        "a real-bug lead instead of refining it away.",
+                        func.name, proposal.added_clause,
+                        cited or sres.output.rationale[:160],
+                        getattr(validation.counterexample, "failing_property", "?"),
+                    )
+                    return validation, realism
+            if sres.ok:
+                logger.info(
+                    "spec_refiner (%s): soundness gate verdict=%s for clause "
+                    "'%s' — allowing refinement",
+                    func.name, sres.output.verdict, proposal.added_clause,
+                )
+            else:
+                logger.info(
+                    "spec_refiner (%s): soundness gate inconclusive (%s) — "
+                    "allowing refinement",
+                    func.name, (sres.error or "no output")[:120],
+                )
 
         refined_spec = refiner.apply_refinement_to_spec(
             spec=spec, proposal=proposal,

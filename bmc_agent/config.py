@@ -218,6 +218,19 @@ class Config:
     # defaults off so existing pipeline behaviour is unchanged.
     enable_spec_refiner: bool = True
 
+    # Caller-grounded soundness gate on refinement (Phase 3b). Before a
+    # refiner-proposed clause is AND'd into the precondition, an agentic
+    # SoundnessAgent checks whether the clause is actually guaranteed by every
+    # caller, or whether adopting it would MASK a reachable path. On a confident
+    # UNSOUND verdict the refinement is BLOCKED (the counterexample survives as a
+    # real-bug lead instead of being assumed away). UNKNOWN/SOUND let the
+    # refinement proceed, so a non-agentic backend (which returns UNKNOWN here)
+    # degrades to the pre-gate behaviour. Opt-in; pairs with
+    # ``--specs-via-claude-code --claude-code-agentic`` (the gate shares the
+    # refinement routing role). Toggle: ``--enable-soundness-gate`` /
+    # ``BMC_AGENT_ENABLE_SOUNDNESS_GATE``.
+    enable_soundness_gate: bool = False
+
     # LLM-driven inline-vs-stub advisor for callees that the mechanical
     # rule (file-local static, ≤30 LoC, no loops/alloc/recursion) marked
     # STUB. The advisor reconsiders them and may PROMOTE some to inline
@@ -699,6 +712,8 @@ class Config:
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
+            enable_soundness_gate=os.environ.get("BMC_AGENT_ENABLE_SOUNDNESS_GATE", "false").lower()
+            in ("1", "true", "yes"),
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
