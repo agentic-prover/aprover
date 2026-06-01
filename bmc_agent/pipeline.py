@@ -445,6 +445,7 @@ class AMCPipeline:
             domain_knowledge=domain_knowledge,
             source_text=preprocessed_source,
             cross_file_caller_contexts=cross_file_caller_contexts,
+            only_functions=only_functions,
         )
         logger.info("Phase 1 complete: %d specs generated", len(specs))
 

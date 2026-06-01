@@ -875,9 +875,14 @@ class SpecGenerator:
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
+        only_functions: Optional[set] = None,
     ) -> dict[str, Spec]:
         """
         Generate specs for all functions in source_file.
+
+        ``only_functions`` is accepted for drop-in compatibility with v2 (which
+        uses it to prune LLM spec-gen to targets + transitive callees); v1 does
+        not prune and ignores it.
 
         Parameters
         ----------

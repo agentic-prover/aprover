@@ -57,3 +57,51 @@ def test_generate_specs_parallel_within_layer(tmp_path, monkeypatch):
     # all functions generated, none lost in the parallel layer
     assert {"a", "b", "c"} <= set(specs.keys())
     assert {"a", "b", "c"} <= seen
+
+
+# --- (c) only_functions prunes LLM spec-gen to target + transitive callees ---
+
+def test_generate_specs_prunes_to_target_and_callees(tmp_path, monkeypatch):
+    from bmc_agent.spec_generator_v2 import SpecGeneratorV2
+    from bmc_agent.spec import Spec
+    from bmc_agent.config import Config
+    import threading
+
+    src = tmp_path / "m.c"
+    # caller -> target -> leaf ; plus an unrelated function `other`.
+    # Checking `target` needs specs for target + leaf only. `caller` (a CALLER
+    # of target) and `other` (unrelated) must NOT trigger an LLM call.
+    src.write_text(
+        "int leaf(void){return 1;}\n"
+        "int target(void){return leaf();}\n"
+        "int caller(void){return target();}\n"
+        "int other(void){return 7;}\n"
+    )
+
+    g = SpecGeneratorV2.__new__(SpecGeneratorV2)
+    g.config = Config()
+    g.store = type("S", (), {
+        "save_spec": lambda self, *a, **k: None,
+        "init_driver": lambda self, *a, **k: None,
+    })()
+    g.boundary_detector = None
+    g.corpus_paths = [src]
+    g.k_callers = 5
+    g._spec_system_prompt = "x"
+
+    seen = set()
+    lock = threading.Lock()
+
+    def fake_gen(func_info, parsed, all_specs_so_far, corpus_paths):
+        with lock:
+            seen.add(func_info.name)
+        return Spec(function_name=func_info.name, precondition="true", postcondition="true")
+
+    monkeypatch.setattr(g, "_generate_one", fake_gen)
+    specs = g.generate_specs(str(src), "drv", only_functions={"target"})
+
+    # returned dict is still complete (pipeline contract unchanged)
+    assert {"leaf", "target", "caller", "other"} <= set(specs.keys())
+    # but only target + its transitive callee got an actual LLM round-trip
+    assert seen == {"target", "leaf"}
+    assert "caller" not in seen and "other" not in seen

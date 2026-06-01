@@ -569,12 +569,23 @@ class SpecGeneratorV2:
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
+        only_functions: Optional[set] = None,
     ) -> dict[str, Spec]:
         """Generate specs for every function defined in ``source_file``.
 
         Output shape: same as v1 — dict mapping function name → Spec.
         Each Spec's ``evidence`` field is populated with per-clause
         provenance tags.
+
+        ``only_functions`` (optional) prunes the EXPENSIVE LLM spec-gen to the
+        verification targets plus their transitive callees — the only specs a
+        compositional check actually consumes (callees get stubbed by their
+        postconditions; callers are merely READ as grounding context, they need
+        no spec of their own). Every other defined function still appears in the
+        returned dict with a cheap trivial spec, so the pipeline's ``all_funcs``
+        and cross-file reachability are unchanged — only the wasted LLM calls on
+        callers / unrelated functions are skipped. When None, all functions are
+        generated (whole-module behaviour).
 
         ``cross_file_caller_contexts`` maps a function name to a list of
         ``(caller FunctionInfo, caller ParsedCFile)`` tuples for callers defined
@@ -629,6 +640,27 @@ class SpecGeneratorV2:
             raw_callees = parsed.call_graph.get(fn_name, set())
             filtered_call_graph[fn_name] = raw_callees & defined_funcs
 
+        # Prune the EXPENSIVE LLM spec-gen to {targets} ∪ transitive callees.
+        # `needed` == None means "generate all" (whole-module). Otherwise every
+        # function NOT in `needed` (callers, unrelated fns) gets a trivial spec
+        # instead of an LLM round-trip — they're never consumed by the check.
+        needed: Optional[set[str]] = None
+        if only_functions:
+            targets = {n for n in only_functions if n in defined_funcs}
+            needed = set(targets)
+            frontier = list(targets)
+            while frontier:
+                fn = frontier.pop()
+                for callee in filtered_call_graph.get(fn, set()):
+                    if callee not in needed:
+                        needed.add(callee)
+                        frontier.append(callee)
+            logger.info(
+                "v2: only_functions=%s → spec-gen pruned to %d of %d "
+                "functions (targets + transitive callees)",
+                sorted(targets), len(needed), len(defined_funcs),
+            )
+
         # Bottom-up layers: leaves first.
         layers = _build_bottom_up_layers(filtered_call_graph)
         logger.info("v2: bottom-up layers: %s", layers)
@@ -655,6 +687,11 @@ class SpecGeneratorV2:
             logger.info("v2: layer %d/%d: %s", layer_idx + 1, len(layers), layer)
             todo = []
             for fn_name in layer:
+                if needed is not None and fn_name not in needed:
+                    # Not a target nor a transitive callee — never consumed by
+                    # the check; skip the LLM round-trip.
+                    all_specs[fn_name] = _trivial_spec(fn_name, "pruned_not_needed")
+                    continue
                 func_info = parsed.get_function_info(fn_name)
                 if func_info is None:
                     all_specs[fn_name] = _trivial_spec(fn_name, "missing_info")
