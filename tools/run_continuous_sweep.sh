@@ -33,7 +33,7 @@ fi
 # fully-initialized TIFF* (mmap/readproc/flags), so permissive harnesses
 # manufacture impossible states (all 12 of its "confirmed+realistic" candidates
 # were adjudicated FALSE_POSITIVE on 2026-05-29).
-PROJECTS=(cmark brotli bzip2 zstd expat libpng)
+PROJECTS=(libtiff expat libpng zstd cmark bzip2)
 DRY_RUN_FLAG=""
 if [[ "${1:-}" == "--dry-run" ]]; then
     DRY_RUN_FLAG="--dry-run"
