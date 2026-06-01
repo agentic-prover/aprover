@@ -6285,6 +6285,11 @@ def _strip_glibc_internal_struct_bodies(
         # on these false-positives project structs.
         if n not in _SYSTEM_TYPEDEF_NAMES_CBMC_PROVIDES
     }
+    # Names of struct/union tags whose bodies we strip during this pass, in
+    # source order. Feeds the by-value struct-name cascade below: a struct that
+    # embeds one of these BY VALUE becomes an incomplete-type error once the
+    # member's body is gone, so it must be stripped too.
+    stripped_struct_names: set[str] = set()
 
     # Strip struct definitions whose names match either:
     #   * A glibc-internal prefix (_IO_, __, _G_), OR
@@ -6434,11 +6439,9 @@ def _strip_glibc_internal_struct_bodies(
             #       after libarchive cab.c was blocked by zlib's
             #       ``struct gzFile_s { off64_t pos; }``.
             should_strip = _struct_name_is_glibc(name)
-            if not should_strip and cascade_stripped:
+            if not should_strip and (cascade_stripped or stripped_struct_names):
                 # Peek at the body: scan from ``k`` (the ``{``) to its
-                # matching ``}`` and check whether any token in the body
-                # is in cascade_stripped. We do this by finding the
-                # matching brace first.
+                # matching ``}`` so we can inspect the field declarations.
                 _peek_m = k
                 _peek_depth = 0
                 while _peek_m < n:
@@ -6453,9 +6456,27 @@ def _strip_glibc_internal_struct_bodies(
                     _peek_m += 1
                 if _peek_depth == 0:
                     _body = text[k:_peek_m]
-                    _body_tokens = set(re.findall(r'\b\w+\b', _body))
-                    if _body_tokens & cascade_stripped:
+                    # (a) typedef cascade: body references a stripped typedef.
+                    if cascade_stripped and (
+                        set(re.findall(r'\b\w+\b', _body)) & cascade_stripped
+                    ):
                         should_strip = True
+                    # (b) struct-name cascade: body has a BY-VALUE member of a
+                    # struct/union whose body we already stripped. ``struct X
+                    # name;`` matches; a pointer member ``struct X *name;`` does
+                    # NOT (an identifier, not ``*``, must follow the tag) — a
+                    # pointer to an incomplete type is fine. (libucl ucl_parser.c,
+                    # 2026-06-01: ``struct _xstate`` embeds ``struct _fpstate``
+                    # &c. by value; the leaf fpstate structs were typedef-cascade
+                    # stripped but _xstate was kept -> "incomplete type not
+                    # permitted here".)
+                    if not should_strip and stripped_struct_names:
+                        for _mm in re.finditer(
+                            r"\b(?:struct|union)\s+(\w+)\s+\w", _body
+                        ):
+                            if _mm.group(1) in stripped_struct_names:
+                                should_strip = True
+                                break
             if not should_strip:
                 result.append(text[i])
                 i += 1
@@ -6513,6 +6534,7 @@ def _strip_glibc_internal_struct_bodies(
             # way — CBMC sees the harness's forward decl and is free to
             # pin its own body.
             result.append(f"{kw} {name}; /* glibc-internal body stripped */")
+            stripped_struct_names.add(name)
             i = tail
             continue
         result.append(text[i])
