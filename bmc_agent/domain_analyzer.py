@@ -160,12 +160,14 @@ def analyze_codebase(
         signatures=signatures,
     )
 
+    from bmc_agent.llm import agentic_system_prompt
     try:
         result = llm.complete(
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=agentic_system_prompt(llm.config, "spec_gen", _SYSTEM_PROMPT),
             user_prompt=user_prompt,
             max_tokens=1024,
             temperature=0.2,
+            role="spec_gen",
         )
     except Exception as exc:
         log.warning("Domain knowledge analysis failed (%s) — proceeding without", exc)

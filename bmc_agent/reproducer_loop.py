@@ -175,9 +175,13 @@ def _llm_generate(
     max_tokens: int = 4096,
 ) -> Optional[str]:
     """Single LLM call → C source. Returns None on UNREPRODUCIBLE or bad output."""
+    from bmc_agent.llm import agentic_system_prompt
     try:
         raw = llm.complete(
-            "You are a security-audit helper that produces compilable C reproducers.",
+            agentic_system_prompt(
+                llm.config, "realism",
+                "You are a security-audit helper that produces compilable C reproducers.",
+            ),
             prompt,
             max_tokens=max_tokens,
             thinking=False,

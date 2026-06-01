@@ -149,9 +149,13 @@ def generate_reproducer(
         fn_body=fn_body,
     )
 
+    from bmc_agent.llm import agentic_system_prompt
     try:
         raw = llm.complete(
-            "You are a security-audit helper that produces compilable C reproducers.",
+            agentic_system_prompt(
+                llm.config, "realism",
+                "You are a security-audit helper that produces compilable C reproducers.",
+            ),
             prompt,
             max_tokens=4096,
             thinking=False,

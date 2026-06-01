@@ -275,7 +275,11 @@ class SpecConsistencyChecker:
         )
 
         try:
-            response = self._llm.complete(system_prompt, user_prompt)
+            from bmc_agent.llm import agentic_system_prompt
+            response = self._llm.complete(
+                agentic_system_prompt(self._llm.config, "spec_gen", system_prompt),
+                user_prompt, role="spec_gen",
+            )
             parsed = json.loads(response.strip())
             consistent = bool(parsed.get("consistent", True))
             reasoning = parsed.get("reasoning", "")
@@ -366,8 +370,13 @@ class ExecutableSanityChecker:
         )
 
         try:
+            from bmc_agent.llm import agentic_system_prompt
             response = self._llm.complete(
-                "You are a formal verification expert for C programs.", prompt
+                agentic_system_prompt(
+                    self._llm.config, "spec_gen",
+                    "You are a formal verification expert for C programs.",
+                ),
+                prompt, role="spec_gen",
             )
             parsed = json.loads(response.strip())
             tests = parsed.get("tests", [])

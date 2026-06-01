@@ -58,6 +58,40 @@ def _strip_reasoning_blocks(text: str) -> str:
     return text
 
 
+_AGENTIC_INVESTIGATION = (
+    "\n\n[Agentic mode] You are running as an agent with read-only tools "
+    "(Read, Grep, Glob) over the project source ({dirs}). BEFORE you answer, "
+    "USE them to ground your response in the REAL code — read the relevant "
+    "function bodies, callers, callees, struct/type definitions and headers "
+    "rather than guessing from this prompt. Never cite a function, caller, "
+    "type or file you have not actually read."
+)
+
+
+def agentic_system_prompt(config, role, system_prompt: str) -> str:
+    """Augment ``system_prompt`` with the investigation directive when this
+    ``role`` runs on the claude-code agent with tools (i.e. under --agentic /
+    ``claude_code_agentic``). No-op otherwise — so flat LLM call sites become
+    *investigating* agents under --agentic by wrapping their system prompt with
+    this, exactly like BaseAgent does for the agent classes.
+    """
+    if not getattr(config, "claude_code_agentic", False):
+        return system_prompt
+    try:
+        prov = ""
+        if role:
+            prov = (config.role_settings(role) or {}).get("provider") or ""
+        if not prov:
+            prov = config.resolved_provider()
+    except Exception:
+        return system_prompt
+    if prov != "claude-code":
+        return system_prompt
+    dirs = ", ".join(getattr(config, "claude_code_add_dirs", None) or []) \
+        or "the project source tree"
+    return system_prompt + _AGENTIC_INVESTIGATION.format(dirs=dirs)
+
+
 class LLMError(Exception):
     """Raised when the LLM client cannot fulfil a request."""
 

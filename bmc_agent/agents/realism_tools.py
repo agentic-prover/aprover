@@ -90,6 +90,12 @@ class RealismToolsAgent(BaseAgent[RealismCheckResult]):
         return user_prompt
 
     def _call_llm(self, prompt: str) -> tuple[str, Optional[str]]:
+        # Under --agentic, run on the Claude Code agent (its own Read/Grep/Glob
+        # + investigation framing) instead of bmc's in-process tool loop. The
+        # bmc-tool-call trace isn't captured on this path yet (stream-json
+        # follow-up); downstream tolerates an absent trace.
+        if self._agent_runs_on_claude_code():
+            return super()._call_llm(prompt)
         # Override the default single-call path with the tool-use loop.
         # Builds tools on-demand using the per-call parsed_file +
         # all_specs context. Stashes the full ToolUseResult on the

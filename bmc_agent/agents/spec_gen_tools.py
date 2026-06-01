@@ -86,6 +86,10 @@ class SpecGenWithToolsAgent(BaseAgent[Spec]):
         return prompt
 
     def _call_llm(self, prompt: str) -> tuple[str, Optional[str]]:
+        # Under --agentic, run on the Claude Code agent instead of bmc's
+        # in-process tool loop (trace not captured here yet — stream-json TODO).
+        if self._agent_runs_on_claude_code():
+            return super()._call_llm(prompt)
         from bmc_agent.llm import LLMError
         from bmc_agent.spec_gen_tools import (
             SpecToolContext, build_spec_gen_tools,
