@@ -68,12 +68,60 @@ _AGENTIC_INVESTIGATION = (
 )
 
 
+# Roles that make a TRUST decision — whether an input is attacker-controlled or
+# caller/hardware-guaranteed. The threat-model note is injected only for these
+# (it's irrelevant to, e.g., feedback_distill or cbmc_driver). Spec_gen leads
+# because the precondition it writes IS the encoded trust boundary; getting it
+# right there means fewer masked bugs AND fewer spurious cex enter the pipeline.
+THREAT_MODEL_NOTE_ROLES = frozenset({
+    "spec_gen", "refinement", "classifier",
+    "dynamic_repro", "dynval_triage", "realism",
+})
+
+# Standing conservative-default instruction shipped WITH every note. Shifting the
+# trust boundary left (into spec-gen) is only safe if the bias is "attacker
+# unless proven otherwise" — a too-generous "trusted" list would mask bugs at
+# generation time, before any gate could catch them.
+_THREAT_MODEL_CONSERVATIVE_RULE = (
+    "\n\nDefault assumption: treat EVERY input (parameters, globals, data read "
+    "from files/network/syscalls/devices) as ATTACKER-CONTROLLED unless the "
+    "note above, a caller, or hardware provably guarantees otherwise. Never add "
+    "a precondition that bounds or validates attacker-controlled data — that "
+    "masks the very bugs we are looking for. Only encode as a precondition the "
+    "structural validity that a caller genuinely establishes."
+)
+
+
+def threat_model_context(config, role) -> str:
+    """Return the trust-boundary block to append to a system prompt for ``role``,
+    or "" when there is nothing to add. Ungated by --agentic: the note is plain
+    context that helps flat and agentic backends alike. Injected only for the
+    trust-deciding roles in :data:`THREAT_MODEL_NOTE_ROLES`.
+    """
+    if role not in THREAT_MODEL_NOTE_ROLES:
+        return ""
+    note = (getattr(config, "threat_model_note", "") or "").strip()
+    if not note:
+        return ""
+    return (
+        "\n\n## Trust boundary for this target\n"
+        + note
+        + _THREAT_MODEL_CONSERVATIVE_RULE
+    )
+
+
 def agentic_system_prompt(config, role, system_prompt: str) -> str:
     """Augment ``system_prompt`` with the investigation directive when this
     ``role`` runs on the claude-code agent with tools (i.e. under --agentic /
     ``claude_code_agentic``). No-op otherwise — so flat LLM call sites become
     *investigating* agents under --agentic by wrapping their system prompt with
     this, exactly like BaseAgent does for the agent classes.
+
+    NOTE: the trust-boundary note is NOT added here — it is injected centrally
+    in :meth:`LLM.complete` / :meth:`LLM.complete_with_tools` (keyed by role) so
+    it reaches every trust-deciding call site uniformly, including the ones that
+    do not wrap their prompt with this helper (e.g. the main spec-gen path).
+    Adding it here too would double-inject at wrapped sites.
     """
     if not getattr(config, "claude_code_agentic", False):
         return system_prompt
@@ -178,6 +226,11 @@ class LLMClient:
         LLMError
             On permanent failure or missing API key.
         """
+        # Trust-boundary note: injected centrally (not at call sites) so every
+        # trust-deciding role gets it uniformly — including the unwrapped main
+        # spec-gen path. No-op for other roles / when no note is configured.
+        system_prompt = system_prompt + threat_model_context(self.config, role)
+
         # Per-role routing. Resolve effective settings for this call -- when the
         # caller passes a role with an override, we use that backend (model,
         # base_url, api_key, provider) for THIS one call. Implementation-wise,
@@ -706,6 +759,9 @@ def _add_complete_with_tools_to_llm():
         raises NotImplementedError. Use a per-role override to ensure
         spec-gen / realism land on the openai path.
         """
+        # Trust-boundary note — central injection, mirrors :meth:`complete`.
+        system_prompt = system_prompt + threat_model_context(self.config, role)
+
         # Per-role config swap (mirrors :meth:`complete`).
         role_settings = self.config.role_settings(role) if role else None
         saved_settings = None

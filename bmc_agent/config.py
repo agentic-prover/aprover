@@ -497,6 +497,17 @@ class Config:
     # "functional" : spec correctness only, no extra CBMC checks.
     threat_model: str = "security"
 
+    # Free-text trust-boundary note (distinct from the ``threat_model`` mode
+    # enum above). Describes, for THIS target, which inputs are
+    # attacker-controlled vs. caller/hardware-guaranteed — the project's trust
+    # boundary in prose. Injected into every trust-deciding role (spec_gen,
+    # refinement, classifier, dynamic_repro, dynval_triage, realism) so the
+    # precondition is shaped correctly AT GENERATION TIME rather than patched
+    # post-hoc by the realism filter. Empty = no note (roles fall back to the
+    # conservative default: treat inputs as attacker-controlled). See
+    # ``llm.threat_model_context``.
+    threat_model_note: str = ""
+
     # Lite mode: skip LLM spec_gen entirely. Every function gets a permissive
     # (pre=post=true) spec, the harness inputs are nondet (subject to the
     # global harness flags), and CBMC's built-in checks (--bounds-check,
@@ -758,5 +769,6 @@ class Config:
             in ("1", "true", "yes"),
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
+            threat_model_note=(os.environ.get("BMC_AGENT_THREAT_MODEL_NOTE") or "").strip(),
             llm_role_overrides=_parse_role_overrides_env(),
         )
