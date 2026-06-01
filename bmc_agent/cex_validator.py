@@ -1385,12 +1385,24 @@ class CExValidator:
                 guard_method = "cbmc"
                 logger.info("Soundness guard (CBMC): safe=%s for '%s'", is_safe, func_name)
             else:
-                is_safe = self._check_over_refinement(
+                # Agentic caller-grounded guard (opt-in) replaces the weak
+                # string-compare when it can decide; reads the real callers.
+                agentic_guard = self._agentic_soundness_guard(
+                    func=func,
                     new_precondition=new_precondition,
-                    caller_expected_preconditions=caller_expected_preconditions,
+                    counterexample=counterexample,
                 )
-                guard_method = "llm"
-                logger.info("Soundness guard (LLM): safe=%s for '%s'", is_safe, func_name)
+                if agentic_guard is not None:
+                    is_safe = agentic_guard
+                    guard_method = "agentic"
+                    logger.info("Soundness guard (agentic): safe=%s for '%s'", is_safe, func_name)
+                else:
+                    is_safe = self._check_over_refinement(
+                        new_precondition=new_precondition,
+                        caller_expected_preconditions=caller_expected_preconditions,
+                    )
+                    guard_method = "llm"
+                    logger.info("Soundness guard (LLM): safe=%s for '%s'", is_safe, func_name)
 
             refinement_history.append({
                 "iteration": iteration + 1,
@@ -1712,6 +1724,64 @@ class CExValidator:
             second[:80],
         )
         return second
+
+    def _agentic_soundness_guard(
+        self,
+        func: FunctionInfo,
+        new_precondition: str,
+        counterexample: Counterexample,
+    ) -> "bool | None":
+        """Caller-grounded soundness check on a proposed (tighter) precondition.
+
+        Upgrades the over-refinement guard: instead of comparing the new
+        precondition against caller *spec strings*, an agentic ``SoundnessAgent``
+        (claude-code with Read/Grep, when routed there) reads the actual call
+        sites and decides whether the tightening is caller-guaranteed.
+
+        Returns:
+          * True  — SOUND (caller-guaranteed): the tightening is safe to accept.
+          * False — UNSOUND (a caller can violate it): over-refinement; reject
+                    so the counterexample survives as a real-bug lead.
+          * None  — disabled / UNKNOWN / fabricated-caller / error: defer to the
+                    CBMC and string-based guards (graceful degradation; a
+                    non-agentic backend returns UNKNOWN here).
+        """
+        if not getattr(self.config, "enable_soundness_gate", False):
+            return None
+        try:
+            from bmc_agent.agents.soundness import SoundnessAgent, caller_is_fabricated
+            res = SoundnessAgent(self.config, self.llm).run(
+                func_info=func,
+                proposed_clause=new_precondition,
+                rejected_cex=counterexample,
+            )
+            if not res.ok or res.output is None:
+                return None
+            v = res.output
+            if v.verdict == "SOUND":
+                return True
+            if v.verdict == "UNSOUND":
+                src = getattr(func, "source_file", "") or ""
+                if caller_is_fabricated(v.implicated_caller, src):
+                    logger.info(
+                        "agentic soundness guard [%s]: UNSOUND but cited caller "
+                        "%r not found in tree — deferring",
+                        func.name, v.implicated_caller,
+                    )
+                    return None
+                logger.info(
+                    "agentic soundness guard [%s]: UNSOUND (caller %s) — "
+                    "over-refinement, keeping counterexample as a lead",
+                    func.name, v.implicated_caller or (v.rationale or "")[:80],
+                )
+                return False
+            return None  # UNKNOWN → defer
+        except Exception as exc:
+            logger.warning(
+                "agentic soundness guard [%s] error: %s — deferring",
+                getattr(func, "name", "?"), exc,
+            )
+            return None
 
     def _check_over_refinement_with_cbmc(
         self,

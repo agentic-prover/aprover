@@ -89,3 +89,73 @@ def test_enable_soundness_gate_env(monkeypatch):
     monkeypatch.setenv("BMC_AGENT_ENABLE_SOUNDNESS_GATE", "1")
     from bmc_agent.config import Config
     assert Config.from_env().enable_soundness_gate is True
+
+
+# --- cex_validator over-refinement guard: agentic upgrade -------------------
+
+class _FakeAgentResult:
+    def __init__(self, output):
+        self.output = output
+        self.error = None
+    @property
+    def ok(self):
+        return self.output is not None
+
+
+def _validator(enable_gate):
+    from bmc_agent.cex_validator import CExValidator
+    v = CExValidator.__new__(CExValidator)   # bypass __init__
+    class _Cfg: pass
+    cfg = _Cfg(); cfg.enable_soundness_gate = enable_gate
+    v.config = cfg
+    v.llm = None
+    return v
+
+
+class _Func:
+    def __init__(self, source_file):
+        self.name = "f"
+        self.source_file = source_file
+
+
+def _patch_agent(monkeypatch, verdict, caller=""):
+    from bmc_agent.agents.soundness import SoundnessVerdict
+    out = SoundnessVerdict(verdict=verdict, implicated_caller=caller, rationale="r")
+    class _FakeAgent:
+        def __init__(self, *a, **k): pass
+        def run(self, **k): return _FakeAgentResult(out)
+    monkeypatch.setattr("bmc_agent.agents.soundness.SoundnessAgent", _FakeAgent)
+
+
+def test_guard_disabled_returns_none():
+    v = _validator(enable_gate=False)
+    assert v._agentic_soundness_guard(func=_Func("/x/a.c"), new_precondition="p", counterexample=None) is None
+
+
+def test_guard_sound_is_safe(monkeypatch):
+    _patch_agent(monkeypatch, "SOUND")
+    v = _validator(enable_gate=True)
+    assert v._agentic_soundness_guard(func=_Func("/x/a.c"), new_precondition="p", counterexample=None) is True
+
+
+def test_guard_unsound_real_caller_is_unsafe(monkeypatch, tmp_path):
+    src = tmp_path / "a.c"; src.write_text("int f(void){return 0;}\n")
+    (tmp_path / "caller.c").write_text("void g(void){}\n")
+    _patch_agent(monkeypatch, "UNSOUND", caller="caller.c:3")
+    v = _validator(enable_gate=True)
+    # real cited caller -> trust the UNSOUND -> not safe (False)
+    assert v._agentic_soundness_guard(func=_Func(str(src)), new_precondition="p", counterexample=None) is False
+
+
+def test_guard_unsound_fabricated_caller_defers(monkeypatch, tmp_path):
+    src = tmp_path / "a.c"; src.write_text("int f(void){return 0;}\n")
+    _patch_agent(monkeypatch, "UNSOUND", caller="ghost_lexer.c:42")
+    v = _validator(enable_gate=True)
+    # fabricated cited caller -> don't trust -> defer (None)
+    assert v._agentic_soundness_guard(func=_Func(str(src)), new_precondition="p", counterexample=None) is None
+
+
+def test_guard_unknown_defers(monkeypatch):
+    _patch_agent(monkeypatch, "UNKNOWN")
+    v = _validator(enable_gate=True)
+    assert v._agentic_soundness_guard(func=_Func("/x/a.c"), new_precondition="p", counterexample=None) is None

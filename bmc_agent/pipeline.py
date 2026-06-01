@@ -37,33 +37,11 @@ logger = get_logger("pipeline")
 
 
 def _cited_caller_is_fabricated(cited: str, func_source_file: str) -> bool:
-    """True iff ``cited`` names a C source file (``*.c``/``*.h``) that does NOT
-    exist anywhere in the function's source tree — i.e. a hallucinated caller.
-
-    Used by the soundness gate to avoid trusting an UNSOUND verdict whose
-    implicated caller was invented (a failure mode of non-agentic backends that
-    can't actually read the callers). When ``cited`` names no file at all (e.g.
-    just a function name), we cannot disprove it, so return False (trust the
-    verdict). When the file basename is found in the tree, also False.
-    """
-    if not cited:
-        return False
-    m = re.search(r"([\w./-]+\.(?:c|h|cc|cpp|cxx))", cited)
-    if not m:
-        return False  # no file cited — nothing to falsify
-    basename = Path(m.group(1)).name
-    try:
-        root = Path(func_source_file).resolve().parent
-    except Exception:
-        return False
-    # Search the function's directory and one level up (covers src/ + include/).
-    for base in {root, root.parent}:
-        try:
-            if any(p.name == basename for p in base.rglob(basename)):
-                return False
-        except Exception:
-            continue
-    return True
+    """Thin wrapper around ``agents.soundness.caller_is_fabricated`` (kept here
+    for the soundness gate's call site + tests). True iff ``cited`` names a
+    ``*.c``/``*.h`` that doesn't exist anywhere in the function's source tree."""
+    from bmc_agent.agents.soundness import caller_is_fabricated
+    return caller_is_fabricated(cited, func_source_file)
 
 
 # CBMC property classes that would manifest as a runtime crash if the bug

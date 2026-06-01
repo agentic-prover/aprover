@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 from bmc_agent.agents.base import BaseAgent
@@ -99,6 +100,36 @@ Reply with ONLY a JSON object:
   "implicated_caller": "<file:line or function name of a caller that can violate the clause, else empty>",
   "rationale": "<one or two sentences citing the specific call sites you examined>"}}
 """
+
+
+def caller_is_fabricated(cited: str, source_file: str) -> bool:
+    """True iff ``cited`` names a C source file (``*.c``/``*.h``) that does NOT
+    exist anywhere in the function's source tree — i.e. a hallucinated caller.
+
+    Used to avoid trusting an UNSOUND verdict whose implicated caller was
+    invented (a failure mode of non-agentic backends that can't actually read
+    the callers). When ``cited`` names no file at all (e.g. just a function
+    name) we cannot disprove it, so return False (trust the verdict). When the
+    file basename is found in the tree, also False.
+    """
+    if not cited:
+        return False
+    m = re.search(r"([\w./-]+\.(?:c|h|cc|cpp|cxx))", cited)
+    if not m:
+        return False  # no file cited — nothing to falsify
+    basename = Path(m.group(1)).name
+    try:
+        root = Path(source_file).resolve().parent
+    except Exception:
+        return False
+    # Search the function's directory and one level up (covers src/ + include/).
+    for base in {root, root.parent}:
+        try:
+            if any(p.name == basename for p in base.rglob(basename)):
+                return False
+        except Exception:
+            continue
+    return True
 
 
 def _extract_json(text: str) -> Optional[dict]:
