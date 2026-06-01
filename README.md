@@ -125,6 +125,33 @@ ANTHROPIC_API_KEY=sk-... uv run uvicorn web.server:app --port 7860
 
 Deploy as a Hugging Face Space with `web/deploy_to_space.sh` — see `web/README.md` for the full guide.
 
+### Agentic mode and post-hoc components
+
+`--agentic` makes every LLM step an investigating agent (Claude Code by default;
+re-point any one with `BMC_AGENT_LLM_<ROLE>_PROVIDER`), while the conventional core
+(tree-sitter parse, CBMC, deterministic harness translation, compile+run) stays
+conventional. Under `--agentic` the **dynamic reproducer is on** and the **LLM
+judgment layers are off by default** and independently opt-in:
+
+```bash
+# spec-gen + refinement + soundness gate + harness-repair are agentic;
+# classifier / realism / triage are OFF (dynamic reproducer is the gate)
+uv run bmc-agent verify-dir --source-dir SRC --driver d --output OUT --agentic
+# opt any judgment layer back in (independent of each other):
+#   --enable-classifier   --enable-realism-check   --enable-triage
+# lean batch variant (spec-gen stays on the fast default LLM): --agentic-refine
+```
+
+The classifier, realism and triage components also run **independently on a
+finished run's artifacts** (`<output>/<driver>/<fn>/…`), so you can apply them
+after the fact (and pick the backend per the same role env vars):
+
+| Component | Post-hoc tool |
+|---|---|
+| Classifier / judge | `uv run bmc-agent judge-dir --report-dir OUT …` |
+| Realism audit | `uv run python scripts/rerun_realism.py …` |
+| Triage (UNRESOLVED CExs) | `uv run python scripts/triage_unresolved.py --sweep-dir OUT --driver d …` |
+
 ## Configuration
 
 All settings are available as environment variables or `Config` dataclass fields.
