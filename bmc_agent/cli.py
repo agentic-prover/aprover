@@ -34,11 +34,15 @@ def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
 
 
 def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
-    """Apply the --provider / --specs-via-claude-code / --claude-code-agentic flags.
+    """Apply the agentic / provider-routing flags.
 
     These are CLI conveniences over the existing env-var routing
     (``BMC_AGENT_LLM_PROVIDER`` and ``BMC_AGENT_LLM_<ROLE>_PROVIDER``):
 
+      --agentic                  UMBRELLA: turn on the whole agentic stack —
+                                 equivalent to --specs-via-claude-code +
+                                 --claude-code-agentic + --enable-soundness-gate
+                                 + --enable-agentic-harness-repair.
       --provider X               sets the global default provider for every role.
       --specs-via-claude-code    routes ONLY the spec_gen + refinement roles to
                                  the Claude Code CLI provider (your local
@@ -47,16 +51,23 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
       --claude-code-agentic      lets the claude-code provider use read-only
                                  tools (Read/Grep/Glob) to explore the source
                                  tree while drafting/refining, instead of a
-                                 one-shot text completion (Step 2 behaviour).
+                                 one-shot text completion.
 
     Merges (rather than replaces) any role override already present from env so
     explicit ``BMC_AGENT_LLM_*`` settings still compose.
     """
+    agentic = getattr(args, "agentic", False)
+
     provider = getattr(args, "provider", "") or ""
     if provider:
         config.llm_provider = provider  # type: ignore[attr-defined]
 
-    if getattr(args, "specs_via_claude_code", False):
+    # --agentic implies specs+refinement via claude-code, tools-on, and both
+    # agentic guards. Individual flags still work on their own.
+    want_specs_cc = agentic or getattr(args, "specs_via_claude_code", False)
+    want_cc_tools = agentic or getattr(args, "claude_code_agentic", False)
+
+    if want_specs_cc:
         overrides = getattr(config, "llm_role_overrides", None)
         if overrides is None:
             overrides = {}
@@ -66,7 +77,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
             merged["provider"] = "claude-code"
             overrides[role] = merged
 
-    if getattr(args, "claude_code_agentic", False):
+    if want_cc_tools:
         config.claude_code_agentic = True  # type: ignore[attr-defined]
         # Scope the read-only file access to the source tree: the source file's
         # directory + any --include-dir. cwd is always readable regardless.
@@ -79,6 +90,12 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # de-dupe, preserve order
         seen: set[str] = set()
         config.claude_code_add_dirs = [d for d in dirs if not (d in seen or seen.add(d))]  # type: ignore[attr-defined]
+
+    if agentic:
+        # The verify/verify-dir-only guards. Harmless on commands that don't use
+        # them (generate, etc.) — the fields just go unread.
+        config.enable_soundness_gate = True  # type: ignore[attr-defined]
+        config.enable_agentic_harness_repair = True  # type: ignore[attr-defined]
 
 
 def _print_ai_layers(config) -> None:
@@ -1314,6 +1331,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Shared provider-routing arguments (CLI sugar over BMC_AGENT_LLM_*_PROVIDER).
     def _add_provider_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--agentic",
+            action="store_true",
+            default=False,
+            dest="agentic",
+            help=(
+                "Umbrella: turn on the full agentic stack — route spec gen + "
+                "refinement to the Claude Code CLI with read-only code-exploration "
+                "tools, enable the caller-grounded soundness gate on refinement, "
+                "and the agentic harness-repair fallback on CBMC build errors. "
+                "Equivalent to --specs-via-claude-code --claude-code-agentic "
+                "--enable-soundness-gate --enable-agentic-harness-repair."
+            ),
+        )
         p.add_argument(
             "--provider",
             default="",

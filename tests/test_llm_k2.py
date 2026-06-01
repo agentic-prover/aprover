@@ -903,3 +903,24 @@ def test_claude_code_agentic_env(monkeypatch):
     monkeypatch.setenv("BMC_AGENT_CLAUDE_CODE_AGENTIC", "1")
     from bmc_agent.config import Config
     assert Config.from_env().claude_code_agentic is True
+
+
+def test_agentic_umbrella_flag(monkeypatch):
+    """--agentic turns on the whole stack: specs+refinement -> claude-code,
+    tools-on, soundness gate, and harness-repair fallback."""
+    for k in ("BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER",
+              "BMC_AGENT_ENABLE_SOUNDNESS_GATE", "BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR",
+              "BMC_AGENT_CLAUDE_CODE_AGENTIC"):
+        monkeypatch.delenv(k, raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args
+    from bmc_agent.config import Config
+    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic"])
+    cfg = Config.from_env()
+    _apply_provider_args(cfg, a)
+    assert cfg.role_settings("spec_gen")["provider"] == "claude-code"
+    assert cfg.role_settings("refinement")["provider"] == "claude-code"
+    assert cfg.claude_code_agentic is True
+    assert cfg.enable_soundness_gate is True
+    assert cfg.enable_agentic_harness_repair is True
+    # non-spec roles stay on the default
+    assert cfg.role_settings("realism")["provider"] == cfg.llm_provider
