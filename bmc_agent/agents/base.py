@@ -203,17 +203,54 @@ class BaseAgent(abc.ABC, Generic[T]):
         """
         return {}
 
+    #: Appended to the system prompt when this agent runs on the claude-code
+    #: agent with tools (i.e. under --agentic / claude_code_agentic). Turns a
+    #: routed-but-flat call into an *investigating* agent: it must read the real
+    #: code rather than answer from the prompt.
+    _AGENTIC_INVESTIGATION = (
+        "\n\n[Agentic mode] You are running as an agent with read-only tools "
+        "(Read, Grep, Glob) over the project source ({dirs}). BEFORE you answer, "
+        "USE them to ground your response in the REAL code — read the relevant "
+        "function bodies, callers, callees, struct/type definitions and headers "
+        "rather than guessing from this prompt. Never cite a function, caller, "
+        "type or file you have not actually read."
+    )
+
+    def _agent_runs_on_claude_code(self) -> bool:
+        """True iff this agent's resolved backend is the claude-code agent with
+        tools (so it can investigate). Gated on ``claude_code_agentic``."""
+        if not getattr(self.config, "claude_code_agentic", False):
+            return False
+        try:
+            prov = self.config.role_settings(self.name).get("provider") or ""
+            if not prov:
+                prov = self.config.resolved_provider()
+        except Exception:
+            return False
+        return prov == "claude-code"
+
+    def _system_prompt_for_call(self) -> str:
+        """System prompt for this call — augmented with the investigation
+        directive when the agent runs on the claude-code agent."""
+        if not self._agent_runs_on_claude_code():
+            return self.system_prompt
+        dirs = ", ".join(getattr(self.config, "claude_code_add_dirs", None) or []) \
+            or "the project source tree"
+        return self.system_prompt + self._AGENTIC_INVESTIGATION.format(dirs=dirs)
+
     def _call_llm(self, prompt: str) -> tuple[str, Optional[str]]:
         """One LLM round-trip. Returns ``(raw_text, error_or_None)``.
 
-        Default implementation: single ``LLMClient.complete`` call, routed
-        by ``self.name``. Override in subclasses that need tool-use
-        augmentation or multi-turn investigation.
+        Default implementation: single ``LLMClient.complete`` call, routed by
+        ``self.name``. Under --agentic, when this agent's backend is the
+        claude-code agent, the system prompt is augmented so the agent
+        *investigates the real code* (Read/Grep/Glob) instead of answering flat.
+        Subclasses that need bmc's in-process tool loop override this.
         """
         from bmc_agent.llm import LLMError
         try:
             response = self.llm.complete(
-                self.system_prompt, prompt, role=self.name,
+                self._system_prompt_for_call(), prompt, role=self.name,
                 **self._llm_call_kwargs(),
             )
         except LLMError as exc:
