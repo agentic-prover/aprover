@@ -63,13 +63,23 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     if provider:
         config.llm_provider = provider  # type: ignore[attr-defined]
 
+    # Every LLM-driven agent role. Under --agentic ALL of them default to the
+    # Claude Code agent (strongest, code-reading). The conventional core (CBMC,
+    # deterministic harness translation, compile+run dynamic validation) has no
+    # LLM and is unaffected.
+    ALL_AGENT_ROLES = (
+        "spec_gen", "refinement", "realism", "triage",
+        "disagreement_diagnose", "feedback_distill", "classifier",
+    )
     # Which roles route to the Claude Code CLI:
-    #   --agentic         -> spec_gen + refinement (full; spec-gen also agentic — slow)
-    #   --agentic-refine  -> refinement only (LEAN; spec-gen stays on the fast
-    #                        default provider — recommended for batches)
+    #   --agentic         -> EVERY agent role (full; the "all agentic" preset — slow)
+    #   --agentic-refine  -> refinement only (LEAN; rest stay on the fast default
+    #                        provider — recommended for batches)
     #   --specs-via-claude-code -> spec_gen + refinement (explicit)
     cc_roles: set[str] = set()
-    if agentic or getattr(args, "specs_via_claude_code", False):
+    if agentic:
+        cc_roles |= set(ALL_AGENT_ROLES)
+    if getattr(args, "specs_via_claude_code", False):
         cc_roles |= {"spec_gen", "refinement"}
     if agentic_refine:
         cc_roles |= {"refinement"}
@@ -83,7 +93,11 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
             config.llm_role_overrides = overrides  # type: ignore[attr-defined]
         for role in sorted(cc_roles):
             merged = dict(overrides.get(role, {}))
-            merged["provider"] = "claude-code"
+            # The flag is the DEFAULT; an explicit per-agent env override
+            # (BMC_AGENT_LLM_<ROLE>_PROVIDER=...) WINS so any agent can be
+            # re-pointed to a cheaper/faster LLM.
+            if not merged.get("provider"):
+                merged["provider"] = "claude-code"
             overrides[role] = merged
 
     if want_cc_tools:
@@ -1350,14 +1364,15 @@ def build_parser() -> argparse.ArgumentParser:
             default=False,
             dest="agentic",
             help=(
-                "Umbrella: turn on the full agentic stack — route spec gen + "
-                "refinement to the Claude Code CLI with read-only code-exploration "
-                "tools, enable the caller-grounded soundness gate on refinement, "
-                "and the agentic harness-repair fallback on CBMC build errors. "
-                "Equivalent to --specs-via-claude-code --claude-code-agentic "
-                "--enable-soundness-gate --enable-agentic-harness-repair. NOTE: "
-                "routes spec-gen to claude-code too (slow); for batches prefer "
-                "--agentic-refine."
+                "Umbrella: ALL agentic. Route EVERY LLM agent role (spec-gen, "
+                "refinement, realism, triage, disagreement, …) to the Claude Code "
+                "CLI with read-only code-exploration tools, and enable the "
+                "soundness gate + agentic harness-repair. Any single agent can be "
+                "re-pointed to a cheaper LLM via BMC_AGENT_LLM_<ROLE>_PROVIDER/"
+                "_MODEL (the override wins). The conventional core (CBMC, harness "
+                "translation, compile+run) is unaffected. NOTE: claude-code is a "
+                "serial subprocess — slow for high-volume roles; for batches "
+                "prefer --agentic-refine."
             ),
         )
         p.add_argument(
