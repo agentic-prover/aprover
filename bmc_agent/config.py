@@ -419,6 +419,17 @@ class Config:
     # match real callers, and emits a complete harness.  Fallback to
     # deterministic gen if the LLM cannot produce something CBMC parses.
     enable_agentic_harness: bool = False
+
+    # Agentic harness-repair FALLBACK. When the deterministic harness fails to
+    # BUILD (CBMC conversion / incomplete-type / parse error — not a property or
+    # resource failure), rebuild it with the agentic, code-reading
+    # AgenticHarnessGen (which reads the real structs/headers/callers and
+    # compile-checks with retry), then re-run CBMC. Distinct from
+    # ``enable_agentic_harness`` (which uses the agentic builder as the PRIMARY
+    # generator): this only fires on a build error, so there is no soundness
+    # downside — a non-building harness yields no verdict either way. Opt-in:
+    # ``--enable-agentic-harness-repair`` / ``BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR``.
+    enable_agentic_harness_repair: bool = False
     # When the judge rules a CEx UNREALISTIC and the agentic harness is on,
     # hand the verdict reasoning + harness + witness back to the agentic
     # generator so it can rewrite the harness. Bounded by this round count.
@@ -715,6 +726,8 @@ class Config:
             enable_soundness_gate=os.environ.get("BMC_AGENT_ENABLE_SOUNDNESS_GATE", "false").lower()
             in ("1", "true", "yes"),
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
+            enable_agentic_harness_repair=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR", "false").lower()
+            in ("1", "true", "yes"),
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
             llm_role_overrides=_parse_role_overrides_env(),

@@ -426,6 +426,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_soundness_gate", False):
         config.enable_soundness_gate = True
+    if getattr(args, "enable_agentic_harness_repair", False):
+        config.enable_agentic_harness_repair = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
     # --no-<flag> escape hatches (override the default-on AI layers).
@@ -727,6 +729,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_soundness_gate", False):
         config.enable_soundness_gate = True
+    if getattr(args, "enable_agentic_harness_repair", False):
+        config.enable_agentic_harness_repair = True
     if getattr(args, "enable_inlining_advisor", False):
         config.enable_inlining_advisor = True
     if getattr(args, "enable_phase_3e_triage", False):
@@ -1576,6 +1580,11 @@ def build_parser() -> argparse.ArgumentParser:
                           "refiner clause that isn't caller-guaranteed (keeps the CEx "
                           "as a real-bug lead instead of assuming it away). Best with "
                           "--specs-via-claude-code --claude-code-agentic.")
+    ver.add_argument("--enable-agentic-harness-repair", action="store_true", default=False,
+                     dest="enable_agentic_harness_repair",
+                     help="On a CBMC harness BUILD error (conversion / incomplete-type / "
+                          "parse), rebuild the harness with the agentic code-reading "
+                          "generator and re-run. Fires only on build errors.")
     ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
                      help="Disable LLM inline-vs-stub advisor.")
     ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,
@@ -1787,6 +1796,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "refiner clause that isn't caller-guaranteed (keeps the CEx "
                          "as a real-bug lead instead of assuming it away). Best with "
                          "--specs-via-claude-code --claude-code-agentic.")
+    vd.add_argument("--enable-agentic-harness-repair", action="store_true", default=False,
+                    dest="enable_agentic_harness_repair",
+                    help="On a CBMC harness BUILD error (conversion / incomplete-type / "
+                         "parse), rebuild the harness with the agentic code-reading "
+                         "generator and re-run. Fires only on build errors.")
     vd.add_argument("--no-inlining-advisor", action="store_true", default=False,
                     help="Disable LLM inline-vs-stub advisor.")
     vd.add_argument("--no-spec-gen-tools", action="store_true", default=False,

@@ -28,6 +28,52 @@ from bmc_agent.spec import Spec
 logger = get_logger("bmc_engine")
 
 
+# CBMC error substrings that indicate the harness failed to BUILD (parse /
+# convert / type-check) rather than a verification outcome (property failure,
+# unwind-bound, timeout). Used to trigger the agentic harness-repair fallback.
+_HARNESS_BUILD_ERROR_MARKERS = (
+    "conversion error",
+    "incomplete type",
+    "parsing error",
+    "redefinition",
+    "conflicting types",
+    "syntax error",
+    "cannot convert",
+    "type mismatch",
+    "expected ',' or ';'",
+    "undeclared",
+)
+
+
+def _is_harness_build_error(err: "str | None") -> bool:
+    """True iff a CBMC error string looks like a harness BUILD failure (parse /
+    conversion / incomplete-type), as opposed to a verification result or a
+    resource limit (unwind bound, timeout)."""
+    if not err:
+        return False
+    e = err.lower()
+    # Never treat resource/verification outcomes as build errors.
+    if "unwind" in e or "timed out" in e or "timeout" in e:
+        return False
+    return any(m in e for m in _HARNESS_BUILD_ERROR_MARKERS)
+
+
+def _harness_entry_of(harness_path) -> "str | None":
+    """Read the `/* Harness entry: NAME */` header tag, if present. Returns the
+    entry function name CBMC should use via --function, or None for main()."""
+    try:
+        with open(harness_path, "r") as _hf:
+            for _line in _hf:
+                if "Harness entry:" in _line:
+                    _name = _line.split("Harness entry:", 1)[1].strip().rstrip("*/").strip()
+                    return _name if _name and _name != "main" else None
+                if not _line.startswith("/*") and "include" in _line:
+                    break  # past the header
+    except Exception:
+        pass
+    return None
+
+
 @dataclass
 class BMCVerdict:
     """Result of running BMC on a single function."""
@@ -150,40 +196,68 @@ class BMCEngine:
             # NAME */`). When the source already defines `main`, the
             # harness uses a different function name and CBMC needs
             # --function to pick it.
-            harness_entry = None
-            try:
-                with open(harness_path, "r") as _hf:
-                    for _line in _hf:
-                        if "Harness entry:" in _line:
-                            _name = _line.split("Harness entry:", 1)[1].strip().rstrip("*/").strip()
-                            if _name and _name != "main":
-                                harness_entry = _name
-                            break
-                        if not _line.startswith("/*") and "include" in _line:
-                            break  # past the header
-            except Exception:
-                pass
-            cbmc_result = run_cbmc(
-                harness_path=harness_path,
-                unwind=unwind_for_this_run,
-                timeout=timeout_for_this_run,
-                cbmc_path=self.config.cbmc_path,
-                include_dirs=getattr(self.config, "include_dirs", None),
-                defines=getattr(self.config, "cbmc_defines", None),
-                unsigned_overflow_check=unsigned_overflow_check,
-                signed_overflow_check=signed_overflow_check,
-                conversion_check=conversion_check,
-                pointer_overflow_check=pointer_overflow_check,
-                undefined_shift_check=undefined_shift_check,
-                pointer_check=pointer_check,
-                bounds_check=bounds_check,
-                div_by_zero_check=div_by_zero_check,
-                object_bits=getattr(self.config, "cbmc_object_bits", None),
-                auto_scale_object_bits=getattr(
-                    self.config, "cbmc_auto_scale_object_bits", True
-                ),
-                function=harness_entry,
-            )
+            harness_entry = _harness_entry_of(harness_path)
+
+            def _run_c_cbmc(_hpath, _hentry):
+                return run_cbmc(
+                    harness_path=_hpath,
+                    unwind=unwind_for_this_run,
+                    timeout=timeout_for_this_run,
+                    cbmc_path=self.config.cbmc_path,
+                    include_dirs=getattr(self.config, "include_dirs", None),
+                    defines=getattr(self.config, "cbmc_defines", None),
+                    unsigned_overflow_check=unsigned_overflow_check,
+                    signed_overflow_check=signed_overflow_check,
+                    conversion_check=conversion_check,
+                    pointer_overflow_check=pointer_overflow_check,
+                    undefined_shift_check=undefined_shift_check,
+                    pointer_check=pointer_check,
+                    bounds_check=bounds_check,
+                    div_by_zero_check=div_by_zero_check,
+                    object_bits=getattr(self.config, "cbmc_object_bits", None),
+                    auto_scale_object_bits=getattr(
+                        self.config, "cbmc_auto_scale_object_bits", True
+                    ),
+                    function=_hentry,
+                )
+
+            cbmc_result = _run_c_cbmc(harness_path, harness_entry)
+
+            # Agentic harness-repair fallback (opt-in): the DETERMINISTIC harness
+            # failed to BUILD (conversion / incomplete-type / parse error). Let the
+            # code-reading AgenticHarnessGen rebuild it, then re-run. Fires only on
+            # a build error, so there's no soundness downside — a non-building
+            # harness yields no verdict either way.
+            if (
+                getattr(self.config, "enable_agentic_harness_repair", False)
+                and cbmc_result.error
+                and _is_harness_build_error(cbmc_result.error)
+            ):
+                repaired_path = self._agentic_repair_harness(
+                    func, parsed_file, all_funcs, driver_name,
+                    build_error=cbmc_result.error,
+                )
+                if repaired_path is not None:
+                    repaired_result = _run_c_cbmc(
+                        repaired_path, _harness_entry_of(repaired_path)
+                    )
+                    if not (
+                        repaired_result.error
+                        and _is_harness_build_error(repaired_result.error)
+                    ):
+                        logger.info(
+                            "agentic harness repair resolved the build error for "
+                            "'%s' (verified=%s, cex=%d)",
+                            fn_name, repaired_result.verified,
+                            len(repaired_result.counterexamples),
+                        )
+                        harness_path = repaired_path
+                        cbmc_result = repaired_result
+                    else:
+                        logger.info(
+                            "agentic harness repair did NOT resolve the build "
+                            "error for '%s' — keeping original verdict", fn_name,
+                        )
         else:
             # Rust / Kani path: the backend wraps its own verifier
             # invocation and returns a CBMCResult-shaped object.
@@ -313,6 +387,57 @@ class BMCEngine:
             logger.warning("Failed to save artifacts for '%s': %s", fn_name, exc)
 
         return verdict
+
+    def _agentic_repair_harness(
+        self,
+        func: FunctionInfo,
+        parsed_file: ParsedCFile,
+        all_funcs: "dict | None",
+        driver_name: str,
+        build_error: str,
+    ) -> "str | None":
+        """Rebuild a non-compiling harness with the agentic, code-reading
+        generator (``AgenticHarnessGen``), which reads the real structs/headers
+        and compile-checks with retry. Returns the path to a freshly saved
+        harness on success, or None. Fail-safe: any error returns None and the
+        caller keeps the original (failed) verdict.
+        """
+        try:
+            from pathlib import Path as _Path
+            from bmc_agent.agentic_harness_gen import AgenticHarnessGen
+
+            src_path = getattr(parsed_file, "path", "") or ""
+            parsed_files = {src_path: parsed_file} if src_path else {}
+            corpus_root = _Path(src_path).parent if src_path else _Path(".")
+            logger.info(
+                "agentic harness repair: rebuilding harness for '%s' "
+                "(build error: %s)",
+                func.name, (build_error or "")[:140],
+            )
+            agen = AgenticHarnessGen(
+                config=self.config,
+                parsed_files=parsed_files,
+                corpus_root=corpus_root,
+            )
+            res = agen.generate(
+                func=func,
+                all_funcs_global=all_funcs or {},
+                include_dirs=list(getattr(self.config, "include_dirs", None) or []),
+                defines=list(getattr(self.config, "cbmc_defines", None) or []),
+            )
+            harness = getattr(res, "harness", None)
+            if harness and not getattr(res, "last_compile_error", None):
+                return str(self._save_harness(driver_name, func.name, harness))
+            logger.info(
+                "agentic harness repair produced no clean harness for '%s' "
+                "(last_compile_error=%s)",
+                func.name, str(getattr(res, "last_compile_error", ""))[:140],
+            )
+        except Exception as exc:
+            logger.warning(
+                "agentic harness repair failed for '%s': %s", func.name, exc
+            )
+        return None
 
     def check_all(
         self,
