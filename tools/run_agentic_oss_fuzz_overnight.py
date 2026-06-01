@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
-"""Overnight --agentic test on OSS-Fuzz parser targets (detached, session-surviving).
+"""Overnight AUDIT-FIRST --agentic bug hunt on OSS-Fuzz parser targets.
 
-Two-stage coaudit loop per target, methodologically aligned with /coaudit:
+Detached, session-surviving. Per target, Direction-A-then-B coaudit:
 
-  Stage 1 (cheap net, fast model): run oss_bmc.py's FP-hint net to SELECT which
-           functions are worth the expensive agentic pass. Uses the configured
-           OpenAI/gpt-4o-mini env (~/.config/bmc-agent/env).
-  Stage 2 (agentic adjudication, HYBRID): re-run JUST those flagged functions
-           through `oss_bmc.py --check-functions --cross-file --agentic`, keeping
-           the env so it's claude-code + API agents:
-             - spec_gen -> fast API (gpt-4o-mini, pinned by BMC_AGENT_LLM_SPEC_GEN_*)
-             - refinement/soundness, realism, classifier, dynamic_repro, dynval_triage,
-               harness-repair -> claude-code (caller-grounded roles; no API key needed).
-           Claude-code uses the local subscription, so the agent half survives the
-           night with nothing to expire; only spec_gen depends on the API key.
+  Stage 1 — SOURCE AUDIT (claude-code, reads real code): a claude agent with
+            Read/Grep/Glob over the target's parser source identifies functions
+            with self-contained OOB-prone idioms reachable from attacker input
+            (file/network bytes used as an unchecked length/index/loop-bound;
+            const table indexed by an unmasked input byte; copy into a fixed
+            buffer with attacker-influenced length). The audit AIMS the verifier
+            instead of letting CBMC blindly fish — far better targeting than a
+            cheap weak-spec net. Returns a JSON shortlist {function,file,idiom,why}.
+  Stage 2 — --agentic VERIFICATION of JUST those functions:
+            `oss_bmc.py --files <audited> --check-functions <funcs> --cross-file --agentic`.
+            HYBRID routing (verified): spec_gen->API gpt-4o-mini; refinement/
+            soundness, realism, classifier, dynamic_repro, dynval_triage,
+            harness-repair->claude-code (subscription, no key). Cross-file gives
+            real caller-grounded gen+refinement; agentic gives the soundness/
+            realism adjudication that decides real-vs-FP.
 
-Robustness (this runs unattended until the user is back):
-  * every subprocess has a hard timeout — nothing hangs the night;
-  * every target is wrapped in try/except — one failure never kills the loop;
-  * a wall-clock DEADLINE bounds the whole run (default 11h);
-  * results stream to <out>/SUMMARY.md (human) + <out>/results.jsonl (machine)
-    after every target, so partial results are always checkable.
+Robustness (unattended until the user is back):
+  * hard per-subprocess timeouts — nothing hangs the night;
+  * per-target try/except — one failure never kills the loop;
+  * wall-clock DEADLINE (default 11h);
+  * results stream to <out>/SUMMARY.md + <out>/results.jsonl after every target.
 
 Usage (detached, survives logout):
-  nohup python3 tools/run_agentic_oss_fuzz_overnight.py --hours 11 \
+  setsid nohup python3 tools/run_agentic_oss_fuzz_overnight.py --hours 11 \
         > /tmp/agentic_oss_fuzz_overnight.log 2>&1 &
 
-Only ASan-confirmed bugs are real bugs (coaudit rule); the agentic verdicts here
-are LEADS — verified=False / UNRESOLVED / REAL_BUG labels to adjudicate when back.
+Only ASan-confirmed bugs are real bugs (coaudit rule); verdicts here are LEADS
+(verified=False / UNRESOLVED / REAL_BUG) to adjudicate + ASan-confirm when back.
 """
 from __future__ import annotations
 
@@ -47,26 +50,29 @@ ENVF = Path.home() / ".config" / "bmc-agent" / "env"
 
 # Curated rotation: real OSS-Fuzz C parser projects, attacker-facing, weaker
 # hardening pedigree (codec/format/CAD parsers) or known-productive (libredwg).
-# Build-unready targets are logged and skipped, never silently dropped.
 DEFAULT_TARGETS = [
-    "libredwg",    # known productive (fix-stream outpaces fuzzing)
-    "libxmp",      # tracker-module parser
-    "libmodplug",  # tracker-module parser (historically OOB-prone)
-    "faad2",       # AAC decoder
-    "matio",       # MAT-file parser
-    "openjpeg",    # JPEG2000 codec
-    "libsndfile",  # audio container parser
-    "gpac",        # MP4/box demuxer
+    "libredwg", "libxmp", "libmodplug", "faad2",
+    "matio", "openjpeg", "libsndfile", "gpac",
 ]
 
-# net (stage 1) caps
-NET_MAX_FILES = 2
-NET_PER_FILE_TIMEOUT = 480          # bmc-agent per-file verify cap (passed to oss_bmc)
-NET_WALL_TIMEOUT = 2400             # whole stage-1 subprocess cap
-# agentic (stage 2) caps
-AGENTIC_PER_FUNC_TIMEOUT = 1500     # passed to oss_bmc --timeout (per fn/file)
-AGENTIC_WALL_TIMEOUT = 6000         # whole stage-2 subprocess cap
-MAX_FUNCS_PER_TARGET = 6            # cap the agentic shortlist
+PARSER_HINT = re.compile(
+    r"(pars|read|decod|demux|box|chunk|header|token|scan|load|unpack|"
+    r"inflate|deflate|extract|process|atom|tag|frame)", re.I)
+
+SETUP_TIMEOUT = 900           # oss_bmc --setup-only (cmake configure etc.)
+AGENTIC_PER_FUNC_TIMEOUT = 1500
+AGENTIC_WALL_TIMEOUT = 7200   # whole stage-2 subprocess cap
+MAX_FUNCS_PER_TARGET = 6
+MAX_PARSER_FILES = 4
+
+# Self-contained OOB idioms = the coaudit "audit-grep": unbounded copies and
+# array/pointer indexing by a variable. High-signal and attacker-reachable in
+# parsers. A single claude agent reading whole 7k-line decoders TIMES OUT, so
+# stage-1 selection is mechanical+instant; the agentic JUDGMENT is stage-2.
+_IDIOM = re.compile(
+    r"\b(memcpy|memmove|memset|strcpy|strncpy|strcat|sprintf|alloca)\s*\(|"
+    r"[A-Za-z_]\w*\s*\[\s*[A-Za-z_]\w*[A-Za-z0-9_ +\-*]*\]",
+)
 
 
 def log(msg: str) -> None:
@@ -74,77 +80,140 @@ def log(msg: str) -> None:
 
 
 def load_env_file() -> dict:
-    """Parse `export K=V` lines from the bmc-agent env file (stage-1 model)."""
     out = {}
     if not ENVF.is_file():
         return out
     for line in ENVF.read_text(errors="replace").splitlines():
         line = line.strip()
+        if line.startswith("#"):
+            continue
         if line.startswith("export "):
             line = line[len("export "):]
         m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line)
-        if m and not line.startswith("#"):
+        if m:
             out[m.group(1)] = m.group(2).strip().strip('"').strip("'")
     return out
 
 
-def net_env() -> dict:
-    """Stage-1 env: host env + the configured fast model (gpt-4o-mini)."""
+def hybrid_env() -> dict:
+    """Host env + the bmc-agent env file. Under --agentic this yields the hybrid:
+    spec_gen pinned to the API (BMC_AGENT_LLM_SPEC_GEN_*), every other agent role
+    -> claude-code. Keeping the env (NOT stripping it) is what makes it hybrid."""
     env = os.environ.copy()
     env.update(load_env_file())
     return env
 
 
-def agentic_env() -> dict:
-    """Stage-2 env: HYBRID. Keep the env (so spec_gen stays pinned to the fast
-    API via BMC_AGENT_LLM_SPEC_GEN_*) and let --agentic route every OTHER agent
-    role (refinement/soundness, realism, classifier, dynamic_repro, dynval_triage,
-    harness-repair) to claude-code — those are the caller-grounded roles that
-    earn the agent. Verified resolved routing: spec_gen->openai, rest->claude-code.
-    Claude-code needs no API key (subscription); spec_gen's gpt-4o-mini key is in
-    the env. So: claude-code + API agents, exactly as intended."""
-    return net_env()
-
-
-def run(cmd: list[str], env: dict, logpath: Path, timeout: int) -> int:
-    """Run a subprocess to a log file with a hard timeout. Returns rc (124 = timeout)."""
+def run(cmd: list[str], env: dict, logpath: Path, timeout: int,
+        stdin_text: str | None = None) -> tuple[int, str]:
     logpath.parent.mkdir(parents=True, exist_ok=True)
-    with logpath.open("w") as fh:
-        fh.write(f"$ {' '.join(cmd)}\n\n")
-        fh.flush()
-        try:
-            p = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT,
-                               timeout=timeout)
-            return p.returncode
-        except subprocess.TimeoutExpired:
-            fh.write(f"\n[overnight] TIMEOUT after {timeout}s\n")
-            return 124
-        except Exception as exc:  # never let a target kill the loop
-            fh.write(f"\n[overnight] EXCEPTION: {exc!r}\n")
-            return 1
+    try:
+        p = subprocess.run(cmd, env=env, input=stdin_text, capture_output=True,
+                           text=True, timeout=timeout)
+        out = (p.stdout or "") + (("\n[stderr]\n" + p.stderr) if p.stderr else "")
+        logpath.write_text(f"$ {' '.join(cmd)}\n\n{out}")
+        return p.returncode, (p.stdout or "")
+    except subprocess.TimeoutExpired as e:
+        logpath.write_text(f"$ {' '.join(cmd)}\n\n[TIMEOUT {timeout}s]\n"
+                           f"{(e.stdout or b'') if isinstance(e.stdout, bytes) else (e.stdout or '')}")
+        return 124, ""
+    except Exception as exc:
+        logpath.write_text(f"$ {' '.join(cmd)}\n\n[EXCEPTION] {exc!r}\n")
+        return 1, ""
 
 
-def flagged_functions(net_out: Path) -> list[str]:
-    """Extract the memory-safety FP-hint function names from net artifacts —
-    same filter as oss_bmc.emit_hints (pointer/bounds/overflow, skip .unwind.)."""
-    funcs: list[str] = []
-    seen = set()
-    for br in net_out.rglob("bug_report.json"):
+def setup_target(target: str, out: Path) -> tuple[Path | None, list[Path]]:
+    """Run oss_bmc --setup-only (derives compile_commands + lists parser files).
+    Returns (compile_commands_path, [parser file paths]) or (None, [])."""
+    rc, stdout = run(
+        ["python3", str(OSS_BMC), target, "--setup-only",
+         "--max-files", str(MAX_PARSER_FILES), "--out", str(out)],
+        env=hybrid_env(), logpath=out / "00_setup.log", timeout=SETUP_TIMEOUT,
+    )
+    m = re.search(r"compile_commands\.json:\s*(\S+)", stdout)
+    if not m:
+        return None, []
+    cc = Path(m.group(1))
+    if not cc.is_file():
+        return None, []
+    try:
+        db = json.loads(cc.read_text())
+    except Exception:
+        return None, []
+    files, seen = [], set()
+    for e in db:
+        f = e.get("file", "")
+        if f.endswith(".c") and PARSER_HINT.search(Path(f).name) and f not in seen:
+            seen.add(f)
+            files.append(Path(f))
+    return cc, files[:MAX_PARSER_FILES]
+
+
+def _split_functions(text: str) -> list[tuple[str, str]]:
+    """Crude pure-Python C function splitter (brace tracking): returns (name, body)
+    pairs. Good enough for SELECTION — not a parser. No deps, so it runs fine in
+    the detached driver's system python."""
+    res, depth, pending, name, bstart = [], 0, "", None, 0
+    skip = {"if", "for", "while", "switch", "sizeof", "return", "do", "else"}
+    j, n = 0, len(text)
+    while j < n:
+        c = text[j]
+        if depth == 0:
+            if c in ";}":
+                pending = ""
+            elif c == "{":
+                m = re.search(r"([A-Za-z_]\w*)\s*\([^;{]*\)\s*$", pending)
+                name = m.group(1) if m else None
+                depth, bstart, pending = 1, j + 1, ""
+            else:
+                pending += c
+                if len(pending) > 4000:
+                    pending = pending[-2000:]
+        else:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    if name and name not in skip:
+                        res.append((name, text[bstart:j]))
+                    name = None
+        j += 1
+    return res
+
+
+def audit_functions(target: str, src_dir: Path, parser_files: list[Path],
+                    out: Path) -> list[dict]:
+    """Stage 1 — mechanical audit-grep: rank functions by self-contained OOB-idiom
+    density across the parser files. Instant + deterministic (no LLM, no timeout).
+    The agentic JUDGMENT of these candidates is stage 2."""
+    scored = []  # (hits, name, file, sample_line)
+    for pf in parser_files:
         try:
-            rep = json.loads(br.read_text()).get("report", {})
+            text = pf.read_text(errors="replace")
         except Exception:
             continue
-        for c in (rep.get("counterexamples") or []):
-            fp = (c.get("failing_property") or "")
-            if ".unwind." in fp:
+        for name, body in _split_functions(text):
+            hits = _IDIOM.findall(body)
+            if not hits:
                 continue
-            if not any(k in fp for k in ("pointer", "bounds", "overflow")):
-                continue
-            fn = rep.get("function_name")
-            if fn and fn not in seen:
-                seen.add(fn)
-                funcs.append(fn)
-    return funcs[:MAX_FUNCS_PER_TARGET]
+            mm = _IDIOM.search(body)
+            ls = body.rfind("\n", 0, mm.start()) + 1
+            le = body.find("\n", mm.start())
+            sample = body[ls: le if le != -1 else mm.end()].strip()[:140]
+            scored.append((len(hits), name, pf.name, sample))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    seen, audit = set(), []
+    for n_hits, name, fname, sample in scored:
+        if name in seen:
+            continue
+        seen.add(name)
+        audit.append({"function": name, "file": fname,
+                      "idiom": f"{n_hits} OOB-idiom hit(s)", "why": sample})
+        if len(audit) >= MAX_FUNCS_PER_TARGET:
+            break
+    (out / "01_audit_shortlist.json").write_text(json.dumps(audit, indent=2))
+    return audit
 
 
 _VERDICT_RE = re.compile(
@@ -159,70 +228,69 @@ def harvest_verdicts(agentic_log: Path) -> list[str]:
     for line in agentic_log.read_text(errors="replace").splitlines():
         if _VERDICT_RE.search(line):
             out.append(line.strip()[:200])
-    return out[:60]
+    return out[:80]
 
 
 def process_target(t: str, out_root: Path, summary: Path, results: Path) -> None:
     log(f"=== target: {t} ===")
     tdir = out_root / t
+    tdir.mkdir(parents=True, exist_ok=True)
     proj = CORPORA / t
     if not proj.is_dir():
-        log(f"  SKIP {t}: not cloned at {proj}")
-        _record(summary, results, t, status="skip_not_cloned", funcs=[], verdicts=[])
-        return
+        log(f"  SKIP {t}: not cloned"); _record(summary, results, t, "skip_not_cloned", [], []); return
 
-    # Stage 0/1: build-readiness + cheap FP-hint net (fast model).
-    net_out = Path(f"/tmp/oss_bmc/{t}")
-    rc = run(
-        ["python3", str(OSS_BMC), t, "--max-files", str(NET_MAX_FILES),
-         "--timeout", str(NET_PER_FILE_TIMEOUT), "--out", str(net_out)],
-        env=net_env(), logpath=tdir / "01_net.log", timeout=NET_WALL_TIMEOUT,
-    )
-    if rc != 0:
-        log(f"  net stage rc={rc} (continuing — may still have partial hints)")
+    cc, parser_files = setup_target(t, tdir)
+    if not cc or not parser_files:
+        log(f"  SKIP {t}: no compile_commands / no parser files (build not integrable)")
+        _record(summary, results, t, "skip_no_build", [], []); return
+    src_dir = parser_files[0].parent
+    log(f"  {len(parser_files)} parser file(s); auditing under {src_dir}")
 
-    funcs = flagged_functions(net_out)
-    if not funcs:
-        log(f"  no memory-safety candidates from net — nothing to adjudicate")
-        _record(summary, results, t, status="no_candidates", funcs=[], verdicts=[])
-        return
-    log(f"  {len(funcs)} candidate fn(s) -> agentic: {', '.join(funcs)}")
+    audit = audit_functions(t, src_dir, parser_files, tdir)
+    if not audit:
+        log(f"  audit found no suspect functions"); _record(summary, results, t, "no_audit_candidates", [], []); return
+    funcs = [a["function"] for a in audit]
+    log(f"  audit -> {len(funcs)} suspect fn: {', '.join(funcs)}")
 
-    # Stage 2: agentic adjudication of JUST those functions (claude-code, sanitized env).
-    alog = tdir / "02_agentic.log"
-    rc2 = run(
-        ["python3", str(OSS_BMC), t, "--check-functions", ",".join(funcs),
-         "--cross-file", "--agentic", "--timeout", str(AGENTIC_PER_FUNC_TIMEOUT),
-         "--out", str(net_out)],
-        env=agentic_env(), logpath=alog, timeout=AGENTIC_WALL_TIMEOUT,
-    )
-    verdicts = harvest_verdicts(alog)
-    log(f"  agentic rc={rc2}; {len(verdicts)} verdict line(s) harvested")
-    _record(summary, results, t, status=f"done(rc={rc2})", funcs=funcs, verdicts=verdicts)
+    audited_files = sorted({a["file"] for a in audit if a.get("file")})
+    files_regex = "(" + "|".join(re.escape(b) for b in audited_files) + ")" if audited_files else None
+    cmd = ["python3", str(OSS_BMC), t, "--check-functions", ",".join(funcs),
+           "--cross-file", "--agentic", "--timeout", str(AGENTIC_PER_FUNC_TIMEOUT),
+           "--out", str(Path(f"/tmp/oss_bmc/{t}"))]
+    if files_regex:
+        cmd += ["--files", files_regex]
+    rc, _ = run(cmd, env=hybrid_env(), logpath=tdir / "02_agentic.log",
+                timeout=AGENTIC_WALL_TIMEOUT)
+    verdicts = harvest_verdicts(tdir / "02_agentic.log")
+    log(f"  agentic rc={rc}; {len(verdicts)} verdict line(s)")
+    _record(summary, results, t, f"done(rc={rc})", audit, verdicts)
 
 
-def _record(summary: Path, results: Path, t: str, *, status: str,
-            funcs: list[str], verdicts: list[str]) -> None:
+def _record(summary: Path, results: Path, t: str, status: str,
+            audit: list[dict], verdicts: list[str]) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     with summary.open("a") as fh:
         fh.write(f"\n## {t} — {status} ({ts})\n")
-        if funcs:
-            fh.write(f"- agentic shortlist: {', '.join(funcs)}\n")
+        if audit:
+            fh.write("- audit shortlist:\n")
+            for a in audit:
+                fh.write(f"    - `{a['function']}` ({a.get('file','?')}) — "
+                         f"{a.get('idiom','')}: {a.get('why','')}\n")
         if verdicts:
             fh.write("- agentic verdict lines:\n")
             for v in verdicts:
                 fh.write(f"    - {v}\n")
-        else:
-            fh.write("- (no lead verdicts harvested)\n")
+        elif audit:
+            fh.write("- (no lead verdicts harvested — see 02_agentic.log)\n")
     with results.open("a") as fh:
         fh.write(json.dumps({"ts": ts, "target": t, "status": status,
-                             "funcs": funcs, "verdicts": verdicts}) + "\n")
+                             "audit": audit, "verdicts": verdicts}) + "\n")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hours", type=float, default=11.0, help="wall-clock deadline")
-    ap.add_argument("--targets", default=None, help="comma-separated override list")
+    ap.add_argument("--hours", type=float, default=11.0)
+    ap.add_argument("--targets", default=None)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -236,12 +304,11 @@ def main() -> int:
     deadline = time.time() + args.hours * 3600
 
     summary.write_text(
-        f"# Overnight --agentic OSS-Fuzz run\n\n"
+        f"# Overnight AUDIT-FIRST --agentic OSS-Fuzz run\n\n"
         f"- started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"- deadline: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(deadline))} "
-        f"({args.hours}h)\n"
+        f"- deadline: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(deadline))} ({args.hours}h)\n"
         f"- targets: {', '.join(targets)}\n"
-        f"- engine: stage1 cheap net (gpt-4o-mini) -> stage2 --agentic (claude-code)\n"
+        f"- pipeline: claude-code SOURCE AUDIT -> --agentic --check-functions (hybrid)\n"
         f"- NOTE: verdicts are LEADS; only ASan-confirmed bugs are real bugs.\n"
     )
     log(f"out={out_root}  deadline={args.hours}h  targets={targets}")
@@ -252,23 +319,18 @@ def main() -> int:
         log(f"--- round {rnd} ---")
         for t in targets:
             if time.time() >= deadline:
-                log("deadline reached — stopping")
-                break
+                log("deadline reached — stopping"); break
             try:
                 process_target(t, out_root, summary, results)
-            except Exception as exc:  # absolute backstop
+            except Exception as exc:
                 log(f"  target {t} raised {exc!r} — continuing")
         else:
-            # finished a full round with time left; loop again (re-runs may
-            # deepen as specs are cached). Avoid a tight spin if everything
-            # no-op'd instantly.
             time.sleep(5)
             continue
         break
 
     with summary.open("a") as fh:
-        fh.write(f"\n---\n_run ended {time.strftime('%Y-%m-%d %H:%M:%S')} "
-                 f"after {rnd} round(s)._\n")
+        fh.write(f"\n---\n_run ended {time.strftime('%Y-%m-%d %H:%M:%S')} after {rnd} round(s)._\n")
     log(f"DONE after {rnd} round(s). Results: {out_root}")
     return 0
 
