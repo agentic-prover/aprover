@@ -33,6 +33,54 @@ def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
         config.llm_model = model  # type: ignore[attr-defined]
 
 
+def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
+    """Apply the --provider / --specs-via-claude-code / --claude-code-agentic flags.
+
+    These are CLI conveniences over the existing env-var routing
+    (``BMC_AGENT_LLM_PROVIDER`` and ``BMC_AGENT_LLM_<ROLE>_PROVIDER``):
+
+      --provider X               sets the global default provider for every role.
+      --specs-via-claude-code    routes ONLY the spec_gen + refinement roles to
+                                 the Claude Code CLI provider (your local
+                                 ``claude`` login; no API key), leaving every
+                                 other role on the global default.
+      --claude-code-agentic      lets the claude-code provider use read-only
+                                 tools (Read/Grep/Glob) to explore the source
+                                 tree while drafting/refining, instead of a
+                                 one-shot text completion (Step 2 behaviour).
+
+    Merges (rather than replaces) any role override already present from env so
+    explicit ``BMC_AGENT_LLM_*`` settings still compose.
+    """
+    provider = getattr(args, "provider", "") or ""
+    if provider:
+        config.llm_provider = provider  # type: ignore[attr-defined]
+
+    if getattr(args, "specs_via_claude_code", False):
+        overrides = getattr(config, "llm_role_overrides", None)
+        if overrides is None:
+            overrides = {}
+            config.llm_role_overrides = overrides  # type: ignore[attr-defined]
+        for role in ("spec_gen", "refinement"):
+            merged = dict(overrides.get(role, {}))
+            merged["provider"] = "claude-code"
+            overrides[role] = merged
+
+    if getattr(args, "claude_code_agentic", False):
+        config.claude_code_agentic = True  # type: ignore[attr-defined]
+        # Scope the read-only file access to the source tree: the source file's
+        # directory + any --include-dir. cwd is always readable regardless.
+        dirs: list[str] = list(getattr(config, "claude_code_add_dirs", None) or [])
+        src = getattr(args, "source", "") or ""
+        if src:
+            dirs.append(str(Path(src).resolve().parent))
+        for inc in getattr(args, "include_dir", None) or []:
+            dirs.append(str(Path(inc).resolve()))
+        # de-dupe, preserve order
+        seen: set[str] = set()
+        config.claude_code_add_dirs = [d for d in dirs if not (d in seen or seen.add(d))]  # type: ignore[attr-defined]
+
+
 def _print_ai_layers(config) -> None:
     """Print the active AI layers so the operator can see what's running.
 
@@ -80,6 +128,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     if getattr(args, "defines", None):
         config.cbmc_defines = list(args.defines)
     _apply_model_arg(config, args)
+    _apply_provider_args(config, args)
 
     store = ArtifactStore(config.artifact_dir)
     llm = LLMClient(config)
@@ -404,6 +453,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
     _apply_model_arg(config, args)
+    _apply_provider_args(config, args)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
@@ -549,6 +599,7 @@ def _cmd_ablation_baseline(args: argparse.Namespace) -> int:
     if args.output:
         config.artifact_dir = args.output
     _apply_model_arg(config, args)
+    _apply_provider_args(config, args)
 
     baseline = AMCAblationBaseline()
 
@@ -706,6 +757,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_realism_tools = False
         config.enable_phase_3e_triage = False
     _apply_model_arg(config, args)
+    _apply_provider_args(config, args)
 
     include_dirs = args.include_dir or []
     if include_dirs:
@@ -947,6 +999,7 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
     if getattr(args, "allow_self_patch", None):
         config.allow_self_patch = args.allow_self_patch
     _apply_model_arg(config, args)
+    _apply_provider_args(config, args)
 
     include_dirs = args.include_dir or []
     if include_dirs:
@@ -1251,6 +1304,42 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
 
+    # Shared provider-routing arguments (CLI sugar over BMC_AGENT_LLM_*_PROVIDER).
+    def _add_provider_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--provider",
+            default="",
+            choices=["", "anthropic", "openai", "claude-code"],
+            metavar="PROVIDER",
+            help=(
+                "LLM provider for all roles (default: auto-detect / env). "
+                "'claude-code' shells out to the local Claude Code CLI, reusing "
+                "your existing login — no API key required."
+            ),
+        )
+        p.add_argument(
+            "--specs-via-claude-code",
+            action="store_true",
+            default=False,
+            dest="specs_via_claude_code",
+            help=(
+                "Route ONLY spec generation + refinement to the Claude Code CLI "
+                "(reuses your Claude Code login; no API key). Every other role "
+                "keeps the global/default provider."
+            ),
+        )
+        p.add_argument(
+            "--claude-code-agentic",
+            action="store_true",
+            default=False,
+            dest="claude_code_agentic",
+            help=(
+                "When the claude-code provider is active, grant it read-only "
+                "tools (Read/Grep/Glob) so it can explore the source tree while "
+                "drafting/refining specs, instead of a one-shot text completion."
+            ),
+        )
+
     # --- generate ---
     gen = subparsers.add_parser(
         "generate",
@@ -1280,6 +1369,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pass a preprocessor define (repeatable), e.g. -D HAVE_CONFIG_H.",
     )
     _add_model_arg(gen)
+    _add_provider_args(gen)
     gen.set_defaults(func=_cmd_generate)
 
     # --- check ---
@@ -1489,6 +1579,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "passing every --no-* individually. For "
                            "zero-LLM-cost smoke runs."))
     _add_model_arg(ver)
+    _add_provider_args(ver)
     ver.set_defaults(func=_cmd_verify)
 
     # --- baseline ---
@@ -1510,6 +1601,7 @@ def build_parser() -> argparse.ArgumentParser:
     ab.add_argument("--driver", required=True, help="Driver name (used for artifact storage)")
     ab.add_argument("--output", default="artifacts", help="Artifact output directory")
     _add_model_arg(ab)
+    _add_provider_args(ab)
     ab.set_defaults(func=_cmd_ablation_baseline)
 
     # --- verify-dir ---
@@ -1703,6 +1795,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_model_arg(vd)
+    _add_provider_args(vd)
     vd.set_defaults(func=_cmd_verify_dir)
 
     # --- autonomous ---
@@ -1799,6 +1892,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_model_arg(au)
+    _add_provider_args(au)
     au.set_defaults(func=_cmd_autonomous)
 
     # --- self-patch-review ---
@@ -1935,6 +2029,7 @@ def build_parser() -> argparse.ArgumentParser:
              "bugs. Default 0 (disabled). Recommended starting value: 1.",
     )
     _add_model_arg(jd)
+    _add_provider_args(jd)
     jd.set_defaults(func=_cmd_judge_dir)
 
     return parser

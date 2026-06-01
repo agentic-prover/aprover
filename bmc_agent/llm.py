@@ -412,13 +412,28 @@ class LLMClient:
         import subprocess
 
         cli = (self.config.claude_code_bin or "claude").strip()
-        cmd: list[str] = [
-            cli,
-            "-p",
-            "--tools", "",
-            "--output-format", "json",
-            "--no-session-persistence",
-        ]
+        cmd: list[str] = [cli, "-p"]
+
+        if getattr(self.config, "claude_code_agentic", False):
+            # Agentic mode: grant read-only tools so the model can go read
+            # caller sites / adjacent code to ground a precondition, scoped to
+            # the project directories. ``--permission-mode`` auto-denies
+            # anything outside the allowlist (no interactive prompt / hang).
+            tools = (getattr(self.config, "claude_code_tools", "") or "Read,Grep,Glob").strip()
+            cmd += ["--allowed-tools", tools]
+            for d in getattr(self.config, "claude_code_add_dirs", None) or []:
+                if d:
+                    cmd += ["--add-dir", str(d)]
+            cmd += [
+                "--permission-mode",
+                (getattr(self.config, "claude_code_permission_mode", "") or "dontAsk").strip(),
+            ]
+        else:
+            # Text-only mode: zero tools — a one-shot completion identical in
+            # shape to the API path.
+            cmd += ["--tools", ""]
+
+        cmd += ["--output-format", "json", "--no-session-persistence"]
         # --model is optional; when ``llm_model`` is empty or looks like a
         # non-claude name (e.g. left over from a K2 Think config), we let the
         # CLI pick the default for the user's session.

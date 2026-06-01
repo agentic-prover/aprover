@@ -87,6 +87,19 @@ uv run bmc-agent verify-dir \
   --enable-realism-thinking \
   --domain-knowledge "any domain notes for the LLM"
 
+# Generate + refine specs with Claude Code instead of the API
+# (reuses your local `claude` login — no ANTHROPIC_API_KEY needed).
+# Only the spec_gen + refinement roles are routed; the rest stay on the default.
+uv run bmc-agent verify --source examples/simple_driver.c --driver simple_driver \
+                        --specs-via-claude-code
+
+# Same, but let Claude Code use read-only tools (Read/Grep/Glob) to explore the
+# source tree while drafting/refining — it can read caller sites to ground a
+# precondition instead of guessing from the prompt. Use `--provider claude-code`
+# to route *every* role through the CLI.
+uv run bmc-agent verify --source examples/simple_driver.c --driver simple_driver \
+                        --specs-via-claude-code --claude-code-agentic
+
 # CBMC-alone baseline (no LLM, no spec generation)
 uv run bmc-agent baseline --source examples/simple_driver.c \
                           --driver simple_driver \
@@ -119,6 +132,11 @@ All settings are available as environment variables or `Config` dataclass fields
 | Variable | Default | Purpose |
 |---|---|---|
 | `BMC_AGENT_LLM_MODEL` | `claude-sonnet-4-6` | LLM model |
+| `BMC_AGENT_LLM_PROVIDER` | _(auto)_ | LLM provider for all roles: `anthropic`, `openai` (K2 / OpenAI-compatible), or `claude-code` (local `claude` CLI, no API key). Empty = auto-detect. Per-role override: `BMC_AGENT_LLM_<ROLE>_PROVIDER` for `SPEC_GEN`/`REFINEMENT`/`REALISM`/… (CLI sugar: `--provider`, `--specs-via-claude-code`) |
+| `BMC_AGENT_CLAUDE_CODE_BIN` | `claude` | Path to the Claude Code CLI (used only when provider is `claude-code`) |
+| `BMC_AGENT_CLAUDE_CODE_TIMEOUT_S` | `600` | Per-call timeout for the `claude -p` path (seconds) |
+| `BMC_AGENT_CLAUDE_CODE_AGENTIC` | `false` | Let the `claude-code` provider use read-only tools (`Read`/`Grep`/`Glob`) to explore the source tree while drafting/refining specs, instead of a one-shot text completion (CLI: `--claude-code-agentic`) |
+| `BMC_AGENT_CLAUDE_CODE_TOOLS` | `Read,Grep,Glob` | Tool allowlist for agentic claude-code mode (keep read-only) |
 | `BMC_AGENT_CBMC_PATH` | `cbmc` | CBMC binary path |
 | `BMC_AGENT_CBMC_UNWIND` | `4` | Loop unwinding bound |
 | `BMC_AGENT_CBMC_TIMEOUT` | `120` | Solver timeout per function (seconds) |

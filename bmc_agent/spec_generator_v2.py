@@ -566,13 +566,32 @@ class SpecGeneratorV2:
         driver_name: str,
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
+        cross_file_caller_contexts: Optional[dict] = None,
     ) -> dict[str, Spec]:
         """Generate specs for every function defined in ``source_file``.
 
         Output shape: same as v1 — dict mapping function name → Spec.
         Each Spec's ``evidence`` field is populated with per-clause
         provenance tags.
+
+        ``cross_file_caller_contexts`` maps a function name to a list of
+        ``(caller FunctionInfo, caller ParsedCFile)`` tuples for callers defined
+        in OTHER files (precomputed by ``pipeline.run_directory``). v2 grounds
+        specs from call sites it finds in ``self.corpus_paths``, so we fold those
+        caller files into the corpus — that is how the cross-file contexts take
+        effect here. Accepting the kwarg also keeps v2 a drop-in for v1, which
+        ``pipeline.run()`` relies on (it always passes it).
         """
+        if cross_file_caller_contexts:
+            seen = {str(p) for p in self.corpus_paths}
+            for callers in cross_file_caller_contexts.values():
+                for item in callers:
+                    pcf = item[1] if isinstance(item, (tuple, list)) and len(item) > 1 else None
+                    path = getattr(pcf, "path", None)
+                    if path and str(path) not in seen:
+                        self.corpus_paths.append(Path(path))
+                        seen.add(str(path))
+
         from bmc_agent.source_parser import parse_source_file as _parse  # type: ignore
 
         logger.info("v2 spec-gen parsing %s", source_file)

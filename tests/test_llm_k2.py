@@ -820,3 +820,86 @@ def test_oracle_disagreement_diagnose_uses_disagreement_role(monkeypatch):
     assert role == "disagreement_diagnose", (
         f"diagnose() should pass role='disagreement_diagnose', got {role!r}"
     )
+
+
+# --- CLI provider-routing flags (--provider / --specs-via-claude-code /
+#     --claude-code-agentic), Step 1 + Step 2 ----------------------------------
+
+def test_specs_via_claude_code_routes_only_spec_roles(monkeypatch):
+    """--specs-via-claude-code routes spec_gen + refinement to claude-code and
+    leaves every other role on the global default."""
+    for key in ("BMC_AGENT_LLM_SPEC_GEN_PROVIDER", "BMC_AGENT_LLM_REFINEMENT_PROVIDER",
+                "BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER"):
+        monkeypatch.delenv(key, raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args, _apply_model_arg
+    from bmc_agent.config import Config
+
+    args = build_parser().parse_args(
+        ["verify", "--source", "x.c", "--driver", "d", "--specs-via-claude-code"]
+    )
+    cfg = Config.from_env()
+    _apply_model_arg(cfg, args)
+    _apply_provider_args(cfg, args)
+
+    assert cfg.role_settings("spec_gen")["provider"] == "claude-code"
+    assert cfg.role_settings("refinement")["provider"] == "claude-code"
+    # A non-spec role keeps the global default (not forced to claude-code).
+    assert cfg.role_settings("realism")["provider"] == cfg.llm_provider
+    assert cfg.claude_code_agentic is False
+
+
+def test_provider_flag_sets_global(monkeypatch):
+    monkeypatch.delenv("BMC_AGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("BMC_AGENT_LLM_DEFAULT_PROVIDER", raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args
+    from bmc_agent.config import Config
+
+    args = build_parser().parse_args(
+        ["verify", "--source", "x.c", "--driver", "d", "--provider", "claude-code"]
+    )
+    cfg = Config.from_env()
+    _apply_provider_args(cfg, args)
+    assert cfg.llm_provider == "claude-code"
+
+
+def test_no_provider_flags_is_noop(monkeypatch):
+    monkeypatch.delenv("BMC_AGENT_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("BMC_AGENT_LLM_DEFAULT_PROVIDER", raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args
+    from bmc_agent.config import Config
+
+    args = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d"])
+    cfg = Config.from_env()
+    before_provider, before_overrides = cfg.llm_provider, dict(cfg.llm_role_overrides)
+    _apply_provider_args(cfg, args)
+    assert cfg.llm_provider == before_provider
+    assert cfg.llm_role_overrides == before_overrides
+    assert cfg.claude_code_agentic is False
+
+
+def test_claude_code_agentic_flag_and_add_dirs(tmp_path, monkeypatch):
+    monkeypatch.delenv("BMC_AGENT_CLAUDE_CODE_AGENTIC", raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args
+    from bmc_agent.config import Config
+
+    src = tmp_path / "mod.c"
+    src.write_text("int f(void){return 0;}\n")
+    inc = tmp_path / "inc"
+    inc.mkdir()
+    args = build_parser().parse_args(
+        ["verify", "--source", str(src), "--driver", "d",
+         "--specs-via-claude-code", "--claude-code-agentic",
+         "--include-dir", str(inc)]
+    )
+    cfg = Config.from_env()
+    _apply_provider_args(cfg, args)
+    assert cfg.claude_code_agentic is True
+    # source dir + include dir are granted, de-duped, no cwd surprises.
+    assert str(src.resolve().parent) in cfg.claude_code_add_dirs
+    assert str(inc.resolve()) in cfg.claude_code_add_dirs
+
+
+def test_claude_code_agentic_env(monkeypatch):
+    monkeypatch.setenv("BMC_AGENT_CLAUDE_CODE_AGENTIC", "1")
+    from bmc_agent.config import Config
+    assert Config.from_env().claude_code_agentic is True

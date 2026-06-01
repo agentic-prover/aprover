@@ -134,6 +134,25 @@ class Config:
     # ``BMC_AGENT_CLAUDE_CODE_TIMEOUT_S``. Ignored when provider != claude-code.
     claude_code_timeout_s: float = 600.0
 
+    # Agentic claude-code mode. When True (and provider == "claude-code"), the
+    # CLI is granted the read-only tools in ``claude_code_tools`` and is allowed
+    # to read files under ``claude_code_add_dirs`` while it answers — so spec
+    # generation / refinement can actually go read caller sites and adjacent
+    # code to ground a precondition, instead of a one-shot text completion.
+    # Off by default (text-only, identical shape to the API path). Toggle via
+    # ``--claude-code-agentic`` or ``BMC_AGENT_CLAUDE_CODE_AGENTIC=1``.
+    claude_code_agentic: bool = False
+    # Read-only tool allowlist handed to ``claude -p`` in agentic mode. Keep it
+    # read-only (no Bash/Write/Edit) so a spec-gen call can't mutate the tree.
+    claude_code_tools: str = "Read,Grep,Glob"
+    # Directories the agentic claude-code call may read. Populated by the CLI
+    # from the source file's directory + any --include-dir. cwd is always
+    # readable regardless; this widens access to the project tree.
+    claude_code_add_dirs: "list[str]" = field(default_factory=list)
+    # Permission mode for the agentic call. ``dontAsk`` auto-denies anything
+    # outside the allowlist silently (no interactive prompt / hang).
+    claude_code_permission_mode: str = "dontAsk"
+
     # Per-role LLM overrides for hybrid backends. Maps a role name (e.g.
     # "spec_gen", "feedback_distill") to a partial settings dict with
     # any subset of {"model", "base_url", "api_key", "provider"}. When
@@ -632,6 +651,12 @@ class Config:
             ),
             claude_code_bin=os.environ.get("BMC_AGENT_CLAUDE_CODE_BIN", "claude"),
             claude_code_timeout_s=float(os.environ.get("BMC_AGENT_CLAUDE_CODE_TIMEOUT_S", "600.0")),
+            claude_code_agentic=os.environ.get("BMC_AGENT_CLAUDE_CODE_AGENTIC", "false").lower()
+            in ("1", "true", "yes"),
+            claude_code_tools=os.environ.get("BMC_AGENT_CLAUDE_CODE_TOOLS", "Read,Grep,Glob"),
+            claude_code_permission_mode=os.environ.get(
+                "BMC_AGENT_CLAUDE_CODE_PERMISSION_MODE", "dontAsk"
+            ),
             lite_mode=os.environ.get("BMC_AGENT_LITE_MODE", "false").lower() == "true",
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
