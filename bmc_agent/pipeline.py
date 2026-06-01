@@ -466,17 +466,7 @@ class AMCPipeline:
                 callee_to_callers.setdefault(callee, set()).add(fn_name)
 
         # ------------------------------------------------------------------
-        # Phase 1.5: Per-function CBMC flag selection [AGENTIC]
-        # ------------------------------------------------------------------
-        flag_selections: dict = {}
-        if getattr(self.config, "enable_flag_selection", False):
-            from bmc_agent.flag_selector import FlagSelector
-            logger.info("--- Phase 1.5: Selecting per-function CBMC flags ---")
-            selector = FlagSelector(self.config, self.llm)
-            flag_selections = selector.select_all(all_funcs)
-
-        # ------------------------------------------------------------------
-        # Phase 2: Run BMC on all functions
+        # Phase 2 scope (computed FIRST so flag selection can be scoped to it).
         # ------------------------------------------------------------------
         # only_functions restricts WHICH functions get verified (CBMC +
         # refinement), while all_funcs stays complete so spec context and
@@ -491,6 +481,23 @@ class AMCPipeline:
                 logger.warning("only_functions not found in %s: %s", source_file, ", ".join(missing))
             logger.info("only_functions: restricting Phase 2 to %d of %d functions",
                         len(funcs_to_check), len(all_funcs))
+
+        # ------------------------------------------------------------------
+        # Phase 1.5: Per-function CBMC flag selection [AGENTIC]
+        # ------------------------------------------------------------------
+        # Scope flag selection to the functions actually being VERIFIED, not the
+        # whole call graph. Otherwise it flag-selects every corpus function even
+        # when only_functions checks one — which, when the cbmc_driver role is
+        # agentic, would fan out into one claude-code call per corpus function
+        # instead of per checked function.
+        flag_selections: dict = {}
+        if getattr(self.config, "enable_flag_selection", False):
+            from bmc_agent.flag_selector import FlagSelector
+            logger.info("--- Phase 1.5: Selecting per-function CBMC flags (%d fn) ---",
+                        len(funcs_to_check))
+            selector = FlagSelector(self.config, self.llm)
+            flag_selections = selector.select_all(funcs_to_check)
+
         logger.info("--- Phase 2: Running BMC on %d functions ---", len(funcs_to_check))
         # Stash on self so the feedback-loop re-invocations of check_function
         # can pass the same per-function selection back through. Without this,
