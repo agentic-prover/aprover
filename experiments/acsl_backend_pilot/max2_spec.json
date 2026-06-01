@@ -1,0 +1,12 @@
+{
+  "function_name": "max2",
+  "precondition": "true",
+  "postcondition": "result >= x && result >= y && (result == x || result == y) && ((x >= y && result == x) || (y > x && result == y))",
+  "callee_specs": {},
+  "loop_invariants": [],
+  "status": "generated",
+  "spec_disagreement": false,
+  "pre_validity": "",
+  "pre_protocol": "",
+  "evidence": {}
+}

@@ -1,0 +1,24 @@
+{
+  "coverage_labels": [
+    {
+      "id": "nonnull",
+      "reference": "requires arr != \\null",
+      "covered": true
+    },
+    {
+      "id": "bounds",
+      "reference": "requires 0 <= idx < len",
+      "covered": true
+    },
+    {
+      "id": "valid_read_range",
+      "reference": "requires \\valid_read(arr + (0 .. len - 1))",
+      "covered": true
+    },
+    {
+      "id": "return_element",
+      "reference": "ensures \\result == arr[idx]",
+      "covered": true
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "function_name": "read_at",
+  "precondition": "valid_range(arr, 0, len) && idx >= 0 && idx < len",
+  "postcondition": "true",
+  "callee_specs": {},
+  "loop_invariants": [],
+  "status": "generated",
+  "spec_disagreement": false,
+  "pre_validity": "",
+  "pre_protocol": "",
+  "evidence": {}
+}

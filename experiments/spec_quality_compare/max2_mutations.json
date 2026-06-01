@@ -1,0 +1,25 @@
+{
+  "mutations": [
+    {
+      "name": "return_left_argument",
+      "old": "return x >= y ? x : y;",
+      "new": "return x;"
+    },
+    {
+      "name": "return_zero",
+      "old": "return x >= y ? x : y;",
+      "new": "return 0;"
+    },
+    {
+      "name": "return_minimum",
+      "old": "return x >= y ? x : y;",
+      "new": "return x < y ? x : y;"
+    },
+    {
+      "name": "tie_break_equal_case",
+      "old": "return x >= y ? x : y;",
+      "new": "return x > y ? x : y;",
+      "equivalent_hint": true
+    }
+  ]
+}

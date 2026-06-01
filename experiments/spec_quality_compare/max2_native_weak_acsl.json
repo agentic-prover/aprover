@@ -1,0 +1,18 @@
+{
+  "function_name": "max2",
+  "requires": [
+    "\\true"
+  ],
+  "assigns": [
+    "\\nothing"
+  ],
+  "ensures": [
+    "\\true"
+  ],
+  "loop_invariants": [],
+  "raw_acsl": "",
+  "generation_metadata": {
+    "source": "handwritten spec-quality fixture",
+    "intended_use": "valid but weak scalar baseline"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "mutations": [
+    {
+      "name": "return_first_element",
+      "old": "return arr[idx];",
+      "new": "return arr[0];"
+    },
+    {
+      "name": "return_zero",
+      "old": "return arr[idx];",
+      "new": "return 0;"
+    },
+    {
+      "name": "return_last_element",
+      "old": "return arr[idx];",
+      "new": "return arr[len - 1];"
+    }
+  ]
+}

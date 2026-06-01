@@ -1,0 +1,22 @@
+{
+  "function_name": "max2",
+  "requires": [
+    "\\true"
+  ],
+  "assigns": [
+    "\\nothing"
+  ],
+  "ensures": [
+    "\\result >= x",
+    "\\result >= y",
+    "\\result == x || \\result == y",
+    "x >= y ==> \\result == x",
+    "y > x ==> \\result == y"
+  ],
+  "loop_invariants": [],
+  "raw_acsl": "",
+  "generation_metadata": {
+    "source": "handwritten spec-quality fixture",
+    "intended_use": "strong scalar baseline"
+  }
+}

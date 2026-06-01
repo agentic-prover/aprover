@@ -1,0 +1,24 @@
+{
+  "coverage_labels": [
+    {
+      "id": "result_ge_x",
+      "reference": "ensures \\result >= x",
+      "covered": true
+    },
+    {
+      "id": "result_ge_y",
+      "reference": "ensures \\result >= y",
+      "covered": true
+    },
+    {
+      "id": "result_is_input",
+      "reference": "ensures \\result == x || \\result == y",
+      "covered": true
+    },
+    {
+      "id": "branch_semantics",
+      "reference": "ensures x >= y ==> \\result == x; ensures y > x ==> \\result == y",
+      "covered": true
+    }
+  ]
+}

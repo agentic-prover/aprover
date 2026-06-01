@@ -1,0 +1,20 @@
+{
+  "function_name": "read_at",
+  "requires": [
+    "arr != \\null",
+    "len > 0",
+    "0 <= idx < len",
+    "\\valid_read(arr + (0 .. len - 1))"
+  ],
+  "assigns": [
+    "\\nothing"
+  ],
+  "ensures": [
+    "\\result == arr[idx]"
+  ],
+  "loop_invariants": [],
+  "raw_acsl": "",
+  "generation_metadata": {
+    "source": "handwritten smoke spec"
+  }
+}

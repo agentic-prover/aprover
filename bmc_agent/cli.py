@@ -1437,6 +1437,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chk.set_defaults(func=_cmd_check)
 
+    from bmc_agent.acsl_cli import add_acsl_subcommands
+
+    add_acsl_subcommands(subparsers, _add_model_arg)
+
     # --- verify ---
     ver = subparsers.add_parser(
         "verify",
