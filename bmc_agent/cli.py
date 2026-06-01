@@ -57,22 +57,31 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     explicit ``BMC_AGENT_LLM_*`` settings still compose.
     """
     agentic = getattr(args, "agentic", False)
+    agentic_refine = getattr(args, "agentic_refine", False)
 
     provider = getattr(args, "provider", "") or ""
     if provider:
         config.llm_provider = provider  # type: ignore[attr-defined]
 
-    # --agentic implies specs+refinement via claude-code, tools-on, and both
-    # agentic guards. Individual flags still work on their own.
-    want_specs_cc = agentic or getattr(args, "specs_via_claude_code", False)
-    want_cc_tools = agentic or getattr(args, "claude_code_agentic", False)
+    # Which roles route to the Claude Code CLI:
+    #   --agentic         -> spec_gen + refinement (full; spec-gen also agentic — slow)
+    #   --agentic-refine  -> refinement only (LEAN; spec-gen stays on the fast
+    #                        default provider — recommended for batches)
+    #   --specs-via-claude-code -> spec_gen + refinement (explicit)
+    cc_roles: set[str] = set()
+    if agentic or getattr(args, "specs_via_claude_code", False):
+        cc_roles |= {"spec_gen", "refinement"}
+    if agentic_refine:
+        cc_roles |= {"refinement"}
 
-    if want_specs_cc:
+    want_cc_tools = agentic or agentic_refine or getattr(args, "claude_code_agentic", False)
+
+    if cc_roles:
         overrides = getattr(config, "llm_role_overrides", None)
         if overrides is None:
             overrides = {}
             config.llm_role_overrides = overrides  # type: ignore[attr-defined]
-        for role in ("spec_gen", "refinement"):
+        for role in sorted(cc_roles):
             merged = dict(overrides.get(role, {}))
             merged["provider"] = "claude-code"
             overrides[role] = merged
@@ -91,12 +100,14 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         seen: set[str] = set()
         config.claude_code_add_dirs = [d for d in dirs if not (d in seen or seen.add(d))]  # type: ignore[attr-defined]
 
-    if agentic:
+    if agentic or agentic_refine:
         # The verify/verify-dir-only guards. Harmless on commands that don't use
         # them (generate, etc.) — the fields just go unread.
         config.enable_soundness_gate = True  # type: ignore[attr-defined]
         config.enable_agentic_harness_repair = True  # type: ignore[attr-defined]
-        # Split spec gen: agentic postcondition/stubs + contract-only precondition.
+        # Split spec gen: contract-only precondition (pass 2 runs on whatever
+        # provider spec_gen is on — agentic under --agentic, flat under
+        # --agentic-refine; the contract POLICY applies either way).
         config.enable_split_spec_gen = True  # type: ignore[attr-defined]
 
 
@@ -1344,7 +1355,22 @@ def build_parser() -> argparse.ArgumentParser:
                 "tools, enable the caller-grounded soundness gate on refinement, "
                 "and the agentic harness-repair fallback on CBMC build errors. "
                 "Equivalent to --specs-via-claude-code --claude-code-agentic "
-                "--enable-soundness-gate --enable-agentic-harness-repair."
+                "--enable-soundness-gate --enable-agentic-harness-repair. NOTE: "
+                "routes spec-gen to claude-code too (slow); for batches prefer "
+                "--agentic-refine."
+            ),
+        )
+        p.add_argument(
+            "--agentic-refine",
+            action="store_true",
+            default=False,
+            dest="agentic_refine",
+            help=(
+                "LEAN agentic: route ONLY refinement (+ its soundness guard) to "
+                "the Claude Code CLI with tools, and enable the guard / "
+                "harness-repair / split-spec-gen — but keep SPEC GENERATION on "
+                "the fast default provider. Recommended for batch runs (avoids "
+                "slow per-function agentic spec-gen)."
             ),
         )
         p.add_argument(

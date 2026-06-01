@@ -924,3 +924,25 @@ def test_agentic_umbrella_flag(monkeypatch):
     assert cfg.enable_agentic_harness_repair is True
     # non-spec roles stay on the default
     assert cfg.role_settings("realism")["provider"] == cfg.llm_provider
+
+
+def test_agentic_refine_lean_flag(monkeypatch):
+    """--agentic-refine routes ONLY refinement to claude-code (spec-gen stays on
+    the fast default provider) but still enables the guards + split spec-gen."""
+    for k in ("BMC_AGENT_LLM_SPEC_GEN_PROVIDER", "BMC_AGENT_LLM_REFINEMENT_PROVIDER",
+              "BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER",
+              "BMC_AGENT_SPEC_GEN_SPLIT", "BMC_AGENT_ENABLE_SOUNDNESS_GATE"):
+        monkeypatch.delenv(k, raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args
+    from bmc_agent.config import Config
+    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic-refine"])
+    cfg = Config.from_env()
+    _apply_provider_args(cfg, a)
+    # refinement -> claude-code; spec_gen stays default (the whole point)
+    assert cfg.role_settings("refinement")["provider"] == "claude-code"
+    assert cfg.role_settings("spec_gen")["provider"] == cfg.llm_provider  # NOT claude-code
+    assert cfg.role_settings("spec_gen")["provider"] != "claude-code"
+    assert cfg.claude_code_agentic is True
+    assert cfg.enable_soundness_gate is True
+    assert cfg.enable_agentic_harness_repair is True
+    assert cfg.enable_split_spec_gen is True

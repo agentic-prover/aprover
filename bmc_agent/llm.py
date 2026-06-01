@@ -436,9 +436,17 @@ class LLMClient:
         cmd += ["--output-format", "json", "--no-session-persistence"]
         # --model is optional; when ``llm_model`` is empty or looks like a
         # non-claude name (e.g. left over from a K2 Think config), we let the
-        # CLI pick the default for the user's session.
+        # CLI pick the default for the user's session. Also skip provider-prefixed
+        # ids like "anthropic/claude-sonnet-4.5" (OpenRouter/LiteLLM form): the
+        # claude CLI wants a bare alias ("sonnet"/"opus") or native id, not a
+        # path — so when a global OpenRouter model leaks into a claude-code-routed
+        # role, fall back to the CLI default instead of passing an invalid id.
         model = (self.config.llm_model or "").strip()
-        if model and ("claude" in model.lower() or model.lower() in ("sonnet", "opus", "haiku")):
+        if (
+            model
+            and "/" not in model
+            and ("claude" in model.lower() or model.lower() in ("sonnet", "opus", "haiku"))
+        ):
             cmd += ["--model", model]
         if system_prompt:
             cmd += ["--system-prompt", system_prompt]
