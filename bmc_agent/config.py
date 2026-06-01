@@ -430,6 +430,18 @@ class Config:
     # downside — a non-building harness yields no verdict either way. Opt-in:
     # ``--enable-agentic-harness-repair`` / ``BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR``.
     enable_agentic_harness_repair: bool = False
+
+    # Split spec generation (pass 1 / pass 2). When True, V2 keeps its
+    # caller-grounded POSTCONDITION + callee stubs (pass 1, where reading real
+    # code helps accuracy) but regenerates the PRECONDITION via a separate
+    # contract-only pass (pass 2) using the union / keep-structural-validity /
+    # drop-data-value policy — so the precondition encodes the function's
+    # tolerance contract, not what the observed callers happen to pass (which
+    # would assume bugs away at generation time, upstream of the soundness
+    # gate). Applies to the LLM-generated spec path only; the conservative
+    # boundary / handle-contract short-circuits are left untouched. Opt-in;
+    # turned on by --agentic. Toggle: ``BMC_AGENT_SPEC_GEN_SPLIT``.
+    enable_split_spec_gen: bool = False
     # When the judge rules a CEx UNREALISTIC and the agentic harness is on,
     # hand the verdict reasoning + harness + witness back to the agentic
     # generator so it can rewrite the harness. Bounded by this round count.
@@ -727,6 +739,8 @@ class Config:
             in ("1", "true", "yes"),
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
             enable_agentic_harness_repair=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR", "false").lower()
+            in ("1", "true", "yes"),
+            enable_split_spec_gen=os.environ.get("BMC_AGENT_SPEC_GEN_SPLIT", "false").lower()
             in ("1", "true", "yes"),
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),

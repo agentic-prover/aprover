@@ -96,6 +96,8 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # them (generate, etc.) — the fields just go unread.
         config.enable_soundness_gate = True  # type: ignore[attr-defined]
         config.enable_agentic_harness_repair = True  # type: ignore[attr-defined]
+        # Split spec gen: agentic postcondition/stubs + contract-only precondition.
+        config.enable_split_spec_gen = True  # type: ignore[attr-defined]
 
 
 def _print_ai_layers(config) -> None:

@@ -31,6 +31,7 @@ from typing import Optional, TYPE_CHECKING
 
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.prompts import (
+    CONTRACT_PRECONDITION_PROMPT,
     render_caller_grounded_spec_prompt,
     spec_system_prompt_for,
 )
@@ -673,6 +674,85 @@ class SpecGeneratorV2:
 
     # -- per-function flow ---------------------------------------------------
 
+    def _contract_precondition(self, func_info, bundle) -> "str | None":
+        """Pass 2: regenerate ONLY the precondition as the function's tolerance
+        CONTRACT (union of reachable inputs: keep structural-validity that every
+        caller establishes, drop value constraints on attacker-controlled data),
+        independent of what the observed callers happen to pass. Returns the new
+        precondition DSL string, or None on failure (caller keeps the original).
+        """
+        sig = func_info.signature
+        params_str = ", ".join(f"{t} {n}" for t, n in sig.parameters) or "void"
+        fn_sig_str = f"{sig.return_type} {sig.name}({params_str})"
+        callers = getattr(bundle, "callers", None) or []
+        if callers:
+            lines = [
+                f"Observed call sites ({len(callers)}) — CONTEXT ONLY, to confirm "
+                "structural universals; do NOT collapse the precondition to them:"
+            ]
+            for i, c in enumerate(callers, start=1):
+                try:
+                    rendered = c.render()
+                except Exception:
+                    rendered = str(c)
+                lines.append(f"--- caller_site_{i} ---\n{rendered}")
+            callers_block = "\n".join(lines) + "\n"
+        else:
+            callers_block = "Observed call sites: NONE in corpus.\n"
+        prompt = CONTRACT_PRECONDITION_PROMPT.format(
+            fn_signature=fn_sig_str,
+            fn_body=(func_info.body or "")[:4000],
+            callers_block=callers_block,
+        )
+        try:
+            resp = self.llm.complete(
+                self._spec_system_prompt, prompt, role="spec_gen", max_tokens=1200,
+            )
+        except Exception as exc:
+            logger.warning(
+                "v2 [%s]: contract-precondition (pass 2) LLM error: %s",
+                func_info.name, exc,
+            )
+            return None
+        data = _extract_json_object(resp)
+        if not data:
+            logger.warning(
+                "v2 [%s]: contract-precondition (pass 2) unparseable response",
+                func_info.name,
+            )
+            return None
+        pre = data.get("pre_validity")
+        if not isinstance(pre, str) or not pre.strip():
+            return None
+        return pre.strip()
+
+    def _maybe_split_precondition(self, spec: Spec, func_info, bundle) -> Spec:
+        """If split spec-gen is on, override the (caller-grounded) precondition
+        with the contract-only pass-2 result, keeping the pass-1 postcondition +
+        callee stubs. No-op when disabled or when pass 2 fails."""
+        if not getattr(self.config, "enable_split_spec_gen", False):
+            return spec
+        new_pre = self._contract_precondition(func_info, bundle)
+        if not new_pre:
+            return spec
+        from dataclasses import replace
+        protocol = getattr(spec, "pre_protocol", "") or ""
+        parts = [p for p in (new_pre, protocol) if p.strip() and p.strip() != "true"]
+        new_precondition = " && ".join(parts) if parts else "true"
+        logger.info(
+            "v2 [%s]: split spec-gen — precondition is now contract-only "
+            "(%r -> %r); postcondition/stubs unchanged",
+            func_info.name, (spec.precondition or "")[:80], new_precondition[:80],
+        )
+        evidence = dict(getattr(spec, "evidence", {}) or {})
+        evidence[new_pre] = ["contract_precondition:pass2"]
+        return replace(
+            spec,
+            precondition=new_precondition,
+            pre_validity=new_pre,
+            evidence=evidence,
+        )
+
     def _generate_one(
         self,
         *,
@@ -781,6 +861,20 @@ class SpecGeneratorV2:
             n_callers_actual=self.k_callers,
         )
 
+        # Split spec-gen, pass 1: when the precondition is derived separately
+        # (pass 2), steer this call toward the POSTCONDITION + callee stubs and
+        # invite an agentic backend to read callee bodies / struct defs to make
+        # them accurate (where reading real code genuinely helps).
+        if getattr(self.config, "enable_split_spec_gen", False):
+            prompt += (
+                "\n\nNOTE (split spec-gen): the PRECONDITION is derived by a "
+                "separate pass — focus your effort here on an accurate "
+                "POSTCONDITION and callee stub contracts. If you have "
+                "file-reading tools, you MAY read the bodies of the callees "
+                "listed above and the definitions of any struct types this "
+                "function manipulates to ground them.\n"
+            )
+
         # Step 5: delegate to SpecGenAgent for the LLM-call boundary.
         # The agent owns the retry-on-parse-fail loop (max_retries =
         # MAX_PARSE_RETRIES). Validation + Spec construction happen
@@ -821,8 +915,10 @@ class SpecGeneratorV2:
                     all_specs_so_far=all_specs_so_far,
                 )
                 if refined is not None:
-                    return refined
+                    spec = refined
                 # Tool-use failed / declined → fall back to base spec.
+            # Split spec-gen, pass 2: override with the contract-only precondition.
+            spec = self._maybe_split_precondition(spec, func_info, bundle)
             return spec
 
         # Step 6+7: fall back to seed-only spec.

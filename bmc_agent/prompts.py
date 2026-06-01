@@ -1108,6 +1108,51 @@ If you see no adjacent bugs, respond with `{{"adjacent_bugs": []}}`.
 #     spec_disagreement=True flagged so the orchestrator can mark the
 #     finding for human review.
 
+CONTRACT_PRECONDITION_PROMPT = """\
+Your task: derive ONLY the PRECONDITION (the caller's obligation) for a single C
+function that will be checked by a bounded model checker. The precondition is
+what the checker ASSUMES about inputs, so it must be the function's TOLERANCE
+CONTRACT — the WEAKEST condition the function genuinely requires for memory
+safety — NOT a description of what the current callers happen to pass.
+
+Function under spec:
+```c
+{fn_signature}
+```
+Function body:
+```c
+{fn_body}
+```
+{callers_block}
+POLICY (emit the union of ALL reachable inputs, not the intersection of current
+callers):
+
+  * KEEP a clause ONLY if it is a structural memory-safety obligation that holds
+    for EVERY caller and that the function does not itself establish:
+      - pointer validity: valid(p) / !null(p) for pointers the body dereferences
+      - buffer extent the body reads/writes: valid_range(buf, 0, len)
+      - non-negativity of a size/length the body uses as an extent: len >= 0
+    Use the observed call sites only to CONFIRM such a clause is universal.
+
+  * DROP every constraint on the VALUES of attacker-controlled data — the bytes
+    or fields the function reads from its input — EVEN IF all observed callers
+    satisfy it. Examples to DROP: `buf[0] < 16`, `data[i] <= MAX`, a data-derived
+    `start < end`, magic-number equalities on input bytes, enum-range limits on
+    a parsed field. The function must tolerate untrusted / other / future
+    callers; assuming these away hides real bugs.
+
+  * If you cannot tell whether a clause is a universal structural obligation or a
+    coincidental data constraint, DROP it (keep that input free).
+
+Express clauses in the same DSL the spec generator uses (valid, valid_string,
+valid_range, in_bounds, null, owns, and C comparisons). Combine with `&&`.
+
+Output ONLY a JSON object:
+{{"pre_validity": "<&&-joined DSL clauses, or \\"true\\" if none>",
+  "reasoning": "<for each clause: kept (structural-universal) or dropped (data value) and why>"}}
+"""
+
+
 CALLER_GROUNDED_SPEC_PROMPT = """\
 Your task: draft a precise formal spec (precondition + postcondition) for a
 single C function, by RECONCILING three independent evidence sources:
