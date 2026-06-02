@@ -540,7 +540,10 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         "iterations": r.iterations,
         "asserts": list(r.asserts or []),
         "failing_asserts": list(r.failing_asserts or []),
-        "synthesized_specs": {fn: {"ensures": p} for fn, p in (r.postconditions or {}).items()},
+        "synthesized_specs": {
+            fn: {"requires": (r.preconditions or {}).get(fn, "true"), "ensures": p}
+            for fn, p in (r.postconditions or {}).items()
+        },
         "note": r.note,
     }
     try:
@@ -551,7 +554,8 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
 
     print("\n=== Synthesized specs ===")
     for fn, p in (r.postconditions or {}).items():
-        print(f"  {fn}:  ensures {p}")
+        print(f"  {fn}:  requires {(r.preconditions or {}).get(fn, 'true')}")
+        print(f"  {' ' * len(fn)}   ensures  {p}")
     print(f"\nasserts: {len(r.asserts)}   iterations: {r.iterations}")
     print(f"written: {out_path}")
     if r.ok:

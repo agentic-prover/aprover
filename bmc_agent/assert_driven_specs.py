@@ -43,6 +43,7 @@ class SynthResult:
     ok: bool
     iterations: int
     postconditions: dict = field(default_factory=dict)   # callee -> postcondition
+    preconditions: dict = field(default_factory=dict)     # callee -> precondition
     failing_asserts: list = field(default_factory=list)   # asserts still unprovable
     asserts: list = field(default_factory=list)
     note: str = ""
@@ -70,10 +71,14 @@ Build a CBMC harness that proves the `//@ assert` clauses of the entry function
 its CONTRACT, not its body.
 
 For every call `lhs = {callee}(args);` to a contracted function, replace it with:
+    /* the caller must ESTABLISH the callee's precondition */
+    __CPROVER_assert(<the callee's PRECONDITION, parameters := actual args>, "pre: <P>");
     lhs = <nondet of lhs's type>;
+    /* then the caller may ASSUME the callee's postcondition */
     __CPROVER_assume(<the callee's postcondition, with `result` := lhs and the
                       callee's parameters := the actual argument expressions>);
-(If the call has no lhs, just emit the assume with result unconstrained.)
+(If the call has no lhs, just emit the assume with result unconstrained. If the
+precondition is `true`/empty, the assert may be omitted.)
 
 Translate each `//@ assert E;` in `{entry}` to `__CPROVER_assert(E, "assert: E");`.
 
@@ -87,7 +92,7 @@ ENTRY FUNCTION:
 {entry_src}
 ```
 
-CONTRACTED CALLEES (name : signature : postcondition to assume after the call):
+CONTRACTED CALLEES (name : signature : requires <precondition> : ensures <postcondition>):
 {contracts}
 
 Output ONLY the harness in one ```c block.
@@ -168,42 +173,47 @@ def synthesize(
     gen = SpecGeneratorV2(config, llm, _NullStore(), corpus_paths=[Path(source_file)])
     specs = gen.generate_specs(str(source_file), "assertsynth", only_functions=set(callees))
     post = {c: (specs[c].postcondition if c in specs else "true") for c in callees}
+    pre = {c: (specs[c].precondition if c in specs else "true") for c in callees}
     sigs = {c: _signature_of(parsed, c) for c in callees}
     bodies = {c: parsed.function_bodies.get(c, "") for c in callees}
 
+    def _result(ok, it, failing, note):
+        return SynthResult(ok=ok, iterations=it, postconditions=dict(post),
+                           preconditions=dict(pre), failing_asserts=list(failing),
+                           asserts=asserts, note=note)
+
     for it in range(1, max_iters + 1):
-        harness = _build_sufficiency_harness(llm, config, entry, entry_src, post, sigs)
+        harness = _build_sufficiency_harness(llm, config, entry, entry_src, pre, post, sigs)
         if not harness:
-            return SynthResult(False, it, post, asserts, asserts, "could not build sufficiency harness")
+            return _result(False, it, asserts, "could not build sufficiency harness")
         res = _run(_nondet_decl() + harness, config, "main", unwind, timeout)
         failing = _failing_asserts(res)
         logger.info("assert-synth iter %d: sufficiency verified=%s, failing=%s",
                     it, res.verified, failing)
         if res.verified and not failing:
-            return SynthResult(True, it, post, [], asserts,
-                               "all //@ asserts provable from synthesized specs")
+            return _result(True, it, [], "all //@ asserts provable from synthesized specs")
 
         # Refine the postcondition of the (single) callee, grounded in its body.
         target = callees[0] if callees else None
         if not target:
-            return SynthResult(False, it, post, failing, asserts, "no callee to refine")
+            return _result(False, it, failing, "no callee to refine")
         new_post = _refine_postcondition(
             llm, config, target, sigs[target], bodies[target],
             failing[0] if failing else asserts[0], post[target])
         if not new_post or new_post == post[target]:
-            return SynthResult(False, it, post, failing, asserts,
-                               "refinement did not change the postcondition — "
-                               "assert likely false / not implied by the body")
+            return _result(False, it, failing,
+                           "refinement did not change the postcondition — "
+                           "assert likely false / not implied by the body")
         # SOUNDNESS gate: the body must actually guarantee the new postcondition.
         if not _postcondition_sound(llm, config, target, sigs[target],
                                     bodies[target], new_post, unwind, timeout):
-            return SynthResult(False, it, post, failing, asserts,
-                               f"proposed postcondition for '{target}' is NOT implied "
-                               f"by its body (would be unsound) → assert is false")
+            return _result(False, it, failing,
+                           f"proposed postcondition for '{target}' is NOT implied "
+                           f"by its body (would be unsound) → assert is false")
         post[target] = new_post
 
-    return SynthResult(False, max_iters, post, asserts, asserts,
-                       "max iterations reached without satisfying all asserts")
+    return _result(False, max_iters, asserts,
+                   "max iterations reached without satisfying all asserts")
 
 
 # --- helpers -----------------------------------------------------------------
@@ -236,9 +246,10 @@ def _signature_of(parsed, fn: str) -> str:
     return f"{sig.return_type} {sig.name}({params})"
 
 
-def _build_sufficiency_harness(llm, config, entry, entry_src, post, sigs) -> str:
+def _build_sufficiency_harness(llm, config, entry, entry_src, pre, post, sigs) -> str:
     contracts = "\n".join(
-        f"  - {c} : {sigs.get(c, c)} : {post[c]}" for c in post) or "  (none)"
+        f"  - {c} : {sigs.get(c, c)} : requires {pre.get(c, 'true')} : ensures {post[c]}"
+        for c in post) or "  (none)"
     prompt = _BUILD_HARNESS_PROMPT.format(
         entry=entry, entry_src=entry_src, contracts=contracts, callee=next(iter(post), "f"))
     txt = llm.complete(
