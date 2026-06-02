@@ -512,6 +512,35 @@ def _run_standalone(args: argparse.Namespace, config: "object") -> int:
     return 1
 
 
+def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
+    """Assertion-driven spec synthesis (see bmc_agent.assert_driven_specs)."""
+    from bmc_agent.assert_driven_specs import synthesize
+    from bmc_agent.llm import LLMClient
+
+    entry = getattr(args, "entry", None) or "main"
+    if getattr(args, "include_dir", None):
+        config.include_dirs = args.include_dir   # type: ignore[attr-defined]
+        config.preprocess = True                 # type: ignore[attr-defined]
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)  # type: ignore[attr-defined]
+
+    print(f"Assertion-driven spec synthesis: {args.source}")
+    print(f"Entry: {entry}   (refining postconditions until //@ asserts hold)")
+    r = synthesize(args.source, config, LLMClient(config), entry=entry)
+
+    print("\n=== Synthesized specs ===")
+    for fn, p in (r.postconditions or {}).items():
+        print(f"  {fn}:  ensures {p}")
+    print(f"\nasserts: {len(r.asserts)}   iterations: {r.iterations}")
+    if r.ok:
+        print("RESULT: SATISFIED — all //@ asserts are provable from the synthesized specs.")
+        return 0
+    print(f"RESULT: NOT SATISFIED — {r.note}")
+    for a in (r.failing_asserts or []):
+        print(f"  unprovable: {a}")
+    return 1
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     """Full pipeline: generate specs + run BMC + validate counterexamples (Phase 3)."""
     from bmc_agent.config import Config
@@ -603,6 +632,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     # than "is each function safe for any caller?".
     if getattr(args, "standalone", False):
         return _run_standalone(args, config)
+
+    # Assertion-driven spec synthesis: refine function postconditions until the
+    # program's //@ assert clauses are provable (and sound w.r.t. the bodies).
+    if getattr(args, "specs_from_asserts", False):
+        return _run_assert_synth(args, config)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
@@ -1688,7 +1722,13 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument(
         "--entry",
         default="main",
-        help="Entry function for --standalone mode (default: main).",
+        help="Entry function for --standalone / --specs-from-asserts mode (default: main).",
+    )
+    ver.add_argument(
+        "--specs-from-asserts",
+        action="store_true",
+        default=False,
+        help="Assertion-driven spec synthesis: treat the program's //@ assert clauses as the goal and refine function postconditions until every assert is provable AND sound (implied by the body). Reports the synthesized contracts; flags any assert no sound spec can satisfy (i.e. genuinely false).",
     )
     ver.add_argument(
         "--standalone-unwind",
