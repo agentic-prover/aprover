@@ -637,6 +637,7 @@ def _generate_stub(
     parsed_file: ParsedCFile,
     extern_sigs: Optional[dict] = None,
     assume_postcondition: bool = False,
+    verified_sound: Optional[set] = None,
 ) -> str:
     """Generate a C stub function for a callee.
 
@@ -772,13 +773,20 @@ def _generate_stub(
                 lines.extend(f"    {c}" for c in inferred)
             elif callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
                 param_names = [pname for _, pname in params]
-                # [assume_callee_postcondition] propagate a CLEAN FUNCTIONAL
-                # postcondition (C boolean over params+result) as a real assume,
-                # so the contract reaches the caller. Default-off; only fires for
-                # C-expressible postconditions (prose/ACSL fall through to the
-                # conservative comment path below, unchanged).
+                # Propagate a CLEAN FUNCTIONAL postcondition (C boolean over
+                # params+result) as a real assume, so the contract reaches the
+                # caller. Fires when EITHER:
+                #   * assume_postcondition (unconditional; only safe behind an
+                #     explicit soundness gate, e.g. assertion-driven synthesis), OR
+                #   * this callee is in verified_sound — it has been PROVEN to
+                #     satisfy its postcondition this run, so assuming it is sound
+                #     (excludes only impossible returns) and kills stub-disconnect FPs.
+                # Prose/ACSL postconditions are not C-expressible → fall through to
+                # the conservative comment path below, unchanged.
+                do_assume = assume_postcondition or (
+                    verified_sound is not None and callee_name in verified_sound)
                 direct = (_c_expressible_postcondition(callee_spec.postcondition, param_names)
-                          if assume_postcondition else None)
+                          if do_assume else None)
                 if direct:
                     lines.append("    /* [assume_callee_postcondition] functional contract */")
                     lines.append(f"    __CPROVER_assume({direct});")
@@ -3619,6 +3627,8 @@ class HarnessGenerator:
                     callee_spec,
                     parsed_file,
                     assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
+                    verified_sound=(getattr(self.config, "verified_sound_functions", None)
+                                    if getattr(self.config, "assume_verified_callee_postcondition", False) else None),
                 )
                 stubs_to_substitute.add(cname)
             stub_sections.append(stub_src)
@@ -3927,6 +3937,8 @@ class HarnessGenerator:
                 callee_spec,
                 parsed_file,
                 assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
+                    verified_sound=(getattr(self.config, "verified_sound_functions", None)
+                                    if getattr(self.config, "assume_verified_callee_postcondition", False) else None),
             )
             # _generate_stub emits a sentinel comment when it can't find a
             # signature and falls through to ``void X_stub(void)``. Skip
@@ -4544,6 +4556,8 @@ class HarnessGenerator:
                 parsed_file,
                 extern_sigs,
                 assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
+                    verified_sound=(getattr(self.config, "verified_sound_functions", None)
+                                    if getattr(self.config, "assume_verified_callee_postcondition", False) else None),
             )
             stub_sections.append(stub_src)
 

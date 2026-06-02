@@ -526,6 +526,18 @@ class AMCPipeline:
         )
         logger.info("Phase 2 complete: %d verdicts", len(verdicts))
 
+        # Register functions proven sound this pass, so the subsequent re-checks
+        # (Phase 2b auto-retry, feedback loop, CEGAR refinement) may ASSUME their
+        # postconditions when stubbing them in a caller — sound (proven) and cuts
+        # stub-disconnect false positives. No effect on this initial pass (the
+        # stubs above already ran with whatever registry existed before it).
+        try:
+            reg = getattr(self.config, "verified_sound_functions", None)
+            if reg is not None:
+                reg.update(n for n, v in verdicts.items() if getattr(v, "verified", False))
+        except Exception:
+            pass
+
         # ------------------------------------------------------------------
         # Phase 2b: Autonomous-mode CBMC-error auto-retry (Phase 1 of the
         # autonomous plan; see PLAN_autonomous_mode.md). For every function

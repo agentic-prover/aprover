@@ -199,6 +199,19 @@ class Config:
     # callee returns (sound for finding OOB/overflow), so this must NOT change
     # that path. Opt-in for assertion-driven / functional-contract verification.
     assume_callee_postcondition: bool = False
+
+    # Best-of-both DEFAULT: in a caller's stub, ASSUME a callee's (C-expressible)
+    # postcondition only when that callee has itself been verified-sound this run.
+    # Sound — body⟹post is proven, so the assume excludes only IMPOSSIBLE return
+    # values → no masked bugs — while cutting stub-disconnect false positives.
+    # (Distinct from assume_callee_postcondition above, which assumes UNVERIFIED
+    # postconditions and is only safe behind an explicit soundness gate.) The
+    # initial verification pass runs with an empty registry (= havoc, unchanged);
+    # re-checks (feedback / CEGAR refinement) consult the populated registry.
+    assume_verified_callee_postcondition: bool = True
+    # Runtime registry of function names proven to satisfy their own
+    # postcondition this run; populated after each Phase-2 pass.
+    verified_sound_functions: set = field(default_factory=set)
     # Real-libc mode: emit minimal harnesses that `#include` the original
     # .c file and let CBMC do all preprocessing via -I, instead of the
     # default Python-side `cc -E` expand-then-strip pipeline. Required
@@ -734,6 +747,7 @@ class Config:
             cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
             inline_pure_callees=os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES", "true").lower() != "false",
             assume_callee_postcondition=os.environ.get("BMC_AGENT_ASSUME_CALLEE_POST", "false").lower() == "true",
+            assume_verified_callee_postcondition=os.environ.get("BMC_AGENT_ASSUME_VERIFIED_CALLEE_POST", "true").lower() == "true",
             inline_pure_callees_max_loc=int(os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES_MAX_LOC", "30")),
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",

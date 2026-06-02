@@ -29,3 +29,18 @@ def test_flag_off_keeps_comment_unchanged():
     s = _stub(False)
     assert "__CPROVER_assume(result == *p + *q);" not in s
     assert "/* condition: result == *p + *q */" in s
+
+
+def test_verified_sound_gates_the_assume():
+    """With the unconditional flag OFF, the postcondition is assumed ONLY when the
+    callee is in the verified_sound registry (proven this run)."""
+    src = "int add(int *p, int *q){ return *p + *q; }\n"
+    parsed = parse_source_file("/tmp/t2.c", source_text=src)
+    spec = Spec(function_name="add", precondition="valid(p) && valid(q)",
+                postcondition="result == *p + *q")
+    # not in registry -> comment (havoc), unchanged
+    s0 = _generate_stub("add", spec, parsed, assume_postcondition=False, verified_sound=set())
+    assert "__CPROVER_assume(result == *p + *q);" not in s0
+    # in registry -> assume (sound: proven this run)
+    s1 = _generate_stub("add", spec, parsed, assume_postcondition=False, verified_sound={"add"})
+    assert "__CPROVER_assume(result == *p + *q);" in s1
