@@ -425,12 +425,25 @@ class BMCEngine:
                 include_dirs=list(getattr(self.config, "include_dirs", None) or []),
                 defines=list(getattr(self.config, "cbmc_defines", None) or []),
             )
-            # Prefer the Claude Code agent (stronger code-reading harness) when
-            # agentic mode is on; else fall back to bmc's in-process tool loop.
-            if getattr(self.config, "claude_code_agentic", False):
+            # Route by the RESOLVED PROVIDER, not just the claude_code_agentic
+            # flag: under --agentic the user may pin the agentic roles to an API
+            # (e.g. OpenRouter) via per-role overrides. Honour that — use the
+            # Claude Code agent ONLY when the resolved provider is actually
+            # claude-code; otherwise use bmc's in-process tool loop, which runs on
+            # the openai-compatible API. (Previously this hardcoded claude-code
+            # whenever claude_code_agentic was set, so "--agentic with API" still
+            # fell back to the claude-code subscription for harness repair.)
+            try:
+                rs = self.config.role_settings("spec_gen") if hasattr(self.config, "role_settings") else None
+                prov = (rs or {}).get("provider") or self.config.resolved_provider()
+            except Exception:
+                prov = "claude-code" if getattr(self.config, "claude_code_agentic", False) else ""
+            if prov == "claude-code":
                 logger.info("agentic harness repair: using Claude Code agent for '%s'", func.name)
                 res = agen.generate_via_claude_code(**gen_kwargs)
             else:
+                logger.info("agentic harness repair: using in-process tool loop (provider=%s) for '%s'",
+                            prov or "?", func.name)
                 res = agen.generate(**gen_kwargs)
             harness = getattr(res, "harness", None)
             if harness and not getattr(res, "last_compile_error", None):
