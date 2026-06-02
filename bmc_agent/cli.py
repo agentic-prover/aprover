@@ -474,6 +474,44 @@ def _cmd_corpus_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_standalone(args: argparse.Namespace, config: "object") -> int:
+    """Standalone whole-program verification (see bmc_agent.standalone)."""
+    from bmc_agent.standalone import verify_standalone
+
+    entry = getattr(args, "entry", None) or "main"
+    unwind = int(getattr(args, "standalone_unwind", None) or 64)
+    if getattr(args, "include_dir", None):
+        config.include_dirs = args.include_dir   # type: ignore[attr-defined]
+        config.preprocess = True                 # type: ignore[attr-defined]
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)  # type: ignore[attr-defined]
+
+    print(f"Standalone whole-program verification: {args.source}")
+    print(f"Entry: {entry}   unwind: {unwind}")
+    print("Checks: bounds, pointer, signed-overflow, pointer-overflow, "
+          "div-by-zero, unwinding-assertions")
+
+    result, n_acsl = verify_standalone(
+        args.source, config, entry=entry, unwind=unwind,
+        timeout=int(getattr(config, "cbmc_timeout", 0) or 300),
+    )
+
+    print("\n=== Standalone result ===")
+    if result.error and not result.counterexamples:
+        print(f"INVALID / CBMC ERROR: {result.error}")
+        return 2
+    if result.verified:
+        extra = f" (incl. {n_acsl} //@ assert)" if n_acsl else ""
+        print(f"VERIFICATION SUCCESSFUL — the program as written is safe{extra}.")
+        return 0
+    print(f"VERIFICATION FAILED — {len(result.counterexamples)} property violation(s):")
+    for ce in result.counterexamples[:25]:
+        loc = ce.failure_location or {}
+        where = f"{loc.get('file','?')}:{loc.get('line','?')}" if loc else ""
+        print(f"  - {ce.failing_property or '?'}  {where}  {ce.description}".rstrip())
+    return 1
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     """Full pipeline: generate specs + run BMC + validate counterexamples (Phase 3)."""
     from bmc_agent.config import Config
@@ -558,6 +596,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_realism_tools = False
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
+
+    # Standalone (whole-program) mode short-circuits the compositional pipeline:
+    # verify the program AS WRITTEN from its real entry point, no harness
+    # synthesis, no nondet injection. Answers "is THIS program safe?" rather
+    # than "is each function safe for any caller?".
+    if getattr(args, "standalone", False):
+        return _run_standalone(args, config)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
@@ -1633,6 +1678,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         dest="defines",
         help="Pass a preprocessor define to CBMC (repeatable). Use NAME or NAME=VALUE form, e.g. -D HAVE_CONFIG_H -D BUILDING_LIBCURL. Required for build-config-driven C codebases (curl, OpenSSL) where headers gate on autoconf-style flags.",
+    )
+    ver.add_argument(
+        "--standalone",
+        action="store_true",
+        default=False,
+        help="Whole-program mode: verify the program AS WRITTEN from its real entry point (no per-function harness synthesis, no nondet injection). Answers 'is THIS program safe?' Loops with concrete bounds unwind fully; //@ assert annotations are checked. Runs CBMC directly with the full memory-safety + overflow check set.",
+    )
+    ver.add_argument(
+        "--entry",
+        default="main",
+        help="Entry function for --standalone mode (default: main).",
+    )
+    ver.add_argument(
+        "--standalone-unwind",
+        type=int,
+        default=64,
+        help="Loop-unwinding bound for --standalone mode (default: 64). With --unwinding-assertions on, an undersized bound is reported, not silently assumed.",
     )
     ver.add_argument(
         "--threat-model",
