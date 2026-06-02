@@ -482,6 +482,15 @@ class AMCPipeline:
                 logger.warning("only_functions not found in %s: %s", source_file, ", ".join(missing))
             logger.info("only_functions: restricting Phase 2 to %d of %d functions",
                         len(funcs_to_check), len(all_funcs))
+            if not funcs_to_check:
+                # This file contains NONE of the requested functions (common in
+                # verify-dir --functions: the targets live in other files). Skip
+                # it — no flag selection, no Phase 2 — instead of crashing or
+                # wasting spec-gen. The cross-file call graph from Phase 1 still
+                # benefits the files that DO contain the targets.
+                logger.info("only_functions: '%s' has none of the requested functions; skipping",
+                            source_file)
+                return []
 
         # ------------------------------------------------------------------
         # Phase 1.5: Per-function CBMC flag selection [AGENTIC]

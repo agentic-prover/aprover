@@ -319,3 +319,16 @@ def test_select_all_with_timeout_override_in_response():
     result = sel.select_all({"foo": _func_info("foo")})
     assert result["foo"].timeout_override == 300
     assert "timeout=300s" in result["foo"].enabled_flags()
+
+
+def test_select_all_empty_funcs_no_crash():
+    """Regression: verify-dir --functions where a file contains none of the
+    requested functions yields an empty funcs dict. select_all must return {}
+    rather than building a ThreadPoolExecutor with max_workers=0 (which raises
+    ValueError and killed whole overnight verify-dir runs)."""
+    from bmc_agent.flag_selector import FlagSelector
+    from bmc_agent.config import Config
+    sel = FlagSelector.__new__(FlagSelector)
+    sel.config = Config()
+    sel.config.enable_flag_selection = True
+    assert sel.select_all({}) == {}

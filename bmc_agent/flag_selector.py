@@ -262,11 +262,16 @@ class FlagSelector:
         Falls back to the default (all off) for any function where the LLM
         call fails, so Phase 2 is never blocked.
         """
+        if not funcs:
+            # e.g. verify-dir --functions where this file contains none of the
+            # requested functions. Nothing to select; an empty set would make
+            # max_workers 0 and crash ThreadPoolExecutor (and kill the whole run).
+            return {}
         if not getattr(self.config, "enable_flag_selection", False):
             return {name: _DEFAULT for name in funcs}
 
         results: dict[str, FlagSelection] = {}
-        max_workers = min(len(funcs), self.config.batch_size, 8)
+        max_workers = max(1, min(len(funcs), self.config.batch_size, 8))
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             future_to_name = {
