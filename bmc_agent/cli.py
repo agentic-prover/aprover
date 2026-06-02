@@ -528,10 +528,32 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     print(f"Entry: {entry}   (refining postconditions until //@ asserts hold)")
     r = synthesize(args.source, config, LLMClient(config), entry=entry)
 
+    # Persist the synthesized contracts + per-assert status to a stable artifact.
+    import json as _json, os as _os
+    out_dir = getattr(config, "artifact_dir", None) or "."
+    _os.makedirs(out_dir, exist_ok=True)
+    out_path = _os.path.join(out_dir, "synthesized_specs.json")
+    payload = {
+        "source": str(args.source),
+        "entry": entry,
+        "satisfied": bool(r.ok),
+        "iterations": r.iterations,
+        "asserts": list(r.asserts or []),
+        "failing_asserts": list(r.failing_asserts or []),
+        "synthesized_specs": {fn: {"ensures": p} for fn, p in (r.postconditions or {}).items()},
+        "note": r.note,
+    }
+    try:
+        with open(out_path, "w") as fh:
+            _json.dump(payload, fh, indent=2)
+    except OSError as exc:
+        print(f"(warning: could not write {out_path}: {exc})")
+
     print("\n=== Synthesized specs ===")
     for fn, p in (r.postconditions or {}).items():
         print(f"  {fn}:  ensures {p}")
     print(f"\nasserts: {len(r.asserts)}   iterations: {r.iterations}")
+    print(f"written: {out_path}")
     if r.ok:
         print("RESULT: SATISFIED — all //@ asserts are provable from the synthesized specs.")
         return 0
