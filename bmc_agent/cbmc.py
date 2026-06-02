@@ -8,6 +8,7 @@ data classes.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -240,6 +241,23 @@ def _parse_cbmc_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
             verified = True
         elif "VERIFICATION FAILED" in raw:
             verified = False
+
+    # Vacuity guard (SOUNDNESS): a "SUCCESSFUL" with ZERO verification conditions
+    # means CBMC checked NOTHING — typically the function under test had no body
+    # (declared extern / not linked), so its code was never analysed. Reporting
+    # that as verified=True is a soundness false-negative (it silently passes a
+    # function whose bugs were never examined). Demote any such pass to a hard
+    # error so the pipeline treats it as INVALID/unresolved, never as safe.
+    if verified and not counterexamples:
+        m = re.search(r"Generated\s+(\d+)\s+VCC", raw)
+        if m and int(m.group(1)) == 0:
+            return CBMCResult(
+                verified=False,
+                raw_output=_cap_raw(raw),
+                error="vacuous verification: CBMC generated 0 VCCs — the function "
+                      "body was not analysed (likely declared extern / not linked). "
+                      "A safe verdict here would be unsound; treating as INVALID.",
+            )
 
     return CBMCResult(
         verified=verified,

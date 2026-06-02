@@ -243,3 +243,29 @@ def test_actionable_flag():
             assert not d.actionable
         else:
             assert d.actionable
+
+
+# --- vacuity guard: 0 VCCs must never be reported as verified ----------------
+
+def test_vacuity_guard_zero_vccs_not_verified():
+    """A 'VERIFICATION SUCCESSFUL' with 0 verification conditions means CBMC
+    analysed nothing (e.g. the function under test had no body / wasn't linked).
+    It must be demoted from verified=True to an INVALID result — else it's a
+    soundness false-negative (silently passes an unexamined function)."""
+    from bmc_agent.cbmc import _parse_cbmc_output
+    vacuous = ('[{"messageText":"**** WARNING: no body for function add"},'
+               '{"messageText":"Generated 0 VCC(s), 0 remaining after simplification"},'
+               '{"result":[]},{"messageText":"VERIFICATION SUCCESSFUL"},'
+               '{"cProverStatus":"success"}]')
+    r = _parse_cbmc_output(vacuous, "", 0)
+    assert r.verified is False
+    assert r.error and "vacuous" in r.error.lower()
+
+
+def test_vacuity_guard_nonzero_vccs_still_verified():
+    """A genuine success (>=1 VCC, no counterexamples) stays verified=True."""
+    from bmc_agent.cbmc import _parse_cbmc_output
+    real = ('[{"messageText":"Generated 5 VCC(s), 5 remaining after simplification"},'
+            '{"result":[]},{"messageText":"VERIFICATION SUCCESSFUL"}]')
+    r = _parse_cbmc_output(real, "", 0)
+    assert r.verified is True and r.error is None

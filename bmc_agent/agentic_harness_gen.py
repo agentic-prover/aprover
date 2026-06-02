@@ -405,8 +405,10 @@ SYSTEM_PROMPT_CLAUDE_CODE = (
     "You are a CBMC harness engineer. You write a single self-contained C harness "
     "(int main(void)) that lets CBMC verify one function for MEMORY SAFETY. You "
     "have read-only tools (Read/Grep/Glob) and the project source on disk — use "
-    "them to get the REAL struct/type/header definitions right. You output ONLY a "
-    "C harness in a fenced ```c block, nothing else."
+    "them to get the REAL struct/type/header definitions right. The function "
+    "under test MUST be DEFINED in the harness (body pasted in, or its .c "
+    "#include'd) — never a bare prototype, or CBMC analyses nothing and vacuously "
+    "passes. You output ONLY a C harness in a fenced ```c block, nothing else."
 )
 
 _CLAUDE_CODE_HARNESS_PROMPT = """\
@@ -420,15 +422,23 @@ exact struct/typedef/header definitions this function and its parameters need.
 
 CRITICAL — SOUNDNESS (this is the whole point; a harness that hides the bug is
 worse than none):
+  * THE FUNCTION-UNDER-TEST MUST HAVE ITS BODY IN THE HARNESS. Either paste the
+    BODY shown below verbatim into the harness, OR `#include` its .c file. NEVER
+    leave the function under test as a bare prototype / `extern` declaration:
+    CBMC would then report "no body for function" and generate 0 verification
+    conditions — a VACUOUS `VERIFICATION SUCCESSFUL` that checks nothing and
+    silently passes the bug. (Forward-declaring with no body is THE classic way
+    this harness goes wrong — do not do it for the function under test.)
   * Make every ATTACKER-CONTROLLED INPUT fully nondeterministic (nondet bytes /
     sizes / fields). Do NOT pin input data to specific values or narrow ranges.
   * Only __CPROVER_assume STRUCTURAL validity the function genuinely requires
     (a pointer is non-null, a backing buffer is N bytes). NEVER assume away a
     data value the function reads from its input — that is exactly where bugs
     live, and over-constraining produces a false `VERIFICATION SUCCESSFUL`.
-  * Keep the harness small: model the bytes directly over a bounded symbolic
-    buffer; avoid pulling in opaque types by value (forward-declare + nondet a
-    small concrete stand-in if needed).
+  * Keep the harness small. The "forward-declare + nondet a small concrete
+    stand-in" trick is ONLY for opaque PARAMETER TYPES or EXTERNAL callees whose
+    havoc'd return is acceptable — NEVER for the function under test itself,
+    which must always be defined (body present) so CBMC actually analyses it.
   * Define `int main(void)` and call the function on the symbolic inputs.
 
 FUNCTION:
