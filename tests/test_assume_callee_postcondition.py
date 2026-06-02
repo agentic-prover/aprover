@@ -44,3 +44,13 @@ def test_verified_sound_gates_the_assume():
     # in registry -> assume (sound: proven this run)
     s1 = _generate_stub("add", spec, parsed, assume_postcondition=False, verified_sound={"add"})
     assert "__CPROVER_assume(result == *p + *q);" in s1
+
+
+def test_c_expressible_rejects_dsl_implication_operators():
+    """`==>` / `<==>` are DSL, not C — must be rejected so they don't become a
+    malformed __CPROVER_assume (caller falls back to the agentic harness)."""
+    assert _c_expressible_postcondition("(x >= y) ==> (result == x)", ["x", "y"]) is None
+    assert _c_expressible_postcondition("result <==> x", ["x"]) is None
+    # but a clean comparison/ternary over params+result is still accepted
+    assert _c_expressible_postcondition("result >= x && result >= y", ["x", "y"]) == "result >= x && result >= y"
+    assert _c_expressible_postcondition("result == (x >= y ? x : y)", ["x", "y"]) == "result == (x >= y ? x : y)"

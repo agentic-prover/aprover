@@ -624,6 +624,12 @@ def _c_expressible_postcondition(post: str, param_names: list, return_var: str =
     expr = re.sub(r"\\result\b", return_var, (post or "")).strip()
     if not expr or "\\" in expr:        # ACSL \old / \forall etc. — not plain C
         return None
+    # DSL-only operators that are NOT valid C (implication / iff). Without this
+    # they slip past the identifier check and become a malformed __CPROVER_assume
+    # that CBMC mis-parses → spurious unsoundness. Reject → caller falls back to
+    # the agentic harness, which can translate them.
+    if any(op in expr for op in ("==>", "<==>", "<=>")):
+        return None
     bound = set(param_names) | {return_var, "NULL", "true", "false"}
     for tok in _C_IDENT_RE.findall(expr):
         if tok not in bound:            # any non-param/result identifier word → reject
