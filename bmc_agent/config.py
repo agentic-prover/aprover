@@ -191,6 +191,14 @@ class Config:
     # inlines everything via #include.
     inline_pure_callees: bool = True
     inline_pure_callees_max_loc: int = 30
+
+    # When True, a stubbed callee's FUNCTIONAL postcondition (a clean C boolean
+    # over its params + `result`, e.g. `result == *p + *q`) is emitted as a real
+    # ``__CPROVER_assume(...)`` on the havoc'd return — so the contract propagates
+    # to the caller. Default OFF: the memory-safety pipeline deliberately havocs
+    # callee returns (sound for finding OOB/overflow), so this must NOT change
+    # that path. Opt-in for assertion-driven / functional-contract verification.
+    assume_callee_postcondition: bool = False
     # Real-libc mode: emit minimal harnesses that `#include` the original
     # .c file and let CBMC do all preprocessing via -I, instead of the
     # default Python-side `cc -E` expand-then-strip pipeline. Required
@@ -725,6 +733,7 @@ class Config:
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
             cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
             inline_pure_callees=os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES", "true").lower() != "false",
+            assume_callee_postcondition=os.environ.get("BMC_AGENT_ASSUME_CALLEE_POST", "false").lower() == "true",
             inline_pure_callees_max_loc=int(os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES_MAX_LOC", "30")),
             strict_dsl=os.environ.get("BMC_AGENT_STRICT_DSL", "false").lower() == "true",
             raw_bytes=os.environ.get("BMC_AGENT_RAW_BYTES", "false").lower() == "true",

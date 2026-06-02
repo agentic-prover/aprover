@@ -609,11 +609,34 @@ def _emit_stub_output_param_init(params) -> list[str]:
     return out
 
 
+_C_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def _c_expressible_postcondition(post: str, param_names: list, return_var: str = "result") -> "str | None":
+    """If *post* is a clean C boolean expression over the callee's params + the
+    return value, return it (with ``\\result`` → ``result``); else None.
+
+    "Clean" = every identifier token is a parameter, the return var, or a C
+    constant — no ACSL (``\\old``), no prose ("sum of ... through"), no unmodelled
+    predicates (``valid``, ``sum``). Those cases return None so the caller falls
+    back to the conservative comment path. Used only when
+    ``assume_callee_postcondition`` is set."""
+    expr = re.sub(r"\\result\b", return_var, (post or "")).strip()
+    if not expr or "\\" in expr:        # ACSL \old / \forall etc. — not plain C
+        return None
+    bound = set(param_names) | {return_var, "NULL", "true", "false"}
+    for tok in _C_IDENT_RE.findall(expr):
+        if tok not in bound:            # any non-param/result identifier word → reject
+            return None
+    return expr
+
+
 def _generate_stub(
     callee_name: str,
     callee_spec: Optional[Spec],
     parsed_file: ParsedCFile,
     extern_sigs: Optional[dict] = None,
+    assume_postcondition: bool = False,
 ) -> str:
     """Generate a C stub function for a callee.
 
@@ -749,13 +772,24 @@ def _generate_stub(
                 lines.extend(f"    {c}" for c in inferred)
             elif callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
                 param_names = [pname for _, pname in params]
-                assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
-                if assert_stmts:
-                    lines.append("    /* Havoc return value subject to postcondition */")
-                    for stmt in assert_stmts:
-                        # In stub context, use __CPROVER_assume instead of assert
-                        stmt = stmt.replace("assert(", "__CPROVER_assume(")
-                        lines.append(f"    {stmt}")
+                # [assume_callee_postcondition] propagate a CLEAN FUNCTIONAL
+                # postcondition (C boolean over params+result) as a real assume,
+                # so the contract reaches the caller. Default-off; only fires for
+                # C-expressible postconditions (prose/ACSL fall through to the
+                # conservative comment path below, unchanged).
+                direct = (_c_expressible_postcondition(callee_spec.postcondition, param_names)
+                          if assume_postcondition else None)
+                if direct:
+                    lines.append("    /* [assume_callee_postcondition] functional contract */")
+                    lines.append(f"    __CPROVER_assume({direct});")
+                else:
+                    assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
+                    if assert_stmts:
+                        lines.append("    /* Havoc return value subject to postcondition */")
+                        for stmt in assert_stmts:
+                            # In stub context, use __CPROVER_assume instead of assert
+                            stmt = stmt.replace("assert(", "__CPROVER_assume(")
+                            lines.append(f"    {stmt}")
         lines.append("    return result;")
 
     lines.append("}")
@@ -3584,6 +3618,7 @@ class HarnessGenerator:
                     cname,
                     callee_spec,
                     parsed_file,
+                    assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
                 )
                 stubs_to_substitute.add(cname)
             stub_sections.append(stub_src)
@@ -3891,6 +3926,7 @@ class HarnessGenerator:
                 cname,
                 callee_spec,
                 parsed_file,
+                assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
             )
             # _generate_stub emits a sentinel comment when it can't find a
             # signature and falls through to ``void X_stub(void)``. Skip
@@ -4507,6 +4543,7 @@ class HarnessGenerator:
                 callee_spec,
                 parsed_file,
                 extern_sigs,
+                assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
             )
             stub_sections.append(stub_src)
 
