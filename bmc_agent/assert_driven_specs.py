@@ -161,6 +161,7 @@ def synthesize(
         return SynthResult(ok=True, iterations=0, note="no //@ assert clauses found")
 
     from bmc_agent.source_parser import parse_source_file
+    from bmc_agent.harness_generator import _c_expressible_postcondition as _cexpr
     parsed = parse_source_file(str(source_file), source_text=src)
     defined = list(parsed.functions.keys())
     entry_src = parsed.function_bodies.get(entry, "")
@@ -176,44 +177,129 @@ def synthesize(
     pre = {c: (specs[c].precondition if c in specs else "true") for c in callees}
     sigs = {c: _signature_of(parsed, c) for c in callees}
     bodies = {c: parsed.function_bodies.get(c, "") for c in callees}
+    pnames = {c: [n for _, n in (parsed.get_function_info(c).signature.parameters
+                                 if parsed.get_function_info(c) else [])] for c in callees}
 
-    def _result(ok, it, failing, note):
+    # Engine context for the FAST path: reuse the pipeline's compositional harness
+    # (callee stubs) with assume_callee_postcondition=True, so a C-expressible
+    # contract propagates to the caller. Best-effort; None → agentic-only.
+    eng = _engine_context(source_file, src, config, entry, callees)
+
+    def _cexpr_ok(c, p=None):
+        return _cexpr(p if p is not None else post[c], pnames.get(c, [])) is not None
+
+    def _result(ok, it, failing, note, backend=""):
         return SynthResult(ok=ok, iterations=it, postconditions=dict(post),
                            preconditions=dict(pre), failing_asserts=list(failing),
-                           asserts=asserts, note=note)
+                           asserts=asserts, note=(note + (f" [{backend}]" if backend else "")))
 
     for it in range(1, max_iters + 1):
-        harness = _build_sufficiency_harness(llm, config, entry, entry_src, pre, post, sigs)
-        if not harness:
-            return _result(False, it, asserts, "could not build sufficiency harness")
-        res = _run(_nondet_decl() + harness, config, "main", unwind, timeout)
-        failing = _failing_asserts(res)
-        logger.info("assert-synth iter %d: sufficiency verified=%s, failing=%s",
-                    it, res.verified, failing)
-        if res.verified and not failing:
-            return _result(True, it, [], "all //@ asserts provable from synthesized specs")
+        # SUFFICIENCY: engine stub (fast, reuses pipeline) when every contract is
+        # C-expressible; otherwise the agentic harness (handles prose/unrolled).
+        use_engine = eng is not None and all(_cexpr_ok(c) for c in callees)
+        backend = "engine" if use_engine else "agentic"
+        if use_engine:
+            verdict = _suff_engine(eng, callees, pre, post)
+            failing, verified = _failing_asserts(verdict), bool(verdict and verdict.verified)
+        else:
+            harness = _build_sufficiency_harness(llm, config, entry, entry_src, pre, post, sigs)
+            if not harness:
+                return _result(False, it, asserts, "could not build sufficiency harness", backend)
+            res = _run(_nondet_decl() + harness, config, "main", unwind, timeout)
+            failing, verified = _failing_asserts(res), res.verified
+        logger.info("assert-synth iter %d [%s]: verified=%s failing=%s", it, backend, verified, failing)
+        if verified and not failing:
+            return _result(True, it, [], "all //@ asserts provable from synthesized specs", backend)
 
-        # Refine the postcondition of the (single) callee, grounded in its body.
         target = callees[0] if callees else None
         if not target:
-            return _result(False, it, failing, "no callee to refine")
+            return _result(False, it, failing, "no callee to refine", backend)
         new_post = _refine_postcondition(
             llm, config, target, sigs[target], bodies[target],
             failing[0] if failing else asserts[0], post[target])
         if not new_post or new_post == post[target]:
             return _result(False, it, failing,
                            "refinement did not change the postcondition — "
-                           "assert likely false / not implied by the body")
-        # SOUNDNESS gate: the body must actually guarantee the new postcondition.
-        if not _postcondition_sound(llm, config, target, sigs[target],
-                                    bodies[target], new_post, unwind, timeout):
+                           "assert likely false / not implied by the body", backend)
+        # SOUNDNESS gate: body must imply the strengthened postcondition. Engine
+        # (fast) when C-expressible, else agentic.
+        if eng is not None and _cexpr_ok(target, new_post):
+            sv = _sound_engine(eng, target, pre[target], new_post)
+            sound = bool(sv and sv.verified)
+        else:
+            sound = _postcondition_sound(llm, config, target, sigs[target],
+                                         bodies[target], new_post, unwind, timeout)
+        if not sound:
             return _result(False, it, failing,
                            f"proposed postcondition for '{target}' is NOT implied "
-                           f"by its body (would be unsound) → assert is false")
+                           f"by its body (would be unsound) → assert is false", backend)
         post[target] = new_post
 
     return _result(False, max_iters, asserts,
                    "max iterations reached without satisfying all asserts")
+
+
+# --- engine backend (fast path: reuse the pipeline's compositional harness) --
+
+_ENTRY_ALIAS = "__assert_entry"   # rename `main` so it doesn't clash with the engine harness's own main
+
+
+def _engine_context(source_file, src, config, entry, callees):
+    """Build a reusable engine context for the C-expressible fast path, or None.
+
+    Translates //@ asserts → __CPROVER_assert, renames `main` (clashes with the
+    harness's own main), parses, and wires the pipeline engine with inlining OFF
+    + assume_callee_postcondition ON so callee stubs propagate functional
+    contracts. Returns a dict, or None on any failure (caller falls back to agentic)."""
+    try:
+        from bmc_agent.standalone import translate_acsl_asserts
+        from bmc_agent.source_parser import parse_source_file
+        import re as _re, tempfile as _tf
+        translated, _ = translate_acsl_asserts(src)
+        entry_name = entry
+        if entry == "main":
+            translated = _re.sub(r"\b(int|void)(\s+)main(\s*\()", rf"\1\2{_ENTRY_ALIAS}\3", translated)
+            entry_name = _ENTRY_ALIAS
+        with _tf.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
+            tf.write(translated)
+            tu = tf.name
+        parsed = parse_source_file(tu, source_text=translated)
+        entry_func = parsed.get_function_info(entry_name)
+        if entry_func is None:
+            return None
+        all_funcs = {n: parsed.get_function_info(n) for n in parsed.functions}
+        config.inline_pure_callees = False
+        config.enable_inlining_advisor = False
+        config.assume_callee_postcondition = True
+        from bmc_agent.pipeline import AMCPipeline
+        engine = AMCPipeline(config).bmc_engine
+        return {"engine": engine, "parsed": parsed, "all_funcs": all_funcs,
+                "entry_name": entry_name, "entry_func": entry_func}
+    except Exception as exc:
+        logger.info("assert-synth: engine context unavailable (%r) — agentic-only", exc)
+        return None
+
+
+def _suff_engine(eng, callees, pre, post):
+    """SUFFICIENCY via the engine: verify the entry with callees stubbed by their
+    current contracts (functional postconditions propagated). Returns the verdict."""
+    from bmc_agent.spec import Spec
+    callee_specs = {c: Spec(function_name=c, precondition=pre[c], postcondition=post[c]) for c in callees}
+    entry_spec = Spec(function_name=eng["entry_name"], precondition="true",
+                      postcondition="true", callee_specs=callee_specs)
+    return eng["engine"].check_function(eng["entry_func"], entry_spec, eng["parsed"],
+                                        "assertsynth", all_funcs=eng["all_funcs"])
+
+
+def _sound_engine(eng, callee, pre_c, new_post):
+    """SOUNDNESS via the engine: does the callee body imply `new_post`?"""
+    from bmc_agent.spec import Spec
+    cf = eng["all_funcs"].get(callee)
+    if cf is None:
+        return None
+    spec = Spec(function_name=callee, precondition=pre_c, postcondition=new_post)
+    return eng["engine"].check_function(cf, spec, eng["parsed"], "assertsynth_sound",
+                                        all_funcs=eng["all_funcs"])
 
 
 # --- helpers -----------------------------------------------------------------
