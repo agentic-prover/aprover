@@ -539,7 +539,8 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         config.cbmc_defines = list(args.defines)  # type: ignore[attr-defined]
 
     print(f"Assertion-driven spec synthesis: {args.source}")
-    print(f"Entry: {entry}   (refining postconditions until //@ asserts hold)")
+    print(f"Entry: {entry}   (refine postconditions until //@ asserts hold; "
+          "with no goal, mine + soundly verify a contract)")
     r = synthesize(args.source, config, LLMClient(config), entry=entry)
     if getattr(r, "entry", "") and r.entry != entry:   # auto-resolved to the goal-bearing fn
         print(f"  (entry auto-resolved to '{r.entry}' — the function containing the asserts)")
@@ -644,12 +645,18 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
 
     if getattr(r, "no_goals", False):
         print(f"RESULT: N/A — {r.note}.")
-        print("  (No assertion target, so no spec was synthesized and the oracle had "
-              "nothing to prove. This is NOT a pass — add a //@ assert / assert / "
+        print("  (No assertion target, and no non-trivial contract could be mined "
+              "from a function body. This is NOT a pass — add a //@ assert / assert / "
               "__VERIFIER_assert stating the expected result to make it a real target.)")
         return 2
     if r.ok:
-        print("RESULT: SATISFIED — all //@ asserts are provable from the synthesized specs.")
+        if r.asserts:
+            print("RESULT: SATISFIED — all //@ asserts are provable from the synthesized specs.")
+        else:
+            # Goal-free mining: a non-trivial contract was synthesized AND the
+            # implementation was proved to satisfy it (sound). Non-vacuous.
+            print("RESULT: SATISFIED — synthesized function contract(s) from the body "
+                  "and proved the implementation satisfies them (no explicit goal needed).")
         return 0
     print(f"RESULT: NOT SATISFIED — {r.note}")
     for a in (r.failing_asserts or []):

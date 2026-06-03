@@ -260,6 +260,33 @@ Output ONLY the new postcondition expression on one line.
 """
 
 
+def _split_conjuncts(expr: str) -> list[str]:
+    """Split a boolean expression on TOP-LEVEL ``&&`` (paren/quote-aware). A
+    conjunction of facts each of which is individually provable is itself provable,
+    so this lets contract mining keep the sound conjuncts and drop the over-claimed
+    ones. Single-clause expressions return as a one-element list."""
+    parts, depth, i, n, start = [], 0, 0, len(expr or ""), 0
+    quote = None
+    while i < n:
+        ch = expr[i]
+        if quote:
+            if ch == "\\":
+                i += 2; continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "&" and depth == 0 and i + 1 < n and expr[i + 1] == "&":
+            parts.append(expr[start:i].strip()); i += 2; start = i; continue
+        i += 1
+    parts.append(expr[start:].strip())
+    return [p for p in parts if p]
+
+
 def _nondet_decl() -> str:
     return ("int __VERIFIER_nondet_int(void);\n"
             "long __VERIFIER_nondet_long(void);\n")
@@ -296,12 +323,12 @@ def synthesize(
     # //@ assert. They are what S must let the verifier prove, not synthesis targets.
     asserts = extract_goals(src)
     if not asserts:
-        # No proof target → N/A, NOT a pass. Counting an assertion-free program as
-        # SATISFIED is a vacuous pass (nothing was proved). ok=False keeps it out of
-        # the pass bucket; no_goals lets the runner report N/A distinctly.
-        return SynthResult(ok=False, iterations=0, no_goals=True,
-                           note="no verification goal (no //@ assert / assert / "
-                                "__VERIFIER_assert) — nothing to prove")
+        # No explicit proof target. Rather than bail N/A, MINE a contract from each
+        # function's BODY and prove the body satisfies it (see _mine_contracts). That
+        # is a real obligation — the synthesized spec must be correct w.r.t. the code —
+        # so SATISFIED is non-vacuous. Still degrades to N/A when nothing non-trivial
+        # can be specified (e.g. a program that is only `main`).
+        return _mine_contracts(source_file, src, config, llm, entry, unwind, timeout)
 
     from bmc_agent.source_parser import parse_source_file
     from bmc_agent.harness_generator import _c_expressible_postcondition as _cexpr
@@ -397,6 +424,121 @@ def synthesize(
 
     return _result(False, max_iters, asserts,
                    "max iterations reached without satisfying all asserts")
+
+
+def _mine_contracts(
+    source_file, src, config, llm, entry: str, unwind: int, timeout: int,
+) -> SynthResult:
+    """Goal-free spec synthesis: the program carries no //@ assert / assert /
+    __VERIFIER_assert, so there is no caller goal to drive refinement. Instead of
+    reporting N/A, MINE a function contract from each function's BODY and prove the
+    body actually satisfies it.
+
+    This is NOT the vacuous pass the goal-required path guards against: the proof
+    obligation here is "the synthesized postcondition is SOUND — implied by the
+    implementation", discharged by the same soundness oracle (engine or CBMC harness)
+    the refinement loop uses. SATISFIED therefore means a non-trivial contract was
+    synthesized AND the code provably meets it. The CLI's Frama-C/WP step then
+    re-confirms the same contracts deductively.
+
+    Degrades to N/A only when there is genuinely nothing to specify: no function other
+    than the driver, or spec-gen yields only trivial (`true`) postconditions.
+    """
+    from bmc_agent.source_parser import parse_source_file
+    from bmc_agent.frama_c import (
+        function_assigns_nothing, insert_contract_acsl, run_wp)
+
+    parsed = parse_source_file(str(source_file), source_text=src)
+    entry = _resolve_entry(parsed, entry)        # no goals → unchanged (usually 'main')
+    defined = list(parsed.functions.keys())
+    # Targets: every defined function except the driver. `main` is an entry point that
+    # wires inputs, not a unit with an interesting contract, so it is never a target.
+    targets = [f for f in defined if f != entry and f != "main"]
+    if not targets:
+        return SynthResult(ok=False, iterations=0, no_goals=True, entry=entry,
+                           note="no verification goal and no non-driver function to "
+                                "specify — nothing to prove")
+
+    from bmc_agent.spec_generator_v2 import SpecGeneratorV2
+    gen = SpecGeneratorV2(config, llm, _NullStore(), corpus_paths=[Path(source_file)])
+    specs = gen.generate_specs(str(source_file), "assertsynth", only_functions=set(targets))
+    post = {c: (specs[c].postcondition if c in specs else "true") for c in targets}
+    pre = {c: (specs[c].precondition if c in specs else "true") for c in targets}
+
+    # Drop trivial postconditions — a `true`/empty ensures states nothing, so proving it
+    # would be vacuous. Keep only contracts with real content.
+    def _trivial(p: str) -> bool:
+        return (p or "").strip() in ("", "true", "1", "\\true")
+    post = {c: p for c, p in post.items() if not _trivial(p)}
+    if not post:
+        return SynthResult(ok=False, iterations=0, no_goals=True, entry=entry,
+                           note="no verification goal; spec-gen produced only trivial "
+                                "(true) postconditions — nothing to prove")
+    pre = {c: pre[c] for c in post}
+
+    logger.info("assert-synth: no goal — mining contracts for %s", list(post))
+
+    oracle = getattr(config, "oracle", "cbmc")
+    math_ints = bool(getattr(config, "math_ints", False))
+    fc_path = getattr(config, "frama_c_path", "frama-c")
+    fn_assigns = {c: ("\\nothing" if function_assigns_nothing(src, c) else "")
+                  for c in post}
+
+    def _conjunct_sound(c: str, clause: str) -> bool:
+        """Is a single postcondition clause implied by the body of `c`? Checked with
+        the CONFIGURED oracle — they have complementary reach:
+
+        * frama-c/WP discharges math-int functional clauses (e.g. result == p*n*r/100)
+          deductively in milliseconds — CBMC would bit-blast the nonlinear mul/div and
+          time out. This is the correct oracle for spec-synthesis contracts.
+        * CBMC checks via a deterministic verbatim-body harness (nondet inputs, assert
+          the clause), falling back to an LLM-built harness for non-scalar params."""
+        if oracle == "frama-c":
+            annotated = insert_contract_acsl(
+                src, c, requires="true", ensures=clause, assigns=fn_assigns.get(c, ""))
+            wp = run_wp(annotated, frama_c_path=fc_path,
+                        rte=not math_ints, exclude_terminates=True)
+            if wp.available:
+                return bool(wp.n_total and wp.n_proved == wp.n_total)
+            # frama-c requested but unavailable → fall through to the CBMC harness
+        h = _mk_sound_harness(parsed, c, clause)
+        if h is not None:
+            res = _run(_nondet_decl() + h, config, "main", unwind, timeout)
+            return bool(res.verified and not res.error)
+        return _postcondition_sound(
+            llm, config, c, _signature_of(parsed, c),
+            parsed.function_bodies.get(c, ""), clause, unwind, timeout)
+
+    # SOUNDNESS: keep the STRONGEST sound contract. spec-gen can over-claim (e.g.
+    # `result >= 0` on a value that may be negative), so check each top-level
+    # conjunct against the body and keep only the ones the code actually guarantees.
+    sound_post: dict[str, str] = {}
+    dropped: dict[str, list[str]] = {}
+    for c, p in post.items():
+        kept = [cl for cl in _split_conjuncts(p) if _conjunct_sound(c, cl)]
+        drop = [cl for cl in _split_conjuncts(p) if cl not in kept]
+        if kept:
+            sound_post[c] = " && ".join(kept)
+        if drop:
+            dropped[c] = drop
+        logger.info("assert-synth: '%s' kept=%s dropped=%s", c, kept, drop)
+
+    if not sound_post:
+        # Every mined clause was either trivial or unsound → no provable spec.
+        return SynthResult(
+            ok=False, iterations=1, no_goals=True, entry=entry,
+            note="no explicit goal; mined contracts but no clause was sound (body "
+                 "implies none of the proposed postconditions) — nothing provable")
+
+    pre = {c: pre.get(c, "true") for c in sound_post}
+    note = ("no explicit goal — synthesized function contract(s) from the body and "
+            "proved the implementation satisfies them (spec mined + verified sound)")
+    if dropped:
+        note += "; dropped unsound clauses: " + "; ".join(
+            f"{c}: {', '.join(cls)}" for c, cls in dropped.items())
+    return SynthResult(
+        ok=True, iterations=1, postconditions=sound_post, preconditions=pre,
+        asserts=[], entry=entry, note=note)
 
 
 # --- engine backend (fast path: reuse the pipeline's compositional harness) --
@@ -518,6 +660,37 @@ def _refine_postcondition(llm, config, callee, signature, body, failing, current
         agentic_system_prompt(config, "refinement", _REFINE_SYS),
         prompt, max_tokens=256, role="refinement")
     return (txt or "").strip().splitlines()[0].strip().strip("`").strip() if txt else ""
+
+
+def _mk_sound_harness(parsed, fn: str, clause: str) -> str | None:
+    """A deterministic CBMC soundness harness for `fn`: define the function body
+    verbatim, declare each parameter as an uninitialised (⇒ nondet) local, call it,
+    and assert `clause` (with `result` bound to the return value). Returns None when
+    a safe deterministic harness can't be built — non-scalar params (pointers/arrays
+    need backing memory) or a missing body/signature — so the caller can fall back to
+    the LLM-built harness. Reliable for leaf functions where the engine's
+    compositional harness goes vacuous."""
+    fi = parsed.get_function_info(fn)
+    if not fi:
+        return None
+    sig = fi.signature
+    params = list(sig.parameters)
+    if any(("*" in t) or ("[" in t or "[" in n) for t, n in params):
+        return None                       # pointer/array param → not deterministically nondet-able here
+    body = parsed.function_bodies.get(fn, "")   # brace block only, e.g. "{ ... }"
+    ret = (sig.return_type or "").strip()
+    if not body or not ret or ret == "void":
+        return None                       # nothing to bind `result` to
+    param_decls = ", ".join(f"{t} {n}" for t, n in params) or "void"
+    decls = "\n  ".join(f"{t} {n};" for t, n in params)
+    call_args = ", ".join(n for _, n in params)
+    expr = re.sub(r"\bresult\b", "__r", clause)
+    return (f"{ret} {fn}({param_decls}) {body}\n\n"   # reconstruct the full definition
+            f"int main(void) {{\n"
+            f"  {decls}\n"
+            f"  {ret} __r = {fn}({call_args});\n"
+            f"  __CPROVER_assert({expr}, \"sound\");\n"
+            f"  return 0;\n}}\n")
 
 
 def _postcondition_sound(llm, config, callee, signature, body, post, unwind, timeout) -> bool:
