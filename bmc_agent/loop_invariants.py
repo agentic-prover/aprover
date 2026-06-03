@@ -611,89 +611,99 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                note="no loops to annotate")
     uw = unwind or _guess_unwind(loops, 64)
     fn_src = src  # whole TU as context (benchmarks are small)
-    # Mode: array-writing loops need a quantified invariant -> loop-head assert +
-    # unwind (requires a small literal bound). Scalar loops -> havoc/assume
-    # abstraction: no unwinding, so it also handles unbounded loops AND huge literal
-    # bounds (y<100000) that would be intractable to unwind.
-    use_havoc = not _has_array_writes(loops)
-    math_ints = bool(getattr(config, "math_ints", False))
-    mode = "havoc-abstraction" + ("/math-ints" if (use_havoc and math_ints) else "") \
-        if use_havoc else "loop-head+unwind"
-    logger.info("loop-inv mode: %s (unwind=%d)", mode, uw)
-
-    def _check(ann):
-        if use_havoc:
-            return check_havoc_abstraction(src, ann, config, entry, timeout, math_ints)
-        return check_loop_invariants(src, ann, config, entry, uw, timeout)
-
-    # Phase 1: initial proposal per loop.
-    annotations = {lp.ordinal: _propose(llm, config, lp, goals, fn_src) for lp in loops}
     by_ord = {lp.ordinal: lp for lp in loops}
-    for o, invs in annotations.items():
-        logger.info("loop-inv proposed for loop %d: %s", o, invs)
+    math_ints = bool(getattr(config, "math_ints", False))
 
-    for it in range(1, max_iters + 1):
-        chk = _check(annotations)
-        logger.info("loop-inv iter %d: verified=%s failing_inv=%s goal_failed=%s",
-                    it, chk.verified, chk.failing_invariants, chk.goal_failed)
-        _log = getattr(chk.result, "raw_output", "") or ""
-        if chk.verified:
-            return LoopSynthResult(
-                ok=True, iterations=it, annotations=annotations,
-                acsl=render_loop_invariants_acsl(annotations, loops), goals=goals,
-                note="invariants are inductive and prove all goals",
-                instrumented=chk.instrumented, cbmc_log=_log)
-        if chk.unwinding_failed:
-            return LoopSynthResult(False, it, annotations,
-                                   render_loop_invariants_acsl(annotations, loops), goals,
-                                   note=f"loop not fully unwound at unwind={uw} (unbounded? "
-                                        "needs a quantifier-capable oracle, e.g. Frama-C/WP)",
-                                   unwinding_failed=True,
-                                   instrumented=chk.instrumented, cbmc_log=_log)
-        # Refine: a non-inductive invariant gets fixed; otherwise strengthen the
-        # loops implicated by the still-failing goal.
-        changed = False
-        if chk.failing_invariants:
-            # First, DETERMINISTICALLY prune the non-inductive clauses: they are
-            # often spurious (e.g. `i < N ==> A[i] == i`, false at the loop head
-            # because A[i] is written *after* the head), and the inductive
-            # behavioral clauses that remain frequently already suffice — which
-            # is also the minimality objective. Re-checked next iteration; if the
-            # pruned set is then too weak, the goal_failed branch strengthens it.
-            fset = set(chk.failing_invariants)
-            pruned = {o: [inv for n, inv in enumerate(invs) if (o, n) not in fset]
-                      for o, invs in annotations.items()}
-            if any(pruned[o] != annotations[o] for o in annotations) and any(pruned.values()):
-                logger.info("loop-inv: pruned non-inductive clauses %s", sorted(fset))
-                annotations = pruned; changed = True
-            else:
-                # nothing safely prunable (would empty a loop) → ask the LLM to fix
-                for ordn in {o for (o, _n) in chk.failing_invariants}:
-                    lp = by_ord[ordn]
-                    new = _refine(llm, config, lp, annotations[ordn],
-                                  "Some invariants are NOT preserved by the loop body (CBMC "
-                                  "refuted them). Note: an invariant holds at the TOP of the "
-                                  "body, BEFORE that iteration's writes — so a fact about the "
-                                  "element written THIS iteration is not yet true. Fix them.",
+    def _attempt(use_havoc: bool, aw: int) -> LoopSynthResult:
+        mode = (("havoc-abstraction" + ("/math-ints" if math_ints else ""))
+                if use_havoc else "loop-head+unwind")
+        logger.info("loop-inv mode: %s (unwind=%d)", mode, aw)
+
+        def _check(ann):
+            if use_havoc:
+                return check_havoc_abstraction(src, ann, config, entry, timeout, math_ints)
+            return check_loop_invariants(src, ann, config, entry, aw, timeout)
+
+        annotations = {lp.ordinal: _propose(llm, config, lp, goals, fn_src) for lp in loops}
+        for o, invs in annotations.items():
+            logger.info("loop-inv proposed for loop %d: %s", o, invs)
+
+        for it in range(1, max_iters + 1):
+            chk = _check(annotations)
+            logger.info("loop-inv iter %d: verified=%s failing_inv=%s goal_failed=%s",
+                        it, chk.verified, chk.failing_invariants, chk.goal_failed)
+            _log = getattr(chk.result, "raw_output", "") or ""
+            if chk.verified:
+                return LoopSynthResult(
+                    ok=True, iterations=it, annotations=annotations,
+                    acsl=render_loop_invariants_acsl(annotations, loops), goals=goals,
+                    note="invariants are inductive and prove all goals",
+                    instrumented=chk.instrumented, cbmc_log=_log)
+            if chk.unwinding_failed:
+                return LoopSynthResult(False, it, annotations,
+                                       render_loop_invariants_acsl(annotations, loops), goals,
+                                       note=f"loop not fully unwound at unwind={aw} (unbounded? "
+                                            "needs a quantifier-capable oracle, e.g. Frama-C/WP)",
+                                       unwinding_failed=True,
+                                       instrumented=chk.instrumented, cbmc_log=_log)
+            changed = False
+            if chk.failing_invariants:
+                # Deterministically prune non-inductive clauses (often spurious; the
+                # inductive behavioral ones that remain frequently suffice — also the
+                # minimality objective). Re-checked next iteration.
+                fset = set(chk.failing_invariants)
+                pruned = {o: [inv for n, inv in enumerate(invs) if (o, n) not in fset]
+                          for o, invs in annotations.items()}
+                if any(pruned[o] != annotations[o] for o in annotations) and any(pruned.values()):
+                    logger.info("loop-inv: pruned non-inductive clauses %s", sorted(fset))
+                    annotations = pruned; changed = True
+                else:
+                    for ordn in {o for (o, _n) in chk.failing_invariants}:
+                        lp = by_ord[ordn]
+                        new = _refine(llm, config, lp, annotations[ordn],
+                                      "Some invariants are NOT preserved by the loop body (CBMC "
+                                      "refuted them). Note: an invariant holds at the TOP of the "
+                                      "body, BEFORE that iteration's writes — so a fact about the "
+                                      "element written THIS iteration is not yet true. Fix them.",
+                                      goals, fn_src)
+                        if new and new != annotations[ordn]:
+                            annotations[ordn] = new; changed = True
+            else:  # goal_failed: invariants valid but too weak
+                for lp in loops:
+                    new = _refine(llm, config, lp, annotations[lp.ordinal],
+                                  "The invariants are valid but TOO WEAK: the goals are not "
+                                  "provable at loop exit. Strengthen / add invariants that "
+                                  "summarize the loop strongly enough to imply the goals.",
                                   goals, fn_src)
-                    if new and new != annotations[ordn]:
-                        annotations[ordn] = new; changed = True
-        else:  # goal_failed: invariants valid but too weak
-            for lp in loops:
-                new = _refine(llm, config, lp, annotations[lp.ordinal],
-                              "The invariants are valid but TOO WEAK: the goals are not "
-                              "provable at loop exit. Strengthen / add invariants that "
-                              "summarize the loop strongly enough to imply the goals.",
-                              goals, fn_src)
-                if new and new != annotations[lp.ordinal]:
-                    annotations[lp.ordinal] = new; changed = True
-        if not changed:
-            return LoopSynthResult(False, it, annotations,
-                                   render_loop_invariants_acsl(annotations, loops), goals,
-                                   note="refinement reached a fixpoint without proving the goals",
-                                   instrumented=chk.instrumented, cbmc_log=_log)
-    return LoopSynthResult(False, max_iters, annotations,
-                           render_loop_invariants_acsl(annotations, loops), goals,
-                           note="max iterations reached",
-                           instrumented=chk.instrumented,
-                           cbmc_log=getattr(chk.result, "raw_output", "") or "")
+                    if new and new != annotations[lp.ordinal]:
+                        annotations[lp.ordinal] = new; changed = True
+            if not changed:
+                return LoopSynthResult(False, it, annotations,
+                                       render_loop_invariants_acsl(annotations, loops), goals,
+                                       note="refinement reached a fixpoint without proving the goals",
+                                       instrumented=chk.instrumented, cbmc_log=_log)
+        return LoopSynthResult(False, max_iters, annotations,
+                               render_loop_invariants_acsl(annotations, loops), goals,
+                               note="max iterations reached",
+                               instrumented=chk.instrumented,
+                               cbmc_log=getattr(chk.result, "raw_output", "") or "")
+
+    # Primary mode: array-writing loops -> loop-head+unwind (quantified invariant
+    # validated per concrete iteration); scalar loops -> havoc abstraction (bound-
+    # independent, handles unbounded + huge bounds).
+    primary_havoc = not _has_array_writes(loops)
+    r = _attempt(primary_havoc, uw)
+    if r.ok or (r.unwinding_failed and not primary_havoc):
+        # ok, or an unbounded array-writing loop (loop-head can't unwind AND havoc
+        # can't do the quantified invariant) = the genuine Frama-C boundary.
+        return r
+    # Fallback: the other mode. A scalar loop whose invariant is actually an array
+    # AGGREGATE (e.g. sum == sum(a[0..p-1])) can't be expressed for havoc, but a
+    # loop-head+unwind validates an array-specific invariant per concrete iteration
+    # when the loop is bounded at the call site (e.g. sumArray(arr, 5)). Cap the
+    # fallback unwind so a small concrete bound verifies without going intractable.
+    fb_havoc = not primary_havoc
+    fb_uw = uw if fb_havoc else min(_guess_unwind(loops, 256), 300)
+    logger.info("loop-inv: primary mode did not converge (%s) — trying fallback", r.note)
+    r2 = _attempt(fb_havoc, fb_uw)
+    return r2 if r2.ok else r
