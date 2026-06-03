@@ -1,8 +1,37 @@
 """Assertion-driven spec synthesis — deterministic helpers."""
 from bmc_agent.assert_driven_specs import (
     extract_asserts, called_functions, _failing_asserts,
-    callee_lhs_map, attribute_assert,
+    callee_lhs_map, attribute_assert, extract_goals,
 )
+
+
+def test_extract_goals_all_forms():
+    src = (
+        "int main(){\n"
+        "  assert(x >= y);\n"
+        "  static_assert(y >= 1, \"y positive\");\n"
+        "  __VERIFIER_assert(A[1023] == 1023);\n"
+        "  //@ assert z == 0 ;\n"
+        "}\n"
+    )
+    goals = extract_goals(src)
+    assert "x >= y" in goals
+    assert "y >= 1" in goals                 # static_assert message dropped
+    assert "A[1023] == 1023" in goals
+    assert "z == 0" in goals                 # ACSL comment form
+
+
+def test_extract_goals_nested_parens_and_dedup():
+    src = ("int main(){ assert(f(a, b) == g(c)); assert(f(a, b) == g(c)); "
+           "__VERIFIER_assert(p && (q || r)); }")
+    goals = extract_goals(src)
+    assert goals.count("f(a, b) == g(c)") == 1      # de-duplicated
+    assert "p && (q || r)" in goals                  # balanced parens, no truncation
+
+
+def test_extract_goals_static_assert_without_message():
+    # no trailing string literal -> keep the whole condition
+    assert "n > 0" in extract_goals("_Static_assert(n > 0);")
 
 
 def test_extract_asserts():

@@ -37,6 +37,83 @@ logger = get_logger("assert_specs")
 _ACSL_ASSERT = re.compile(r"//@\s*assert\s+(.+?)\s*;", re.IGNORECASE)
 _CALL_RE_TMPL = r"\b{name}\s*\("
 
+# Verification goals are INPUTS (per the Specification Synthesis Problem): the
+# executable goal forms the program already contains, plus the ACSL comment form.
+#   assert(E);  static_assert(E[, "msg"]);  __VERIFIER_assert(E);  //@ assert E;
+_GOAL_CALL = re.compile(
+    r"\b(?:__VERIFIER_assert|static_assert|_Static_assert|assert)\s*\(", re.IGNORECASE)
+
+
+def _balanced_arg(source: str, open_paren: int) -> tuple[str, int]:
+    """Return (arg_text, index_after_close) for the parenthesised argument list
+    starting at ``source[open_paren] == '('``. Paren-balanced so nested calls and
+    commas inside the expression are handled; respects char/string literals."""
+    depth, i, n = 0, open_paren, len(source)
+    quote = None
+    while i < n:
+        ch = source[i]
+        if quote:
+            if ch == "\\":
+                i += 2; continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return source[open_paren + 1:i], i + 1
+        i += 1
+    return source[open_paren + 1:], n
+
+
+def _strip_assert_message(arg: str) -> str:
+    """`static_assert(cond, "msg")` → `cond`. Drop a trailing string-literal
+    message argument at top-level (depth 0), keep the condition expression."""
+    depth, i, n = 0, 0, len(arg)
+    quote = None
+    last_top_comma = -1
+    while i < n:
+        ch = arg[i]
+        if quote:
+            if ch == "\\":
+                i += 2; continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            last_top_comma = i
+        i += 1
+    if last_top_comma >= 0 and '"' in arg[last_top_comma:]:
+        return arg[:last_top_comma].strip()
+    return arg.strip()
+
+
+def extract_goals(source: str) -> list[str]:
+    """All verification-goal expressions (INPUTS) in source order, de-duplicated:
+    executable ``assert``/``static_assert``/``__VERIFIER_assert`` plus the ACSL
+    ``//@ assert`` comment form. The goals are what S must let the verifier prove;
+    they are NOT synthesis targets."""
+    goals: list[str] = []
+    for m in _GOAL_CALL.finditer(source):
+        arg, _ = _balanced_arg(source, m.end() - 1)
+        expr = _strip_assert_message(arg)
+        if expr:
+            goals.append(expr.strip())
+    goals.extend(extract_asserts(source))   # //@ assert E;
+    seen, out = set(), []
+    for g in goals:
+        if g not in seen:
+            seen.add(g); out.append(g)
+    return out
+
 
 @dataclass
 class SynthResult:
@@ -184,9 +261,11 @@ def synthesize(
 ) -> SynthResult:
     """Run the assertion-driven spec-synthesis loop. Returns a SynthResult."""
     src = Path(source_file).read_text(encoding="utf-8", errors="replace")
-    asserts = extract_asserts(src)
+    # Verification goals are INPUTS: assert / static_assert / __VERIFIER_assert /
+    # //@ assert. They are what S must let the verifier prove, not synthesis targets.
+    asserts = extract_goals(src)
     if not asserts:
-        return SynthResult(ok=True, iterations=0, note="no //@ assert clauses found")
+        return SynthResult(ok=True, iterations=0, note="no verification goals found")
 
     from bmc_agent.source_parser import parse_source_file
     from bmc_agent.harness_generator import _c_expressible_postcondition as _cexpr
@@ -297,6 +376,12 @@ def _engine_context(source_file, src, config, entry, callees):
         from bmc_agent.source_parser import parse_source_file
         import re as _re, tempfile as _tf
         translated, _ = translate_acsl_asserts(src)
+        # Make executable goal forms checkable by CBMC: __VERIFIER_assert has no
+        # body (CBMC would otherwise treat the goal as an uninterpreted call and
+        # skip it); map it to a CBMC assertion. `assert` is handled natively.
+        if "__VERIFIER_assert" in translated and "#define __VERIFIER_assert" not in translated:
+            translated = ('#define __VERIFIER_assert(c) __CPROVER_assert((c), "goal")\n'
+                          + translated)
         entry_name = entry
         if entry == "main":
             translated = _re.sub(r"\b(int|void)(\s+)main(\s*\()", rf"\1\2{_ENTRY_ALIAS}\3", translated)
