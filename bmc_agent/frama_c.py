@@ -130,21 +130,38 @@ def parse_wp_output(raw: str) -> tuple:
 
 def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
            timeout: int = 120, rte: bool = True, prover: str = "alt-ergo",
-           wp_timeout: int = 10) -> WPResult:
+           wp_timeout: int = 10, inline: "list[str]" = None,
+           exclude_terminates: bool = False) -> WPResult:
     """Run ``frama-c -wp`` over an ACSL-annotated source and parse the verdict.
 
     ``-wp-rte`` adds runtime-error (memory-safety/overflow) goals so the proof is
     sound, not just functional. Returns WPResult(available=False) if frama-c is
-    not on PATH (so callers degrade gracefully)."""
+    not on PATH (so callers degrade gracefully).
+
+    ``inline`` names functions whose call sites should be inlined (``-inline-calls``)
+    and whose now-redundant standalone proof obligations removed (``-remove-inlined``)
+    — used when a verification goal lives in a CALLER but the loop/invariant lives in
+    a callee: inlining lets the callee's loop invariant discharge the caller's goal
+    WITHOUT a separately-synthesized function contract (the modular-WP boundary that
+    CBMC's whole-program unwind hides). ``exclude_terminates`` drops ``@terminates``
+    goals (``-wp-prop``) — we synthesize partial-correctness specs (the asserts), not
+    loop variants, matching CBMC's bounded semantics."""
     if not frama_c_available(frama_c_path):
         return WPResult(available=False, error="frama-c not installed (not on PATH)")
     with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
         tf.write(source_with_acsl)
         path = tf.name
-    cmd = [frama_c_path, "-wp"]
+    cmd = [frama_c_path]
+    if inline:
+        fns = ", ".join(inline)
+        cmd += [f"-inline-calls={fns}", f"-remove-inlined={fns}"]
+    cmd += ["-wp"]
     if rte:
         cmd.append("-wp-rte")
-    cmd += [f"-wp-prover", prover, f"-wp-timeout", str(wp_timeout), path]
+    cmd += [f"-wp-prover", prover, f"-wp-timeout", str(wp_timeout)]
+    if exclude_terminates:
+        cmd += ["-wp-prop=-@terminates"]
+    cmd += [path]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

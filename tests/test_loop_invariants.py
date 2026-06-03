@@ -6,7 +6,7 @@ from bmc_agent.loop_invariants import (
     insert_loop_invariants, render_loop_invariants_acsl, failing_loopinvs,
     _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
     modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
-    _has_array_writes, _filter_in_scope,
+    _has_array_writes, _filter_in_scope, _enclosing_function, _loop_function_callees,
 )
 
 IC3 = (
@@ -186,3 +186,30 @@ def test_synthesize_end_to_end_with_mock_llm(tmp_path):
     assert r.annotations[0]
     assert "loop invariant \\forall integer k;" in r.acsl
     assert "A[7] == 7" in r.goals
+
+
+# --- Frama-C oracle: inline callee loops so a caller-resident goal discharges ----
+
+def test_enclosing_function_identifies_callee():
+    src = ("int f(int *a, int n){ int s=0; while(n>0){ s+=a[--n]; } return s; }\n"
+           "void main(){ int x[3]={1,2,3}; int s=f(x,3); /*@ assert s==6; */ }\n")
+    lp = find_loops(src)[0]
+    assert _enclosing_function(src, lp.start_offset) == "f"
+
+
+def test_enclosing_function_skips_control_keywords():
+    # a loop nested inside an `if` block of a callee must resolve to the callee,
+    # not the `if` (which also matches the name(...){ shape).
+    src = ("int g(int n){ int s=0; if(n>0){ for(int i=0;i<n;i++){ s+=i; } } return s; }\n"
+           "void main(){ /*@ assert 1; */ }\n")
+    lp = find_loops(src)[0]
+    assert _enclosing_function(src, lp.start_offset) == "g"
+
+
+def test_loop_function_callees_inlines_callee_not_entry():
+    # loop in a callee -> inline it; loop directly in the entry -> nothing to inline.
+    callee = ("int f(int *a, int n){ int s=0; while(n>0){ s+=a[--n]; } return s; }\n"
+              "void main(){ int x[3]={1,2,3}; int s=f(x,3); /*@ assert s==6; */ }\n")
+    assert _loop_function_callees(callee, "main") == ["f"]
+    colocated = ("void main(){ int s=0,i=0; while(i<10){ s+=i; i++; } /*@ assert s>=0; */ }\n")
+    assert _loop_function_callees(colocated, "main") == []

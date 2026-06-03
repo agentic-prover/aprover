@@ -528,17 +528,62 @@ def _loop_assigns(lp) -> str:
     return ", ".join(scalars + [f"{a}[..]" for a in arrays])
 
 
+_FUNC_DEF_RX = re.compile(
+    r"(?:^|[;}\s])([A-Za-z_]\w*)\s*\([^;{)]*\)\s*\{", re.M)
+# control keywords that also match name(...){ but are NOT function definitions
+_C_KEYWORDS = {"if", "while", "for", "switch", "do", "else", "return",
+               "sizeof", "catch"}
+
+
+def _enclosing_function(source: str, offset: int) -> str:
+    """Name of the function whose body brace-range tightly contains ``offset`` (or
+    "" if none). Used to decide which callee a loop lives in vs the entry function."""
+    best, best_open = "", -1
+    for m in _FUNC_DEF_RX.finditer(source):
+        name = m.group(1)
+        if name in _C_KEYWORDS:
+            continue
+        open_brace = source.index("{", m.end() - 1)
+        close = _matching_brace(source, open_brace)
+        if close < 0:
+            continue
+        if open_brace < offset < close and open_brace > best_open:
+            best, best_open = name, open_brace   # tightest enclosing def wins
+    return best
+
+
+def _loop_function_callees(source: str, entry: str) -> list:
+    """Functions that CONTAIN a loop and are NOT the entry — i.e. callees whose
+    loop invariant must be inlined into the caller for a caller-resident goal to be
+    discharged by WP (modular WP otherwise needs a separate function contract)."""
+    callees = []
+    for lp in find_loops(source):
+        fn = _enclosing_function(source, lp.start_offset)
+        if fn and fn != entry and fn not in callees:
+            callees.append(fn)
+    return callees
+
+
 def check_loop_invariants_wp(source: str, annotations: dict, config,
                              entry: str = "main", timeout: int = 120) -> "LoopCheck":
     """Frama-C/WP oracle: render the invariants to ACSL, splice them before each
     loop, express goals as ACSL asserts, and run ``frama-c -wp``. Handles unbounded
     loops + mathematical-integer / aggregate invariants that CBMC cannot. Returns a
-    LoopCheck (available=False inside .result when frama-c is absent)."""
+    LoopCheck (available=False inside .result when frama-c is absent).
+
+    When a goal lives in the entry function but the loop lives in a callee, the
+    callee's call sites are inlined (``run_wp(inline=...)``) so the loop invariant
+    discharges the caller's goal without a separately-synthesized contract. Goals are
+    judged on partial correctness (``exclude_terminates`` — we synthesize asserts, not
+    loop variants), matching the CBMC oracle's bounded semantics."""
     from bmc_agent import frama_c
     loops = find_loops(source)
     assigns = {lp.ordinal: _loop_assigns(lp) for lp in loops}
-    annotated = frama_c.insert_loop_invariants_acsl(_prep_goals_acsl(source), annotations, assigns)
-    wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout)
+    prepped = _prep_goals_acsl(source)
+    inline = _loop_function_callees(prepped, entry)
+    annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns)
+    wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout,
+                        inline=inline, exclude_terminates=True)
     # WP goal names: "..._loop_invariant_..." (validity) vs "...assert..." (adequacy).
     inv_failed = any("invariant" in g.lower() for g in wp.unproved)
     goal_failed = any("assert" in g.lower() for g in wp.unproved) or (
