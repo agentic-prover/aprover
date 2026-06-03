@@ -146,6 +146,10 @@ class Config:
     # Off by default (text-only, identical shape to the API path). Toggle via
     # ``--claude-code-agentic`` or ``BMC_AGENT_CLAUDE_CODE_AGENTIC=1``.
     claude_code_agentic: bool = False
+    # Loop-invariant synthesis: assume the loop body's signed arithmetic does not
+    # overflow (mathematical-integer semantics), so textbook invariants like
+    # x>=1 under x=x+y are inductive. Set by `--math-ints`. Off => machine ints.
+    math_ints: bool = False
     # Read-only tool allowlist handed to ``claude -p`` in agentic mode. Keep it
     # read-only (no Bash/Write/Edit) so a spec-gen call can't mutate the tree.
     claude_code_tools: str = "Read,Grep,Glob"

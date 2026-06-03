@@ -41,6 +41,8 @@ class LoopSite:
     head_offset: int    # char index just AFTER the body-opening '{'
     body: str           # loop body text (between the braces)
     ordinal: int        # 0-based source order
+    start_offset: int = -1   # char index of the `for`/`while` keyword
+    end_offset: int = -1     # char index just AFTER the body-closing '}'
 
 
 def _matching_brace(source: str, open_idx: int) -> int:
@@ -84,7 +86,8 @@ def find_loops(source: str) -> list[LoopSite]:
             continue
         loops.append(LoopSite(kind=m.group(1), guard=guard.strip(),
                               head_offset=j + 1, body=source[j + 1:close],
-                              ordinal=len(loops)))
+                              ordinal=len(loops), start_offset=m.start(),
+                              end_offset=close + 1))
     return loops
 
 
@@ -205,11 +208,32 @@ def failing_loopinvs(res) -> list:
     return out
 
 
+_STATIC_ASSERT_RX = re.compile(r"\b(?:static_assert|_Static_assert)\s*\(")
+
+
 def _prep_goals(source: str) -> str:
     """Make the program's verification GOALS checkable by CBMC: translate
-    ``//@ assert`` and shim ``__VERIFIER_assert`` (``assert`` is native)."""
+    ``//@ assert`` and ``static_assert`` to runtime ``__CPROVER_assert`` and shim
+    ``__VERIFIER_assert`` (``assert`` is native).
+
+    ``static_assert`` is compile-time in standard C, but these benchmarks use it
+    with RUNTIME expressions as the goal — so treat it as a runtime assertion.
+    """
     from bmc_agent.standalone import translate_acsl_asserts
+    from bmc_agent.assert_driven_specs import _balanced_arg, _strip_assert_message
     src, _ = translate_acsl_asserts(source)
+
+    out, i = [], 0
+    while True:
+        m = _STATIC_ASSERT_RX.search(src, i)
+        if not m:
+            out.append(src[i:]); break
+        out.append(src[i:m.start()])
+        arg, after = _balanced_arg(src, m.end() - 1)
+        out.append(f'__CPROVER_assert({_strip_assert_message(arg)}, "GOAL")')
+        i = after
+    src = "".join(out)
+
     if "__VERIFIER_assert" in src and "#define __VERIFIER_assert" not in src:
         src = '#define __VERIFIER_assert(c) __CPROVER_assert((c), "GOAL")\n' + src
     return src
@@ -245,6 +269,130 @@ def check_loop_invariants(source: str, annotations: dict, config,
     return LoopCheck(verified=bool(res.verified) and not finv and not goal_failed,
                      failing_invariants=finv, goal_failed=goal_failed,
                      unwinding_failed=unwinding, result=res)
+
+
+# --- havoc/assume loop abstraction (UNBOUNDED scalar loops; no unwinding) -----
+# For a loop CBMC cannot unwind (while(unknown()), symbolic bound), abstract it
+# by its invariant: assert(inv) [base] ; havoc(assigns) ; assume(inv) ;
+# if(guard){ body ; assert(inv) [step] ; assume(0) } ; <goal under inv && !guard>.
+# Sound for SCALAR invariants (the symbolic-bound `forall` problem only hits the
+# unwinding path). --math-ints assumes the body's signed arithmetic doesn't
+# overflow (= the mathematical-integer semantics these IC3-style benchmarks use).
+
+_DECL_RE = re.compile(
+    r"\b(?:unsigned\s+|signed\s+)?(?:int|long\s+long|long|short|char|size_t|"
+    r"u?int\d+_t|_Bool|bool|float|double)\b[\s*]*([A-Za-z_]\w*)")
+_ASSIGN_RE = re.compile(r"([A-Za-z_]\w*)\s*(?:=(?!=)|[-+*/%&|^]=|<<=|>>=)")
+_INCDEC_RE = re.compile(r"(?:([A-Za-z_]\w*)\s*(?:\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*))")
+_ARRAYW_RE = re.compile(r"([A-Za-z_]\w*)\s*\[[^\]]*\]\s*(?:=(?!=)|[-+*/%]=)")
+
+_NONDET = {
+    "int": "__VERIFIER_nondet_int", "unsigned int": "__VERIFIER_nondet_uint",
+    "unsigned": "__VERIFIER_nondet_uint", "long": "__VERIFIER_nondet_long",
+    "long long": "__VERIFIER_nondet_longlong", "short": "__VERIFIER_nondet_short",
+    "char": "__VERIFIER_nondet_char", "size_t": "__VERIFIER_nondet_ulong",
+    "_Bool": "__VERIFIER_nondet_bool", "bool": "__VERIFIER_nondet_bool",
+}
+
+_NONDET_PRELUDE = (
+    "int __VERIFIER_nondet_int(void); unsigned __VERIFIER_nondet_uint(void);\n"
+    "long __VERIFIER_nondet_long(void); long long __VERIFIER_nondet_longlong(void);\n"
+    "short __VERIFIER_nondet_short(void); char __VERIFIER_nondet_char(void);\n"
+    "unsigned long __VERIFIER_nondet_ulong(void); _Bool __VERIFIER_nondet_bool(void);\n")
+
+_BINOP_ASSIGN = re.compile(
+    r"([A-Za-z_]\w*(?:\[[^\]]*\])?)\s*=\s*([^;=]+?)\s*([-+*])\s*([^;]+?)\s*;")
+
+
+def modified_vars(body: str) -> tuple:
+    """(scalars, arrays) assigned in the loop body that are NOT declared inside it
+    — i.e. the loop's frame (`assigns` set). Body-local temporaries are excluded."""
+    declared = {m.group(1) for m in _DECL_RE.finditer(body)}
+    assigned = {m.group(1) for m in _ASSIGN_RE.finditer(body)}
+    for m in _INCDEC_RE.finditer(body):
+        assigned.add(m.group(1) or m.group(2))
+    arrays = {m.group(1) for m in _ARRAYW_RE.finditer(body)} - declared
+    scalars = (assigned - declared) - arrays
+    return sorted(scalars), sorted(arrays)
+
+
+def _var_type(source: str, var: str) -> str:
+    m = re.search(rf"\b((?:unsigned|signed)\s+)?(int|long\s+long|long|short|char|"
+                  rf"size_t|u?int\d+_t|_Bool|bool|float|double)\b[\s*]*\b{re.escape(var)}\b", source)
+    return ((m.group(1) or "") + m.group(2)).strip() if m else ""
+
+
+def _havoc_stmt(var: str, vtype: str) -> str:
+    fn = _NONDET.get(vtype)
+    return f"{var} = {fn}();" if fn else f"__CPROVER_havoc_object(&{var});"
+
+
+def _inject_no_overflow(body: str) -> str:
+    """Best-effort math-int mode: before each `lhs = A <op> B;` (op in + - *),
+    assume the signed operation does not overflow (widen to long long to compute
+    the true result and bound it to int range)."""
+    def repl(m):
+        a, op, b = m.group(2).strip(), m.group(3), m.group(4).strip()
+        chk = (f'__CPROVER_assume((long long)({a}) {op} (long long)({b}) <= 2147483647LL '
+               f'&& (long long)({a}) {op} (long long)({b}) >= -2147483648LL); ')
+        return chk + m.group(0)
+    return _BINOP_ASSIGN.sub(repl, body)
+
+
+def build_havoc_abstraction(source: str, loop: LoopSite, invariants: list,
+                            math_ints: bool = False) -> str:
+    """Replace `loop` in `source` with its invariant abstraction (see module note)."""
+    o = loop.ordinal
+    inv_c = [_inv_to_cbmc(inv) for inv in invariants] or ["1"]
+    base = "\n    ".join(f'__CPROVER_assert({c}, "loopinv_{o}_{n}");' for n, c in enumerate(inv_c))
+    step = "\n        ".join(f'__CPROVER_assert({c}, "loopinv_{o}_{n}");' for n, c in enumerate(inv_c))
+    assume_inv = " && ".join(f"({c})" for c in inv_c)
+    scalars, arrays = modified_vars(loop.body)
+    havoc = "\n    ".join([_havoc_stmt(v, _var_type(source, v)) for v in scalars]
+                          + [f"__CPROVER_havoc_object(&{a});" for a in arrays])
+    if loop.kind == "while":
+        guard, body, init, incr = (loop.guard or "1"), loop.body, "", ""
+    else:  # for(init; cond; incr)
+        parts = loop.guard.split(";")
+        init = parts[0].strip()
+        guard = (parts[1].strip() if len(parts) > 1 else "") or "1"
+        incr = parts[2].strip() if len(parts) > 2 else ""
+    if math_ints:
+        body = _inject_no_overflow(body)
+    nl = "\n    "
+    block = (
+        f"/* loop #{o} abstracted by its invariant (havoc/assume) */{nl}"
+        + (f"{init};{nl}" if init else "")
+        + base + nl
+        + (havoc + nl if havoc else "")
+        + f"__CPROVER_assume({assume_inv});{nl}"
+        + "if (" + guard + ") {\n        "
+        + body.strip() + "\n        "
+        + (f"{incr};\n        " if incr else "")
+        + step + "\n        "
+        + "__CPROVER_assume(0);\n    }\n"
+    )
+    return source[:loop.start_offset] + block + source[loop.end_offset:]
+
+
+def check_havoc_abstraction(source: str, annotations: dict, config, entry: str = "main",
+                            timeout: int = 120, math_ints: bool = False) -> LoopCheck:
+    """Validity+adequacy via the havoc/assume abstraction (no unwinding)."""
+    loops = find_loops(source)
+    instrumented = source
+    for lp in sorted(loops, key=lambda l: -l.start_offset):
+        invs = annotations.get(lp.ordinal) or []
+        if invs:
+            instrumented = build_havoc_abstraction(instrumented, lp, invs, math_ints)
+    instrumented = _NONDET_PRELUDE + _prep_goals(instrumented)
+    from bmc_agent.assert_driven_specs import _run
+    res = _run(instrumented, config, entry, unwind=1, timeout=timeout)
+    finv = failing_loopinvs(res)
+    goal_failed = any(not re.match(r"loopinv_\d+_\d+", (ce.description or ""))
+                      for ce in getattr(res, "counterexamples", []) or [])
+    return LoopCheck(verified=bool(res.verified) and not finv and not goal_failed,
+                     failing_invariants=finv, goal_failed=goal_failed,
+                     unwinding_failed=False, result=res)
 
 
 # --- the gen+refine driver (reuses the engine: LLM proposes, CBMC disposes) ---
@@ -368,6 +516,13 @@ def _guess_unwind(loops: list, default: int) -> int:
     return min(max(best + 2, default), 4100) if best else default
 
 
+def _has_literal_bound(loops: list) -> bool:
+    """True iff every loop has a literal trip bound CBMC can unwind to (`< N`/`<= N`).
+    Otherwise (while(unknown()), symbolic bound) the loop must be ABSTRACTED, not
+    unwound — route to the havoc/assume mode."""
+    return bool(loops) and all(re.search(r"<=?\s*\d+", lp.guard) for lp in loops)
+
+
 def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                max_iters: int = 6, unwind: int = 0,
                                timeout: int = 180) -> LoopSynthResult:
@@ -383,6 +538,18 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                note="no loops to annotate")
     uw = unwind or _guess_unwind(loops, 64)
     fn_src = src  # whole TU as context (benchmarks are small)
+    # Mode: bounded loops -> loop-head assert + unwind (handles quantified array
+    # invariants); unbounded/symbolic -> havoc/assume abstraction (scalar invs).
+    use_havoc = not _has_literal_bound(loops)
+    math_ints = bool(getattr(config, "math_ints", False))
+    mode = "havoc-abstraction" + ("/math-ints" if (use_havoc and math_ints) else "") \
+        if use_havoc else "loop-head+unwind"
+    logger.info("loop-inv mode: %s (unwind=%d)", mode, uw)
+
+    def _check(ann):
+        if use_havoc:
+            return check_havoc_abstraction(src, ann, config, entry, timeout, math_ints)
+        return check_loop_invariants(src, ann, config, entry, uw, timeout)
 
     # Phase 1: initial proposal per loop.
     annotations = {lp.ordinal: _propose(llm, config, lp, goals, fn_src) for lp in loops}
@@ -391,7 +558,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         logger.info("loop-inv proposed for loop %d: %s", o, invs)
 
     for it in range(1, max_iters + 1):
-        chk = check_loop_invariants(src, annotations, config, entry, uw, timeout)
+        chk = _check(annotations)
         logger.info("loop-inv iter %d: verified=%s failing_inv=%s goal_failed=%s",
                     it, chk.verified, chk.failing_invariants, chk.goal_failed)
         if chk.verified:

@@ -586,6 +586,27 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     return 1
 
 
+def _run_specs_bench(args: argparse.Namespace, config: "object") -> int:
+    """One-flag Specification-Synthesis benchmark runner. Turns on the
+    mathematical-integer semantics these benchmarks assume, then dispatches by
+    program content: loops → loop-invariant synthesis; otherwise → function-
+    contract synthesis. Both emit ACSL."""
+    config.math_ints = True                                   # type: ignore[attr-defined]
+    from bmc_agent.loop_invariants import find_loops
+    src = ""
+    try:
+        with open(args.source) as fh:
+            src = fh.read()
+    except OSError as exc:
+        print(f"error: cannot read {args.source}: {exc}")
+        return 2
+    if find_loops(src):
+        print("specs-bench: loops present → loop-invariant synthesis (+ --math-ints)")
+        return _run_loop_invariant_synth(args, config)
+    print("specs-bench: no loops → function-contract synthesis")
+    return _run_assert_synth(args, config)
+
+
 def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int:
     """Specification-synthesis mode: synthesize loop invariants (ACSL) that are
     inductive and sufficient to prove the program's goals (see
@@ -600,6 +621,8 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     if getattr(args, "defines", None):
         config.cbmc_defines = list(args.defines)        # type: ignore[attr-defined]
     unwind = int(getattr(args, "standalone_unwind", 0) or 0)   # 0 => auto from loop bound
+    if getattr(args, "math_ints", False):
+        config.math_ints = True                          # type: ignore[attr-defined]
 
     print(f"Loop-invariant synthesis: {args.source}")
     print(f"Entry: {entry}   (propose → CBMC validity+adequacy → refine)")
@@ -733,6 +756,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     if getattr(args, "synth_loop_invariants", False):
         return _run_loop_invariant_synth(args, config)
+
+    if getattr(args, "specs_bench", False):
+        return _run_specs_bench(args, config)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
@@ -1831,6 +1857,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Specification-synthesis mode: synthesize LOOP INVARIANTS (and render them in ACSL) that are inductive AND sufficient to prove the program's verification goals (assert / static_assert / __VERIFIER_assert / //@ assert). Reuses the gen+refine engine; CBMC validates each invariant per-iteration (Local Validity) and proves the goals (Global Adequacy) for unwindable loops.",
+    )
+    ver.add_argument(
+        "--specs-bench",
+        action="store_true",
+        default=False,
+        help="Specification-synthesis BENCHMARK preset (one flag). Reads the goals (assert/static_assert/__VERIFIER_assert///@ assert), dispatches by program content — loops → loop-invariant synthesis, otherwise → function-contract synthesis — turns on --math-ints (mathematical-integer semantics these benchmarks assume), and emits ACSL. Equivalent to picking the right synthesis mode + --math-ints automatically.",
+    )
+    ver.add_argument(
+        "--math-ints",
+        action="store_true",
+        default=False,
+        help="Loop-invariant synthesis (unbounded loops): assume the loop body's signed arithmetic does not overflow (mathematical-integer semantics, as IC3-style benchmarks and Frama-C/WP assume), so invariants like x>=1 under x=x+y are inductive. Off => machine-int (wrapping) semantics.",
     )
     ver.add_argument(
         "--standalone-unwind",

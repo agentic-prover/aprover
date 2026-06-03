@@ -5,6 +5,18 @@ from bmc_agent.loop_invariants import (
     find_loops, _inv_to_cbmc, _inv_to_acsl, _top_implication_to_or,
     insert_loop_invariants, render_loop_invariants_acsl, failing_loopinvs,
     _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
+    modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
+)
+
+IC3 = (
+    "void main(){\n"
+    "  int x = 1; int y = 1;\n"
+    "  while (unknown1()) {\n"
+    "    int t1 = x; int t2 = y;\n"
+    "    x = t1 + t2; y = t1 + t2;\n"
+    "  }\n"
+    "  static_assert(y >= 1);\n"
+    "}\n"
 )
 
 SRC = (
@@ -99,6 +111,36 @@ def test_guess_unwind_from_bound():
     loops = [LoopSite("for", "i = 0; i < 1024; i++", 0, "", 0)]
     assert _guess_unwind(loops, 64) == 1026          # bound+2
     assert _guess_unwind([LoopSite("while", "x", 0, "", 0)], 64) == 64   # no literal -> default
+
+
+def test_modified_vars_excludes_body_locals():
+    lp = find_loops(IC3)[0]
+    scalars, arrays = modified_vars(lp.body)
+    assert scalars == ["x", "y"]      # t1, t2 are body-local -> excluded
+    assert arrays == []
+
+
+def test_has_literal_bound():
+    assert _has_literal_bound(find_loops("void f(){ for(i=0;i<64;i++){x=1;} }")) is True
+    assert _has_literal_bound(find_loops(IC3)) is False   # while(unknown1()) -> abstract
+
+
+def test_build_havoc_abstraction_structure():
+    lp = find_loops(IC3)[0]
+    out = build_havoc_abstraction(IC3, lp, ["x == y", "x >= 1"], math_ints=False)
+    assert "abstracted by its invariant" in out
+    assert '__CPROVER_assert(x == y, "loopinv_0_0");' in out        # base
+    assert "__CPROVER_assume((x == y) && (x >= 1));" in out          # assume inv
+    assert "if (unknown1()) {" in out                                # guard
+    assert "__CPROVER_assume(0);" in out                             # cut
+    assert "while (unknown1())" not in out                           # loop replaced
+
+
+def test_math_ints_injects_no_overflow():
+    body = " x = t1 + t2; "
+    got = _inject_no_overflow(body)
+    assert "(long long)(t1) + (long long)(t2) <= 2147483647LL" in got
+    assert "x = t1 + t2;" in got       # original assignment preserved
 
 
 @pytest.mark.skipif(not shutil.which("cbmc"), reason="cbmc not installed")
