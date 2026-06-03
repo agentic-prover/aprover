@@ -124,6 +124,11 @@ class SynthResult:
     failing_asserts: list = field(default_factory=list)   # asserts still unprovable
     asserts: list = field(default_factory=list)
     note: str = ""
+    # No verification goal in the program (no //@ assert / assert / __VERIFIER_assert).
+    # Distinct from ok: there is NOTHING to prove, so the run is N/A — reporting it as
+    # SATISFIED would be a vacuous pass. ok is forced False so it is never counted as a
+    # pass and the oracle-confirmation step is skipped.
+    no_goals: bool = False
 
 
 def extract_asserts(source: str) -> list[str]:
@@ -265,7 +270,12 @@ def synthesize(
     # //@ assert. They are what S must let the verifier prove, not synthesis targets.
     asserts = extract_goals(src)
     if not asserts:
-        return SynthResult(ok=True, iterations=0, note="no verification goals found")
+        # No proof target → N/A, NOT a pass. Counting an assertion-free program as
+        # SATISFIED is a vacuous pass (nothing was proved). ok=False keeps it out of
+        # the pass bucket; no_goals lets the runner report N/A distinctly.
+        return SynthResult(ok=False, iterations=0, no_goals=True,
+                           note="no verification goal (no //@ assert / assert / "
+                                "__VERIFIER_assert) — nothing to prove")
 
     from bmc_agent.source_parser import parse_source_file
     from bmc_agent.harness_generator import _c_expressible_postcondition as _cexpr

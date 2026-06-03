@@ -626,6 +626,7 @@ class LoopSynthResult:
     unwinding_failed: bool = False
     instrumented: str = ""      # the final instrumented source CBMC checked
     cbmc_log: str = ""          # raw CBMC output of the final check
+    no_goals: bool = False      # no //@ assert / assert / __VERIFIER_assert → N/A, not a pass
 
 
 def _parse_inv_lines(text: str) -> list:
@@ -769,8 +770,15 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     src = Path(source_file).read_text(encoding="utf-8", errors="replace")
     goals = extract_goals(src)
     loops = find_loops(src)
+    if not goals:
+        # No proof target → N/A, NOT a pass. Without a goal the invariants would
+        # "verify" vacuously (nothing to fail adequacy), which would be a misleading
+        # pass; report N/A so an assertion-free program is never counted as proved.
+        return LoopSynthResult(ok=False, iterations=0, goals=goals, no_goals=True,
+                               note="no verification goal (no //@ assert / assert / "
+                                    "__VERIFIER_assert) — nothing to prove")
     if not loops:
-        return LoopSynthResult(ok=(not goals), iterations=0, goals=goals,
+        return LoopSynthResult(ok=False, iterations=0, goals=goals,
                                note="no loops to annotate")
     uw = unwind or _guess_unwind(loops, 64)
     fn_src = src  # whole TU as context (benchmarks are small)

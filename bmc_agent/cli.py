@@ -552,6 +552,7 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         "source": str(args.source),
         "entry": entry,
         "satisfied": bool(r.ok),
+        "na": bool(getattr(r, "no_goals", False)),   # no proof target → N/A, not pass/fail
         "iterations": r.iterations,
         "asserts": list(r.asserts or []),
         "failing_asserts": list(r.failing_asserts or []),
@@ -638,6 +639,12 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         except Exception as exc:  # never let the WP confirmation mask the CBMC result
             print(f"Frama-C/WP: confirmation step errored ({exc}); CBMC verdict stands.")
 
+    if getattr(r, "no_goals", False):
+        print(f"RESULT: N/A — {r.note}.")
+        print("  (No assertion target, so no spec was synthesized and the oracle had "
+              "nothing to prove. This is NOT a pass — add a //@ assert / assert / "
+              "__VERIFIER_assert stating the expected result to make it a real target.)")
+        return 2
     if r.ok:
         print("RESULT: SATISFIED — all //@ asserts are provable from the synthesized specs.")
         return 0
@@ -714,7 +721,9 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     log_path = _os.path.join(out_dir, f"{base}_cbmc.log")
     payload = {
         "source": str(args.source), "entry": entry,
-        "satisfied": bool(r.ok), "iterations": r.iterations,
+        "satisfied": bool(r.ok),
+        "na": bool(getattr(r, "no_goals", False)),   # no proof target → N/A, not pass/fail
+        "iterations": r.iterations,
         "goals": list(r.goals or []),
         "loop_invariants": {str(o): invs for o, invs in (r.annotations or {}).items()},
         "acsl": r.acsl, "note": r.note,
@@ -741,6 +750,11 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
         print(f"harness: {inst_path}")
     if r.cbmc_log:
         print(f"cbmc log: {log_path}")
+    if getattr(r, "no_goals", False):
+        print(f"RESULT: N/A — {r.note}.")
+        print("  (No assertion target, so nothing was proved. This is NOT a pass — add a "
+              "//@ assert / assert / __VERIFIER_assert stating the expected result.)")
+        return 2
     if r.ok:
         print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
         return 0

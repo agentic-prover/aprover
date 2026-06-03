@@ -1,8 +1,22 @@
 """Assertion-driven spec synthesis — deterministic helpers."""
 from bmc_agent.assert_driven_specs import (
     extract_asserts, called_functions, _failing_asserts,
-    callee_lhs_map, attribute_assert, extract_goals,
+    callee_lhs_map, attribute_assert, extract_goals, synthesize, SynthResult,
 )
+
+
+def test_synthesize_assertion_free_is_na_not_pass(tmp_path):
+    # An assertion-free program has NO proof target: it must be N/A, NOT a vacuous
+    # pass. ok must be False (kept out of the pass bucket) and no_goals True.
+    src = ("int simple(int p,int n,int r){ int si = p*n*r/100; return si; }\n"
+           "int main(){ int s = simple(10000,3,10); return 0; }\n")
+    f = tmp_path / "simple.c"; f.write_text(src)
+    from bmc_agent.config import Config
+    r = synthesize(str(f), Config.from_env(), llm=None, entry="main")
+    assert isinstance(r, SynthResult)
+    assert r.no_goals is True
+    assert r.ok is False          # never counted as SATISFIED
+    assert r.iterations == 0
 
 
 def test_extract_goals_all_forms():
