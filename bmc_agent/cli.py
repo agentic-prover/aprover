@@ -532,7 +532,8 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     import json as _json, os as _os
     out_dir = getattr(config, "artifact_dir", None) or "."
     _os.makedirs(out_dir, exist_ok=True)
-    out_path = _os.path.join(out_dir, "synthesized_specs.json")
+    _base = _os.path.splitext(_os.path.basename(str(args.source)))[0] or "out"
+    out_path = _os.path.join(out_dir, f"synthesized_specs_{_base}.json")
     payload = {
         "source": str(args.source),
         "entry": entry,
@@ -632,24 +633,39 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     import json as _json, os as _os
     out_dir = getattr(config, "artifact_dir", None) or "."
     _os.makedirs(out_dir, exist_ok=True)
-    out_path = _os.path.join(out_dir, "synthesized_loop_invariants.json")
+    base = _os.path.splitext(_os.path.basename(str(args.source)))[0] or "out"
+    out_path = _os.path.join(out_dir, f"synthesized_loop_invariants_{base}.json")
+    inst_path = _os.path.join(out_dir, f"{base}_instrumented.c")
+    log_path = _os.path.join(out_dir, f"{base}_cbmc.log")
     payload = {
         "source": str(args.source), "entry": entry,
         "satisfied": bool(r.ok), "iterations": r.iterations,
         "goals": list(r.goals or []),
         "loop_invariants": {str(o): invs for o, invs in (r.annotations or {}).items()},
         "acsl": r.acsl, "note": r.note,
+        "instrumented_source": _os.path.relpath(inst_path) if r.instrumented else "",
+        "cbmc_log": _os.path.relpath(log_path) if r.cbmc_log else "",
     }
     try:
         with open(out_path, "w") as fh:
             _json.dump(payload, fh, indent=2)
+        if r.instrumented:                      # (b) the source CBMC actually checked
+            with open(inst_path, "w") as fh:
+                fh.write(r.instrumented)
+        if r.cbmc_log:                          # (b) raw CBMC output of the final check
+            with open(log_path, "w") as fh:
+                fh.write(r.cbmc_log)
     except OSError as exc:
-        print(f"(warning: could not write {out_path}: {exc})")
+        print(f"(warning: could not write artifacts: {exc})")
 
     print("\n=== Synthesized loop invariants (ACSL) ===")
     print(r.acsl or "  (none)")
     print(f"\ngoals: {len(r.goals)}   iterations: {r.iterations}")
     print(f"written: {out_path}")
+    if r.instrumented:
+        print(f"harness: {inst_path}")
+    if r.cbmc_log:
+        print(f"cbmc log: {log_path}")
     if r.ok:
         print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
         return 0

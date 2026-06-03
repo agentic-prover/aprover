@@ -246,6 +246,7 @@ class LoopCheck:
     goal_failed: bool = False                                 # a goal still unprovable
     unwinding_failed: bool = False                            # under-unwound (unsound)
     result: object = None
+    instrumented: str = ""                                    # the source CBMC actually checked
 
 
 def check_loop_invariants(source: str, annotations: dict, config,
@@ -268,7 +269,7 @@ def check_loop_invariants(source: str, annotations: dict, config,
                       for ce in getattr(res, "counterexamples", []) or [])
     return LoopCheck(verified=bool(res.verified) and not finv and not goal_failed,
                      failing_invariants=finv, goal_failed=goal_failed,
-                     unwinding_failed=unwinding, result=res)
+                     unwinding_failed=unwinding, result=res, instrumented=instrumented)
 
 
 # --- havoc/assume loop abstraction (UNBOUNDED scalar loops; no unwinding) -----
@@ -392,7 +393,7 @@ def check_havoc_abstraction(source: str, annotations: dict, config, entry: str =
                       for ce in getattr(res, "counterexamples", []) or [])
     return LoopCheck(verified=bool(res.verified) and not finv and not goal_failed,
                      failing_invariants=finv, goal_failed=goal_failed,
-                     unwinding_failed=False, result=res)
+                     unwinding_failed=False, result=res, instrumented=instrumented)
 
 
 # --- the gen+refine driver (reuses the engine: LLM proposes, CBMC disposes) ---
@@ -469,6 +470,8 @@ class LoopSynthResult:
     goals: list = field(default_factory=list)
     note: str = ""
     unwinding_failed: bool = False
+    instrumented: str = ""      # the final instrumented source CBMC checked
+    cbmc_log: str = ""          # raw CBMC output of the final check
 
 
 def _parse_inv_lines(text: str) -> list:
@@ -597,17 +600,20 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         chk = _check(annotations)
         logger.info("loop-inv iter %d: verified=%s failing_inv=%s goal_failed=%s",
                     it, chk.verified, chk.failing_invariants, chk.goal_failed)
+        _log = getattr(chk.result, "raw_output", "") or ""
         if chk.verified:
             return LoopSynthResult(
                 ok=True, iterations=it, annotations=annotations,
                 acsl=render_loop_invariants_acsl(annotations, loops), goals=goals,
-                note="invariants are inductive and prove all goals")
+                note="invariants are inductive and prove all goals",
+                instrumented=chk.instrumented, cbmc_log=_log)
         if chk.unwinding_failed:
             return LoopSynthResult(False, it, annotations,
                                    render_loop_invariants_acsl(annotations, loops), goals,
                                    note=f"loop not fully unwound at unwind={uw} (unbounded? "
                                         "needs a quantifier-capable oracle, e.g. Frama-C/WP)",
-                                   unwinding_failed=True)
+                                   unwinding_failed=True,
+                                   instrumented=chk.instrumented, cbmc_log=_log)
         # Refine: a non-inductive invariant gets fixed; otherwise strengthen the
         # loops implicated by the still-failing goal.
         changed = False
@@ -648,7 +654,10 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         if not changed:
             return LoopSynthResult(False, it, annotations,
                                    render_loop_invariants_acsl(annotations, loops), goals,
-                                   note="refinement reached a fixpoint without proving the goals")
+                                   note="refinement reached a fixpoint without proving the goals",
+                                   instrumented=chk.instrumented, cbmc_log=_log)
     return LoopSynthResult(False, max_iters, annotations,
                            render_loop_invariants_acsl(annotations, loops), goals,
-                           note="max iterations reached")
+                           note="max iterations reached",
+                           instrumented=chk.instrumented,
+                           cbmc_log=getattr(chk.result, "raw_output", "") or "")
