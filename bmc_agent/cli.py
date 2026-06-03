@@ -592,6 +592,31 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         print(block)
     print(f"\nasserts: {len(r.asserts)}   iterations: {r.iterations}")
     print(f"written: {out_path}")
+
+    # --oracle frama-c: deductively CONFIRM the CBMC-synthesized contract with
+    # Frama-C/WP. The gen-refine loop above (CBMC) does the synthesis; WP then
+    # discharges the contract + the //@ assert goals over mathematical integers.
+    # Degrades cleanly when frama-c is absent (the CBMC verdict still stands).
+    if r.ok and getattr(config, "oracle", "cbmc") == "frama-c":
+        from bmc_agent.frama_c import insert_contract_acsl, run_wp
+        try:
+            annotated = open(str(args.source)).read()
+            for fn, p in (r.postconditions or {}).items():
+                annotated = insert_contract_acsl(
+                    annotated, fn,
+                    requires=(r.preconditions or {}).get(fn, "true"), ensures=p)
+            wp = run_wp(annotated, frama_c_path=getattr(config, "frama_c_path", "frama-c"))
+            if not wp.available:
+                print(f"Frama-C/WP: requested but unavailable ({wp.error}); contract "
+                      "validated by CBMC only — install frama-c + alt-ergo for WP confirmation.")
+            elif wp.n_total and wp.n_proved == wp.n_total:
+                print(f"Frama-C/WP: CONFIRMED — proved {wp.n_proved}/{wp.n_total} goals.")
+            else:
+                print(f"Frama-C/WP: proved {wp.n_proved}/{wp.n_total} goals; "
+                      f"unproved: {', '.join(wp.unproved) or '?'}")
+        except Exception as exc:  # never let the WP confirmation mask the CBMC result
+            print(f"Frama-C/WP: confirmation step errored ({exc}); CBMC verdict stands.")
+
     if r.ok:
         print("RESULT: SATISFIED — all //@ asserts are provable from the synthesized specs.")
         return 0
