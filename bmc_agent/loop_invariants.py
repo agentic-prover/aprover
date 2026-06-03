@@ -486,13 +486,40 @@ def _parse_inv_lines(text: str) -> list:
     return out
 
 
+_C_KEYWORDS = {
+    "int", "unsigned", "signed", "long", "short", "char", "void", "const", "static",
+    "if", "else", "while", "for", "do", "return", "sizeof", "struct", "union", "enum",
+    "true", "false", "size_t", "forall", "exists", "result", "_Bool", "bool", "float",
+    "double", "NULL", "assert", "static_assert",
+}
+
+
+def _filter_in_scope(clauses: list, source: str) -> list:
+    """Drop invariant clauses that reference identifiers not present in the program
+    (LLM hallucinations like an invented loop counter `i`). An out-of-scope name
+    would make the instrumented source fail to compile, so the check silently
+    'fails' every iteration and never converges. Quantifier-bound variables are
+    exempt (they're locally bound)."""
+    known = set(re.findall(r"[A-Za-z_]\w*", source))
+    out = []
+    for c in clauses:
+        m = _FORALL.match(c)
+        body, qvar = (m.group(2), {m.group(1)}) if m else (c, set())
+        ids = set(re.findall(r"[A-Za-z_]\w*", body)) - qvar - _C_KEYWORDS - known
+        if ids:
+            logger.info("loop-inv: dropping clause with out-of-scope %s: %r", sorted(ids), c)
+            continue
+        out.append(c)
+    return out
+
+
 def _propose(llm, config, loop, goals, fn_src) -> list:
     from bmc_agent.llm import agentic_system_prompt
     prompt = _PROPOSE_PROMPT.format(goals="\n".join(f"  {g}" for g in goals) or "  (none)",
                                     fn_src=fn_src, kind=loop.kind, guard=loop.guard)
     txt = llm.complete(agentic_system_prompt(config, "spec_gen", _PROPOSE_SYS),
                        prompt, max_tokens=512, role="spec_gen")
-    return _parse_inv_lines(txt)
+    return _filter_in_scope(_parse_inv_lines(txt), fn_src)
 
 
 def _refine(llm, config, loop, current, problem, goals, fn_src) -> list:
@@ -503,7 +530,7 @@ def _refine(llm, config, loop, current, problem, goals, fn_src) -> list:
         fn_src=fn_src, kind=loop.kind, guard=loop.guard)
     txt = llm.complete(agentic_system_prompt(config, "refinement", _REFINE_SYS),
                        prompt, max_tokens=512, role="refinement")
-    return _parse_inv_lines(txt)
+    return _filter_in_scope(_parse_inv_lines(txt), fn_src)
 
 
 def _guess_unwind(loops: list, default: int) -> int:
@@ -517,10 +544,17 @@ def _guess_unwind(loops: list, default: int) -> int:
 
 
 def _has_literal_bound(loops: list) -> bool:
-    """True iff every loop has a literal trip bound CBMC can unwind to (`< N`/`<= N`).
-    Otherwise (while(unknown()), symbolic bound) the loop must be ABSTRACTED, not
-    unwound — route to the havoc/assume mode."""
+    """True iff every loop has a literal trip bound CBMC can unwind to (`< N`/`<= N`)."""
     return bool(loops) and all(re.search(r"<=?\s*\d+", lp.guard) for lp in loops)
+
+
+def _has_array_writes(loops: list) -> bool:
+    """True iff any loop body writes an array element. Array-writing loops need a
+    QUANTIFIED invariant, which CBMC can only validate via loop-head-assert +
+    unwinding (the havoc/assume mode's symbolic-bound `forall` is unsound). Loops
+    that write only SCALARS use the havoc abstraction — bound-independent, so it
+    also handles huge literal bounds (e.g. y<100000) that are intractable to unwind."""
+    return any(modified_vars(lp.body)[1] for lp in loops)
 
 
 def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
@@ -538,9 +572,11 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                note="no loops to annotate")
     uw = unwind or _guess_unwind(loops, 64)
     fn_src = src  # whole TU as context (benchmarks are small)
-    # Mode: bounded loops -> loop-head assert + unwind (handles quantified array
-    # invariants); unbounded/symbolic -> havoc/assume abstraction (scalar invs).
-    use_havoc = not _has_literal_bound(loops)
+    # Mode: array-writing loops need a quantified invariant -> loop-head assert +
+    # unwind (requires a small literal bound). Scalar loops -> havoc/assume
+    # abstraction: no unwinding, so it also handles unbounded loops AND huge literal
+    # bounds (y<100000) that would be intractable to unwind.
+    use_havoc = not _has_array_writes(loops)
     math_ints = bool(getattr(config, "math_ints", False))
     mode = "havoc-abstraction" + ("/math-ints" if (use_havoc and math_ints) else "") \
         if use_havoc else "loop-head+unwind"

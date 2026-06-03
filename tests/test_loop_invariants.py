@@ -6,6 +6,7 @@ from bmc_agent.loop_invariants import (
     insert_loop_invariants, render_loop_invariants_acsl, failing_loopinvs,
     _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
     modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
+    _has_array_writes, _filter_in_scope,
 )
 
 IC3 = (
@@ -134,6 +135,19 @@ def test_build_havoc_abstraction_structure():
     assert "if (unknown1()) {" in out                                # guard
     assert "__CPROVER_assume(0);" in out                             # cut
     assert "while (unknown1())" not in out                           # loop replaced
+
+
+def test_has_array_writes_dispatch_signal():
+    assert _has_array_writes(find_loops("void f(){ for(i=0;i<64;i++){A[i]=i;} }")) is True
+    assert _has_array_writes(find_loops(IC3)) is False   # scalar -> havoc mode
+
+
+def test_filter_in_scope_drops_hallucinated_vars():
+    src = "void main(){ int x=1; int y=0; while(y<100000){ x=x+y; y=y+1; } }"
+    # 'i' is not in the program -> dropped; x/y clauses kept; forall var exempt
+    kept = _filter_in_scope(["x >= y", "i <= y", "y >= 0",
+                             "forall k : (k < y) ==> (x >= k)"], src)
+    assert kept == ["x >= y", "y >= 0", "forall k : (k < y) ==> (x >= k)"]
 
 
 def test_math_ints_injects_no_overflow():
