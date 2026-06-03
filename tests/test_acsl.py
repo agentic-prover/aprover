@@ -21,6 +21,12 @@ def test_expr_valid_predicates():
     assert expr_to_acsl("valid(p) && result == 0") == "\\valid(p) && \\result == 0"
 
 
+def test_expr_null_predicate():
+    # DSL null(p)/!null(p) -> idiomatic ACSL
+    assert expr_to_acsl("!null(p) && !null(q)") == "!(p == \\null) && !(q == \\null)"
+    assert expr_to_acsl("null(ptr)") == "(ptr == \\null)"
+
+
 def test_contract_block_drops_vacuous():
     # requires true is dropped; ensures rendered
     block = contract_to_acsl("true", "result >= x && result >= y && (result == x || result == y)")

@@ -39,6 +39,8 @@ def expr_to_acsl(expr: str) -> str:
     # valid_range(p, lo, hi) -> \valid(p + (lo .. (hi) - 1))   (before the bare valid())
     out = re.sub(r"\bvalid_range\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)",
                  r"\\valid(\1 + (\2 .. (\3) - 1))", out)
+    out = re.sub(r"\bnull\s*\(\s*([^()]+?)\s*\)", r"(\1 == \\null)", out)  # null(p) -> (p == \null)
+    out = re.sub(r"\bvalid_string\s*\(\s*([^()]+?)\s*\)", r"\\valid_read(\1)", out)
     out = re.sub(r"(?<!\\)\bvalid\s*\(", r"\\valid(", out)        # valid(p) -> \valid(p)
     out = re.sub(r"(?<!\\)\bold\s*\(", r"\\old(", out)            # old(e)   -> \old(e)
     out = re.sub(r"(?<![\\\w])\bresult\b", r"\\result", out)      # result   -> \result
