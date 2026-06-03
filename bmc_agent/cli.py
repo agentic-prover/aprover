@@ -607,6 +607,19 @@ def _run_specs_bench(args: argparse.Namespace, config: "object") -> int:
     program content: loops → loop-invariant synthesis; otherwise → function-
     contract synthesis. Both emit ACSL."""
     config.math_ints = True                                   # type: ignore[attr-defined]
+    # Oracle for bench mode: an explicit --oracle always wins; otherwise prefer
+    # Frama-C/WP (the correct oracle for specification benchmarks — native ACSL,
+    # mathematical integers, unbounded + aggregate goals) when it is installed,
+    # falling back to CBMC so a run is never a no-op where frama-c is absent.
+    if getattr(args, "oracle", None):
+        config.oracle = args.oracle                           # type: ignore[attr-defined]
+    else:
+        from bmc_agent.frama_c import frama_c_available
+        fc_path = getattr(config, "frama_c_path", "frama-c")
+        config.oracle = "frama-c" if frama_c_available(fc_path) else "cbmc"  # type: ignore[attr-defined]
+        print(f"specs-bench: oracle auto-selected → {config.oracle}"
+              + ("" if config.oracle == "frama-c"
+                 else " (frama-c not on PATH; install frama-c + alt-ergo to use WP)"))
     from bmc_agent.loop_invariants import find_loops
     src = ""
     try:
@@ -1921,8 +1934,8 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument(
         "--oracle",
         choices=["cbmc", "frama-c"],
-        default="cbmc",
-        help="Verification oracle for spec synthesis. 'cbmc' (default): bounded model checking — unwinds bounded loops, machine integers. 'frama-c': Frama-C/WP deductive verification — consumes the synthesized ACSL loop invariants/contracts natively, uses mathematical integers, and discharges base+preservation+goal for UNBOUNDED loops and aggregate (\\sum) invariants CBMC can't. Requires frama-c + an SMT prover (e.g. alt-ergo) on PATH.",
+        default=None,
+        help="Verification oracle for spec synthesis. Unset: 'cbmc' everywhere EXCEPT --specs-bench, which auto-prefers 'frama-c' when frama-c is on PATH (the correct oracle for specification benchmarks: native ACSL + mathematical integers + unbounded/aggregate goals) and falls back to 'cbmc' otherwise. 'cbmc': bounded model checking — unwinds bounded loops, machine integers. 'frama-c': Frama-C/WP deductive verification — consumes the synthesized ACSL loop invariants/contracts natively, mathematical integers, discharges base+preservation+goal for UNBOUNDED loops and aggregate (\\sum) invariants CBMC can't. Requires frama-c + an SMT prover (e.g. alt-ergo) on PATH. An explicit value always wins.",
     )
     ver.add_argument(
         "--standalone-unwind",
