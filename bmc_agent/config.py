@@ -150,6 +150,11 @@ class Config:
     # overflow (mathematical-integer semantics), so textbook invariants like
     # x>=1 under x=x+y are inductive. Set by `--math-ints`. Off => machine ints.
     math_ints: bool = False
+    # Verification oracle for spec-synthesis: "cbmc" (bounded model checking;
+    # default) or "frama-c" (WP deductive verification — mathematical integers +
+    # native ACSL loop invariants, for unbounded / aggregate-invariant goals).
+    oracle: str = "cbmc"
+    frama_c_path: str = "frama-c"
     # Read-only tool allowlist handed to ``claude -p`` in agentic mode. Keep it
     # read-only (no Bash/Write/Edit) so a spec-gen call can't mutate the tree.
     claude_code_tools: str = "Read,Grep,Glob"

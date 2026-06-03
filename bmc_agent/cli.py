@@ -638,6 +638,8 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     unwind = int(getattr(args, "standalone_unwind", 0) or 0)   # 0 => auto from loop bound
     if getattr(args, "math_ints", False):
         config.math_ints = True                          # type: ignore[attr-defined]
+    if getattr(args, "oracle", None):
+        config.oracle = args.oracle                      # type: ignore[attr-defined]
 
     print(f"Loop-invariant synthesis: {args.source}")
     print(f"Entry: {entry}   (propose → CBMC validity+adequacy → refine)")
@@ -1915,6 +1917,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Loop-invariant synthesis (unbounded loops): assume the loop body's signed arithmetic does not overflow (mathematical-integer semantics, as IC3-style benchmarks and Frama-C/WP assume), so invariants like x>=1 under x=x+y are inductive. Off => machine-int (wrapping) semantics.",
+    )
+    ver.add_argument(
+        "--oracle",
+        choices=["cbmc", "frama-c"],
+        default="cbmc",
+        help="Verification oracle for spec synthesis. 'cbmc' (default): bounded model checking — unwinds bounded loops, machine integers. 'frama-c': Frama-C/WP deductive verification — consumes the synthesized ACSL loop invariants/contracts natively, uses mathematical integers, and discharges base+preservation+goal for UNBOUNDED loops and aggregate (\\sum) invariants CBMC can't. Requires frama-c + an SMT prover (e.g. alt-ergo) on PATH.",
     )
     ver.add_argument(
         "--standalone-unwind",

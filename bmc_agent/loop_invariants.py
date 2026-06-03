@@ -497,6 +497,59 @@ Output ONLY the corrected invariant lines.
 """
 
 
+def _prep_goals_acsl(source: str) -> str:
+    """For the Frama-C oracle: express every goal as an ACSL ``//@ assert`` (WP
+    proves those natively). ``//@ assert`` stays; the executable forms
+    (assert / static_assert / __VERIFIER_assert) are rewritten to ``/*@ assert E; */``
+    and their call (incl. trailing ``;``) consumed."""
+    from bmc_agent.assert_driven_specs import _balanced_arg, _strip_assert_message
+    rx = re.compile(r"\b(?:__VERIFIER_assert|static_assert|_Static_assert|assert)\s*\(")
+    out, i = [], 0
+    while True:
+        m = rx.search(source, i)
+        if not m:
+            out.append(source[i:]); break
+        out.append(source[i:m.start()])
+        arg, after = _balanced_arg(source, m.end() - 1)
+        out.append(f"/*@ assert {_strip_assert_message(arg)}; */")
+        j = after
+        while j < len(source) and source[j] in " \t":
+            j += 1
+        if j < len(source) and source[j] == ";":
+            j += 1
+        i = j
+    return "".join(out)
+
+
+def _loop_assigns(lp) -> str:
+    """Best-effort ACSL ``loop assigns`` (frame) for a loop: modified scalars plus
+    each modified array as ``arr[..]``. WP needs the frame to prove preservation."""
+    scalars, arrays = modified_vars(lp.body)
+    return ", ".join(scalars + [f"{a}[..]" for a in arrays])
+
+
+def check_loop_invariants_wp(source: str, annotations: dict, config,
+                             entry: str = "main", timeout: int = 120) -> "LoopCheck":
+    """Frama-C/WP oracle: render the invariants to ACSL, splice them before each
+    loop, express goals as ACSL asserts, and run ``frama-c -wp``. Handles unbounded
+    loops + mathematical-integer / aggregate invariants that CBMC cannot. Returns a
+    LoopCheck (available=False inside .result when frama-c is absent)."""
+    from bmc_agent import frama_c
+    loops = find_loops(source)
+    assigns = {lp.ordinal: _loop_assigns(lp) for lp in loops}
+    annotated = frama_c.insert_loop_invariants_acsl(_prep_goals_acsl(source), annotations, assigns)
+    wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout)
+    # WP goal names: "..._loop_invariant_..." (validity) vs "...assert..." (adequacy).
+    inv_failed = any("invariant" in g.lower() for g in wp.unproved)
+    goal_failed = any("assert" in g.lower() for g in wp.unproved) or (
+        not wp.proved and not inv_failed)
+    # frama-c doesn't expose our (ordinal,n); signal "an invariant failed" coarsely.
+    finv = [(lp.ordinal, 0) for lp in loops] if inv_failed else []
+    return LoopCheck(verified=bool(wp.proved), failing_invariants=finv,
+                     goal_failed=goal_failed, unwinding_failed=False,
+                     result=wp, instrumented=annotated)
+
+
 @dataclass
 class LoopSynthResult:
     ok: bool
@@ -613,13 +666,24 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     fn_src = src  # whole TU as context (benchmarks are small)
     by_ord = {lp.ordinal: lp for lp in loops}
     math_ints = bool(getattr(config, "math_ints", False))
+    oracle = getattr(config, "oracle", "cbmc") or "cbmc"
+    if oracle == "frama-c":
+        from bmc_agent import frama_c
+        if not frama_c.frama_c_available(getattr(config, "frama_c_path", "frama-c")):
+            return LoopSynthResult(
+                False, 0, {}, "", goals,
+                note="--oracle frama-c selected but frama-c is not on PATH "
+                     "(install Frama-C + an SMT prover, e.g. alt-ergo)")
 
     def _attempt(use_havoc: bool, aw: int) -> LoopSynthResult:
-        mode = (("havoc-abstraction" + ("/math-ints" if math_ints else ""))
-                if use_havoc else "loop-head+unwind")
+        mode = ("frama-c/wp" if oracle == "frama-c" else
+                (("havoc-abstraction" + ("/math-ints" if math_ints else ""))
+                 if use_havoc else "loop-head+unwind"))
         logger.info("loop-inv mode: %s (unwind=%d)", mode, aw)
 
         def _check(ann):
+            if oracle == "frama-c":
+                return check_loop_invariants_wp(src, ann, config, entry, timeout)
             if use_havoc:
                 return check_havoc_abstraction(src, ann, config, entry, timeout, math_ints)
             return check_loop_invariants(src, ann, config, entry, aw, timeout)
@@ -687,6 +751,11 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                note="max iterations reached",
                                instrumented=chk.instrumented,
                                cbmc_log=getattr(chk.result, "raw_output", "") or "")
+
+    # Frama-C/WP oracle: a single attempt (WP consumes the ACSL loop invariants
+    # directly — no bounded/unbounded mode dispatch or CBMC fallback).
+    if oracle == "frama-c":
+        return _attempt(False, uw)
 
     # Primary mode: array-writing loops -> loop-head+unwind (quantified invariant
     # validated per concrete iteration); scalar loops -> havoc abstraction (bound-
