@@ -31,11 +31,11 @@ def test_no_framing_when_role_routed_elsewhere():
 
 
 def test_all_agent_roles_includes_dynamic_repro_and_dynval(monkeypatch):
-    """--agentic routes every agent role, incl. the dynamic-validation ones."""
+    """--agentic-claude-code routes every agent role, incl. the dynamic-validation ones."""
     for k in ("BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
     from bmc_agent.cli import build_parser, _apply_provider_args
-    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic"])
+    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic-claude-code"])
     cfg = Config.from_env()
     _apply_provider_args(cfg, a)
     for role in ("dynamic_repro", "dynval_triage"):

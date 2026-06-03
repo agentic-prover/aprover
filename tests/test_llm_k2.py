@@ -905,8 +905,8 @@ def test_claude_code_agentic_env(monkeypatch):
     assert Config.from_env().claude_code_agentic is True
 
 
-def test_agentic_umbrella_flag(monkeypatch):
-    """--agentic is ALL-agentic: EVERY agent role -> claude-code, tools-on,
+def test_agentic_claude_code_forces_all_roles(monkeypatch):
+    """--agentic-claude-code: EVERY agent role -> claude-code, tools-on,
     soundness gate, harness-repair."""
     for k in ("BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER",
               "BMC_AGENT_ENABLE_SOUNDNESS_GATE", "BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR",
@@ -915,7 +915,7 @@ def test_agentic_umbrella_flag(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     from bmc_agent.cli import build_parser, _apply_provider_args
     from bmc_agent.config import Config
-    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic"])
+    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic-claude-code"])
     cfg = Config.from_env()
     _apply_provider_args(cfg, a)
     # EVERY agent role now defaults to claude-code
@@ -927,9 +927,29 @@ def test_agentic_umbrella_flag(monkeypatch):
     assert cfg.enable_agentic_harness_repair is True
 
 
-def test_agentic_per_agent_override_wins(monkeypatch):
-    """--agentic defaults every agent to claude-code, but an explicit per-agent
-    provider override (env) WINS — so any agent can be re-pointed to a cheaper LLM."""
+def test_agentic_general_does_not_force_a_backend(monkeypatch):
+    """--agentic (general) enables the stack but FORCES no backend: with no
+    per-role / default provider set, no role is pinned to claude-code (each keeps
+    its own routing)."""
+    for k in ("BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER",
+              "BMC_AGENT_LLM_SPEC_GEN_PROVIDER", "BMC_AGENT_LLM_REFINEMENT_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
+    from bmc_agent.cli import build_parser, _apply_provider_args
+    from bmc_agent.config import Config
+    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic"])
+    cfg = Config.from_env()
+    _apply_provider_args(cfg, a)
+    overrides = getattr(cfg, "llm_role_overrides", {}) or {}
+    assert not any(v.get("provider") == "claude-code" for v in overrides.values())
+    # but the agentic stack is on
+    assert cfg.claude_code_agentic is True
+    assert cfg.enable_soundness_gate is True
+    assert cfg.enable_split_spec_gen is True
+
+
+def test_agentic_claude_code_per_agent_override_wins(monkeypatch):
+    """--agentic-claude-code defaults every agent to claude-code, but an explicit
+    per-agent provider override (env) WINS — any agent can be re-pointed."""
     for k in ("BMC_AGENT_LLM_PROVIDER", "BMC_AGENT_LLM_DEFAULT_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
     # Re-point ONLY realism to a fast OpenAI-compatible model.
@@ -937,7 +957,7 @@ def test_agentic_per_agent_override_wins(monkeypatch):
     monkeypatch.setenv("BMC_AGENT_LLM_REALISM_MODEL", "gpt-4o-mini")
     from bmc_agent.cli import build_parser, _apply_provider_args
     from bmc_agent.config import Config
-    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic"])
+    a = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d", "--agentic-claude-code"])
     cfg = Config.from_env()
     _apply_provider_args(cfg, a)
     # realism keeps the explicit override; everything else defaults to claude-code

@@ -64,10 +64,20 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     These are CLI conveniences over the existing env-var routing
     (``BMC_AGENT_LLM_PROVIDER`` and ``BMC_AGENT_LLM_<ROLE>_PROVIDER``):
 
-      --agentic                  UMBRELLA: turn on the whole agentic stack —
-                                 equivalent to --specs-via-claude-code +
-                                 --claude-code-agentic + --enable-soundness-gate
-                                 + --enable-agentic-harness-repair.
+      --agentic                  GENERAL agentic stack: every agent role becomes
+                                 an investigating agent, but each is instantiated
+                                 by WHATEVER backend its routing says — a per-role
+                                 BMC_AGENT_LLM_<ROLE>_PROVIDER override, else the
+                                 global default provider (--provider / env), else
+                                 the auto-resolved provider. So roles can be a mix
+                                 of API / claude-code / codex / etc. Turns on the
+                                 soundness gate, agentic harness repair, split
+                                 spec-gen and component gating — WITHOUT forcing
+                                 any particular backend.
+      --agentic-claude-code      Like --agentic, but FORCES every agent role onto
+                                 the local Claude Code CLI provider (the previous
+                                 --agentic behaviour). A per-role env override
+                                 still wins, so individual agents can be repointed.
       --provider X               sets the global default provider for every role.
       --specs-via-claude-code    routes ONLY the spec_gen + refinement roles to
                                  the Claude Code CLI provider (your local
@@ -82,6 +92,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     explicit ``BMC_AGENT_LLM_*`` settings still compose.
     """
     agentic = getattr(args, "agentic", False)
+    agentic_cc = getattr(args, "agentic_claude_code", False)
     agentic_refine = getattr(args, "agentic_refine", False)
 
     provider = getattr(args, "provider", "") or ""
@@ -97,20 +108,23 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         "disagreement_diagnose", "feedback_distill", "classifier",
         "dynamic_repro", "dynval_triage", "cbmc_driver",
     )
-    # Which roles route to the Claude Code CLI:
-    #   --agentic         -> EVERY agent role (full; the "all agentic" preset — slow)
-    #   --agentic-refine  -> refinement only (LEAN; rest stay on the fast default
-    #                        provider — recommended for batches)
+    # Which roles are FORCED onto the Claude Code CLI:
+    #   --agentic-claude-code -> EVERY agent role (the "all claude-code" preset)
+    #   --agentic-refine      -> refinement only (LEAN; rest stay on the default
+    #                            provider — recommended for batches)
     #   --specs-via-claude-code -> spec_gen + refinement (explicit)
+    #   --agentic (general)   -> forces NOTHING; each role keeps its per-role /
+    #                            default / resolved provider (API, claude-code, …).
     cc_roles: set[str] = set()
-    if agentic:
+    if agentic_cc:
         cc_roles |= set(ALL_AGENT_ROLES)
     if getattr(args, "specs_via_claude_code", False):
         cc_roles |= {"spec_gen", "refinement"}
     if agentic_refine:
         cc_roles |= {"refinement"}
 
-    want_cc_tools = agentic or agentic_refine or getattr(args, "claude_code_agentic", False)
+    want_cc_tools = (agentic or agentic_cc or agentic_refine
+                     or getattr(args, "claude_code_agentic", False))
 
     if cc_roles:
         overrides = getattr(config, "llm_role_overrides", None)
@@ -140,7 +154,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         seen: set[str] = set()
         config.claude_code_add_dirs = [d for d in dirs if not (d in seen or seen.add(d))]  # type: ignore[attr-defined]
 
-    if agentic or agentic_refine:
+    if agentic or agentic_cc or agentic_refine:
         # The verify/verify-dir-only guards. Harmless on commands that don't use
         # them (generate, etc.) — the fields just go unread.
         config.enable_soundness_gate = True  # type: ignore[attr-defined]
@@ -150,8 +164,8 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # --agentic-refine; the contract POLICY applies either way).
         config.enable_split_spec_gen = True  # type: ignore[attr-defined]
 
-    if agentic:
-        # Component gating (--agentic only). The CLASSIFIER stays ON: it drives
+    if agentic or agentic_cc:
+        # Component gating (both agentic presets). The CLASSIFIER stays ON: it drives
         # the spurious→refinement→soundness-gate loop (the agentic centerpiece),
         # so it must NOT be disabled by default. The dynamic reproducer is ON.
         # Only the noisy LLM judgment layers — realism (exploitability downgrade)
@@ -1643,15 +1657,31 @@ def build_parser() -> argparse.ArgumentParser:
             default=False,
             dest="agentic",
             help=(
-                "Umbrella: ALL agentic. Route EVERY LLM agent role (spec-gen, "
-                "refinement, realism, triage, disagreement, …) to the Claude Code "
-                "CLI with read-only code-exploration tools, and enable the "
-                "soundness gate + agentic harness-repair. Any single agent can be "
-                "re-pointed to a cheaper LLM via BMC_AGENT_LLM_<ROLE>_PROVIDER/"
-                "_MODEL (the override wins). The conventional core (CBMC, harness "
-                "translation, compile+run) is unaffected. NOTE: claude-code is a "
-                "serial subprocess — slow for high-volume roles; for batches "
-                "prefer --agentic-refine."
+                "GENERAL agentic stack: make EVERY LLM agent role (spec-gen, "
+                "refinement, realism, triage, disagreement, …) an investigating "
+                "agent and enable the soundness gate + agentic harness-repair + "
+                "split spec-gen + component gating — but DO NOT force any backend. "
+                "Each role is instantiated by whatever its routing says: a per-role "
+                "BMC_AGENT_LLM_<ROLE>_PROVIDER/_MODEL override, else the global "
+                "default (--provider / BMC_AGENT_LLM_DEFAULT_*), else the "
+                "auto-resolved provider — so roles may be a mix of API / "
+                "claude-code / codex / etc. The conventional core (CBMC, harness "
+                "translation, compile+run) is unaffected. Use --agentic-claude-code "
+                "to force every role onto the local Claude Code CLI."
+            ),
+        )
+        p.add_argument(
+            "--agentic-claude-code",
+            action="store_true",
+            default=False,
+            dest="agentic_claude_code",
+            help=(
+                "Like --agentic, but FORCE every agent role onto the local Claude "
+                "Code CLI provider (read-only code-exploration tools, your `claude` "
+                "login, no API key). This was the original --agentic behaviour. A "
+                "per-role BMC_AGENT_LLM_<ROLE>_PROVIDER override still wins, so an "
+                "individual agent can be repointed to an API/codex backend. NOTE: "
+                "claude-code is a serial subprocess — slow for high-volume roles."
             ),
         )
         p.add_argument(

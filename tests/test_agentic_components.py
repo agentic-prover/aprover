@@ -86,7 +86,7 @@ def test_cbmc_driver_role_decoupled_and_agentic():
         from bmc_agent.cli import build_parser, _apply_provider_args
         from bmc_agent.config import Config
         from bmc_agent.llm import agentic_system_prompt
-        a = build_parser().parse_args(_BASE + ["--agentic"])
+        a = build_parser().parse_args(_BASE + ["--agentic-claude-code"])
         c = Config.from_env(); _apply_provider_args(c, a)
         assert c.role_settings("spec_gen")["provider"] == "openai"        # fast
         assert c.role_settings("cbmc_driver")["provider"] == "claude-code"  # agentic, independent
