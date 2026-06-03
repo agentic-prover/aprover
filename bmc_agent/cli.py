@@ -552,10 +552,29 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     except OSError as exc:
         print(f"(warning: could not write {out_path}: {exc})")
 
-    print("\n=== Synthesized specs ===")
+    # Render the synthesized contracts in ACSL (the benchmark output format) and
+    # fold them into the artifact alongside the DSL form.
+    from bmc_agent.acsl import contract_to_acsl
+    acsl_blocks = {}
+    for fn, p in (r.postconditions or {}).items():
+        block = contract_to_acsl((r.preconditions or {}).get(fn, "true"), p)
+        if block:
+            acsl_blocks[fn] = block
+    payload["acsl"] = acsl_blocks
+    try:
+        with open(out_path, "w") as fh:
+            _json.dump(payload, fh, indent=2)
+    except OSError:
+        pass
+
+    print("\n=== Synthesized specs (DSL) ===")
     for fn, p in (r.postconditions or {}).items():
         print(f"  {fn}:  requires {(r.preconditions or {}).get(fn, 'true')}")
         print(f"  {' ' * len(fn)}   ensures  {p}")
+    print("\n=== Synthesized specs (ACSL) ===")
+    for fn, block in acsl_blocks.items():
+        print(f"// contract for {fn}")
+        print(block)
     print(f"\nasserts: {len(r.asserts)}   iterations: {r.iterations}")
     print(f"written: {out_path}")
     if r.ok:

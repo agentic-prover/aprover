@@ -37,6 +37,10 @@ The specification DSL:
 - precondition: "requires <formula>"
 - postcondition: "ensures <formula>"
 - formulas can use: &&, ||, !, forall, exists
+- FULLY PARENTHESIZE any formula mixing && and ||: && binds tighter than ||, so
+  "a && b || c" means "(a && b) || c" — write the grouping explicitly. E.g. for a
+  max characterization write  result >= x && result >= y && (result == x || result == y)
+  NOT  result >= x && result >= y && result == x || result == y
 - predicates: valid(ptr), valid_string(ptr), valid_range(ptr, lo, hi), in_bounds(arr, idx), locked(lock), owns(ptr), null(ptr)
 - valid_string(ptr): ptr is a non-null, null-terminated C string (use for char* parameters)
 - valid_range(ptr, lo, hi): ptr is non-null and the range ptr[lo..hi) is in bounds (lo >= 0 and hi >= lo)
@@ -68,6 +72,12 @@ verification. Do NOT include:
   * sentence punctuation ('.' at end of clause, ',' separating clauses)
 Combine clauses with && and ||. Quote struct fields directly
 (p->curr_buf, p->stackpos, etc.).
+  * FULLY PARENTHESIZE any expression that mixes && and ||. In C, &&
+    binds tighter than ||, so `a && b || c` means `(a && b) || c` —
+    almost never what you intend. Write the grouping explicitly, e.g.
+    `a && (b || c)`. For a characterization like max, write
+    `result >= x && result >= y && (result == x || result == y)`,
+    NOT `result >= x && result >= y && result == x || result == y`.
 
 Allowed predicates (rewritten to C by the harness generator):
   * valid(ptr)        → ptr != NULL

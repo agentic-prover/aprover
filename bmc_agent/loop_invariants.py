@@ -131,18 +131,9 @@ def _top_implication_to_or(expr: str) -> str:
 
 
 def _inv_to_acsl(expr: str) -> str:
-    """Render a DSL invariant to ACSL.
-
-    ``forall k : BODY`` -> ``\\forall integer k; BODY``;  ``result`` -> ``\\result``.
-    ``==>`` is valid ACSL and passes through. Used for output and (later) Frama-C.
-    """
-    expr = expr.strip()
-    m = _FORALL.match(expr)
-    if m:
-        var, body = m.group(1), m.group(2).strip()
-        body = re.sub(r"\bresult\b", r"\\result", body)
-        return f"\\forall integer {var}; {body}"
-    return re.sub(r"\bresult\b", r"\\result", expr)
+    """Render a DSL invariant to ACSL (delegates to the shared serializer)."""
+    from bmc_agent.acsl import expr_to_acsl
+    return expr_to_acsl(expr)
 
 
 # --- source instrumentation ---------------------------------------------------
