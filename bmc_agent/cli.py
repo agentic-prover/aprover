@@ -541,6 +541,9 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     print(f"Assertion-driven spec synthesis: {args.source}")
     print(f"Entry: {entry}   (refining postconditions until //@ asserts hold)")
     r = synthesize(args.source, config, LLMClient(config), entry=entry)
+    if getattr(r, "entry", "") and r.entry != entry:   # auto-resolved to the goal-bearing fn
+        print(f"  (entry auto-resolved to '{r.entry}' — the function containing the asserts)")
+        entry = r.entry
 
     # Persist the synthesized contracts + per-assert status to a stable artifact.
     import json as _json, os as _os

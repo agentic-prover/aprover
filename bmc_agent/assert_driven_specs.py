@@ -44,6 +44,31 @@ _GOAL_CALL = re.compile(
     r"\b(?:__VERIFIER_assert|static_assert|_Static_assert|assert)\s*\(", re.IGNORECASE)
 
 
+def _function_has_goal(body: str) -> bool:
+    """True iff a function body holds a verification goal (//@ assert / assert(...) /
+    static_assert / __VERIFIER_assert)."""
+    return bool(_ACSL_ASSERT.search(body or "") or _GOAL_CALL.search(body or ""))
+
+
+def _resolve_entry(parsed, entry: str) -> str:
+    """Pick the function the asserts actually live in. The asserts are the proof
+    target, so the entry must be the function that CONTAINS them. If the given/default
+    entry already holds a goal (or doesn't exist while exactly one other function
+    does), keep/switch accordingly — so a bare run on a program whose asserts sit in
+    `foo` (not `main`) targets `foo` instead of silently verifying nothing. Only
+    switches when the current entry bears NO goal AND exactly one function does, so an
+    explicit, correct --entry is always respected and ambiguity never guesses."""
+    bodies = getattr(parsed, "function_bodies", None) or {}
+    if entry in bodies and _function_has_goal(bodies[entry]):
+        return entry
+    bearers = [fn for fn, b in bodies.items() if _function_has_goal(b)]
+    if len(bearers) == 1 and bearers[0] != entry:
+        logger.info("assert-synth: entry %r bears no goal; using goal-bearing "
+                    "function %r", entry, bearers[0])
+        return bearers[0]
+    return entry
+
+
 def _balanced_arg(source: str, open_paren: int) -> tuple[str, int]:
     """Return (arg_text, index_after_close) for the parenthesised argument list
     starting at ``source[open_paren] == '('``. Paren-balanced so nested calls and
@@ -123,6 +148,7 @@ class SynthResult:
     preconditions: dict = field(default_factory=dict)     # callee -> precondition
     failing_asserts: list = field(default_factory=list)   # asserts still unprovable
     asserts: list = field(default_factory=list)
+    entry: str = ""              # the entry function actually used (after auto-resolution)
     note: str = ""
     # No verification goal in the program (no //@ assert / assert / __VERIFIER_assert).
     # Distinct from ok: there is NOTHING to prove, so the run is N/A — reporting it as
@@ -280,6 +306,9 @@ def synthesize(
     from bmc_agent.source_parser import parse_source_file
     from bmc_agent.harness_generator import _c_expressible_postcondition as _cexpr
     parsed = parse_source_file(str(source_file), source_text=src)
+    # The entry must be the function the asserts live in (default 'main' may not
+    # exist, or the goals may sit in another function like `foo`).
+    entry = _resolve_entry(parsed, entry)
     defined = list(parsed.functions.keys())
     entry_src = parsed.function_bodies.get(entry, "")
     callees = [c for c in called_functions(src, defined) if c != entry]
@@ -309,7 +338,8 @@ def synthesize(
     def _result(ok, it, failing, note, backend=""):
         return SynthResult(ok=ok, iterations=it, postconditions=dict(post),
                            preconditions=dict(pre), failing_asserts=list(failing),
-                           asserts=asserts, note=(note + (f" [{backend}]" if backend else "")))
+                           asserts=asserts, entry=entry,
+                           note=(note + (f" [{backend}]" if backend else "")))
 
     for it in range(1, max_iters + 1):
         # SUFFICIENCY: engine stub (fast, reuses pipeline) when every contract is

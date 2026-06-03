@@ -2,7 +2,43 @@
 from bmc_agent.assert_driven_specs import (
     extract_asserts, called_functions, _failing_asserts,
     callee_lhs_map, attribute_assert, extract_goals, synthesize, SynthResult,
+    _resolve_entry, _function_has_goal,
 )
+
+
+class _FakeParsed:
+    def __init__(self, bodies): self.function_bodies = bodies
+
+
+def test_resolve_entry_picks_goal_bearing_function():
+    # default entry 'main' doesn't exist; asserts live in foo -> resolve to foo
+    p = _FakeParsed({
+        "max": "{ if (x>=y) return x; return y; }",
+        "foo": "{ int s=max(34,45); //@ assert s==45; }",
+    })
+    assert _resolve_entry(p, "main") == "foo"
+    # explicit entry that already bears a goal is respected
+    assert _resolve_entry(p, "foo") == "foo"
+
+
+def test_resolve_entry_keeps_entry_when_it_has_goals():
+    p = _FakeParsed({"g": "{ return x; }",
+                     "main": "{ int v=g(3); //@ assert v==3; }"})
+    assert _resolve_entry(p, "main") == "main"
+
+
+def test_resolve_entry_no_switch_when_ambiguous():
+    # two goal-bearing functions, entry has none -> don't guess, keep entry
+    p = _FakeParsed({"a": "{ //@ assert 1; }", "b": "{ assert(2); }",
+                     "main": "{ return 0; }"})
+    assert _resolve_entry(p, "main") == "main"
+
+
+def test_function_has_goal_forms():
+    assert _function_has_goal("{ //@ assert x==1; }")
+    assert _function_has_goal("{ __VERIFIER_assert(p); }")
+    assert _function_has_goal("{ static_assert(q, \"m\"); }")
+    assert not _function_has_goal("{ int t = a + b; return t; }")
 
 
 def test_synthesize_assertion_free_is_na_not_pass(tmp_path):
