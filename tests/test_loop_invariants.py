@@ -7,6 +7,7 @@ from bmc_agent.loop_invariants import (
     _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
     modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
     _has_array_writes, _filter_in_scope, _enclosing_function, _loop_function_callees,
+    _is_non_behavioral, _minimize_invariants,
 )
 
 IC3 = (
@@ -213,3 +214,43 @@ def test_loop_function_callees_inlines_callee_not_entry():
     assert _loop_function_callees(callee, "main") == ["f"]
     colocated = ("void main(){ int s=0,i=0; while(i<10){ s+=i; i++; } /*@ assert s>=0; */ }\n")
     assert _loop_function_callees(colocated, "main") == []
+
+
+# --- minimal behavioral invariants: minimization + non-behavioral heuristic ------
+
+def test_non_behavioral_heuristic():
+    # value-pinning clauses (caller/input constants) are non-behavioral
+    for c in ("n == 5", "a[0] == 1", "len == 1024", "x == -43"):
+        assert _is_non_behavioral(c), c
+    # relationships / bounds / quantified facts are behavioral
+    for c in ("p <= n", "p >= 0", "sum == (p>=1?a[0]:0)",
+              "forall k : 0 <= k < i ==> A[k]==k", "x == y"):
+        assert not _is_non_behavioral(c), c
+
+
+def test_minimize_drops_redundant_keeps_behavioral_core():
+    # needed = bound + behavioral summary; redundant = input constants.
+    ann = {0: ["n == 5", "a[0] == 1", "a[1] == 2", "p <= n", "sum == S", "p >= 0"]}
+    needed = {"p <= n", "sum == S", "p >= 0"}
+
+    class _Chk:
+        def __init__(self, v): self.verified = v; self.result = None
+
+    def check(a):                       # "verifies" iff the load-bearing core is present
+        return _Chk(needed.issubset(set(a[0])))
+
+    import logging
+    out = _minimize_invariants(ann, check, None, logging.getLogger("t"))
+    assert set(out[0]) == needed
+
+
+def test_minimize_never_empties_a_loop():
+    ann = {0: ["n == 5", "a[0] == 1"]}
+
+    class _Chk:
+        def __init__(self, v): self.verified = v; self.result = None
+
+    import logging
+    # everything "verifies" (goal proved for free) -> must still keep >= 1 clause
+    out = _minimize_invariants(ann, lambda a: _Chk(True), None, logging.getLogger("t"))
+    assert len(out[0]) == 1

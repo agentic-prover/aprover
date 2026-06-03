@@ -456,6 +456,16 @@ over
     A[1023] == 1023
 Always include the index-bound invariant (e.g. `i <= N`).
 
+Aim for the FEWEST, most GENERAL clauses that suffice: the index bound plus a
+behavioral summary of what the loop computes (a running sum/relationship that holds
+for ANY input). Prefer expressing the relationship over restating the caller's
+concrete input values — clauses like `n == 5` or `len == 1024` are usually
+redundant (the verifier already knows them from the call site). But correctness and
+provability come FIRST: if a per-element fact is genuinely needed for the invariant
+to be inductive (e.g. relating a symbolic `a[p]` to its value), include it.
+Redundant clauses are pruned automatically afterward, so never drop a fact the
+proof needs just to look minimal.
+
 OUTPUT FORMAT (one invariant per line):
   - a boolean expression over the loop variables/arrays, e.g.  i <= 1024
   - or a quantified fact:  forall <var> : <range/guard> ==> <fact>
@@ -575,15 +585,25 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     callee's call sites are inlined (``run_wp(inline=...)``) so the loop invariant
     discharges the caller's goal without a separately-synthesized contract. Goals are
     judged on partial correctness (``exclude_terminates`` — we synthesize asserts, not
-    loop variants), matching the CBMC oracle's bounded semantics."""
+    loop variants), matching the CBMC oracle's bounded semantics.
+
+    ``config.math_ints`` selects mathematical-integer semantics (IC3-style
+    benchmarks: `x = x + y` in an unbounded loop never overflows). It maps to
+    ``run_wp(rte=False)``: with ``-wp-rte`` WP keeps the WRAPPING machine-int VALUE
+    model even when the overflow alarm is suppressed, so a textbook invariant like
+    ``x >= 1`` under ``x = x + y`` is not preserved (the sum could wrap negative).
+    Dropping RTE gives the unbounded-integer reasoning these invariants assume. With
+    machine-int semantics (``math_ints`` off) RTE stays on (sound overflow + memory
+    safety)."""
     from bmc_agent import frama_c
+    math_ints = bool(getattr(config, "math_ints", False))
     loops = find_loops(source)
     assigns = {lp.ordinal: _loop_assigns(lp) for lp in loops}
     prepped = _prep_goals_acsl(source)
     inline = _loop_function_callees(prepped, entry)
     annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns)
     wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout,
-                        inline=inline, exclude_terminates=True)
+                        inline=inline, exclude_terminates=True, rte=not math_ints)
     # WP goal names: "..._loop_invariant_..." (validity) vs "...assert..." (adequacy).
     inv_failed = any("invariant" in g.lower() for g in wp.unproved)
     goal_failed = any("assert" in g.lower() for g in wp.unproved) or (
@@ -694,6 +714,51 @@ def _has_array_writes(loops: list) -> bool:
     return any(modified_vars(lp.body)[1] for lp in loops)
 
 
+# A clause is "non-behavioral" when it merely pins a concrete value rather than
+# expressing a relationship maintained by the loop: `n == 5`, `a[0] == 1`,
+# `len == 1024`. These are caller/input constants (true only because the call was
+# inlined into a concrete context) — sound but not generalizable. Minimization
+# drops these FIRST so the surviving set is the behavioral core (bounds + summary).
+_NON_BEHAVIORAL_RX = re.compile(
+    r"^\s*[A-Za-z_]\w*\s*(\[\s*\d+\s*\])?\s*==\s*-?\d+\s*$")
+
+
+def _is_non_behavioral(clause: str) -> bool:
+    return bool(_NON_BEHAVIORAL_RX.match(clause))
+
+
+def _minimize_invariants(annotations: dict, check_fn, loops, logger) -> dict:
+    """Greedily drop every clause that is NOT load-bearing for the proof, so the
+    result is a MINIMAL, behavioral invariant set rather than a sound-but-bloated
+    one (the verifier proves goals in a concrete/inlined context, so input-restating
+    clauses like ``n==5`` / ``a[0]==1`` survive 'for free' — strip them). Non-
+    behavioral clauses are tried first; a loop never reduces below one clause, and
+    every removal is re-verified with the SAME oracle so minimization stays sound."""
+    cur = {o: list(v) for o, v in annotations.items()}
+
+    def _order(o):
+        # indices of THIS loop's clauses, non-behavioral first (drop scaffolding
+        # before the behavioral core), each group high-index-first for stable popping
+        idxs = list(range(len(cur[o])))
+        return sorted(idxs, key=lambda i: (not _is_non_behavioral(cur[o][i]), -i))
+
+    changed = True
+    while changed:
+        changed = False
+        for o in list(cur):
+            for idx in _order(o):
+                if len(cur[o]) <= 1:           # keep at least one invariant per loop
+                    break
+                trial = {oo: list(vv) for oo, vv in cur.items()}
+                dropped = trial[o].pop(idx)
+                if check_fn(trial).verified:
+                    cur = trial
+                    logger.info("loop-inv: minimized — dropped redundant clause %r", dropped)
+                    changed = True
+                    break                      # restart this loop's scan over the smaller set
+    return cur
+
+
 def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                max_iters: int = 6, unwind: int = 0,
                                timeout: int = 180) -> LoopSynthResult:
@@ -743,11 +808,27 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                         it, chk.verified, chk.failing_invariants, chk.goal_failed)
             _log = getattr(chk.result, "raw_output", "") or ""
             if chk.verified:
+                # Prefer MINIMAL behavioral invariants: once the goals are proved,
+                # greedily drop clauses that aren't load-bearing (input/goal-restating
+                # scaffolding that survives 'for free' in the concrete context). Only
+                # where the invariant is GENUINELY required for the proof — Frama-C/WP
+                # and the havoc abstraction. In loop-head+unwind mode CBMC proves the
+                # goal by UNWINDING regardless of the invariant, so "not load-bearing"
+                # would wrongly strip the very behavioral invariant we synthesized.
+                final_chk = chk
+                if oracle == "frama-c" or use_havoc:
+                    minimized = _minimize_invariants(annotations, _check, loops, logger)
+                    if minimized != annotations:
+                        mchk = _check(minimized)
+                        if mchk.verified:
+                            annotations, final_chk = minimized, mchk
+                            _log = getattr(mchk.result, "raw_output", "") or _log
                 return LoopSynthResult(
                     ok=True, iterations=it, annotations=annotations,
                     acsl=render_loop_invariants_acsl(annotations, loops), goals=goals,
-                    note="invariants are inductive and prove all goals",
-                    instrumented=chk.instrumented, cbmc_log=_log)
+                    note="invariants are inductive and prove all goals (minimized)",
+                    instrumented=getattr(final_chk, "instrumented", chk.instrumented),
+                    cbmc_log=_log)
             if chk.unwinding_failed:
                 return LoopSynthResult(False, it, annotations,
                                        render_loop_invariants_acsl(annotations, loops), goals,
