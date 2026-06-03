@@ -60,6 +60,34 @@ def called_functions(source: str, defined: list[str]) -> list[str]:
             and re.search(rf"\b\w[\w\s\*]*\b{re.escape(fn)}\s*\([^;]*\)\s*\{{", source)]
 
 
+def callee_lhs_map(entry_src: str, callees: list[str]) -> dict:
+    """Map each callee -> the LHS variables it is assigned to at its call sites.
+
+    Parses ``[type] lhs = callee(...)`` so a failing assert can be traced back to
+    the callee whose return value flows into it. Order-preserving, de-duplicated.
+    """
+    m: dict = {}
+    for c in callees:
+        lhs = re.findall(rf"(\w+)\s*=\s*{re.escape(c)}\s*\(", entry_src or "")
+        if lhs:
+            m[c] = list(dict.fromkeys(lhs))
+    return m
+
+
+def attribute_assert(expr: str, lhs_map: dict, callees: list[str]) -> list[str]:
+    """Callees implicated by a failing assert, most-likely first.
+
+    A callee is implicated if one of its call-site LHS variables appears as an
+    identifier in the assert expression (its return value flows into the assert).
+    Implicated callees come first (source order); the remaining callees follow as
+    fallbacks, so refinement still progresses when attribution is empty/ambiguous.
+    """
+    words = set(re.findall(r"\b\w+\b", expr or ""))
+    hit = [c for c in callees if any(v in words for v in lhs_map.get(c, []))]
+    rest = [c for c in callees if c not in hit]
+    return hit + rest
+
+
 _BUILD_HARNESS_SYS = (
     "You are a CBMC harness engineer doing COMPOSITIONAL verification. You output "
     "ONLY a self-contained C harness in a single fenced ```c block."
@@ -179,6 +207,7 @@ def synthesize(
     bodies = {c: parsed.function_bodies.get(c, "") for c in callees}
     pnames = {c: [n for _, n in (parsed.get_function_info(c).signature.parameters
                                  if parsed.get_function_info(c) else [])] for c in callees}
+    lhs_map = callee_lhs_map(entry_src, callees)
 
     # Engine context for the FAST path: reuse the pipeline's compositional harness
     # (callee stubs) with assume_callee_postcondition=True, so a C-expressible
@@ -211,29 +240,41 @@ def synthesize(
         if verified and not failing:
             return _result(True, it, [], "all //@ asserts provable from synthesized specs", backend)
 
-        target = callees[0] if callees else None
-        if not target:
+        if not callees:
             return _result(False, it, failing, "no callee to refine", backend)
-        new_post = _refine_postcondition(
-            llm, config, target, sigs[target], bodies[target],
-            failing[0] if failing else asserts[0], post[target])
-        if not new_post or new_post == post[target]:
-            return _result(False, it, failing,
-                           "refinement did not change the postcondition — "
-                           "assert likely false / not implied by the body", backend)
-        # SOUNDNESS gate: body must imply the strengthened postcondition. Engine
-        # (fast) when C-expressible, else agentic.
-        if eng is not None and _cexpr_ok(target, new_post):
-            sv = _sound_engine(eng, target, pre[target], new_post)
-            sound = bool(sv and sv.verified)
-        else:
-            sound = _postcondition_sound(llm, config, target, sigs[target],
-                                         bodies[target], new_post, unwind, timeout)
-        if not sound:
-            return _result(False, it, failing,
-                           f"proposed postcondition for '{target}' is NOT implied "
-                           f"by its body (would be unsound) → assert is false", backend)
-        post[target] = new_post
+        # Attribute the failing assert to the callee whose return value flows into
+        # it; try implicated callees first, then the rest. A refinement counts only
+        # if it (a) changes the postcondition and (b) is SOUND (implied by the body).
+        focus = failing[0] if failing else asserts[0]
+        candidates = attribute_assert(focus, lhs_map, callees)
+        progressed = False
+        saw_changed_unsound = False   # a strictly-stronger proposal failed soundness
+        for target in candidates:
+            new_post = _refine_postcondition(
+                llm, config, target, sigs[target], bodies[target], focus, post[target])
+            if not new_post or new_post == post[target]:
+                continue   # no new information from this callee — try the next
+            # SOUNDNESS gate: body must imply the strengthened postcondition.
+            if eng is not None and _cexpr_ok(target, new_post):
+                sv = _sound_engine(eng, target, pre[target], new_post)
+                sound = bool(sv and sv.verified)
+            else:
+                sound = _postcondition_sound(llm, config, target, sigs[target],
+                                             bodies[target], new_post, unwind, timeout)
+            if not sound:
+                saw_changed_unsound = True
+                logger.info("assert-synth: '%s' proposal unsound, trying next callee", target)
+                continue   # unsound for this callee — another callee may carry the assert
+            post[target] = new_post
+            logger.info("assert-synth: refined '%s' (implicated by %r)", target, focus)
+            progressed = True
+            break
+        if not progressed:
+            note = ("no SOUND postcondition strengthening across the implicated callees makes "
+                    "the assert provable → assert likely false / not implied by any callee body"
+                    if saw_changed_unsound else
+                    "refinement proposed no stronger postcondition (fixpoint) — assert unprovable")
+            return _result(False, it, failing, note, backend)
 
     return _result(False, max_iters, asserts,
                    "max iterations reached without satisfying all asserts")
