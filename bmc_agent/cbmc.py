@@ -251,13 +251,28 @@ def _parse_cbmc_output(raw: str, stderr: str, returncode: int) -> CBMCResult:
     if verified and not counterexamples:
         m = re.search(r"Generated\s+(\d+)\s+VCC", raw)
         if m and int(m.group(1)) == 0:
-            return CBMCResult(
-                verified=False,
-                raw_output=_cap_raw(raw),
-                error="vacuous verification: CBMC generated 0 VCCs — the function "
-                      "body was not analysed (likely declared extern / not linked). "
-                      "A safe verdict here would be unsound; treating as INVALID.",
-            )
+            # 0 VCCs is vacuous ONLY if NO properties were actually enumerated.
+            # CBMC constant-folds fully-concrete assertions to `true` (0 VCCs reach
+            # the solver) yet still REPORTS them as checked results — that is a
+            # genuine proof, not an un-analysed body. Demote only when CBMC reported
+            # zero property results (extern/unlinked body = nothing to check).
+            n_props = 0
+            try:
+                for msg in json.loads(raw):
+                    if isinstance(msg, dict) and isinstance(msg.get("result"), list):
+                        n_props += len(msg["result"])
+            except (json.JSONDecodeError, TypeError):
+                mm = re.search(r"\bof\s+(\d+)\s+failed", raw)
+                n_props = int(mm.group(1)) if mm else 0
+            if n_props == 0:
+                return CBMCResult(
+                    verified=False,
+                    raw_output=_cap_raw(raw),
+                    error="vacuous verification: CBMC generated 0 VCCs and reported 0 "
+                          "properties — the function body was not analysed (likely "
+                          "declared extern / not linked). A safe verdict here would be "
+                          "unsound; treating as INVALID.",
+                )
 
     return CBMCResult(
         verified=verified,

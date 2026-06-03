@@ -160,6 +160,43 @@ def _inv_to_acsl(expr: str) -> str:
     return expr_to_acsl(expr)
 
 
+def _split_top_implication(expr: str):
+    """Split ``ANTE ==> CONS`` at the first top-level ``==>``; (None, expr) if none."""
+    depth, i, n = 0, 0, len(expr)
+    while i < n - 2:
+        c = expr[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and expr[i:i + 3] == "==>":
+            return expr[:i].strip(), expr[i + 3:].strip()
+        i += 1
+    return None, expr.strip()
+
+
+def _loophead_assert(inv: str, tag: str) -> str:
+    """Loop-head assertion statement for one invariant.
+
+    For a quantified ``forall k : ANTE ==> CONS``, emit the single-nondet-WITNESS
+    form — ``{ int k = nondet; assume(ANTE); assert(CONS); }`` — which is O(1) per
+    unwound iteration instead of O(N) for ``__CPROVER_forall`` (the forall expands
+    to a conjunction over the array). This keeps a large literal trip bound (e.g.
+    1024) tractable. Sound: an arbitrary witness covers all k. Plain invariants
+    and quantified-without-implication fall back to a direct assert."""
+    inv = inv.strip()
+    m = _FORALL.match(inv)
+    if m:
+        var, body = m.group(1), m.group(2).strip()
+        ante, cons = _split_top_implication(body)
+        if ante is not None:
+            ante_c = _expand_chained_comparisons(ante, var)
+            return (f'\n    {{ int {var} = __VERIFIER_nondet_int();'
+                    f' __CPROVER_assume({ante_c});'
+                    f' __CPROVER_assert({cons}, "{tag}"); }}')
+    return f'\n    __CPROVER_assert({_inv_to_cbmc(inv)}, "{tag}");'
+
+
 # --- source instrumentation ---------------------------------------------------
 
 def insert_loop_invariants(source: str, annotations: dict) -> str:
@@ -173,8 +210,7 @@ def insert_loop_invariants(source: str, annotations: dict) -> str:
     for lp in loops:
         for n, inv in enumerate(annotations.get(lp.ordinal, []) or []):
             tag = f"loopinv_{lp.ordinal}_{n}"
-            stmt = f'\n    __CPROVER_assert({_inv_to_cbmc(inv)}, "{tag}");'
-            edits.append((lp.head_offset, stmt))
+            edits.append((lp.head_offset, _loophead_assert(inv, tag)))
     out = source
     for off, stmt in sorted(edits, key=lambda e: -e[0]):
         out = out[:off] + stmt + out[off:]
@@ -257,7 +293,7 @@ def check_loop_invariants(source: str, annotations: dict, config,
     under-sized unwind is reported, not silently assumed — so a clean pass means
     Local Validity (per-iteration invariant) AND Global Adequacy (goals) hold."""
     from bmc_agent.assert_driven_specs import _run
-    instrumented = _prep_goals(insert_loop_invariants(source, annotations))
+    instrumented = _NONDET_PRELUDE + _prep_goals(insert_loop_invariants(source, annotations))
     res = _run(instrumented, config, entry, unwind, timeout)
     finv = failing_loopinvs(res)
     unwinding = any("unwinding" in (getattr(ce, "failing_property", "") or "").lower()

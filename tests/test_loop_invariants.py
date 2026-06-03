@@ -79,9 +79,11 @@ def test_inv_to_acsl_forall_and_result():
 
 def test_insert_loop_invariants_at_head():
     out = insert_loop_invariants(SRC, {0: ["i <= 1024", "forall k : (k < i) ==> (A[k] == k)"]})
-    # both asserts inserted, tagged, before the body statement
+    # plain invariant -> direct assert; quantified -> single-nondet-WITNESS form (O(1)/iter)
     assert '__CPROVER_assert(i <= 1024, "loopinv_0_0");' in out
-    assert '__CPROVER_forall { int k; ((k < i) ==> (A[k] == k)) }, "loopinv_0_1"' in out
+    assert 'int k = __VERIFIER_nondet_int();' in out
+    assert '__CPROVER_assume((k < i));' in out
+    assert '__CPROVER_assert((A[k] == k), "loopinv_0_1");' in out
     assert out.index("loopinv_0_0") < out.index("A[i] = i;")
 
 
@@ -174,7 +176,9 @@ def test_synthesize_end_to_end_with_mock_llm(tmp_path):
 
     class MockLLM:
         def complete(self, system, prompt, max_tokens=0, role=""):
-            return "i <= 8\nforall k : (k < i) ==> (A[k] == (int)k)"
+            # fully-bounded antecedent (0 <= k): the witness form needs the lower
+            # bound, else A[k] for k<0 is an OOB read.
+            return "i <= 8\nforall k : 0 <= k < i ==> (A[k] == (int)k)"
 
     r = synthesize_loop_invariants(str(f), Config.from_env(), MockLLM(),
                                    entry="main", unwind=10, timeout=90)
