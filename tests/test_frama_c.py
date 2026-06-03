@@ -2,8 +2,23 @@
 (everything that doesn't need the frama-c binary)."""
 from bmc_agent.frama_c import (
     insert_loop_invariants_acsl, insert_contract_acsl, parse_wp_output, run_wp,
-    frama_c_available, WPResult,
+    frama_c_available, WPResult, function_assigns_nothing,
 )
+
+
+def test_function_assigns_nothing_pure_vs_impure():
+    # pure leaf functions (no escaping store) -> assigns \nothing
+    assert function_assigns_nothing("int add(int *p,int *q){ return *p + *q; }", "add")
+    assert function_assigns_nothing("int max(int x,int y){ if(x>=y) return x; return y; }", "max")
+    # local scalar writes don't touch the frame -> still pure
+    assert function_assigns_nothing("int g(int n){ int t=0; t=n+1; return t; }", "g")
+    # escaping stores -> NOT assigns \nothing
+    assert not function_assigns_nothing("void set(int *p,int v){ *p = v; }", "set")
+    assert not function_assigns_nothing("void z(int *a){ a[0] = 1; }", "z")
+    assert not function_assigns_nothing("void s(struct T *p){ p->f = 1; }", "s")
+    # comparisons / unknown function must not be misread as stores
+    assert function_assigns_nothing("int cmp(int *p,int *q){ return *p == *q; }", "cmp")
+    assert not function_assigns_nothing("int h(int x){ return x; }", "missing")
 
 
 def test_insert_loop_invariants_acsl_before_loop():

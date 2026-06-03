@@ -570,12 +570,20 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     # Render the synthesized contracts in ACSL (the benchmark output format) and
     # fold them into the artifact alongside the DSL form.
     from bmc_agent.acsl import contract_to_acsl
+    from bmc_agent.frama_c import function_assigns_nothing
+    _src_text = open(str(args.source)).read()
+    fn_assigns = {fn: ("\\nothing" if function_assigns_nothing(_src_text, fn) else "")
+                  for fn in (r.postconditions or {})}
     acsl_blocks = {}
     for fn, p in (r.postconditions or {}).items():
-        block = contract_to_acsl((r.preconditions or {}).get(fn, "true"), p)
+        block = contract_to_acsl((r.preconditions or {}).get(fn, "true"), p,
+                                 assigns=fn_assigns.get(fn, ""))
         if block:
             acsl_blocks[fn] = block
     payload["acsl"] = acsl_blocks
+    for fn, a in fn_assigns.items():           # record the frame in the DSL artifact too
+        if a:
+            payload["synthesized_specs"].get(fn, {})["assigns"] = a
     try:
         with open(out_path, "w") as fh:
             _json.dump(payload, fh, indent=2)
@@ -585,6 +593,8 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     print("\n=== Synthesized specs (DSL) ===")
     for fn, p in (r.postconditions or {}).items():
         print(f"  {fn}:  requires {(r.preconditions or {}).get(fn, 'true')}")
+        if fn_assigns.get(fn):
+            print(f"  {' ' * len(fn)}   assigns  {fn_assigns[fn]}")
         print(f"  {' ' * len(fn)}   ensures  {p}")
     print("\n=== Synthesized specs (ACSL) ===")
     for fn, block in acsl_blocks.items():
@@ -600,12 +610,23 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     if r.ok and getattr(config, "oracle", "cbmc") == "frama-c":
         from bmc_agent.frama_c import insert_contract_acsl, run_wp
         try:
-            annotated = open(str(args.source)).read()
+            annotated = _src_text
             for fn, p in (r.postconditions or {}).items():
+                # A frame clause is ESSENTIAL for modular WP: without `assigns
+                # \nothing` on a pure callee, WP assumes the call may clobber any
+                # memory (e.g. add(&a,&b) "could" change a/b), so post-call asserts
+                # about the caller's variables fail — even though CBMC, which inlines,
+                # proves them. fn_assigns (computed above) emits \nothing for callees
+                # with no escaping store.
                 annotated = insert_contract_acsl(
                     annotated, fn,
-                    requires=(r.preconditions or {}).get(fn, "true"), ensures=p)
-            wp = run_wp(annotated, frama_c_path=getattr(config, "frama_c_path", "frama-c"))
+                    requires=(r.preconditions or {}).get(fn, "true"), ensures=p,
+                    assigns=fn_assigns.get(fn, ""))
+            # Match the loop oracle's semantics: partial correctness (no @terminates)
+            # and mathematical integers under --math-ints (no overflow RTE).
+            math_ints = bool(getattr(config, "math_ints", False))
+            wp = run_wp(annotated, frama_c_path=getattr(config, "frama_c_path", "frama-c"),
+                        rte=not math_ints, exclude_terminates=True)
             if not wp.available:
                 print(f"Frama-C/WP: requested but unavailable ({wp.error}); contract "
                       "validated by CBMC only — install frama-c + alt-ergo for WP confirmation.")

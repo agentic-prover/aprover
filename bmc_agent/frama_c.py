@@ -70,6 +70,55 @@ _FUNC_DEF_TMPL = (
     r"[A-Za-z_][\w \t\*]*\b{name}\s*\([^;{{]*\)\s*\{{")
 
 
+def _find_brace_block(source: str, open_idx: int) -> int:
+    """Index of the '}' matching '{' at ``source[open_idx]`` (quote-aware), or -1."""
+    depth, i, n, quote = 0, open_idx, len(source), None
+    while i < n:
+        ch = source[i]
+        if quote:
+            if ch == "\\":
+                i += 2; continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+# a write that escapes the function's frame: store through a pointer (`*x =`),
+# array element (`x[i] =`), or struct field (`x->f =` / `x.f =`), incl. compound
+# assignment and ++/--. Writes to plain local scalars don't touch the frame.
+_MEM_STORE_RX = re.compile(
+    r"(?:\*\s*[A-Za-z_]\w*|[A-Za-z_]\w*\s*\[[^\]]*\]|[A-Za-z_]\w*\s*(?:->|\.)\s*[A-Za-z_]\w*)"
+    r"\s*(?:[-+*/%&|^]?=(?!=)|<<=|>>=)"
+    r"|(?:\+\+|--)\s*\*?\s*[A-Za-z_]\w*\s*(?:\[|->|\.)"
+    r"|\*\s*[A-Za-z_]\w*\s*(?:\+\+|--)")
+
+
+def function_assigns_nothing(source: str, fn: str) -> bool:
+    """True iff ``fn``'s body performs NO write that escapes its frame — no store
+    through a pointer/array/field. Such a (leaf) function is ``assigns \\nothing;``.
+    Conservative: any escaping store (or inability to locate the body) => False, so
+    we only ever ADD a sound frame, never claim a false one. Writes to plain local
+    scalars are irrelevant to the frame and ignored."""
+    m = re.search(_FUNC_DEF_TMPL.format(name=re.escape(fn)), source)
+    if not m:
+        return False
+    open_brace = source.index("{", m.end() - 1)
+    close = _find_brace_block(source, open_brace)
+    if close < 0:
+        return False
+    body = source[open_brace + 1:close]
+    return _MEM_STORE_RX.search(body) is None
+
+
 def insert_contract_acsl(source: str, fn: str, requires: str = "",
                          ensures: str = "", assigns: str = "") -> str:
     """Splice an ACSL function contract ``/*@ requires…; ensures…; */`` immediately
