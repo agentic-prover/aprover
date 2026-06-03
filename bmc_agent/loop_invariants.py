@@ -90,10 +90,30 @@ def find_loops(source: str) -> list[LoopSite]:
 
 # --- DSL -> oracle renderers (the quantified fragment invariants need) --------
 
+_CHAIN_RE_TMPL = (
+    r"([\w\[\]\.]+(?:\s*[-+*/]\s*[\w\[\]\.]+)*)\s*(<=?|>=?)\s*"
+    r"(\b{var}\b)\s*(<=?|>=?)\s*([\w\[\]\.]+(?:\s*[-+*/]\s*[\w\[\]\.]+)*)")
+
+
+def _expand_chained_comparisons(body: str, var: str) -> str:
+    """Expand a math-style chained comparison around the quantifier variable
+    (valid DSL/ACSL, INVALID C): ``LO <= var < HI`` -> ``(LO <= var) && (var < HI)``.
+    C parses ``0 <= k < i`` as ``(0<=k) < i`` (a 0/1 vs i compare) — a semantic
+    bug — so the C renderer must split it; ACSL keeps the chained form natively."""
+    rx = re.compile(_CHAIN_RE_TMPL.format(var=re.escape(var)))
+    prev = None
+    out = body
+    while out != prev:
+        prev = out
+        out = rx.sub(r"((\1 \2 \3) && (\3 \4 \5))", out)
+    return out
+
+
 def _inv_to_cbmc(expr: str) -> str:
     """Render a DSL invariant to a C boolean expression for CBMC.
 
     ``forall k : G ==> B``  ->  ``__CPROVER_forall { int k; (G ==> B) }``
+    Chained comparisons around the bound variable are expanded (C has none).
     Plain boolean expressions pass through unchanged. ``==>`` is accepted by
     CBMC inside ``__CPROVER_forall`` and at top level it is normalised to
     ``(!(a) || (b))`` so a bare implication is also checkable.
@@ -102,6 +122,7 @@ def _inv_to_cbmc(expr: str) -> str:
     m = _FORALL.match(expr)
     if m:
         var, body = m.group(1), m.group(2).strip()
+        body = _expand_chained_comparisons(body, var)
         return f"__CPROVER_forall {{ int {var}; ({body}) }}"
     return _top_implication_to_or(expr)
 
@@ -237,6 +258,12 @@ Synthesize loop invariant(s) for the loop below so a verifier can prove the
 program's GOALS. An invariant must be INDUCTIVE: true when the loop is first
 reached, and preserved by every iteration.
 
+An invariant is evaluated at the TOP of the loop body (the loop head), BEFORE
+that iteration's statements execute. So for a loop `for(i=0;i<N;i++)` whose body
+sets `A[i]=i`, at the head the elements A[0..i-1] are already set but A[i] is NOT
+yet — write `forall k : 0 <= k < i ==> A[k] == k`, and do NOT write `A[i] == i`
+(it is false at the head).
+
 Prefer BEHAVIORAL, generalizable invariants that SUMMARIZE the loop over facts
 that merely restate a goal. E.g. prefer
     forall k : 0 <= k < i ==> A[k] == k
@@ -360,6 +387,8 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     # Phase 1: initial proposal per loop.
     annotations = {lp.ordinal: _propose(llm, config, lp, goals, fn_src) for lp in loops}
     by_ord = {lp.ordinal: lp for lp in loops}
+    for o, invs in annotations.items():
+        logger.info("loop-inv proposed for loop %d: %s", o, invs)
 
     for it in range(1, max_iters + 1):
         chk = check_loop_invariants(src, annotations, config, entry, uw, timeout)
@@ -380,14 +409,30 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         # loops implicated by the still-failing goal.
         changed = False
         if chk.failing_invariants:
-            for ordn, _n in {(o, n) for (o, n) in chk.failing_invariants}:
-                lp = by_ord[ordn]
-                new = _refine(llm, config, lp, annotations[ordn],
-                              "Some of these invariants are NOT preserved by the loop body "
-                              "(CBMC refuted them). Fix them so every one is inductive.",
-                              goals, fn_src)
-                if new and new != annotations[ordn]:
-                    annotations[ordn] = new; changed = True
+            # First, DETERMINISTICALLY prune the non-inductive clauses: they are
+            # often spurious (e.g. `i < N ==> A[i] == i`, false at the loop head
+            # because A[i] is written *after* the head), and the inductive
+            # behavioral clauses that remain frequently already suffice — which
+            # is also the minimality objective. Re-checked next iteration; if the
+            # pruned set is then too weak, the goal_failed branch strengthens it.
+            fset = set(chk.failing_invariants)
+            pruned = {o: [inv for n, inv in enumerate(invs) if (o, n) not in fset]
+                      for o, invs in annotations.items()}
+            if any(pruned[o] != annotations[o] for o in annotations) and any(pruned.values()):
+                logger.info("loop-inv: pruned non-inductive clauses %s", sorted(fset))
+                annotations = pruned; changed = True
+            else:
+                # nothing safely prunable (would empty a loop) → ask the LLM to fix
+                for ordn in {o for (o, _n) in chk.failing_invariants}:
+                    lp = by_ord[ordn]
+                    new = _refine(llm, config, lp, annotations[ordn],
+                                  "Some invariants are NOT preserved by the loop body (CBMC "
+                                  "refuted them). Note: an invariant holds at the TOP of the "
+                                  "body, BEFORE that iteration's writes — so a fact about the "
+                                  "element written THIS iteration is not yet true. Fix them.",
+                                  goals, fn_src)
+                    if new and new != annotations[ordn]:
+                        annotations[ordn] = new; changed = True
         else:  # goal_failed: invariants valid but too weak
             for lp in loops:
                 new = _refine(llm, config, lp, annotations[lp.ordinal],

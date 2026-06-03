@@ -44,6 +44,12 @@ def test_inv_to_cbmc_plain_passthrough():
     assert _inv_to_cbmc("i <= 1024") == "i <= 1024"
 
 
+def test_inv_to_cbmc_expands_chained_comparison():
+    # math-style `0 <= k < i` (valid ACSL, INVALID C) must be split for CBMC
+    got = _inv_to_cbmc("forall k : 0 <= k < i ==> A[k] == k")
+    assert got == "__CPROVER_forall { int k; (((0 <= k) && (k < i)) ==> A[k] == k) }"
+
+
 def test_top_implication_rewrite():
     assert _top_implication_to_or("a ==> b") == "(!(a) || (b))"
     # nested implication on the rhs is rewritten too

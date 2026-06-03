@@ -1835,8 +1835,8 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument(
         "--standalone-unwind",
         type=int,
-        default=64,
-        help="Loop-unwinding bound for --standalone mode (default: 64). With --unwinding-assertions on, an undersized bound is reported, not silently assumed.",
+        default=0,
+        help="Loop-unwinding bound for --standalone / --synth-loop-invariants modes. 0 (default) means: --standalone uses 64; --synth-loop-invariants auto-derives bound+2 from a literal loop bound. With --unwinding-assertions on, an undersized bound is reported, not silently assumed.",
     )
     ver.add_argument(
         "--threat-model",
