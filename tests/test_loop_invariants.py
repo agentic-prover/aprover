@@ -1,7 +1,10 @@
 """Loop-invariant synthesis — deterministic helpers (no LLM/CBMC)."""
+import shutil
+import pytest
 from bmc_agent.loop_invariants import (
     find_loops, _inv_to_cbmc, _inv_to_acsl, _top_implication_to_or,
     insert_loop_invariants, render_loop_invariants_acsl, failing_loopinvs,
+    _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
 )
 
 SRC = (
@@ -75,3 +78,45 @@ def test_failing_loopinvs_parsing():
     class R:
         counterexamples = [CE("loopinv_0_1"), CE("loopinv_2_0"), CE("GOAL")]
     assert failing_loopinvs(R()) == [(0, 1), (2, 0)]
+
+
+def test_parse_inv_lines_strips_noise():
+    txt = ("```\n"
+           "- loop invariant i <= 1024;\n"
+           "forall k : (k < i) ==> (A[k] == k)\n"
+           "// a comment\n"
+           "```")
+    assert _parse_inv_lines(txt) == ["i <= 1024", "forall k : (k < i) ==> (A[k] == k)"]
+
+
+def test_guess_unwind_from_bound():
+    loops = [LoopSite("for", "i = 0; i < 1024; i++", 0, "", 0)]
+    assert _guess_unwind(loops, 64) == 1026          # bound+2
+    assert _guess_unwind([LoopSite("while", "x", 0, "", 0)], 64) == 64   # no literal -> default
+
+
+@pytest.mark.skipif(not shutil.which("cbmc"), reason="cbmc not installed")
+def test_synthesize_end_to_end_with_mock_llm(tmp_path):
+    """Whole driver: propose (mocked) → real CBMC validity+adequacy → ACSL out.
+    The mock returns the behavioral invariant the engine would synthesize."""
+    from bmc_agent.config import Config
+    src = (
+        "int main(void){\n"
+        "  int A[8]; unsigned i;\n"
+        "  for (i = 0; i < 8; i++) { A[i] = i; }\n"
+        "  __VERIFIER_assert(A[7] == 7);\n"
+        "  return 0;\n"
+        "}\n"
+    )
+    f = tmp_path / "bench.c"; f.write_text(src)
+
+    class MockLLM:
+        def complete(self, system, prompt, max_tokens=0, role=""):
+            return "i <= 8\nforall k : (k < i) ==> (A[k] == (int)k)"
+
+    r = synthesize_loop_invariants(str(f), Config.from_env(), MockLLM(),
+                                   entry="main", unwind=10, timeout=90)
+    assert r.ok, r.note
+    assert r.annotations[0]
+    assert "loop invariant \\forall integer k;" in r.acsl
+    assert "A[7] == 7" in r.goals

@@ -567,6 +567,54 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     return 1
 
 
+def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int:
+    """Specification-synthesis mode: synthesize loop invariants (ACSL) that are
+    inductive and sufficient to prove the program's goals (see
+    bmc_agent.loop_invariants)."""
+    from bmc_agent.loop_invariants import synthesize_loop_invariants
+    from bmc_agent.llm import LLMClient
+
+    entry = getattr(args, "entry", None) or "main"
+    if getattr(args, "include_dir", None):
+        config.include_dirs = args.include_dir          # type: ignore[attr-defined]
+        config.preprocess = True                        # type: ignore[attr-defined]
+    if getattr(args, "defines", None):
+        config.cbmc_defines = list(args.defines)        # type: ignore[attr-defined]
+    unwind = int(getattr(args, "standalone_unwind", 0) or 0)   # 0 => auto from loop bound
+
+    print(f"Loop-invariant synthesis: {args.source}")
+    print(f"Entry: {entry}   (propose → CBMC validity+adequacy → refine)")
+    r = synthesize_loop_invariants(args.source, config, LLMClient(config),
+                                   entry=entry, unwind=unwind)
+
+    import json as _json, os as _os
+    out_dir = getattr(config, "artifact_dir", None) or "."
+    _os.makedirs(out_dir, exist_ok=True)
+    out_path = _os.path.join(out_dir, "synthesized_loop_invariants.json")
+    payload = {
+        "source": str(args.source), "entry": entry,
+        "satisfied": bool(r.ok), "iterations": r.iterations,
+        "goals": list(r.goals or []),
+        "loop_invariants": {str(o): invs for o, invs in (r.annotations or {}).items()},
+        "acsl": r.acsl, "note": r.note,
+    }
+    try:
+        with open(out_path, "w") as fh:
+            _json.dump(payload, fh, indent=2)
+    except OSError as exc:
+        print(f"(warning: could not write {out_path}: {exc})")
+
+    print("\n=== Synthesized loop invariants (ACSL) ===")
+    print(r.acsl or "  (none)")
+    print(f"\ngoals: {len(r.goals)}   iterations: {r.iterations}")
+    print(f"written: {out_path}")
+    if r.ok:
+        print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
+        return 0
+    print(f"RESULT: NOT SATISFIED — {r.note}")
+    return 1
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     """Full pipeline: generate specs + run BMC + validate counterexamples (Phase 3)."""
     from bmc_agent.config import Config
@@ -663,6 +711,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     # program's //@ assert clauses are provable (and sound w.r.t. the bodies).
     if getattr(args, "specs_from_asserts", False):
         return _run_assert_synth(args, config)
+
+    if getattr(args, "synth_loop_invariants", False):
+        return _run_loop_invariant_synth(args, config)
 
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
@@ -1755,6 +1806,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Assertion-driven spec synthesis: treat the program's //@ assert clauses as the goal and refine function postconditions until every assert is provable AND sound (implied by the body). Reports the synthesized contracts; flags any assert no sound spec can satisfy (i.e. genuinely false).",
+    )
+    ver.add_argument(
+        "--synth-loop-invariants",
+        action="store_true",
+        default=False,
+        help="Specification-synthesis mode: synthesize LOOP INVARIANTS (and render them in ACSL) that are inductive AND sufficient to prove the program's verification goals (assert / static_assert / __VERIFIER_assert / //@ assert). Reuses the gen+refine engine; CBMC validates each invariant per-iteration (Local Validity) and proves the goals (Global Adequacy) for unwindable loops.",
     )
     ver.add_argument(
         "--standalone-unwind",
