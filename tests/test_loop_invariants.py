@@ -7,8 +7,29 @@ from bmc_agent.loop_invariants import (
     _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
     modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
     _has_array_writes, _filter_in_scope, _enclosing_function, _loop_function_callees,
-    _is_non_behavioral, _minimize_invariants,
+    _is_non_behavioral, _minimize_invariants, _loop_assigns,
 )
+
+
+def test_loop_assigns_includes_for_header_counter():
+    # The counter is updated in the for-HEADER (`i++`), not the body — the frame
+    # must still list it, or WP's frame is unsound and preservation fails.
+    src = "void main(){ int A[2048]; int i;\n for (i = 0; i < 1024; i++) { A[i] = i; } }"
+    (lp,) = find_loops(src)
+    assert _loop_assigns(lp) == "i, A[..]"
+
+
+def test_loop_assigns_excludes_inline_declared_counter():
+    # `for (int i = ...)` declares i loop-locally → it is NOT part of the frame.
+    src = "void g(){ int A[8]; for (int i = 0; i < 8; i++) { A[i] = i; } }"
+    (lp,) = find_loops(src)
+    assert _loop_assigns(lp) == "A[..]"
+
+
+def test_loop_assigns_while_counter_in_body():
+    src = "void f(int n, int *a){ int s = 0, p = 0; while (p < n) { s += a[p]; p++; } }"
+    (lp,) = find_loops(src)
+    assert _loop_assigns(lp) == "p, s"
 
 IC3 = (
     "void main(){\n"

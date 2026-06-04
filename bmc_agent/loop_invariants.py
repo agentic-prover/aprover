@@ -533,8 +533,21 @@ def _prep_goals_acsl(source: str) -> str:
 
 def _loop_assigns(lp) -> str:
     """Best-effort ACSL ``loop assigns`` (frame) for a loop: modified scalars plus
-    each modified array as ``arr[..]``. WP needs the frame to prove preservation."""
-    scalars, arrays = modified_vars(lp.body)
+    each modified array as ``arr[..]``. WP needs the frame to prove preservation.
+
+    The scan covers the body AND, for a ``for`` loop, the header's init/increment
+    clauses — the loop COUNTER is updated there (``i++``), not in the body. Omitting
+    it makes the frame unsound (WP assumes ``i`` is unchanged while the loop mutates
+    it), so preservation of ``i <= N`` and the whole goal fail. A counter DECLARED
+    in the init (``for (int i = ...``) is loop-local and correctly excluded by
+    modified_vars' declared-variable filter."""
+    scan = lp.body
+    if getattr(lp, "kind", "") == "for":
+        parts = (lp.guard or "").split(";")
+        init = parts[0] if parts else ""
+        incr = parts[2] if len(parts) > 2 else ""
+        scan = f"{lp.body}\n{init};\n{incr};"
+    scalars, arrays = modified_vars(scan)
     return ", ".join(scalars + [f"{a}[..]" for a in arrays])
 
 
