@@ -494,7 +494,11 @@ that merely restate a goal. E.g. prefer
     forall k : 0 <= k < i ==> A[k] == k
 over
     A[1023] == 1023
-Always include the index-bound invariant (e.g. `i <= N`).
+Always include the FULL index-bound invariant — BOTH the lower and upper bound
+(e.g. `0 <= i` AND `i <= N`, or written together `0 <= i <= N`). The lower bound
+is not optional: a value-summary invariant (a running sum/relationship) is only
+inductive when the counter's lower bound is also pinned, so omitting `0 <= i`
+makes the summary clause fail to verify.
 
 Aim for the FEWEST, most GENERAL clauses that suffice: the index bound plus a
 behavioral summary of what the loop computes (a running sum/relationship that holds
@@ -510,6 +514,14 @@ OUTPUT FORMAT (one invariant per line):
   - a boolean expression over the loop variables/arrays, e.g.  i <= 1024
   - or a quantified fact:  forall <var> : <range/guard> ==> <fact>
 Use `==>` for implication. Do NOT use `\\` or ACSL syntax — plain C-style names.
+
+For a running SUM / PRODUCT / COUNT the loop accumulates, summarize it as an
+explicit per-index ladder the verifier can DISCHARGE — one case per reached
+index, guarded on the counter — e.g. a loop summing a[0..p-1] into `sum`:
+    sum == (p == 0 ? 0 : (p == 1 ? a[0] : (p == 2 ? a[0] + a[1] : sum)))
+Do NOT use an ACSL `\\sum`/`\\product` aggregate: although it is more general, an
+SMT prover cannot discharge the symbolic recursive-aggregate axioms (even the
+empty-aggregate base case times out), so it makes the goal unprovable.
 
 GOALS to enable (these are inputs, NOT invariants — do not just restate them):
 {goals}
