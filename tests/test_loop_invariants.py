@@ -395,3 +395,32 @@ def test_accumulator_function_contract():
     inmain = ("void main(){int A[8]; int i=0,s=0; while(i<8){s=s+A[i]; i++;} /*@ assert s==s; */}")
     assert detect_accumulator(find_loops(inmain)[0], inmain) is not None   # fold IS detected
     assert accumulator_contracts(inmain, find_loops(inmain), entry="main") == {}
+
+
+# --- behavioral strengthening: relational equality invariants -----------------
+from bmc_agent.loop_invariants import equal_update_invariants
+
+
+def test_equal_update_invariants_detects_parallel_assignment():
+    src = ("void main(){int x=1,y=1; while(unknown1()){"
+           "int t1=x; int t2=y; x=t1+t2; y=t1+t2;} }")
+    loops = find_loops(src)
+    assert equal_update_invariants(loops[0]) == ["x == y"]
+
+
+def test_equal_update_invariants_none_for_distinct_rhs():
+    src = "void main(){int x=0,y=0; while(unknown1()){ x=x+1; y=y+2; } }"
+    assert equal_update_invariants(find_loops(src)[0]) == []
+
+
+def test_equal_update_invariants_skips_accumulator_fold():
+    # sum=sum+a[p] / p++ has no two scalars sharing an RHS → no spurious equality
+    src = ("int s(int*a,int n){int p=0,sum=0; while(p<n){ sum=sum+a[p]; p++; }"
+           " return sum;}")
+    assert equal_update_invariants(find_loops(src)[0]) == []
+
+
+def test_equal_update_invariants_ignores_declaration_initializers():
+    # `int t1=x; int t2=x;` are declarations, not loop-carried scalar updates
+    src = "void main(){int x=0; while(unknown1()){ int t1=x; int t2=x; x=x+1; } }"
+    assert equal_update_invariants(find_loops(src)[0]) == []

@@ -602,6 +602,39 @@ def _refine_problem(base: str, dropped) -> str:
     return base
 
 
+# A plain (non-compound) assignment to a loop-carried scalar: `<var> = <rhs>;`.
+# The leading anchor (line/brace/`;`) rejects a declaration's initializer
+# (`int t1 = x;` — `int` is consumed as the var, then the `=` check fails) and the
+# `[^=]` after `=` rejects the `==` comparison. The anchor is a ZERO-WIDTH lookbehind
+# so a statement's trailing `;` still serves as the NEXT statement's anchor (two
+# adjacent assignments `x=E; y=E;` must both match).
+_PLAIN_ASSIGN_RX = re.compile(
+    r"(?:(?<=[;{}\n])|^)\s*([A-Za-z_]\w*)\s*=\s*([^=][^;]*);")
+
+
+def equal_update_invariants(lp) -> list:
+    """Relational EQUALITY invariants for a loop that updates two or more loop-
+    carried scalars to the SAME value in one iteration (``x = E; y = E;`` ⇒
+    ``x == y``). These are inductive BEHAVIORAL facts a particular goal usually does
+    not force (the dual of the goal-minimal set) — so the caller adds each only if
+    the augmented invariant set STILL verifies, i.e. the equality is established at
+    entry and preserved. Returns DSL equality strings; never claims, only proposes."""
+    body = lp.body or ""
+    scalars, _arrays = modified_vars(body)
+    sset = set(scalars)
+    groups: dict = {}
+    for m in _PLAIN_ASSIGN_RX.finditer(body):
+        var, rhs = m.group(1), re.sub(r"\s+", "", m.group(2))
+        if var in sset:
+            groups.setdefault(rhs, []).append(var)
+    out = []
+    for _rhs, vs in groups.items():
+        uniq = list(dict.fromkeys(vs))          # de-dup, keep first-seen order
+        for other in uniq[1:]:                  # chain equalities to the first var
+            out.append(f"{uniq[0]} == {other}")
+    return out
+
+
 def _prep_goals_acsl(source: str) -> str:
     """For the Frama-C oracle: express every goal as an ACSL ``//@ assert`` (WP
     proves those natively). ``//@ assert`` stays; the executable forms
@@ -1369,6 +1402,30 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                         if mchk.verified:
                             annotations, final_chk = minimized, mchk
                             _log = getattr(mchk.result, "raw_output", "") or _log
+                    # BEHAVIORAL STRENGTHENING (dual of minimization): minimization
+                    # drops clauses the GOAL doesn't need; this ADDS the strongest
+                    # inductive RELATIONAL invariants the goal didn't force (e.g.
+                    # `x == y` when both are updated to the same value) — the project's
+                    # behavioral-spec preference. Each candidate is kept only if the
+                    # augmented set still verifies (so it is established + preserved),
+                    # so the verdict can never weaken. Gated like the contract path.
+                    if getattr(config, "enable_spec_strengthen", True):
+                        strengthened = {o: list(v) for o, v in annotations.items()}
+                        for lp in loops:
+                            have = set(strengthened.get(lp.ordinal, []))
+                            for cand in equal_update_invariants(by_ord[lp.ordinal]):
+                                if cand in have:
+                                    continue
+                                trial = {o: list(v) for o, v in strengthened.items()}
+                                trial[lp.ordinal] = strengthened.get(lp.ordinal, []) + [cand]
+                                tchk = _check(trial)
+                                if tchk.verified:
+                                    strengthened, final_chk = trial, tchk
+                                    have.add(cand)
+                                    _log = getattr(tchk.result, "raw_output", "") or _log
+                                    logger.info("loop-inv: strengthened loop %d with "
+                                                "behavioral invariant %r", lp.ordinal, cand)
+                        annotations = strengthened
                 # Overflow-rigorous mode (all loops are folds, math-int on): the shown
                 # spec carries the loop variant + no-overflow precondition that the
                 # RTE-checked proof used, so the displayed contract is the sound one.
