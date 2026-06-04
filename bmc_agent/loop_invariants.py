@@ -258,16 +258,22 @@ def insert_loop_invariants(source: str, annotations: dict) -> str:
 
 
 def render_loop_invariants_acsl(annotations: dict, loops: list = None,
-                                variants: dict = None) -> str:
+                                variants: dict = None, assigns: dict = None) -> str:
     """Render the synthesized invariants as ACSL ``loop invariant`` blocks (one
-    block per loop), for the benchmark output / Frama-C. ``variants`` (loop ordinal
-    -> expr) adds a ``loop variant`` clause for termination where present."""
+    block per loop), for the benchmark output / Frama-C. ``assigns`` (loop ordinal
+    -> frame expr) emits the ``loop assigns`` clause that was VERIFIED, so the shown
+    spec is the complete, re-checkable loop contract — not a frame-less subset.
+    ``variants`` (loop ordinal -> expr) adds a ``loop variant`` for termination.
+    ACSL clause order is fixed: invariant(s), then assigns, then variant."""
     blocks = []
     for ordinal in sorted(annotations):
         invs = annotations.get(ordinal) or []
         if not invs:
             continue
         lines = "\n".join(f"  loop invariant {_inv_to_acsl(inv)};" for inv in invs)
+        frame = (assigns or {}).get(ordinal, "")
+        if frame:
+            lines += f"\n  loop assigns {frame};"
         var = (variants or {}).get(ordinal, "")
         if var:
             lines += f"\n  loop variant {var};"
@@ -1612,7 +1618,14 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 ovf_specs = (overflow_safe_accumulators(src, loops, math_ints)
                              if oracle == "frama-c" else {})
                 variants = {ordn: accumulator_variant(s) for ordn, s in ovf_specs.items()}
-                rendered = render_loop_invariants_acsl(annotations, loops, variants)
+                # Show the SAME `loop assigns` frame the WP oracle verified, so the
+                # displayed spec is the complete, re-checkable loop contract (not a
+                # frame-less subset). Only for frama-c — CBMC's loop-head+unwind mode
+                # has no ACSL frame. The frame was already proven (its assigns goals
+                # passed for this SATISFIED set), so showing it can't misrepresent.
+                disp_assigns = ({lp.ordinal: _loop_assigns(lp) for lp in loops}
+                                if oracle == "frama-c" else {})
+                rendered = render_loop_invariants_acsl(annotations, loops, variants, disp_assigns)
                 # Show the complete synthesized spec above the loop invariants — the
                 # recursive-logic-function definition(s) then the function contract(s)
                 # — but only for accumulators whose summary survived minimization (the
