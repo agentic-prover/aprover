@@ -275,3 +275,31 @@ def test_minimize_never_empties_a_loop():
     # everything "verifies" (goal proved for free) -> must still keep >= 1 clause
     out = _minimize_invariants(ann, lambda a: _Chk(True), None, logging.getLogger("t"))
     assert len(out[0]) == 1
+
+
+def test_parse_inv_lines_drops_reasoning_prose():
+    from bmc_agent.loop_invariants import _parse_inv_lines
+    reply = ("Let me think.\n"
+             "p <= n\n"
+             "Wait, I need a behavioral invariant:\n"
+             "forall k : 0 <= k < p ==> A[k] == k\n"
+             "The most direct way:")
+    assert _parse_inv_lines(reply) == ["p <= n", "forall k : 0 <= k < p ==> A[k] == k"]
+
+
+def test_parse_inv_lines_normalizes_acsl_quantifier():
+    from bmc_agent.loop_invariants import _parse_inv_lines
+    # ACSL-native `\forall <type> v; body` -> DSL `forall v : body`
+    assert _parse_inv_lines("\\forall int i; 0 <= i < n ==> a[i] == i + 1") == \
+        ["forall i : 0 <= i < n ==> a[i] == i + 1"]
+    assert _parse_inv_lines("\\forall integer k; (0 <= k < p) ==> (A[k] == k)") == \
+        ["forall k : (0 <= k < p) ==> (A[k] == k)"]
+
+
+def test_acsl_quantifier_survives_scope_filter():
+    # the regression: an ACSL-form quantifier was dropped because the bound var
+    # wasn't recognized -> _filter_in_scope flagged it out-of-scope. Now it's kept.
+    from bmc_agent.loop_invariants import _parse_inv_lines, _filter_in_scope
+    src = "int f(int *a, int n){ int p=0,s=0; while(p<n){s=s+a[p];p++;} return s; }"
+    inv = _parse_inv_lines("\\forall int i; 0 <= i && i < n ==> a[i] == i + 1")
+    assert _filter_in_scope(inv, src) == inv

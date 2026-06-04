@@ -642,9 +642,40 @@ class LoopSynthResult:
     no_goals: bool = False      # no //@ assert / assert / __VERIFIER_assert → N/A, not a pass
 
 
+# A real invariant line carries a relational/logical operator. Reasoning prose
+# ("Wait, let me reconsider.", "The most direct way:") does not — agentic models
+# interleave chain-of-thought with the answer, so the parser must reject it here
+# rather than leaning on the downstream out-of-scope filter (which is noisy and
+# misses prose built from in-scope identifiers).
+_INV_OP_RE = re.compile(r"(==>|<==>|==|!=|<=|>=|<|>|&&|\|\||\\forall|\\exists|\\sum|forall|exists)")
+
+
+def _normalize_quantifiers(expr: str) -> str:
+    """Rewrite ACSL-native quantifiers ``\\forall <type> v; BODY`` into the DSL
+    form ``forall v : BODY`` the pipeline expects.
+
+    Capable models routinely answer in ACSL syntax (``\\forall int i; 0<=i<n ==>
+    a[i]==i+1``) instead of the requested DSL ``forall i : ...``. Without this the
+    DSL ``_FORALL`` (colon form) doesn't match, so the bound variable isn't
+    recognised as quantified and the WHOLE clause is dropped by _filter_in_scope as
+    "out-of-scope". Normalising at ingest keeps these (often load-bearing)
+    invariants. Single-binder only; the last identifier before ``;`` is the var."""
+    def repl(m):
+        kw, binder, body = m.group(1).lower(), m.group(2).strip(), m.group(3)
+        toks = binder.split()
+        if not toks:
+            return m.group(0)
+        return f"{kw} {toks[-1]} : {body}"
+    return re.sub(r"\\?(forall|exists)\s+([A-Za-z_][\w\s]*?)\s*;\s*(.+)",
+                  repl, expr, flags=re.IGNORECASE | re.DOTALL)
+
+
 def _parse_inv_lines(text: str) -> list:
     """Invariant expressions from an LLM reply: one per line, fences/bullets/
-    trailing semicolons and `loop invariant` keyword stripped."""
+    trailing semicolons and `loop invariant` keyword stripped. ACSL-native
+    quantifiers are normalised to DSL form. Lines that don't look like a
+    boolean/quantified expression (no relational/logical operator, or a prose
+    lead-in ending in ':') are dropped as interleaved reasoning."""
     out = []
     for raw in (text or "").splitlines():
         ln = raw.strip().strip("`").strip()
@@ -652,8 +683,11 @@ def _parse_inv_lines(text: str) -> list:
             continue
         ln = re.sub(r"^\s*(?:[-*]\s*)?(?:loop\s+invariant\s+)?", "", ln, flags=re.IGNORECASE)
         ln = ln.rstrip(";").strip()
-        if ln:
-            out.append(ln)
+        if not ln:
+            continue
+        if ln.endswith(":") or not _INV_OP_RE.search(ln):
+            continue   # prose / reasoning, not an invariant
+        out.append(_normalize_quantifiers(ln))
     return out
 
 
