@@ -24,6 +24,7 @@ wherever Frama-C is on PATH.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -38,6 +39,40 @@ logger = get_logger("frama_c")
 
 def frama_c_available(frama_c_path: str = "frama-c") -> bool:
     return shutil.which(frama_c_path) is not None
+
+
+# Preference order for the WP SMT backend. Alt-Ergo is fastest on the typical
+# arithmetic/array goals; z3 and cvc5 are stronger on others (e.g. quantifier
+# instantiation / unfolding chains alt-ergo stalls on). WP runs them per goal in
+# this order and the FIRST to prove wins — so adding the fallbacks only ever
+# proves MORE, never fewer (a goal alt-ergo already closes still closes first).
+_WP_PROVER_PREFERENCE = ("alt-ergo", "z3", "cvc5")
+_WP_PROVERS_CACHE: "dict[str, list[str]]" = {}
+_WP_PROVER_ID_RE = re.compile(r"\[([a-z0-9][a-z0-9-]*)[|\]]")
+
+
+def available_wp_provers(frama_c_path: str = "frama-c") -> list:
+    """The preferred WP provers actually registered (via ``frama-c -wp-detect`` —
+    which reads why3's config, so absolute prover paths there work without the
+    binaries being on PATH). Cached per frama_c_path. Falls back to ``alt-ergo``
+    if detection yields nothing. An explicit ``BMC_AGENT_WP_PROVERS`` env (comma
+    list) overrides detection entirely."""
+    override = os.environ.get("BMC_AGENT_WP_PROVERS", "").strip()
+    if override:
+        return [p.strip() for p in override.split(",") if p.strip()]
+    if frama_c_path in _WP_PROVERS_CACHE:
+        return _WP_PROVERS_CACHE[frama_c_path]
+    found: set = set()
+    try:
+        proc = subprocess.run([frama_c_path, "-wp-detect"],
+                              capture_output=True, text=True, timeout=60)
+        for m in _WP_PROVER_ID_RE.finditer((proc.stdout or "") + (proc.stderr or "")):
+            found.add(m.group(1))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    provers = [p for p in _WP_PROVER_PREFERENCE if p in found] or ["alt-ergo"]
+    _WP_PROVERS_CACHE[frama_c_path] = provers
+    return provers
 
 
 # --- ACSL placement ----------------------------------------------------------
@@ -188,7 +223,7 @@ def parse_wp_output(raw: str) -> tuple:
 
 
 def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
-           timeout: int = 120, rte: bool = True, prover: str = "alt-ergo",
+           timeout: int = 120, rte: bool = True, prover: str = None,
            wp_timeout: int = 10, inline: "list[str]" = None,
            exclude_terminates: bool = False) -> WPResult:
     """Run ``frama-c -wp`` over an ACSL-annotated source and parse the verdict.
@@ -207,6 +242,11 @@ def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
     loop variants, matching CBMC's bounded semantics."""
     if not frama_c_available(frama_c_path):
         return WPResult(available=False, error="frama-c not installed (not on PATH)")
+    # Default to ALL registered preferred provers (alt-ergo→z3→cvc5), tried per
+    # goal in order; first to prove wins. An explicit `prover` (single id or
+    # comma list) always wins.
+    if not prover:
+        prover = ",".join(available_wp_provers(frama_c_path))
     with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
         tf.write(source_with_acsl)
         path = tf.name

@@ -105,3 +105,22 @@ def test_parse_wp_captures_prefix_status_goal_name():
     n_proved, n_total, unproved = parse_wp_output(raw)
     assert (n_proved, n_total) == (10, 11)
     assert unproved == ["typed_main_loop_invariant_4_established"]
+
+
+def test_available_wp_provers_env_override(monkeypatch):
+    from bmc_agent import frama_c
+    monkeypatch.setenv("BMC_AGENT_WP_PROVERS", "z3, cvc5")
+    assert frama_c.available_wp_provers("frama-c") == ["z3", "cvc5"]
+
+
+def test_wp_prover_id_regex_parses_detect_output():
+    # ids are the first token in each [id|alias|...] bracket of `frama-c -wp-detect`
+    from bmc_agent.frama_c import _WP_PROVER_ID_RE, _WP_PROVER_PREFERENCE
+    sample = ("[wp] Prover Alt-Ergo 2.6.3 [alt-ergo|altergo|Alt-Ergo:2.6.3]\n"
+              "[wp] Prover Z3 4.13.0 [z3|Z3:4.13.0]\n"
+              "[wp] Prover CVC5 1.2.0 [cvc5|CVC5:1.2.0]\n"
+              "[wp] Prover Z3 (ce) [z3-ce|Z3:4.13.0:counterexamples]\n")
+    found = {m.group(1) for m in _WP_PROVER_ID_RE.finditer(sample)}
+    assert {"alt-ergo", "z3", "cvc5"} <= found
+    # preference filter keeps order and only base ids
+    assert [p for p in _WP_PROVER_PREFERENCE if p in found] == ["alt-ergo", "z3", "cvc5"]
