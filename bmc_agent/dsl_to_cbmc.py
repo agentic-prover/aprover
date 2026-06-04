@@ -311,10 +311,22 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         matched_span = m.group(0).strip()
         if matched_span == stripped_norm:
             return wrap(atom)
-        # The comparison is embedded in prose (e.g. "otherwise X >= 0",
-        # "result is the value if Y"). The qualifying word changes the
-        # condition's meaning, so wrapping just the matched comparison
-        # would over-constrain. Comment it out instead.
+        # The single matched comparison does not span the whole atom. Two
+        # cases must be told apart:
+        #   (a) the atom is a COMPOUND boolean C expression — multiple
+        #       comparisons joined by &&/||/!/== such as a biconditional
+        #       postcondition ``(result==1) == (a>0 && b>0 && c>0)``. This is
+        #       a perfectly assertable predicate and MUST be wrapped whole;
+        #       commenting it out silently drops the property, leaving CBMC
+        #       with 0 VCCs (vacuous verification) → the sound-verify step
+        #       rejects an actually-correct contract → false NOT SATISFIED.
+        #   (b) the comparison is embedded in prose (``otherwise X >= 0``,
+        #       ``result is the value if Y``) where the qualifying word
+        #       changes the meaning and wrapping would over-constrain.
+        # _is_pure_bool_c_expr distinguishes them structurally (the caller's
+        # _looks_like_c_expr already screened out obvious prose).
+        if _is_pure_bool_c_expr(atom_norm):
+            return wrap(atom)
         return f"/* condition: {_escape_for_c_comment(atom)} */"
 
     # Fall through: emit as a comment (natural language / unknown)
@@ -336,6 +348,51 @@ def _escape_for_c_comment(text: str) -> str:
     sees a comment boundary.
     """
     return text.replace("*/", "* /").replace("/*", "/ *")
+
+
+# Characters permitted in a self-contained compound boolean C expression:
+# identifiers, whitespace, comparison/logical/arithmetic/bitwise operators,
+# parens/brackets and member access. Prose is rejected separately (by
+# _looks_like_c_expr) before this is consulted; a top-level comma is excluded
+# so we never mistake an English list for an expression.
+_PURE_BOOL_C_CHARS_RE = re.compile(r'^[\w\s!=<>&|()\[\].+\-*/%^~]+$')
+
+
+def _is_pure_bool_c_expr(s: str) -> bool:
+    """Return True if *s* is a self-contained, assertable boolean C expression.
+
+    Decides whether an atom whose single matched comparison does NOT span the
+    whole atom is nonetheless a compound boolean predicate — multiple
+    comparisons / logical connectives, e.g. ``(r==1) == (a>0 && b>0)`` — that
+    should be asserted whole, versus a comparison embedded in natural-language
+    prose, which must be commented out. Callers gate this behind
+    _looks_like_c_expr (the prose screen); here we additionally require:
+      * every character is a C-expression token char (no prose, no comma),
+      * parentheses/brackets are balanced,
+      * at least one relational/equality operator is present, so the
+        expression is genuinely boolean rather than a bare arithmetic value.
+    """
+    s = s.strip()
+    if not s or not _PURE_BOOL_C_CHARS_RE.match(s):
+        return False
+    # Prose tell: two identifier tokens separated only by whitespace
+    # (``otherwise result``, ``result is``). A well-formed C boolean
+    # expression always puts an operator/paren between two identifiers, so
+    # this pattern reliably flags a comparison embedded in natural language
+    # that survived the lexical char-class screen above.
+    if re.search(r'[A-Za-z_]\w*\s+[A-Za-z_]\w*', s):
+        return False
+    depth = 0
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+            if depth < 0:
+                return False
+    if depth != 0:
+        return False
+    return _C_COMPARISON_RE.search(s) is not None
 
 
 def _looks_like_c_expr(atom: str) -> bool:
