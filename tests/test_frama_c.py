@@ -27,7 +27,7 @@ def test_insert_loop_invariants_acsl_before_loop():
     out = insert_loop_invariants_acsl(
         src, {0: ["i <= 8", "forall k : 0 <= k < i ==> A[k] == k"]}, {0: "i, A[..]"})
     assert "loop invariant i <= 8;" in out
-    assert "loop invariant \\forall integer k; 0 <= k < i ==> A[k] == k;" in out
+    assert "loop invariant \\forall integer k; (0 <= k < i) ==> (A[k] == k);" in out
     assert "loop assigns i, A[..];" in out
     # ACSL block precedes the for-loop
     assert out.index("loop invariant") < out.index("for (i = 0")
@@ -37,7 +37,7 @@ def test_insert_contract_acsl_before_function():
     src = "#include <x.h>\nint add(int *p, int *q) {\n return *p + *q;\n}\n"
     out = insert_contract_acsl(src, "add", requires="valid(p) && valid(q)",
                                ensures="result == *p + *q")
-    assert "requires \\valid(p) && \\valid(q);" in out
+    assert "requires (\\valid(p)) && (\\valid(q));" in out
     assert "ensures \\result == *p + *q;" in out
     assert out.index("requires") < out.index("int add(")
 

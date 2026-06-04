@@ -4,8 +4,9 @@ from bmc_agent.acsl import expr_to_acsl, contract_to_acsl, loop_invariants_to_ac
 
 def test_expr_result_and_forall():
     assert expr_to_acsl("result >= x") == "\\result >= x"
+    # boolean structure is fully parenthesised (precedence-independent render)
     assert expr_to_acsl("forall k : 0 <= k < i ==> A[k] == k") == \
-        "\\forall integer k; 0 <= k < i ==> A[k] == k"
+        "\\forall integer k; (0 <= k < i) ==> (A[k] == k)"
 
 
 def test_expr_true_false():
@@ -18,12 +19,12 @@ def test_expr_valid_predicates():
     assert expr_to_acsl("valid(p)") == "\\valid(p)"
     assert expr_to_acsl("valid_range(buf, 0, n)") == "\\valid(buf + (0 .. (n) - 1))"
     # 'result' inside a larger expr, not double-escaped
-    assert expr_to_acsl("valid(p) && result == 0") == "\\valid(p) && \\result == 0"
+    assert expr_to_acsl("valid(p) && result == 0") == "(\\valid(p)) && (\\result == 0)"
 
 
 def test_expr_null_predicate():
     # DSL null(p)/!null(p) -> idiomatic ACSL
-    assert expr_to_acsl("!null(p) && !null(q)") == "!(p == \\null) && !(q == \\null)"
+    assert expr_to_acsl("!null(p) && !null(q)") == "(!(p == \\null)) && (!(q == \\null))"
     assert expr_to_acsl("null(ptr)") == "(ptr == \\null)"
 
 
@@ -32,7 +33,7 @@ def test_contract_block_drops_vacuous():
     block = contract_to_acsl("true", "result >= x && result >= y && (result == x || result == y)")
     assert block.startswith("/*@")
     assert "requires" not in block
-    assert "ensures \\result >= x && \\result >= y && (\\result == x || \\result == y);" in block
+    assert "ensures (\\result >= x) && (\\result >= y) && ((\\result == x) || (\\result == y));" in block
 
 
 def test_contract_block_empty_when_vacuous():

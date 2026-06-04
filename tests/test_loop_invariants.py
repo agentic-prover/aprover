@@ -74,7 +74,7 @@ def test_top_implication_rewrite():
 
 def test_inv_to_acsl_forall_and_result():
     assert _inv_to_acsl("forall k : 0 <= k < i ==> A[k] == k") == \
-        "\\forall integer k; 0 <= k < i ==> A[k] == k"
+        "\\forall integer k; (0 <= k < i) ==> (A[k] == k)"
     assert _inv_to_acsl("result >= x") == "\\result >= x"
 
 

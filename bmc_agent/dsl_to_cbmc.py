@@ -326,7 +326,7 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
         # _is_pure_bool_c_expr distinguishes them structurally (the caller's
         # _looks_like_c_expr already screened out obvious prose).
         if _is_pure_bool_c_expr(atom_norm):
-            return wrap(atom)
+            return wrap(fully_parenthesize(atom))
         return f"/* condition: {_escape_for_c_comment(atom)} */"
 
     # Fall through: emit as a comment (natural language / unknown)
@@ -493,6 +493,12 @@ def _atom_to_expr(atom: str) -> Optional[str]:
         matched_span = m.group(0).strip()
         if matched_span == stripped_norm:
             return _strip_outer_parens(atom).strip()
+        # Compound boolean operand (e.g. a biconditional ``(r==1)==cond``) that
+        # the single comparison doesn't span — keep it whole and pinned rather
+        # than dropping it, mirroring translate_atom. Without this the
+        # disjunction path silently loses such an operand.
+        if _is_pure_bool_c_expr(atom_norm):
+            return fully_parenthesize(_strip_outer_parens(atom).strip())
 
     return None
 
@@ -538,6 +544,72 @@ def _top_level_split(text: str, op: str) -> list[str]:
         i += 1
     parts.append("".join(current).strip())
     return parts if len(parts) > 1 else [text]
+
+
+# Boolean connectives in ACSL/C precedence order, LOWEST-binding first. Used by
+# fully_parenthesize to split outermost first so the resulting grouping matches
+# standard precedence. ``<==>`` MUST precede ``==>`` (the latter is a substring
+# of the former) and both precede ``||``/``&&``. ``==>``/``<==>`` are ACSL-only;
+# in a C expression they simply never split (returns one part).
+_BOOL_PRECEDENCE = ("<==>", "==>", "||", "&&")
+
+# A primary operand that never needs wrapping under a top-level boolean
+# connective: a single identifier / member access / array index / ACSL builtin
+# (``\result``), or an integer literal. Anything with an embedded operator is
+# wrapped so the &&/|| structure is explicit.
+_PRIMARY_OPERAND_RE = re.compile(
+    r"^(?:"
+    r"\\?[A-Za-z_]\w*"
+    r"(?:\s*(?:\.|->)\s*[A-Za-z_]\w*|\s*\[[^\[\]]*\])*"
+    r"|\d+"
+    r")$"
+)
+
+
+def _wrap_operand(expr: str) -> str:
+    """Parenthesise *expr* unless it is a primary operand, a pure comment
+    fragment, or already a single fully-parenthesised group."""
+    e = expr.strip()
+    if not e:
+        return e
+    if e.startswith("/*") and e.endswith("*/"):
+        return e  # already-dropped clause — leave untouched
+    if _PRIMARY_OPERAND_RE.match(e):
+        return e
+    if e.startswith("(") and _strip_outer_parens(e) != e:
+        return e  # already a single parenthesised group
+    return f"({e})"
+
+
+def fully_parenthesize(expr: str) -> str:
+    """Make the boolean (``<==>``/``==>``/``||``/``&&``) structure of *expr*
+    explicit so its meaning no longer DEPENDS on operator precedence.
+
+    Splits at the lowest-binding top-level connective first and parenthesises
+    every compound operand, recursively. The result is semantically identical
+    under standard C/ACSL precedence — nothing is reordered — but the grouping
+    is now pinned by parentheses. This matters because the SAME synthesized
+    string is parsed by two engines (CBMC's C front-end and Frama-C's ACSL),
+    and a bare ``A == B && C || D`` invites both reader error and a CBMC/WP
+    disagreement. Equality/relational/arithmetic sub-structure is left intact
+    inside each operand: its precedence is identical across both engines, so
+    wrapping the whole operand already pins it unambiguously. Idempotent.
+    """
+    if not expr:
+        return expr
+    s = expr.strip()
+    for op in _BOOL_PRECEDENCE:
+        parts = _top_level_split(s, op)
+        if len(parts) > 1:
+            return f" {op} ".join(
+                _wrap_operand(fully_parenthesize(p)) for p in parts
+            )
+    # No top-level boolean connective: recurse INTO a single outer-paren group
+    # so any connective nested one level down is pinned too.
+    inner = _strip_outer_parens(s)
+    if inner != s:
+        return "(" + fully_parenthesize(inner) + ")"
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -985,6 +1057,11 @@ def _condition_to_stmts(
         cp = cp.strip()
         if not cp:
             continue
+        # Pin the &&/|| grouping of this clause BEFORE the && split so the
+        # emitted C matches standard precedence (and the ACSL render) — e.g.
+        # ``(r==1)==c && r==0 || r==1`` is grouped ``((r==1)==c && r==0) ||
+        # r==1`` rather than being mis-split into independent && conjuncts.
+        cp = fully_parenthesize(cp)
         # Split each coarse part on top-level ``&&``.
         for sub in _top_level_split(cp, "&&"):
             sub = sub.strip()

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+from bmc_agent.dsl_to_cbmc import fully_parenthesize
+
 _FORALL = re.compile(r"^\s*forall\s+(\w+)\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 _EXISTS = re.compile(r"^\s*exists\s+(\w+)\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 
@@ -35,7 +37,12 @@ def expr_to_acsl(expr: str) -> str:
     m = _EXISTS.match(expr)
     if m:
         return f"\\exists integer {m.group(1)}; {expr_to_acsl(m.group(2).strip())}"
-    out = expr
+    # Pin the boolean (<==>/==>/||/&&) grouping with explicit parentheses so the
+    # rendered ACSL doesn't rely on operator precedence — keeping it readable
+    # and, crucially, identical in meaning to the CBMC harness (which renders
+    # the same DSL via dsl_to_cbmc.fully_parenthesize). Quantifiers are handled
+    # above first, so their bodies are parenthesised in the recursive call.
+    out = fully_parenthesize(expr)
     # valid_range(p, lo, hi) -> \valid(p + (lo .. (hi) - 1))   (before the bare valid())
     out = re.sub(r"\bvalid_range\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)",
                  r"\\valid(\1 + (\2 .. (\3) - 1))", out)

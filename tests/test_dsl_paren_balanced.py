@@ -148,3 +148,55 @@ def test_owns_with_cast_arg_uses_last_arg_as_pointer():
     assert "(T*)p != NULL" in out
     # The scope arg should not appear in the emitted condition.
     assert "ctx !=" not in out
+
+
+# ---------------------------------------------------------------------------
+# fully_parenthesize: pin &&/||/==>/<==> grouping so the rendered C/ACSL does
+# not depend on operator precedence (and CBMC and Frama-C agree).
+# ---------------------------------------------------------------------------
+from bmc_agent.dsl_to_cbmc import fully_parenthesize, postcond_to_assert
+
+
+def test_fully_parenthesize_biconditional_and_or_mix():
+    # The shape that motivated the fix: (r==1)==cond && r==0 || r==1.
+    # C precedence groups it ((==-bicond && r==0) || r==1); make that explicit.
+    expr = "(result == 1) == ((a + b > c) && (b + c > a)) && result == 0 || result == 1"
+    assert fully_parenthesize(expr) == (
+        "(((result == 1) == ((a + b > c) && (b + c > a))) && (result == 0)) "
+        "|| (result == 1)"
+    )
+
+
+def test_fully_parenthesize_precedence_and_idempotent():
+    assert fully_parenthesize("a || b && c") == "a || (b && c)"
+    assert fully_parenthesize("a && b || c") == "(a && b) || c"
+    # ==> binds looser than &&  (ACSL)
+    assert fully_parenthesize("p ==> q && r") == "p ==> (q && r)"
+    # <==> binds loosest of all
+    assert fully_parenthesize("p <==> q || r") == "p <==> (q || r)"
+    # primaries and single comparisons are left bare
+    assert fully_parenthesize("result == 1") == "result == 1"
+    assert fully_parenthesize("a[i]") == "a[i]"
+    # applying twice changes nothing
+    for e in ("a || b && c", "(x==1)==c && y==0 || z", "p ==> q && r"):
+        assert fully_parenthesize(fully_parenthesize(e)) == fully_parenthesize(e)
+
+
+def test_fully_parenthesize_does_not_split_quantifier_or_comment():
+    # a /* ... */ operand is left untouched (already-dropped clause)
+    assert "/* x */" in fully_parenthesize("a && /* x */")
+
+
+def test_postcond_to_assert_emits_single_grouped_assert():
+    # The whole biconditional must become ONE correctly-grouped assert, not be
+    # mis-split into independent && conjuncts (which would change the meaning).
+    stmts = postcond_to_assert(
+        "(result == 1) == ((a + b > c) && (b + c > a)) && result == 0 || result == 1",
+        ["a", "b", "c"],
+    )
+    asserts = [s for s in stmts if s.strip().startswith("assert(")]
+    assert len(asserts) == 1
+    assert asserts[0] == (
+        "assert((((result == 1) == ((a + b > c) && (b + c > a))) "
+        "&& (result == 0)) || (result == 1));"
+    )

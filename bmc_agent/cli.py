@@ -595,12 +595,16 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     except OSError:
         pass
 
+    from bmc_agent.dsl_to_cbmc import fully_parenthesize
     print("\n=== Synthesized specs (DSL) ===")
     for fn, p in (r.postconditions or {}).items():
-        print(f"  {fn}:  requires {(r.preconditions or {}).get(fn, 'true')}")
+        # Display with explicit &&/|| grouping so the printed DSL is read the
+        # same way the renderers (ACSL/CBMC) interpret it — no precedence guesswork.
+        req = (r.preconditions or {}).get(fn, "true")
+        print(f"  {fn}:  requires {fully_parenthesize(req)}")
         if fn_assigns.get(fn):
             print(f"  {' ' * len(fn)}   assigns  {fn_assigns[fn]}")
-        print(f"  {' ' * len(fn)}   ensures  {p}")
+        print(f"  {' ' * len(fn)}   ensures  {fully_parenthesize(p)}")
     print("\n=== Synthesized specs (ACSL) ===")
     for fn, block in acsl_blocks.items():
         print(f"// contract for {fn}")
