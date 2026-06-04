@@ -368,6 +368,51 @@ def synthesize(
                            asserts=asserts, entry=entry,
                            note=(note + (f" [{backend}]" if backend else "")))
 
+    def _sound_ok(target, candidate):
+        """Does the body imply `candidate`? (engine fast path, else LLM harness)."""
+        if eng is not None and _cexpr_ok(target, candidate):
+            sv = _sound_engine(eng, target, pre[target], candidate)
+            return bool(sv and sv.verified)
+        return _postcondition_sound(llm, config, target, sigs[target],
+                                    bodies[target], candidate, unwind, timeout)
+
+    def _sufficient(trial_post):
+        """Is the goal provable with this (callee -> postcondition) map?"""
+        if eng is not None and all(_cexpr_ok(c, trial_post[c]) for c in callees):
+            v = _suff_engine(eng, callees, pre, trial_post)
+            return bool(v and v.verified) and not _failing_asserts(v)
+        h = _build_sufficiency_harness(llm, config, entry, entry_src, pre, trial_post, sigs)
+        if not h:
+            return False
+        r = _run(_nondet_decl() + h, config, "main", unwind, timeout)
+        return bool(r.verified) and not _failing_asserts(r)
+
+    def _strengthen():
+        """#2 — push each sound+adequate postcondition toward the behavioral form.
+        Monotonic: a candidate replaces the current post ONLY if re-verified sound,
+        stronger-or-equal (cand ==> cur), and still adequate. Else the original is
+        kept, so the already-achieved SATISFIED can never be lost."""
+        for c in callees:
+            cur = post[c]
+            cand = _propose_behavioral_post(llm, config, c, sigs[c], bodies[c], cur)
+            logger.debug("assert-synth strengthen %s: candidate=%r", c, cand)
+            if not cand or cand == cur:
+                continue
+            if not _sound_ok(c, cand):
+                logger.debug("assert-synth strengthen %s: reject (unsound)", c)
+                continue
+            # Don't trade for a weaker/incomparable spec — require cand ==> cur.
+            if not _expr_implies(parsed, c, cand, cur, config, unwind, timeout):
+                logger.debug("assert-synth strengthen %s: reject (cand=>cur unproven)", c)
+                continue
+            trial = dict(post); trial[c] = cand
+            if not _sufficient(trial):
+                logger.debug("assert-synth strengthen %s: reject (no longer adequate)", c)
+                continue
+            post[c] = cand
+            logger.info("assert-synth: strengthened '%s' to behavioral postcondition "
+                        "(%s)", c, cand)
+
     for it in range(1, max_iters + 1):
         # SUFFICIENCY: engine stub (fast, reuses pipeline) when every contract is
         # C-expressible; otherwise the agentic harness (handles prose/unrolled).
@@ -384,6 +429,11 @@ def synthesize(
             failing, verified = _failing_asserts(res), res.verified
         logger.info("assert-synth iter %d [%s]: verified=%s failing=%s", it, backend, verified, failing)
         if verified and not failing:
+            # The goal is provable. Optionally tighten loose-but-adequate
+            # postconditions toward the function's behavioral relation (quality
+            # only — gated so it can never weaken the result or flip the verdict).
+            if getattr(config, "enable_spec_strengthen", True):
+                _strengthen()
             return _result(True, it, [], "all //@ asserts provable from synthesized specs", backend)
 
         if not callees:
@@ -652,6 +702,24 @@ def _build_sufficiency_harness(llm, config, entry, entry_src, pre, post, sigs) -
     return _extract_c(txt)
 
 
+def _clean_expr(txt: str) -> str:
+    """Extract a single postcondition expression from an LLM reply, tolerating a
+    ```code fence``` and a leading keyword / trailing ``;`` even though the system
+    prompt asks for a bare line (models add fences anyway — without this the first
+    'line' is the fence and the expression is silently lost)."""
+    s = (txt or "").strip()
+    m = re.search(r"```(?:c|cpp|text)?\s*\n?(.*?)```", s, re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    for line in s.splitlines():
+        line = line.strip().strip("`").strip()
+        line = re.sub(r"^(ensures|postcondition:?)\s+", "", line, flags=re.I)
+        line = line.rstrip(";").strip()
+        if line and not line.startswith("//"):
+            return line
+    return ""
+
+
 def _refine_postcondition(llm, config, callee, signature, body, failing, current) -> str:
     prompt = _REFINE_PROMPT.format(
         failing=failing, callee=callee, current_post=current,
@@ -659,7 +727,90 @@ def _refine_postcondition(llm, config, callee, signature, body, failing, current
     txt = llm.complete(
         agentic_system_prompt(config, "refinement", _REFINE_SYS),
         prompt, max_tokens=256, role="refinement")
-    return (txt or "").strip().splitlines()[0].strip().strip("`").strip() if txt else ""
+    return _clean_expr(txt)
+
+
+# --- behavioral strengthening (the dual of refinement) -----------------------
+#
+# Refinement makes a too-WEAK postcondition strong enough to prove the goal.
+# Strengthening runs AFTER the goal is already provable and pushes a sound,
+# adequate-but-LOOSE postcondition toward the function's exact input/output
+# relation — `result` pinned as a function of the PARAMETERS in every branch —
+# so the contract is reusable by any caller, not just the one whose goal
+# happened to exercise one branch. It is purely a quality lever: a candidate is
+# adopted only when re-verified SOUND, strictly-stronger-or-equal, AND still
+# adequate, so it can never weaken a result or flip the verdict.
+
+_STRENGTHEN_SYS = (
+    "You are a formal-methods engineer writing the STRONGEST SOUND, fully "
+    "BEHAVIORAL postcondition for a function — the exact input/output relation, "
+    "with the return value pinned as a function of the PARAMETERS in every "
+    "branch. You output ONLY the postcondition as a single DSL/boolean line — "
+    "no prose, no code fences."
+)
+
+_STRENGTHEN_PROMPT = """\
+`{callee}` already has this SOUND postcondition (a caller goal relies on it):
+    {current}
+
+Rewrite it as the STRONGEST postcondition the BODY guarantees — the exact
+input/output relation — so it constrains `result` for ALL inputs, not just the
+arguments some caller happens to pass. Requirements:
+  - Refer to the return value as `result`; use the parameter names from the signature.
+  - Express `result` purely as a function of the PARAMETERS. Do NOT use concrete
+    caller argument values (e.g. `a == 2`) and do NOT restate a specific call.
+  - State the relation unconditionally (keep `requires` true); cover EVERY branch
+    — e.g. both the true and false cases of a condition.
+  - It MUST be sound: only state what the code below actually computes.
+  - Prefer a conjunction of biconditionals written with `==` (C-expressible), e.g.
+    `((result == 1) == COND) && ((result == 0) == (!(COND)))`, or a ternary
+    `result == (COND ? X : Y)`.
+
+SIGNATURE: {signature}
+BODY:
+```c
+{body}
+```
+
+Output ONLY the postcondition expression on one line.
+"""
+
+
+def _propose_behavioral_post(llm, config, callee, signature, body, current) -> str:
+    prompt = _STRENGTHEN_PROMPT.format(
+        callee=callee, current=current, signature=signature, body=body)
+    txt = llm.complete(
+        agentic_system_prompt(config, "refinement", _STRENGTHEN_SYS),
+        prompt, max_tokens=256, role="refinement")
+    return _clean_expr(txt)
+
+
+def _expr_implies(parsed, fn, strong, weak, config, unwind, timeout) -> bool:
+    """Verify ``strong ==> weak`` over all nondet (result, params): assume
+    `strong`, assert `weak`. Body-independent — a pure validity check that
+    `strong` is at least as strong as `weak`. Scalar params only; returns False
+    when a safe harness can't be built or CBMC can't discharge it, so the caller
+    treats "not provably stronger" as "keep the original" (no regression)."""
+    fi = parsed.get_function_info(fn)
+    if not fi:
+        return False
+    params = list(fi.signature.parameters)
+    if any(("*" in t) or ("[" in t or "[" in n) for t, n in params):
+        return False                       # pointer/array params: not deterministically nondet-able here
+    ret = (fi.signature.return_type or "").strip()
+    if not ret or ret == "void":
+        return False
+    decls = "\n  ".join(f"{t} {n};" for t, n in params)
+    s = re.sub(r"\bresult\b", "__r", strong)
+    w = re.sub(r"\bresult\b", "__r", weak)
+    h = (f"int main(void) {{\n"
+         f"  {decls}\n"
+         f"  {ret} __r;\n"
+         f"  __CPROVER_assume({s});\n"
+         f"  __CPROVER_assert({w}, \"implies\");\n"
+         f"  return 0;\n}}\n")
+    res = _run(_nondet_decl() + h, config, "main", unwind, timeout)
+    return bool(getattr(res, "verified", False)) and not getattr(res, "error", None)
 
 
 def _mk_sound_harness(parsed, fn: str, clause: str) -> str | None:

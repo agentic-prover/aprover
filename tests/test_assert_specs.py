@@ -154,3 +154,23 @@ def test_attribute_assert_substring_not_falsely_matched():
     lhs_map = {"sum": ["s"]}
     assert attribute_assert("samples == sum_total", lhs_map, ["sum"]) == ["sum"]  # fallback, no real hit
     assert attribute_assert("s == 0", lhs_map, ["sum"]) == ["sum"]               # real hit
+
+
+# --- #2 behavioral-strengthening helpers -------------------------------------
+from bmc_agent.assert_driven_specs import _clean_expr
+
+
+def test_clean_expr_strips_code_fence_and_keyword():
+    # the model wraps the line in a fence despite the "bare line" instruction
+    assert _clean_expr("```c\nresult == (a > b ? a : b)\n```") == "result == (a > b ? a : b)"
+    # leading 'ensures' keyword and trailing semicolon are removed
+    assert _clean_expr("ensures result >= 0;") == "result >= 0"
+    # bare line passes through
+    assert _clean_expr("(result == 1) == (x > 0)") == "(result == 1) == (x > 0)"
+    # empty / fence-only replies yield empty (caller treats as "no candidate")
+    assert _clean_expr("```\n```") == ""
+    assert _clean_expr("") == ""
+
+
+def test_clean_expr_skips_comment_only_first_line():
+    assert _clean_expr("// here is the spec\nresult == x") == "result == x"

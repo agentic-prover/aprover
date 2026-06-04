@@ -155,6 +155,12 @@ class Config:
     # native ACSL loop invariants, for unbounded / aggregate-invariant goals).
     oracle: str = "cbmc"
     frama_c_path: str = "frama-c"
+    # After the goal is provable, push a loose-but-adequate synthesized
+    # postcondition toward the function's exact behavioral relation (result
+    # pinned as a function of the parameters in every branch) — adopting a
+    # candidate only when re-verified sound, stronger-or-equal, and still
+    # adequate. Quality lever; gated so it can never weaken/flip a result.
+    enable_spec_strengthen: bool = True
     # Read-only tool allowlist handed to ``claude -p`` in agentic mode. Keep it
     # read-only (no Bash/Write/Edit) so a spec-gen call can't mutate the tree.
     claude_code_tools: str = "Read,Grep,Glob"
