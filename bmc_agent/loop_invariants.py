@@ -758,6 +758,8 @@ def _parse_inv_lines(text: str) -> list:
             continue
         if ln.endswith(":") or not _INV_OP_RE.search(ln):
             continue   # prose / reasoning, not an invariant
+        if "..." in ln or "…" in ln:
+            continue   # informal math ellipsis (a[0]+...+a[p-1]) — not valid ACSL/C
         out.append(_normalize_quantifiers(ln))
     return out
 

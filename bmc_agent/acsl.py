@@ -23,6 +23,68 @@ from bmc_agent.dsl_to_cbmc import fully_parenthesize
 _FORALL = re.compile(r"^\s*forall\s+(\w+)\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 _EXISTS = re.compile(r"^\s*exists\s+(\w+)\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL)
 
+# DSL aggregate form `\sum k : LO <= k < HI : TERM` (likewise \product, \numof).
+# Frama-C/WP spells these `\sum(low, high, \lambda integer k; term)` with an
+# INCLUSIVE high bound — so the colon-form below must be rewritten, not passed
+# through (Frama-C rejects it with "unexpected token 'k'"). Header only; the
+# guard and term are scanned with paren-balancing in _rewrite_aggregates.
+_AGG_HEAD = re.compile(r"\\(sum|product|numof)\s+(\w+)\s*:\s*", re.IGNORECASE)
+
+
+def _scan_to_depth0(expr: str, start: int, stops: str) -> int:
+    """Index of the first char in ``stops`` at bracket-depth 0 from ``start``, or
+    the index of the unbalanced closing bracket / end of string."""
+    depth, j = 0, start
+    while j < len(expr):
+        c = expr[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return j
+            depth -= 1
+        elif depth == 0 and c in stops:
+            return j
+        j += 1
+    return len(expr)
+
+
+def _agg_bound(guard: str, var: str):
+    """(low, high_inclusive) ACSL bounds from a chained guard `LO <= k < HI`.
+    Frama-C's high is inclusive, so `< HI` -> `(HI) - 1`, and a strict low
+    `LO < k` -> `(LO) + 1`. Returns (None, None) if the guard isn't recognised."""
+    m = re.match(rf"\s*(.+?)\s*(<=|<)\s*{re.escape(var)}\s*(<=|<)\s*(.+?)\s*$", guard,
+                 re.DOTALL)
+    if not m:
+        return None, None
+    lo_e, lo_op, hi_op, hi_e = m.group(1), m.group(2), m.group(3), m.group(4)
+    low = lo_e.strip() if lo_op == "<=" else f"({lo_e.strip()}) + 1"
+    high = f"({hi_e.strip()}) - 1" if hi_op == "<" else hi_e.strip()
+    return low, high
+
+
+def _rewrite_aggregates(expr: str) -> str:
+    """Rewrite every DSL `\\sum k : guard : term` (and \\product/\\numof) — possibly
+    nested inside a larger expression — into Frama-C's
+    `\\sum(low, high, \\lambda integer k; term)`. Left unchanged if the bound can't
+    be parsed (so the failure is visible at the oracle, not silently wrong)."""
+    while True:
+        m = _AGG_HEAD.search(expr)
+        if not m:
+            return expr
+        kw, var = m.group(1).lower(), m.group(2)
+        guard_end = _scan_to_depth0(expr, m.end(), ":")
+        if guard_end >= len(expr) or expr[guard_end] != ":":
+            return expr  # no term separator — malformed, leave as-is
+        guard = expr[m.end():guard_end]
+        term_end = _scan_to_depth0(expr, guard_end + 1, "")
+        term = expr[guard_end + 1:term_end].strip()
+        low, high = _agg_bound(guard, var)
+        if low is None:
+            return expr
+        rendered = f"\\{kw}({low}, {high}, \\lambda integer {var}; {expr_to_acsl(term)})"
+        expr = expr[:m.start()] + rendered + expr[term_end:]
+
 
 def expr_to_acsl(expr: str) -> str:
     """Render a DSL boolean/arithmetic expression to ACSL."""
@@ -31,6 +93,10 @@ def expr_to_acsl(expr: str) -> str:
         return "\\true"
     if expr.lower() == "false":
         return "\\false"
+    # Rewrite \sum/\product/\numof colon-form to Frama-C's \lambda form before any
+    # other handling (they may be nested inside the boolean structure below).
+    if "\\sum" in expr or "\\product" in expr or "\\numof" in expr:
+        expr = _rewrite_aggregates(expr)
     m = _FORALL.match(expr)
     if m:
         return f"\\forall integer {m.group(1)}; {expr_to_acsl(m.group(2).strip())}"
