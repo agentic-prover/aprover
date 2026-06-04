@@ -490,3 +490,19 @@ def test_generality_gate_drops_removable_flags_loadbearing():
     assert "a[0] == 1" in out[0]              # load-bearing caller-specific -> kept...
     assert "a[0] == 1" in flagged             # ...and FLAGGED as non-behavioral
     assert "x == y" in out[0] and "x == y" not in flagged   # behavioral, untouched
+
+
+def test_reinject_pairs_dropped_clause_with_auxiliary():
+    from bmc_agent.loop_invariants import _reinject
+    reinj = set()
+    # refinement proposed the auxiliary `x>=1` but dropped the goal-relevant `x>=y`;
+    # re-injection restores `x>=y` so the pair lands in the set together.
+    out = _reinject(["y >= 0", "y <= 100000", "x >= 1"], ["x >= y"], reinj)
+    assert "x >= y" in out and "x >= 1" in out
+    assert reinj == {"x >= y"}             # tracked, so a 2nd failure can give up on it
+    # no dropped clauses → identity, nothing tracked
+    r2 = set()
+    assert _reinject(["x >= 1"], [], r2) == ["x >= 1"] and r2 == set()
+    # already present → not duplicated, not tracked
+    r3 = set()
+    assert _reinject(["x >= y"], ["x >= y"], r3) == ["x >= y"] and r3 == set()

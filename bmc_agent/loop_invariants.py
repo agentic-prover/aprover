@@ -602,6 +602,23 @@ def _refine_problem(base: str, dropped) -> str:
     return base
 
 
+def _reinject(new: list, dropped, reinj_set: set) -> list:
+    """Re-add the remembered non-inductive (goal-relevant) clauses that a refinement
+    DROPPED instead of keeping. A clause and the auxiliary that makes it inductive
+    must be in the set TOGETHER (``x>=y`` is only preserved alongside ``x>=1``); the
+    LLM, asked to strengthen, often emits the auxiliary but forgets to re-state the
+    original clause, so the two never co-occur and the loop oscillates. Re-injecting
+    pairs them deterministically. Each re-injected clause is recorded so that if it
+    STILL fails next iteration (no auxiliary actually rescues it ⇒ it was false), the
+    caller gives up on it rather than re-injecting forever."""
+    out = list(new)
+    for c in (dropped or []):
+        if c not in out:
+            out.append(c)
+            reinj_set.add(c)
+    return out
+
+
 # A plain (non-compound) assignment to a loop-carried scalar: `<var> = <rhs>;`.
 # The leading anchor (line/brace/`;`) rejects a declaration's initializer
 # (`int t1 = x;` — `int` is consumed as the var, then the `=` check fails) and the
@@ -1541,6 +1558,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         # cycle. Remembering the dropped text lets the next refinement ask for the
         # auxiliary invariant that makes it stick, instead of re-offering it bare.
         pruned_non_inductive: dict = {lp.ordinal: [] for lp in loops}
+        reinjected: dict = {lp.ordinal: set() for lp in loops}   # pruned clauses re-paired with an aux
 
         for it in range(1, max_iters + 1):
             chk = _check(annotations)
@@ -1634,11 +1652,21 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 fset = set(chk.failing_invariants)
                 # Remember the TEXT of each clause dropped as non-inductive so a
                 # later refinement can request the auxiliary companion that makes it
-                # inductive, rather than silently losing a goal-relevant fact.
+                # inductive, rather than silently losing a goal-relevant fact. A clause
+                # that was already RE-INJECTED (paired with a proposed auxiliary) and
+                # STILL fails is genuinely non-inductive (likely false) — give up on it
+                # so it isn't re-injected forever (the false-clause oscillation guard).
                 for (o, n) in fset:
                     invs_o = annotations.get(o) or []
-                    if 0 <= n < len(invs_o) and invs_o[n] not in pruned_non_inductive.setdefault(o, []):
-                        pruned_non_inductive[o].append(invs_o[n])
+                    if not (0 <= n < len(invs_o)):
+                        continue
+                    c = invs_o[n]
+                    if c in reinjected.get(o, set()):
+                        reinjected[o].discard(c)
+                        if c in pruned_non_inductive.get(o, []):
+                            pruned_non_inductive[o].remove(c)
+                    elif c not in pruned_non_inductive.setdefault(o, []):
+                        pruned_non_inductive[o].append(c)
                 pruned = {o: [inv for n, inv in enumerate(invs) if (o, n) not in fset]
                           for o, invs in annotations.items()}
                 if any(pruned[o] != annotations[o] for o in annotations) and any(pruned.values()):
@@ -1656,6 +1684,9 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                           "true. Fix them.",
                                           pruned_non_inductive.get(ordn)),
                                       goals, fn_src)
+                        if new:
+                            new = _reinject(new, pruned_non_inductive.get(ordn),
+                                            reinjected.setdefault(ordn, set()))
                         if new and new != annotations[ordn]:
                             annotations[ordn] = new; changed = True
             else:  # goal_failed: invariants valid but too weak
@@ -1667,6 +1698,9 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                       "summarize the loop strongly enough to imply the goals.",
                                       pruned_non_inductive.get(lp.ordinal)),
                                   goals, fn_src)
+                    if new:
+                        new = _reinject(new, pruned_non_inductive.get(lp.ordinal),
+                                        reinjected.setdefault(lp.ordinal, set()))
                     if new and new != annotations[lp.ordinal]:
                         annotations[lp.ordinal] = new; changed = True
             if not changed:
