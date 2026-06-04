@@ -687,7 +687,7 @@ def _run_specs_bench(args: argparse.Namespace, config: "object") -> int:
         print(f"specs-bench: oracle auto-selected → {config.oracle}"
               + ("" if config.oracle == "frama-c"
                  else " (frama-c not on PATH; install frama-c + alt-ergo to use WP)"))
-    from bmc_agent.loop_invariants import find_loops
+    from bmc_agent.loop_invariants import find_loops, brace_braceless_loops
     src = ""
     try:
         with open(args.source) as fh:
@@ -695,7 +695,9 @@ def _run_specs_bench(args: argparse.Namespace, config: "object") -> int:
     except OSError as exc:
         print(f"error: cannot read {args.source}: {exc}")
         return 2
-    if find_loops(src):
+    # Normalise brace-less loops so a single-statement loop body still dispatches
+    # to loop-invariant synthesis (not the contract path).
+    if find_loops(brace_braceless_loops(src)):
         print("specs-bench: loops present → loop-invariant synthesis (+ --math-ints)")
         return _run_loop_invariant_synth(args, config)
     print("specs-bench: no loops → function-contract synthesis")

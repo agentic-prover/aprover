@@ -318,3 +318,19 @@ def test_wp_failing_invariant_indices_maps_to_clause():
          "typed_main_loop_invariant_3_preserved"], ann, loops) == [(0, 0), (0, 2)]
     # an assert-only (goal) failure yields no invariant indices
     assert _wp_failing_invariant_indices(["typed_main_assert"], ann, loops) == []
+
+
+def test_brace_braceless_loops_normalizes_and_preserves():
+    from bmc_agent.loop_invariants import brace_braceless_loops, find_loops
+    # already-braced is byte-for-byte unchanged
+    braced = "void f(){ for(i=0;i<8;i++){ A[i]=i; } }"
+    assert brace_braceless_loops(braced) == braced
+    # simple brace-less for -> braced + now detectable
+    bl = "void main(){ int A[64],i;\n for (i=0;i<64;i++)\n   A[i]=7;\n }"
+    assert len(find_loops(bl)) == 0
+    assert len(find_loops(brace_braceless_loops(bl))) == 1
+    # brace-less while
+    assert len(find_loops(brace_braceless_loops("void g(){int i=0; while(i<9) i++;}"))) == 1
+    # do-while condition is not mistaken for a brace-less body (no crash, unchanged)
+    dw = "void h(){ int i=0; do { i++; } while(i<5); }"
+    assert brace_braceless_loops(dw) == dw

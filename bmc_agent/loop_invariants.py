@@ -69,10 +69,50 @@ def _matching_brace(source: str, open_idx: int) -> int:
     return -1
 
 
+_CTRL_KW = re.compile(r"\b(?:for|while|if|do|switch)\b")
+
+
+def brace_braceless_loops(source: str) -> str:
+    """Wrap a brace-less single-statement loop body in ``{ ... }`` so the rest of
+    the pipeline (which assumes braced bodies — find_loops, both oracle insertion
+    paths) handles it. Idempotent on already-braced loops (returns them byte-for-
+    byte). Conservatively SKIPS a body that begins with a control keyword
+    (``for (...) for (...) ...`` / ``if``) — handling nested/compound brace-less
+    bodies needs full statement parsing; the inner simple loop still gets braced,
+    so a single brace-less loop works and a nested one degrades safely rather than
+    misparsing. Semantically identical (added braces around one statement)."""
+    edits = []
+    for m in _LOOP_HEADER.finditer(source):
+        _guard, after = _balanced_arg(source, m.end() - 1)
+        j = after
+        while j < len(source) and source[j] in " \t\r\n":
+            j += 1
+        if j >= len(source) or source[j] in "{;":
+            continue                          # already braced, or empty / do-while cond
+        if _CTRL_KW.match(source, j):
+            continue                          # nested/compound body — skip (safe)
+        depth, k = 0, j                       # find the statement's top-level ';'
+        while k < len(source):
+            c = source[k]
+            if c in "([":
+                depth += 1
+            elif c in ")]":
+                depth -= 1
+            elif c == ";" and depth == 0:
+                break
+            k += 1
+        if k >= len(source):
+            continue
+        edits.append((j, k + 1))
+    for a, b in sorted(edits, key=lambda e: -e[0]):
+        source = source[:a] + "{ " + source[a:b] + " }" + source[b:]
+    return source
+
+
 def find_loops(source: str) -> list[LoopSite]:
     """Find brace-bodied ``for``/``while`` loops, with the insertion point just
-    inside the body. Single-statement (brace-less) bodies are skipped — benchmark
-    loops with invariants are braced."""
+    inside the body. Single-statement (brace-less) bodies are skipped here — run
+    ``brace_braceless_loops`` first to normalise them into braced form."""
     loops: list[LoopSite] = []
     for m in _LOOP_HEADER.finditer(source):
         guard, after = _balanced_arg(source, m.end() - 1)
@@ -871,6 +911,9 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     are proved (or a cap/fixpoint). Returns the invariants + their ACSL rendering."""
     from pathlib import Path
     src = Path(source_file).read_text(encoding="utf-8", errors="replace")
+    # Normalise brace-less single-statement loop bodies into braced form so
+    # find_loops / the oracle insertion paths can annotate them.
+    src = brace_braceless_loops(src)
     goals = extract_goals(src)
     loops = find_loops(src)
     if not goals:
