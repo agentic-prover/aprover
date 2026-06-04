@@ -579,9 +579,16 @@ at the loop head, makes the clause preserved. Re-derive preservation BY HAND:
 assume the clause at the head, symbolically execute ONE iteration's writes, and
 read off the extra fact you must already know for it to still hold afterward;
 that fact is the auxiliary invariant to add.
-Worked example: `x >= y` under `x = x + y; y = y + 1` is NOT inductive alone —
-preserving it needs `x + y >= y + 1`, i.e. `x >= 1`; so the inductive set is
-`{{x >= 1, x >= y}}` (note `x >= 1` is itself inductive given `y >= 0`).
+Worked example (illustrates the METHOD — your loop's variables/update differ):
+a clause `r >= 0` under an update `r = r + s` is not inductive alone — stepping it
+once gives `r + s >= 0`, which you can only guarantee if you ALSO know `s >= 0`;
+so the auxiliary is `s >= 0` and you emit `{{s >= 0, r >= 0}}`. Apply the same
+step-and-read-off reasoning to THIS loop's actual updates — do not reuse `r`/`s`.
+VERIFY your candidate before emitting: substitute the post-state back into the
+clause and check it holds with NO gap. If a gap remains, your auxiliary is too
+WEAK — tighten it (a strict `>`/`>=k` margin is often needed, not just `>= 0`)
+until the stepped clause closes exactly. A non-strict bound that leaves the step
+one short is the most common mistake.
 Output the FULL set: the auxiliary clause(s) you derived PLUS the original
 goal-relevant clause(s) — do not drop the clause that was rejected."""
 
