@@ -154,13 +154,20 @@ class WPResult:
 _PROVED_RX = re.compile(r"Proved goals:\s*(\d+)\s*/\s*(\d+)")
 # per-goal status lines: "[wp] [Alt-Ergo] typed_… : Valid|Unknown|Timeout|Failed"
 _GOAL_RX = re.compile(r"\[wp\].*?\b(\S+)\s*:\s*(Valid|Unknown|Timeout|Failed|Unsuccess)", re.I)
+# The per-goal FAILURE format puts the status BEFORE the name, with no colon:
+#   ``[wp] [Timeout] typed_main_loop_invariant_4_established (Alt-Ergo)``
+# Without capturing this the failing goal NAME is lost, so a caller can't tell
+# WHICH invariant/assert failed (it only sees the ``Proved N/M`` shortfall).
+_GOAL_STATUS_PREFIX_RX = re.compile(
+    r"\[wp\]\s*\[(?:Timeout|Unknown|Failed|Unsuccess|Stuck|Partial)\]\s+(\S+)", re.I)
 
 
 def parse_wp_output(raw: str) -> tuple:
     """(n_proved, n_total, unproved_goals) from ``frama-c -wp`` output.
 
     Prefers the summary ``Proved goals: N / M``; falls back to counting per-goal
-    ``: Valid`` vs not. ``unproved`` lists the goal names not proved Valid."""
+    ``: Valid`` vs not. ``unproved`` lists the goal names not proved Valid —
+    including failures reported in the ``[Status] goalname`` prefix form."""
     n_proved = n_total = 0
     m = _PROVED_RX.search(raw or "")
     if m:
@@ -170,6 +177,9 @@ def parse_wp_output(raw: str) -> tuple:
     for gm in _GOAL_RX.finditer(raw or ""):
         seen_total += 1
         if gm.group(2).lower() != "valid":
+            unproved.append(gm.group(1))
+    for gm in _GOAL_STATUS_PREFIX_RX.finditer(raw or ""):   # [Timeout]/[Unknown]/… name
+        if gm.group(1) not in unproved:
             unproved.append(gm.group(1))
     if not m and seen_total:                 # no summary line; use per-goal tally
         n_total = seen_total

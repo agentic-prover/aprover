@@ -303,3 +303,18 @@ def test_acsl_quantifier_survives_scope_filter():
     src = "int f(int *a, int n){ int p=0,s=0; while(p<n){s=s+a[p];p++;} return s; }"
     inv = _parse_inv_lines("\\forall int i; 0 <= i && i < n ==> a[i] == i + 1")
     assert _filter_in_scope(inv, src) == inv
+
+
+def test_wp_failing_invariant_indices_maps_to_clause():
+    from bmc_agent.loop_invariants import _wp_failing_invariant_indices, LoopSite
+    loops = [LoopSite("for", "i=99;i>=0;i--", 0, "", 0)]
+    ann = {0: ["i >= -1", "i <= 99", "forall k : i<k<=99 ==> A[k]==k",
+               "forall k : 0<=k<=i ==> A[k]==k"]}
+    # WP names the failing invariant 1-based, source-order
+    assert _wp_failing_invariant_indices(
+        ["typed_main_loop_invariant_4_established"], ann, loops) == [(0, 3)]
+    assert _wp_failing_invariant_indices(
+        ["typed_main_loop_invariant_1_preserved",
+         "typed_main_loop_invariant_3_preserved"], ann, loops) == [(0, 0), (0, 2)]
+    # an assert-only (goal) failure yields no invariant indices
+    assert _wp_failing_invariant_indices(["typed_main_assert"], ann, loops) == []

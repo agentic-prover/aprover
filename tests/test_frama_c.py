@@ -93,3 +93,15 @@ def test_synthesize_frama_c_oracle_unavailable_exits_cleanly(tmp_path, monkeypat
     r = synthesize_loop_invariants(str(f), cfg, MockLLM(), entry="main")
     assert r.ok is False
     assert "frama-c" in r.note.lower() and "path" in r.note.lower()
+
+
+def test_parse_wp_captures_prefix_status_goal_name():
+    # the FAILURE format puts the status before the name with no colon; the goal
+    # NAME must still land in `unproved` so callers can tell which goal failed.
+    from bmc_agent.frama_c import parse_wp_output
+    raw = ("[wp] 10 goals scheduled\n"
+           "[wp] [Timeout] typed_main_loop_invariant_4_established (Alt-Ergo)\n"
+           "[wp] Proved goals:   10 / 11\n")
+    n_proved, n_total, unproved = parse_wp_output(raw)
+    assert (n_proved, n_total) == (10, 11)
+    assert unproved == ["typed_main_loop_invariant_4_established"]

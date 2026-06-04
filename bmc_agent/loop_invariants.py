@@ -587,6 +587,30 @@ def _loop_function_callees(source: str, entry: str) -> list:
     return callees
 
 
+_WP_INV_GOAL_RE = re.compile(r"loop_invariant(?:_named)?_(\d+)(?:_(?:established|preserved))?",
+                             re.IGNORECASE)
+
+
+def _wp_failing_invariant_indices(unproved: list, annotations: dict, loops: list) -> list:
+    """Map WP unproved ``loop_invariant_<N>_(established|preserved)`` goals to our
+    ``(ordinal, n)`` clause coordinates so the refine loop can drop the SPECIFIC
+    failing clause. N is Frama-C's 1-based, function-global, source-order index;
+    we flatten our clauses the same way (loops in ordinal order, clauses in list
+    order) — matching how ``insert_loop_invariants_acsl`` renders them."""
+    flat = []  # flat[N-1] = (ordinal, n)
+    for lp in sorted(loops, key=lambda l: l.ordinal):
+        for n in range(len(annotations.get(lp.ordinal, []) or [])):
+            flat.append((lp.ordinal, n))
+    out = set()
+    for g in unproved:
+        m = _WP_INV_GOAL_RE.search(g or "")
+        if m:
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(flat):
+                out.add(flat[idx])
+    return sorted(out)
+
+
 def check_loop_invariants_wp(source: str, annotations: dict, config,
                              entry: str = "main", timeout: int = 120) -> "LoopCheck":
     """Frama-C/WP oracle: render the invariants to ACSL, splice them before each
@@ -617,12 +641,19 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns)
     wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout,
                         inline=inline, exclude_terminates=True, rte=not math_ints)
-    # WP goal names: "..._loop_invariant_..." (validity) vs "...assert..." (adequacy).
+    # WP goal names: "..._loop_invariant_<N>_(established|preserved)" (validity)
+    # vs "...assert..." (adequacy). N is Frama-C's 1-based, function-global,
+    # source-order index of loop invariants.
     inv_failed = any("invariant" in g.lower() for g in wp.unproved)
     goal_failed = any("assert" in g.lower() for g in wp.unproved) or (
         not wp.proved and not inv_failed)
-    # frama-c doesn't expose our (ordinal,n); signal "an invariant failed" coarsely.
-    finv = [(lp.ordinal, 0) for lp in loops] if inv_failed else []
+    # Map each failing invariant to its (ordinal, n) so the refine loop can drop
+    # the SPECIFIC bad clause (an unsound extra clause shouldn't poison an
+    # otherwise-provable set). Fall back to coarse (ordinal, 0) only if WP named
+    # an invariant failure we couldn't index.
+    finv = _wp_failing_invariant_indices(wp.unproved, annotations, loops)
+    if inv_failed and not finv:
+        finv = [(lp.ordinal, 0) for lp in loops]
     return LoopCheck(verified=bool(wp.proved), failing_invariants=finv,
                      goal_failed=goal_failed, unwinding_failed=False,
                      result=wp, instrumented=annotated)
@@ -698,19 +729,44 @@ _C_KEYWORDS = {
     "double", "NULL", "assert", "static_assert",
 }
 
+# Binder keywords that introduce a locally-scoped variable: the DSL `forall`/
+# `exists` (no backslash) and the ACSL aggregates (`\sum` etc., backslash
+# required so the program variable `sum` is never mistaken for the keyword). The
+# bound name is the identifier following the keyword, skipping an optional `(`
+# and a leading type (`int`/`integer`/...): matches `\sum(int k;`, `\sum k :`,
+# and `forall k :` alike.
+_BINDER_RE = re.compile(
+    r"(?:\b(?:forall|exists)\b|\\(?:sum|product|numof|lambda|max|min)\b)"
+    r"[\s(]*(?:(?:integer|int|unsigned|signed|long|short|char|size_t)\s+)*"
+    r"([A-Za-z_]\w*)",
+    re.IGNORECASE,
+)
+
+
+def _bound_vars(clause: str) -> set:
+    """Variables locally bound by a quantifier or aggregate anywhere in the clause.
+
+    Covers the DSL form (`forall k :`, `exists k :`) AND ACSL-native binders that
+    capable models emit for aggregate invariants — `\\sum(int k; lo; hi; a[k])`,
+    `\\sum k : lo <= k < hi : a[k]`, `\\product`, `\\numof`, `\\lambda`, `\\max`,
+    `\\min`. These binders may be NESTED inside a larger expression
+    (`sum == \\sum(int k; ...)`), so the top-level `_FORALL` anchor misses them and
+    the bound variable looks out-of-scope. Without exempting it, the whole (often
+    load-bearing) aggregate invariant is dropped, leaving only a concrete
+    index-enumerated fallback."""
+    return set(_BINDER_RE.findall(clause))
+
 
 def _filter_in_scope(clauses: list, source: str) -> list:
     """Drop invariant clauses that reference identifiers not present in the program
     (LLM hallucinations like an invented loop counter `i`). An out-of-scope name
     would make the instrumented source fail to compile, so the check silently
-    'fails' every iteration and never converges. Quantifier-bound variables are
-    exempt (they're locally bound)."""
+    'fails' every iteration and never converges. Quantifier/aggregate-bound
+    variables are exempt (they're locally bound)."""
     known = set(re.findall(r"[A-Za-z_]\w*", source))
     out = []
     for c in clauses:
-        m = _FORALL.match(c)
-        body, qvar = (m.group(2), {m.group(1)}) if m else (c, set())
-        ids = set(re.findall(r"[A-Za-z_]\w*", body)) - qvar - _C_KEYWORDS - known
+        ids = set(re.findall(r"[A-Za-z_]\w*", c)) - _bound_vars(c) - _C_KEYWORDS - known
         if ids:
             logger.info("loop-inv: dropping clause with out-of-scope %s: %r", sorted(ids), c)
             continue
