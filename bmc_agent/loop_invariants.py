@@ -1050,7 +1050,8 @@ def _wp_failing_invariant_indices(unproved: list, annotations: dict, loops: list
 
 
 def check_loop_invariants_wp(source: str, annotations: dict, config,
-                             entry: str = "main", timeout: int = 120) -> "LoopCheck":
+                             entry: str = "main", timeout: int = 120,
+                             force_rte: bool | None = None) -> "LoopCheck":
     """Frama-C/WP oracle: render the invariants to ACSL, splice them before each
     loop, express goals as ACSL asserts, and run ``frama-c -wp``. Handles unbounded
     loops + mathematical-integer / aggregate invariants that CBMC cannot. Returns a
@@ -1081,7 +1082,10 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     # actually checked, not assumed away. The precondition makes machine- and math-
     # int semantics coincide, keeping the AccFold invariant provable.
     ovf_specs = overflow_safe_accumulators(source, loops, math_ints)
-    rte = (not math_ints) or bool(ovf_specs)
+    # ``force_rte`` overrides the math-int default — used by the machine-int
+    # overflow recheck, which re-runs WP with RTE on over the SAME invariant
+    # set to report whether a math-int-proved result is also machine-int sound.
+    rte = force_rte if force_rte is not None else ((not math_ints) or bool(ovf_specs))
     variants = ({ordn: accumulator_variant(spec) for ordn, spec in ovf_specs.items()}
                 if ovf_specs else None)
     if ovf_specs:

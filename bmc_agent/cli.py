@@ -840,6 +840,40 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
               "//@ assert / assert / __VERIFIER_assert stating the expected result.)")
         return 2
     if r.ok:
+        # --- machine-int overflow recheck (Frama-C oracle) ---------------------
+        # The math-int proof above ran with RTE off, so a body site like `x = x + y`
+        # that genuinely overflows int is assumed away. Re-run WP over the SAME
+        # invariant set with RTE ON and report whether the result is also machine-
+        # int sound. Additive: this NEVER flips the math-int SATISFIED verdict — it
+        # only annotates it (the loop path's analogue of the contract path's
+        # overflow-rigor pass). The loop entry is usually a parameterless `main`, so
+        # there's nowhere to add a no-overflow precondition; the honest outcome is
+        # to state whether machine-int overflow is provably absent at the bound.
+        if (getattr(config, "oracle", "cbmc") == "frama-c"
+                and getattr(config, "math_ints", False)
+                and getattr(args, "overflow_rigor", True)
+                and r.annotations):
+            try:
+                from bmc_agent.loop_invariants import check_loop_invariants_wp
+                _src = open(str(args.source)).read()
+                _chk = check_loop_invariants_wp(_src, r.annotations, config, entry,
+                                                force_rte=True)
+                _wp = getattr(_chk, "result", None)
+                if _wp is not None and _wp.available:
+                    _ovf = [g for g in _wp.unproved if "overflow" in g.lower()]
+                    if _wp.proved:
+                        print("overflow-rigor: machine-int sound — re-verified with RTE on "
+                              "(signed overflow provably absent at the loop bound).")
+                    elif _ovf:
+                        print(f"overflow-rigor: math-int only — {len(_ovf)} signed-overflow "
+                              "site(s) in the loop body are NOT machine-int safe at this bound; "
+                              "the result holds under mathematical-integer semantics (--math-ints).")
+                    else:
+                        print("overflow-rigor: math-int only — the invariants are not preserved "
+                              "under machine-int (wrapping) semantics; the result holds under "
+                              "mathematical-integer semantics (--math-ints).")
+            except Exception as exc:   # never let the rigor recheck mask the result
+                print(f"overflow-rigor: recheck skipped ({exc}); math-int result stands.")
         print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
         return 0
     print(f"RESULT: NOT SATISFIED — {r.note}")
