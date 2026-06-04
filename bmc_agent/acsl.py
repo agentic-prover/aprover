@@ -134,9 +134,13 @@ def contract_to_acsl(requires: str = "", ensures: str = "", assigns: str = "") -
     return "/*@\n" + "\n".join(lines) + "\n*/" if lines else ""
 
 
-def loop_invariants_to_acsl(invariants: list, assigns: str = "") -> str:
-    """Render a loop's invariants (DSL exprs) as an ACSL loop-annotation block."""
+def loop_invariants_to_acsl(invariants: list, assigns: str = "",
+                            variant: str = "") -> str:
+    """Render a loop's invariants (DSL exprs) as an ACSL loop-annotation block.
+    ``variant`` (when given) adds a ``loop variant`` clause for termination."""
     lines = [f"  loop invariant {expr_to_acsl(inv)};" for inv in (invariants or []) if inv]
     if assigns:
         lines.append(f"  loop assigns {assigns};")
+    if variant:
+        lines.append(f"  loop variant {variant};")
     return "/*@\n" + "\n".join(lines) + "\n*/" if lines else ""

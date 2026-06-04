@@ -257,15 +257,20 @@ def insert_loop_invariants(source: str, annotations: dict) -> str:
     return out
 
 
-def render_loop_invariants_acsl(annotations: dict, loops: list = None) -> str:
+def render_loop_invariants_acsl(annotations: dict, loops: list = None,
+                                variants: dict = None) -> str:
     """Render the synthesized invariants as ACSL ``loop invariant`` blocks (one
-    block per loop), for the benchmark output / Frama-C."""
+    block per loop), for the benchmark output / Frama-C. ``variants`` (loop ordinal
+    -> expr) adds a ``loop variant`` clause for termination where present."""
     blocks = []
     for ordinal in sorted(annotations):
         invs = annotations.get(ordinal) or []
         if not invs:
             continue
         lines = "\n".join(f"  loop invariant {_inv_to_acsl(inv)};" for inv in invs)
+        var = (variants or {}).get(ordinal, "")
+        if var:
+            lines += f"\n  loop variant {var};"
         blocks.append(f"/* loop #{ordinal} */\n/*@\n{lines}\n*/")
     return "\n".join(blocks)
 
@@ -735,6 +740,39 @@ def accumulator_specs(source: str, loops: list) -> dict:
     return out
 
 
+def overflow_safe_accumulators(source: str, loops: list, math_ints: bool) -> dict:
+    """Loop ordinal -> AccumulatorSpec, but ONLY when an overflow-rigorous proof is
+    appropriate: mathematical-integer mode is on (the bench preset) AND every loop in
+    the program is a recognized array fold. In that case the no-overflow precondition
+    + stepping-stone asserts + loop variant make the spec sound with RTE on (machine-
+    and math-int semantics coincide). A program that also has a general (non-fold)
+    loop is left on the math-int/RTE-off path, where a per-prefix overflow bound can't
+    be expressed mechanically — returns {} so the caller keeps current behavior."""
+    if not math_ints or not loops:
+        return {}
+    specs = accumulator_specs(source, loops)
+    return specs if len(specs) == len(loops) else {}
+
+
+def inject_overflow_asserts(source: str, acc_specs: dict) -> str:
+    """Insert the per-fold stepping-stone overflow assertions at the top of each
+    accumulator loop body. Edits are applied in descending offset order so earlier
+    insertions don't shift later loops' offsets."""
+    if not acc_specs:
+        return source
+    by_ord = {lp.ordinal: lp for lp in find_loops(source)}
+    edits = []
+    for ordn, spec in acc_specs.items():
+        lp = by_ord.get(ordn)
+        if lp is None:
+            continue
+        edits.append((lp.head_offset, "\n" + accumulator_overflow_asserts(spec)))
+    out = source
+    for off, text in sorted(edits, key=lambda e: -e[0]):
+        out = out[:off] + text + out[off:]
+    return out
+
+
 def _function_returns_var(source: str, fn: str, var: str) -> bool:
     """True iff ``fn``'s body has a ``return <var>;`` — i.e. the function's result
     IS the accumulator, so an ``ensures \\result == Fn(...)`` contract is meaningful."""
@@ -749,27 +787,82 @@ def _function_returns_var(source: str, fn: str, var: str) -> bool:
     return re.search(rf"\breturn\s+{re.escape(var)}\s*;", body) is not None
 
 
-def accumulator_contract_acsl(spec: "AccumulatorSpec") -> str:
+def accumulator_contract_acsl(spec: "AccumulatorSpec",
+                              overflow_safe: bool = False) -> str:
     """The function contract for an accumulator-folding function: it reads the
     array (\\valid_read), has no side effect (assigns \\nothing), and returns the
     fold over the whole range (\\result == Fn(a, 0, bound)). Bridges a caller's
-    goal to the callee MODULARLY (no inlining), which is the clean general spec."""
+    goal to the callee MODULARLY (no inlining), which is the clean general spec.
+
+    ``overflow_safe`` adds the precondition that EVERY partial fold stays within
+    the element type's machine range, so the C accumulation ``acc OP= a[i]`` cannot
+    overflow (signed overflow is UB). Without it the ACSL fold is mathematical
+    while the implementation may wrap — the contract is then only sound under
+    mathematical-integer semantics. With it, machine- and math-int semantics
+    coincide and the contract is provable with RTE (``-wp-rte``) on."""
     a, b, fn = spec.array, spec.bound, spec.fn
+    lines = [
+        f"  requires {b} >= 0;",
+        f"  requires \\valid_read({a} + (0 .. {b}-1));",
+    ]
+    if overflow_safe:
+        lo, hi = _type_bounds(spec.elem_type)
+        lines.append(
+            f"  requires \\forall integer k; 0 <= k <= {b} ==>\n"
+            f"             {lo} <= {fn}({a}, 0, k) <= {hi};")
+    lines += [
+        "  assigns \\nothing;",
+        f"  ensures \\result == {fn}({a}, 0, {b});",
+    ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+# element-type -> (ACSL min, max) macro pair for the no-overflow precondition.
+# Mathematical bounds expressed as <limits.h> macros (requires the header).
+_TYPE_BOUNDS = {
+    "int":      ("INT_MIN", "INT_MAX"),
+    "short":    ("SHRT_MIN", "SHRT_MAX"),
+    "long":     ("LONG_MIN", "LONG_MAX"),
+    "char":     ("CHAR_MIN", "CHAR_MAX"),
+}
+
+
+def _type_bounds(elem_type: str) -> tuple:
+    """(min, max) <limits.h> macros for a signed accumulator's element type;
+    defaults to the int range when the type isn't a known signed integer."""
+    return _TYPE_BOUNDS.get(elem_type, ("INT_MIN", "INT_MAX"))
+
+
+def accumulator_variant(spec: "AccumulatorSpec") -> str:
+    """ACSL ``loop variant`` for a counting accumulator: ``bound - index`` is
+    non-negative (index <= bound) and strictly decreases each iteration, proving
+    termination."""
+    return f"{spec.bound} - {spec.index}"
+
+
+def accumulator_overflow_asserts(spec: "AccumulatorSpec") -> str:
+    """In-body ACSL assertions that let WP discharge the RTE signed-overflow check
+    on the fold step ``acc OP a[idx]``. WP will not, on its own, rewrite that
+    expression to ``Fn(a, 0, idx+1)`` (one step-axiom application) and then bound it
+    via the contract's per-prefix precondition — so we state both stepping stones
+    explicitly. Inserted at the top of the loop body, before the fold."""
+    fn, a, idx, acc, op = spec.fn, spec.array, spec.index, spec.acc, spec.op
+    lo, hi = _type_bounds(spec.elem_type)
     return (
-        "/*@\n"
-        f"  requires {b} >= 0;\n"
-        f"  requires \\valid_read({a} + (0 .. {b}-1));\n"
-        f"  assigns \\nothing;\n"
-        f"  ensures \\result == {fn}({a}, 0, {b});\n"
-        "*/\n"
+        f"        //@ assert {fn}({a}, 0, {idx}+1) == {acc} {op} {a}[{idx}];\n"
+        f"        //@ assert {lo} <= {acc} {op} {a}[{idx}] <= {hi};\n"
     )
 
 
-def accumulator_contracts(source: str, loops: list, entry: str) -> dict:
+def accumulator_contracts(source: str, loops: list, entry: str,
+                          overflow_safe: bool = False) -> dict:
     """Map fn-name -> contract ACSL for each NON-entry function that folds an array
     into its return value and is side-effect-free. Such a function gets a modular
     contract (so the caller's goal is discharged WITHOUT inlining). Functions that
-    aren't pure, don't return the accumulator, or are the entry are skipped."""
+    aren't pure, don't return the accumulator, or are the entry are skipped.
+
+    ``overflow_safe`` adds the no-overflow precondition to each contract (see
+    ``accumulator_contract_acsl``)."""
     from bmc_agent import frama_c
     out = {}
     by_ord = {lp.ordinal: lp for lp in loops}
@@ -779,7 +872,7 @@ def accumulator_contracts(source: str, loops: list, entry: str) -> dict:
         if (fn and fn != entry
                 and _function_returns_var(source, fn, spec.acc)
                 and frama_c.function_assigns_nothing(source, fn)):
-            out[fn] = accumulator_contract_acsl(spec)
+            out[fn] = accumulator_contract_acsl(spec, overflow_safe)
     return out
 
 
@@ -869,12 +962,23 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     loops = find_loops(source)
     assigns = {lp.ordinal: _loop_assigns(lp) for lp in loops}
     prepped = _prep_goals_acsl(source)
+    # Overflow-rigorous accumulator mode: when every loop is an array fold (and
+    # math-int mode is on), emit the no-overflow precondition + per-fold stepping-
+    # stone asserts + loop variant and verify WITH RTE on — so signed-overflow is
+    # actually checked, not assumed away. The precondition makes machine- and math-
+    # int semantics coincide, keeping the AccFold invariant provable.
+    ovf_specs = overflow_safe_accumulators(source, loops, math_ints)
+    rte = (not math_ints) or bool(ovf_specs)
+    variants = ({ordn: accumulator_variant(spec) for ordn, spec in ovf_specs.items()}
+                if ovf_specs else None)
+    if ovf_specs:
+        prepped = inject_overflow_asserts(prepped, ovf_specs)
     inline = _loop_function_callees(prepped, entry)
-    annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns)
+    annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns, variants)
     # A pure array-folding callee gets a MODULAR contract (`ensures \result ==
     # Fn(a,0,n)`), so the caller's goal is discharged through the contract rather
     # than by inlining — drop those functions from the inline set.
-    contracts = accumulator_contracts(source, loops, entry)
+    contracts = accumulator_contracts(source, loops, entry, overflow_safe=bool(ovf_specs))
     for fn, block in contracts.items():
         annotated = frama_c.insert_contract_block(annotated, fn, block)
     inline = [fn for fn in inline if fn not in contracts]
@@ -884,10 +988,13 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     # numbering (used by _wp_failing_invariant_indices) is unperturbed.
     prelude = "".join(
         accumulator_axiomatic(s) for s in accumulator_specs(source, loops).values())
+    # The no-overflow precondition/asserts reference <limits.h> macros (INT_MIN, …).
+    if ovf_specs:
+        prelude = "#include <limits.h>\n" + prelude
     if prelude:
         annotated = prelude + annotated
     wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout,
-                        inline=inline, exclude_terminates=True, rte=not math_ints)
+                        inline=inline, exclude_terminates=True, rte=rte)
     # WP goal names: "..._loop_invariant_<N>_(established|preserved)" (validity)
     # vs "...assert..." (adequacy). N is Frama-C's 1-based, function-global,
     # source-order index of loop invariants.
@@ -1199,7 +1306,13 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                         if mchk.verified:
                             annotations, final_chk = minimized, mchk
                             _log = getattr(mchk.result, "raw_output", "") or _log
-                rendered = render_loop_invariants_acsl(annotations, loops)
+                # Overflow-rigorous mode (all loops are folds, math-int on): the shown
+                # spec carries the loop variant + no-overflow precondition that the
+                # RTE-checked proof used, so the displayed contract is the sound one.
+                ovf_specs = (overflow_safe_accumulators(src, loops, math_ints)
+                             if oracle == "frama-c" else {})
+                variants = {ordn: accumulator_variant(s) for ordn, s in ovf_specs.items()}
+                rendered = render_loop_invariants_acsl(annotations, loops, variants)
                 # Show the complete synthesized spec above the loop invariants — the
                 # recursive-logic-function definition(s) then the function contract(s)
                 # — but only for accumulators whose summary survived minimization (the
@@ -1208,7 +1321,10 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 live_fns = {s.fn for s in live}
                 prelude = "".join(accumulator_axiomatic(s) for s in live)
                 if prelude and oracle == "frama-c":
-                    for fn, block in accumulator_contracts(src, loops, entry).items():
+                    if ovf_specs:
+                        prelude = "#include <limits.h>\n" + prelude
+                    for fn, block in accumulator_contracts(
+                            src, loops, entry, overflow_safe=bool(ovf_specs)).items():
                         if any(lf in block for lf in live_fns):   # contract for a live fold
                             prelude += f"// contract for {fn}\n{block}"
                 return LoopSynthResult(

@@ -78,12 +78,15 @@ def available_wp_provers(frama_c_path: str = "frama-c") -> list:
 # --- ACSL placement ----------------------------------------------------------
 
 def insert_loop_invariants_acsl(source: str, annotations: dict,
-                                assigns: dict = None) -> str:
-    """Splice an ACSL ``/*@ loop invariant …; [loop assigns …;] */`` block
-    immediately BEFORE each annotated loop (Frama-C attaches it to the next loop).
+                                assigns: dict = None,
+                                variants: dict = None) -> str:
+    """Splice an ACSL ``/*@ loop invariant …; [loop assigns …;] [loop variant …;] */``
+    block immediately BEFORE each annotated loop (Frama-C attaches it to the next
+    loop).
 
     ``annotations``: loop ordinal -> list of DSL invariant expressions.
     ``assigns``:     loop ordinal -> ACSL assigns clause (frame), optional.
+    ``variants``:    loop ordinal -> ACSL loop-variant expr (termination), optional.
     """
     from bmc_agent.loop_invariants import find_loops
     loops = find_loops(source)
@@ -92,7 +95,8 @@ def insert_loop_invariants_acsl(source: str, annotations: dict,
         invs = annotations.get(lp.ordinal) or []
         if not invs:
             continue
-        block = loop_invariants_to_acsl(invs, (assigns or {}).get(lp.ordinal, ""))
+        block = loop_invariants_to_acsl(invs, (assigns or {}).get(lp.ordinal, ""),
+                                        (variants or {}).get(lp.ordinal, ""))
         edits.append((lp.start_offset, block + "\n"))
     out = source
     for off, text in sorted(edits, key=lambda e: -e[0]):
