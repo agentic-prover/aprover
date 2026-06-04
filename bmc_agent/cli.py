@@ -559,9 +559,24 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         try:
             from bmc_agent.frama_c import (insert_contract_acsl, run_wp,
                                            function_assigns_nothing)
-            from bmc_agent.assert_driven_specs import overflow_preconditions
+            from bmc_agent.assert_driven_specs import (
+                overflow_preconditions, overflow_preconditions_from_body)
             _src0 = open(str(args.source)).read()
+            _fc = getattr(config, "frama_c_path", "frama-c")
             ovf = overflow_preconditions(_src0, r.postconditions or {})
+            # Postcondition-shape extraction (`result == E`) misses arithmetic
+            # buried in guards/comparisons (e.g. `a+b>c`). Under --math-ints the
+            # functional proof already assumes no overflow, so ALSO enumerate
+            # every body overflow site via RTE and bound it — making the math-int
+            # contract machine-int sound wherever WP can still discharge it.
+            if getattr(config, "math_ints", False):
+                body_ovf = overflow_preconditions_from_body(
+                    _src0, list((r.postconditions or {}).keys()), frama_c_path=_fc)
+                for fn, term in body_ovf.items():
+                    if fn not in ovf:
+                        ovf[fn] = term
+                    elif term not in ovf[fn]:
+                        ovf[fn] = f"({ovf[fn]}) && ({term})"
             if ovf:
                 _assigns0 = {fn: ("\\nothing" if function_assigns_nothing(_src0, fn) else "")
                              for fn in (r.postconditions or {})}

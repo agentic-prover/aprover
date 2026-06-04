@@ -366,6 +366,74 @@ def overflow_preconditions(src: str, postconditions: dict) -> dict:
     return out
 
 
+# Parse one Frama-C `-rte -warn-signed-overflow -print` overflow assertion, e.g.
+#   assert rte: signed_overflow: -2147483648 ≤ a + b;
+#   assert rte: signed_overflow: a + b ≤ 2147483647;
+# recovering the (parameter-level) arithmetic sub-expression being bounded.
+_RTE_OVF_RX = re.compile(r"assert rte: signed_overflow:\s*(.+?);")
+_FUNC_SIG_RX = re.compile(
+    rf"^\s*(?:{_TYPE_KW}\s+)*{_TYPE_KW}\s+\**\s*(\w+)\s*\([^;{{]*\)\s*$")
+
+
+def overflow_preconditions_from_body(
+    src: str, fns, frama_c_path: str = "frama-c") -> dict:
+    """Map fn -> no-overflow precondition by enumerating EVERY signed-overflow
+    site in the body — not just the ``result == E`` postcondition shape that
+    ``overflow_preconditions`` handles. Lets Frama-C's own RTE pass list the
+    overflowing sub-expressions (``-rte -warn-signed-overflow -print``), then
+    bounds each with ``INT_MIN <= expr <= INT_MAX``.
+
+    This catches arithmetic buried in guards/comparisons (e.g. ``a+b>c``) whose
+    result never appears in the postcondition. CANDIDATE only — the caller adopts
+    it iff Frama-C/WP then discharges all goals with RTE on; lifting a body
+    expression to a precondition is sound when its operands are the parameters'
+    initial values (no prior reassignment), and the verification gate rejects any
+    case where that does not hold. Best-effort: returns {} if Frama-C is absent
+    or emits nothing.
+    """
+    import subprocess
+    want = set(fns or [])
+    if not want:
+        return {}
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
+            tf.write(src)
+            path = tf.name
+        proc = subprocess.run(
+            [frama_c_path, "-rte", "-warn-signed-overflow", "-print", path],
+            capture_output=True, text=True, timeout=60)
+        printed = proc.stdout
+    except Exception:
+        return {}
+    cur = None
+    per: dict[str, set] = {}
+    for line in printed.splitlines():
+        sig = _FUNC_SIG_RX.match(line.rstrip())
+        if sig and "{" not in line:
+            cur = sig.group(1)
+            if cur in want:
+                per.setdefault(cur, set())
+        a = _RTE_OVF_RX.search(line)
+        if a and cur in want:
+            body = a.group(1)
+            # strip the numeric bound + relational operator from either side,
+            # leaving just the arithmetic sub-expression.
+            expr = re.sub(r"[-\d]+\s*[≤<>=]+\s*", "", body)
+            expr = re.sub(r"\s*[≤<>=]+\s*[-\d]+", "", expr).strip()
+            if expr:
+                per[cur].add(re.sub(r"\s+", " ", expr))
+    out = {}
+    for fn, exprs in per.items():
+        ret = _return_type_of(src, fn)
+        # operand width drives the bound; default to int (the promoted width).
+        lo, hi = _RET_BOUNDS.get(ret if ret in _RET_BOUNDS else "int",
+                                 ("INT_MIN", "INT_MAX"))
+        if exprs:
+            out[fn] = " && ".join(f"{lo} <= {e} <= {hi}"
+                                  for e in sorted(exprs))
+    return out
+
+
 def synthesize(
     source_file: str | Path,
     config,
