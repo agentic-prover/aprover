@@ -1218,6 +1218,22 @@ def _is_non_behavioral(clause: str) -> bool:
     return bool(_NON_BEHAVIORAL_RX.match(clause))
 
 
+def _is_behavioral_core(clause: str) -> bool:
+    """A clause that SUMMARIZES what the loop computes — the behavioral core worth
+    keeping even when a (possibly weak) goal does not strictly need it: a quantified
+    fact (``forall k; ...``), an accumulator-fold equation (``sum == AccFold(...)``),
+    or an EQUALITY relating program terms (``x == y``). These characterize the loop;
+    a value-pin (``n == 5``) or a one-sided bound (``i <= N``) does not. Minimization
+    NEVER drops a behavioral-core clause, so a too-weak goal (e.g. ``y >= 1`` when the
+    loop actually maintains ``x == y``) can't collapse the spec down to bare bounds."""
+    c = clause.strip()
+    if re.search(r"\\?\bforall\b|\bAccFold\w*\b", c):
+        return True
+    # An equality that is NOT a mere value-pin (`var == literal`) relates terms the
+    # loop keeps in lockstep — the summary. (`==` only; one-sided bounds stay droppable.)
+    return "==" in c and not _is_non_behavioral(c)
+
+
 def _minimize_invariants(annotations: dict, check_fn, loops, logger) -> dict:
     """Greedily drop every clause that is NOT load-bearing for the proof, so the
     result is a MINIMAL, behavioral invariant set rather than a sound-but-bloated
@@ -1228,9 +1244,11 @@ def _minimize_invariants(annotations: dict, check_fn, loops, logger) -> dict:
     cur = {o: list(v) for o, v in annotations.items()}
 
     def _order(o):
-        # indices of THIS loop's clauses, non-behavioral first (drop scaffolding
-        # before the behavioral core), each group high-index-first for stable popping
-        idxs = list(range(len(cur[o])))
+        # droppable indices of THIS loop's clauses — behavioral-core clauses (the
+        # loop's summary: equalities/quantified facts) are PROTECTED from removal so
+        # a weak goal can't strip them; among the rest, scaffolding (value-pins) is
+        # tried before bounds, each group high-index-first for stable popping
+        idxs = [i for i in range(len(cur[o])) if not _is_behavioral_core(cur[o][i])]
         return sorted(idxs, key=lambda i: (not _is_non_behavioral(cur[o][i]), -i))
 
     changed = True
