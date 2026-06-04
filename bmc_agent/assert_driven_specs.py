@@ -308,6 +308,64 @@ def _run(check_src: str, config, entry: str, unwind: int, timeout: int):
     )
 
 
+# signed-integer <limits.h> bound macros by return type (for the no-overflow
+# precondition). Unsigned types wrap by definition (no UB) → no precondition.
+_RET_BOUNDS = {
+    "int": ("INT_MIN", "INT_MAX"),
+    "short": ("SHRT_MIN", "SHRT_MAX"),
+    "long": ("LONG_MIN", "LONG_MAX"),
+    "long long": ("LLONG_MIN", "LLONG_MAX"),
+    "char": ("CHAR_MIN", "CHAR_MAX"),
+    "signed char": ("SCHAR_MIN", "SCHAR_MAX"),
+}
+
+_RESULT_EQ_RX = re.compile(r"^\\?result\s*==\s*(.+)$", re.S)
+
+
+_TYPE_KW = r"(?:unsigned|signed|long|short|int|char)"
+
+
+def _return_type_of(src: str, fn: str) -> str:
+    """Best-effort return type of ``fn`` from its definition; '' if not found.
+    Matches a run of integer type keywords (``unsigned``, ``long long``, ``int`` …)
+    immediately before the (possibly pointer-qualified) function name."""
+    m = re.search(rf"\b({_TYPE_KW}(?:\s+{_TYPE_KW})*)\s+\**\s*{re.escape(fn)}\s*\(", src)
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+
+
+def _has_signed_arith(e: str) -> bool:
+    """True iff ``e`` performs a binary +/-/* (which can signed-overflow). A unary
+    ``*p`` deref or a bare variable/constant cannot, so they are excluded — the
+    multiply/subtract pattern requires a left OPERAND (word / ``)`` / ``]``)."""
+    return bool(re.search(r"[\w\)\]]\s*\+", e)          # binary +
+                or re.search(r"[\w\)\]]\s*[-*]\s*[\w(]", e))   # binary - or *
+
+
+def overflow_preconditions(src: str, postconditions: dict) -> dict:
+    """Map fn -> no-overflow precondition (DSL ``MIN <= E <= MAX``) for each
+    postcondition of the shape ``result == E`` where ``E`` does signed arithmetic
+    that the C body therefore computes and can overflow (signed overflow is UB).
+
+    This is a CANDIDATE only — the caller adopts it solely if Frama-C/WP then
+    discharges all goals with RTE on (so an insufficient bound, e.g. when the body
+    has un-bounded intermediates, harmlessly falls back to the math-int contract).
+    Unsigned return types are skipped (wrapping is defined, not UB)."""
+    out = {}
+    for fn, post in (postconditions or {}).items():
+        m = _RESULT_EQ_RX.match((post or "").strip())
+        if not m:
+            continue
+        expr = m.group(1).strip().rstrip(";").strip()
+        if not _has_signed_arith(expr):
+            continue
+        ret = _return_type_of(src, fn)
+        if ret.startswith("unsigned"):
+            continue
+        lo, hi = _RET_BOUNDS.get(ret, ("INT_MIN", "INT_MAX"))
+        out[fn] = f"{lo} <= {expr} <= {hi}"
+    return out
+
+
 def synthesize(
     source_file: str | Path,
     config,

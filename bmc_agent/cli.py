@@ -546,6 +546,44 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         print(f"  (entry auto-resolved to '{r.entry}' — the function containing the asserts)")
         entry = r.entry
 
+    # --- verification-gated overflow rigor (Frama-C oracle) ---------------------
+    # A synthesized `ensures \result == E` with signed arithmetic is only sound for
+    # mathematical integers — the C body computing E can overflow (UB). Add the
+    # no-overflow precondition `MIN <= E <= MAX` and re-verify with RTE ON; adopt it
+    # (into the displayed + confirmed contract) ONLY if WP still discharges every
+    # goal. Otherwise fall back to the math-int (RTE-off) contract below. This makes
+    # the contract path overflow-rigorous wherever it provably can be.
+    _ovf_used = False
+    _ovf_wp = None
+    if r.ok and getattr(config, "oracle", "cbmc") == "frama-c":
+        try:
+            from bmc_agent.frama_c import (insert_contract_acsl, run_wp,
+                                           function_assigns_nothing)
+            from bmc_agent.assert_driven_specs import overflow_preconditions
+            _src0 = open(str(args.source)).read()
+            ovf = overflow_preconditions(_src0, r.postconditions or {})
+            if ovf:
+                _assigns0 = {fn: ("\\nothing" if function_assigns_nothing(_src0, fn) else "")
+                             for fn in (r.postconditions or {})}
+                aug_pre = dict(r.preconditions or {})
+                for fn, term in ovf.items():
+                    cur = (aug_pre.get(fn) or "true").strip()
+                    aug_pre[fn] = term if cur in ("", "true") else f"({cur}) && ({term})"
+                annotated = "#include <limits.h>\n" + _src0
+                for fn, p in (r.postconditions or {}).items():
+                    annotated = insert_contract_acsl(
+                        annotated, fn, requires=aug_pre.get(fn, "true"), ensures=p,
+                        assigns=_assigns0.get(fn, ""))
+                wp = run_wp(annotated, frama_c_path=getattr(config, "frama_c_path", "frama-c"),
+                            rte=True, exclude_terminates=True)
+                if wp.available and wp.n_total and wp.n_proved == wp.n_total:
+                    r.preconditions = aug_pre   # adopt the rigorous contract for display
+                    _ovf_used, _ovf_wp = True, wp
+                    print("overflow-rigor: added no-overflow precondition(s) "
+                          f"for {', '.join(ovf)} — re-verified with RTE on")
+        except Exception as exc:   # never let the rigor attempt mask the result
+            print(f"overflow-rigor: skipped ({exc}); math-int contract stands.")
+
     # Persist the synthesized contracts + per-assert status to a stable artifact.
     import json as _json, os as _os
     out_dir = getattr(config, "artifact_dir", None) or "."
@@ -606,6 +644,8 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
             print(f"  {' ' * len(fn)}   assigns  {fn_assigns[fn]}")
         print(f"  {' ' * len(fn)}   ensures  {fully_parenthesize(p)}")
     print("\n=== Synthesized specs (ACSL) ===")
+    if _ovf_used:
+        print("#include <limits.h>")
     for fn, block in acsl_blocks.items():
         print(f"// contract for {fn}")
         print(block)
@@ -616,7 +656,11 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     # Frama-C/WP. The gen-refine loop above (CBMC) does the synthesis; WP then
     # discharges the contract + the //@ assert goals over mathematical integers.
     # Degrades cleanly when frama-c is absent (the CBMC verdict still stands).
-    if r.ok and getattr(config, "oracle", "cbmc") == "frama-c":
+    if r.ok and _ovf_used and _ovf_wp is not None:
+        # Already deductively confirmed above WITH RTE on (overflow checked).
+        print(f"Frama-C/WP: CONFIRMED — proved {_ovf_wp.n_proved}/{_ovf_wp.n_total} "
+              "goals (RTE on; signed overflow checked).")
+    elif r.ok and getattr(config, "oracle", "cbmc") == "frama-c":
         from bmc_agent.frama_c import insert_contract_acsl, run_wp
         try:
             annotated = _src_text

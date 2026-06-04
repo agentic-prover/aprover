@@ -174,3 +174,46 @@ def test_clean_expr_strips_code_fence_and_keyword():
 
 def test_clean_expr_skips_comment_only_first_line():
     assert _clean_expr("// here is the spec\nresult == x") == "result == x"
+
+
+# --- verification-gated overflow precondition --------------------------------
+from bmc_agent.assert_driven_specs import (
+    overflow_preconditions, _has_signed_arith, _return_type_of,
+)
+
+
+def test_has_signed_arith_distinguishes_binary_op_from_deref():
+    assert _has_signed_arith("*p + *q")      # binary +
+    assert _has_signed_arith("a * b")        # binary *
+    assert _has_signed_arith("x - 1")        # binary -
+    assert not _has_signed_arith("*p")       # unary deref, not arithmetic
+    assert not _has_signed_arith("x")        # bare var
+    assert not _has_signed_arith("a[i]")     # index, no arithmetic
+
+
+def test_overflow_preconditions_for_result_eq_arith():
+    src = "int add(int *p, int *q) { return *p + *q; }"
+    out = overflow_preconditions(src, {"add": "result == *p + *q"})
+    assert out == {"add": "INT_MIN <= *p + *q <= INT_MAX"}
+
+
+def test_overflow_preconditions_skips_non_arith_and_unsigned():
+    # not a `result == E` arithmetic shape -> no precondition
+    assert overflow_preconditions("int f(int*p){return *p;}",
+                                  {"f": "result == *p"}) == {}
+    assert overflow_preconditions("int g(int a){return a>0;}",
+                                  {"g": "result == 1"}) == {}
+    # unsigned return wraps by definition (no UB) -> skipped
+    assert overflow_preconditions("unsigned u(unsigned a, unsigned b){return a+b;}",
+                                  {"u": "result == a + b"}) == {}
+
+
+def test_overflow_preconditions_type_aware_bounds():
+    src = "long s(long *p, long *q){ return *p + *q; }"
+    out = overflow_preconditions(src, {"s": "result == *p + *q"})
+    assert out == {"s": "LONG_MIN <= *p + *q <= LONG_MAX"}
+
+
+def test_return_type_of_handles_pointer_and_qualifiers():
+    assert _return_type_of("int *add(int*p){return p;}", "add") == "int"
+    assert _return_type_of("unsigned long f(void){return 0;}", "f") == "unsigned long"
