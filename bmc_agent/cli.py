@@ -762,7 +762,15 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     if getattr(args, "defines", None):
         config.cbmc_defines = list(args.defines)        # type: ignore[attr-defined]
     unwind = int(getattr(args, "standalone_unwind", 0) or 0)   # 0 => auto from loop bound
-    if getattr(args, "math_ints", False):
+    # Honor the explicit --math-ints flag, a preset default already on config,
+    # AND the --specs-bench preset itself. The dispatcher routes --synth-loop-
+    # invariants here BEFORE _run_specs_bench runs, so passing both flags would
+    # otherwise silently drop the preset's math-ints default (IC3-style benchmarks
+    # assume mathematical-integer semantics — without it correct invariants get
+    # masked by signed-overflow RTE goals).
+    if (getattr(args, "math_ints", False)
+            or getattr(args, "specs_bench", False)
+            or getattr(config, "math_ints", False)):
         config.math_ints = True                          # type: ignore[attr-defined]
     if getattr(args, "oracle", None):
         config.oracle = args.oracle                      # type: ignore[attr-defined]
