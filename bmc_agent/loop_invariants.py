@@ -603,6 +603,138 @@ def _loop_assigns(lp) -> str:
     return ", ".join(scalars + [f"{a}[..]" for a in arrays])
 
 
+# --- accumulator-loop recognition → recursive-logic-function synthesis --------
+#
+# A loop that folds an array into a scalar (`sum = sum + a[p]`, `prod *= a[i]`)
+# has a GENERAL invariant `acc == Fn(a, 0, idx)` where `Fn` is a user-defined
+# recursive logic function. The built-in ACSL `\sum`/`\product` aggregate is the
+# obvious form but is NOT auto-dischargeable — WP renders it to opaque quantified
+# axioms no SMT prover (Alt-Ergo/Z3/CVC5) unfolds, so even the empty-aggregate
+# base case times out. A recursive logic function with an explicit `reads` clause
+# IS dischargeable: its preservation is a single axiom application (the step
+# axiom at k=idx+1), not an induction. So instead of leaning on the LLM (which
+# emits the unprovable aggregate, or a bound-specific per-index ladder), we
+# DETECT the accumulator mechanically and SYNTHESIZE the axiomatic + invariant.
+
+@dataclass
+class AccumulatorSpec:
+    loop_ord: int
+    acc: str            # accumulator scalar, e.g. "sum"
+    kind: str           # "sum" | "product"
+    array: str          # folded array/pointer, e.g. "a"
+    index: str          # loop counter, e.g. "p"
+    elem_type: str      # array element type, e.g. "int"
+    bound: str          # loop upper bound from the guard, e.g. "n"
+    fn: str             # synthesized logic-function name
+
+    @property
+    def identity(self) -> str:
+        return "0" if self.kind == "sum" else "1"
+
+    @property
+    def op(self) -> str:
+        return "+" if self.kind == "sum" else "*"
+
+
+_SCALAR_TYPES = {"int", "char", "short", "long", "unsigned", "signed",
+                 "float", "double", "size_t"}
+
+
+def _elem_type_of(source: str, var: str) -> str:
+    """Element type of array/pointer ``var`` from its declaration (`int *a` /
+    `int a[..]`); defaults to ``int`` when not confidently found."""
+    for rx in (rf"\b([A-Za-z_]\w*)\s*\*\s*{re.escape(var)}\b",
+               rf"\b([A-Za-z_]\w*)\s+{re.escape(var)}\s*\["):
+        m = re.search(rx, source)
+        if m and m.group(1) in _SCALAR_TYPES:
+            return m.group(1)
+    return "int"
+
+
+def _guard_index_upper(lp, idx: str):
+    """Upper-bound expression for ``idx`` from the loop guard (`idx < N` / `idx <=
+    N`), or None. For a ``for`` loop the condition is the middle ``;`` clause."""
+    cond = lp.guard or ""
+    if getattr(lp, "kind", "") == "for":
+        parts = cond.split(";")
+        cond = parts[1] if len(parts) > 1 else ""
+    m = re.search(rf"\b{re.escape(idx)}\s*<=?\s*(.+?)\s*$", cond.strip())
+    return m.group(1).strip() if m else None
+
+
+def detect_accumulator(lp, source: str):
+    """Recognize a folding loop `acc = acc OP arr[idx]` / `acc OP= arr[idx]` whose
+    counter `idx` starts at 0 and `acc` at the fold identity. Returns an
+    AccumulatorSpec, or None when the pattern (or the 0/identity init reaching the
+    loop) isn't clearly present — in which case synthesis safely declines and the
+    LLM path is used."""
+    body = lp.body or ""
+    scalars, _arrays = modified_vars(body)
+    for kind, op in (("sum", r"\+"), ("product", r"\*")):
+        m = re.search(
+            rf"\b([A-Za-z_]\w*)\s*=\s*\1\s*{op}\s*([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]",
+            body) or re.search(
+            rf"\b([A-Za-z_]\w*)\s*{op}=\s*([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]",
+            body)
+        if not m:
+            continue
+        acc, arr, idx = m.group(1), m.group(2), m.group(3)
+        # idx must be the loop counter (advanced in the loop); acc the fold target.
+        if idx not in scalars or acc not in scalars or idx == acc:
+            continue
+        bound = _guard_index_upper(lp, idx)
+        if not bound:
+            continue
+        identity = "0" if kind == "sum" else "1"
+        pre = source[:getattr(lp, "start_offset", 0)]
+        # the invariant `acc == Fn(arr,0,idx)` is only sound if idx==0 & acc==id
+        # hold on loop entry; require a reaching initializer for each.
+        if not re.search(rf"\b{re.escape(idx)}\s*=\s*0\b", pre):
+            continue
+        if not re.search(rf"\b{re.escape(acc)}\s*=\s*{identity}\b", pre):
+            continue
+        fn = f"AccFold_{kind}_{acc}"
+        return AccumulatorSpec(lp.ordinal, acc, kind, arr, idx,
+                               _elem_type_of(source, arr), bound, fn)
+    return None
+
+
+def accumulator_axiomatic(spec: "AccumulatorSpec") -> str:
+    """The recursive-logic-function definition for an accumulator: `Fn(a,m,k)` =
+    fold of a[m..k-1]. `reads a[m..k-1]` is REQUIRED — it frames the function so WP
+    can discharge preservation by one step-axiom application. Definitional axioms
+    (admitted) generate no proof goals, so they don't perturb invariant numbering."""
+    p, a, fn = spec.elem_type, spec.array, spec.fn
+    return (
+        f"/*@ axiomatic {fn}_ax {{\n"
+        f"  logic integer {fn}({p} *{a}, integer m, integer k) reads {a}[m .. k-1];\n"
+        f"  axiom {fn}_empty: \\forall {p} *{a}, integer m, k;\n"
+        f"    m >= k ==> {fn}({a}, m, k) == {spec.identity};\n"
+        f"  axiom {fn}_step:  \\forall {p} *{a}, integer m, k;\n"
+        f"    m < k ==> {fn}({a}, m, k) == {fn}({a}, m, k-1) {spec.op} {a}[k-1];\n"
+        f"}} */\n"
+    )
+
+
+def accumulator_invariants(spec: "AccumulatorSpec") -> list:
+    """Deterministic, general invariant set for an accumulator loop: the index
+    bounds plus the recursive-logic-function summary."""
+    return [f"0 <= {spec.index}",
+            f"{spec.index} <= {spec.bound}",
+            f"{spec.acc} == {spec.fn}({spec.array}, 0, {spec.index})"]
+
+
+def accumulator_specs(source: str, loops: list) -> dict:
+    """Map of loop ordinal -> AccumulatorSpec for every loop recognized as an
+    array fold."""
+    out = {}
+    for lp in loops:
+        spec = detect_accumulator(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
 _FUNC_DEF_RX = re.compile(
     r"(?:^|[;}\s])([A-Za-z_]\w*)\s*\([^;{)]*\)\s*\{", re.M)
 # control keywords that also match name(...){ but are NOT function definitions
@@ -691,6 +823,14 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     prepped = _prep_goals_acsl(source)
     inline = _loop_function_callees(prepped, entry)
     annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns)
+    # Prepend the recursive-logic-function definition(s) for any accumulator loop
+    # whose invariant references one (`acc == AccFold_*(...)`). The axiomatic must
+    # precede first use; definitional axioms add no proof goals, so loop-invariant
+    # numbering (used by _wp_failing_invariant_indices) is unperturbed.
+    prelude = "".join(
+        accumulator_axiomatic(s) for s in accumulator_specs(source, loops).values())
+    if prelude:
+        annotated = prelude + annotated
     wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout,
                         inline=inline, exclude_terminates=True, rte=not math_ints)
     # WP goal names: "..._loop_invariant_<N>_(established|preserved)" (validity)
@@ -966,7 +1106,20 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 return check_havoc_abstraction(src, ann, config, entry, timeout, math_ints)
             return check_loop_invariants(src, ann, config, entry, aw, timeout)
 
-        annotations = {lp.ordinal: _propose(llm, config, lp, goals, fn_src) for lp in loops}
+        # Accumulator loops (array folds) get a DETERMINISTIC, general invariant
+        # set (index bounds + recursive-logic-function summary) under the frama-c
+        # oracle — the LLM is skipped for them (it emits the unprovable `\sum`
+        # aggregate or a bound-specific ladder). Other loops use the LLM proposer.
+        acc_specs = accumulator_specs(src, loops) if oracle == "frama-c" else {}
+        annotations = {}
+        for lp in loops:
+            if lp.ordinal in acc_specs:
+                annotations[lp.ordinal] = accumulator_invariants(acc_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized accumulator invariant for loop %d (%s fold "
+                            "→ %s)", lp.ordinal, acc_specs[lp.ordinal].kind,
+                            acc_specs[lp.ordinal].fn)
+            else:
+                annotations[lp.ordinal] = _propose(llm, config, lp, goals, fn_src)
         for o, invs in annotations.items():
             logger.info("loop-inv proposed for loop %d: %s", o, invs)
 
@@ -991,9 +1144,15 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                         if mchk.verified:
                             annotations, final_chk = minimized, mchk
                             _log = getattr(mchk.result, "raw_output", "") or _log
+                rendered = render_loop_invariants_acsl(annotations, loops)
+                # Show the synthesized recursive-logic-function definition(s) above
+                # the invariants — but only for accumulators whose summary survived
+                # minimization (the axiomatic is otherwise unused/orphaned).
+                prelude = "".join(accumulator_axiomatic(s) for s in acc_specs.values()
+                                  if s.fn in rendered)
                 return LoopSynthResult(
                     ok=True, iterations=it, annotations=annotations,
-                    acsl=render_loop_invariants_acsl(annotations, loops), goals=goals,
+                    acsl=(prelude + "\n" + rendered if prelude else rendered), goals=goals,
                     note="invariants are inductive and prove all goals (minimized)",
                     instrumented=getattr(final_chk, "instrumented", chk.instrumented),
                     cbmc_log=_log)

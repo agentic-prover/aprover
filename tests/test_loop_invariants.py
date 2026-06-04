@@ -334,3 +334,44 @@ def test_brace_braceless_loops_normalizes_and_preserves():
     # do-while condition is not mistaken for a brace-less body (no crash, unchanged)
     dw = "void h(){ int i=0; do { i++; } while(i<5); }"
     assert brace_braceless_loops(dw) == dw
+
+
+def test_detect_accumulator_sum_and_product():
+    from bmc_agent.loop_invariants import (
+        find_loops, brace_braceless_loops, detect_accumulator, accumulator_invariants,
+        accumulator_axiomatic)
+    # sum fold: acc = acc + a[p]
+    src = "int s(int *a,int n){int p=0,sum=0; while(p<n){sum=sum+a[p]; p++;} return sum;}"
+    (lp,) = find_loops(src)
+    spec = detect_accumulator(lp, src)
+    assert spec is not None
+    assert (spec.kind, spec.acc, spec.array, spec.index, spec.elem_type, spec.bound) == \
+        ("sum", "sum", "a", "p", "int", "n")
+    assert accumulator_invariants(spec) == [
+        "0 <= p", "p <= n", "sum == AccFold_sum_sum(a, 0, p)"]
+    ax = accumulator_axiomatic(spec)
+    assert "logic integer AccFold_sum_sum(int *a, integer m, integer k) reads a[m .. k-1]" in ax
+    assert "m >= k ==> AccFold_sum_sum(a, m, k) == 0" in ax            # sum identity
+    assert "AccFold_sum_sum(a, m, k-1) + a[k-1]" in ax                 # sum step
+
+    # product fold via compound assignment: pr *= a[i]
+    psrc = "int pr(int *a,int n){int i=0,prod=1; while(i<n){prod*=a[i]; i++;} return prod;}"
+    (plp,) = find_loops(psrc)
+    pspec = detect_accumulator(plp, psrc)
+    assert pspec is not None and pspec.kind == "product"
+    pax = accumulator_axiomatic(pspec)
+    assert "== 1" in pax                                               # product identity
+    assert "* a[k-1]" in pax                                           # product step
+
+
+def test_detect_accumulator_declines_non_folds():
+    from bmc_agent.loop_invariants import find_loops, detect_accumulator
+    # array fill (writes the array, not a scalar fold) -> not an accumulator
+    fill = "void f(int *A,int n){int i=0; while(i<n){A[i]=i; i++;}}"
+    assert detect_accumulator(find_loops(fill)[0], fill) is None
+    # scalar recurrence with no array index (IC3-style) -> not an accumulator
+    ic3 = "void f(){int x=1,y=2; while(x<100){x=x+y;}}"
+    assert detect_accumulator(find_loops(ic3)[0], ic3) is None
+    # fold whose counter has no 0-initializer reaching the loop -> declines (unsound otherwise)
+    noinit = "int s(int *a,int n,int p){int sum=0; while(p<n){sum=sum+a[p]; p++;} return sum;}"
+    assert detect_accumulator(find_loops(noinit)[0], noinit) is None
