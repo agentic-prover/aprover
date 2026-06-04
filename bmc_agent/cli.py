@@ -555,7 +555,8 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     # the contract path overflow-rigorous wherever it provably can be.
     _ovf_used = False
     _ovf_wp = None
-    if r.ok and getattr(config, "oracle", "cbmc") == "frama-c":
+    if (r.ok and getattr(config, "oracle", "cbmc") == "frama-c"
+            and getattr(args, "overflow_rigor", True)):
         try:
             from bmc_agent.frama_c import (insert_contract_acsl, run_wp,
                                            function_assigns_nothing)
@@ -2073,6 +2074,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Loop-invariant synthesis (unbounded loops): assume the loop body's signed arithmetic does not overflow (mathematical-integer semantics, as IC3-style benchmarks and Frama-C/WP assume), so invariants like x>=1 under x=x+y are inductive. Off => machine-int (wrapping) semantics.",
+    )
+    ver.add_argument(
+        "--no-overflow-rigor",
+        dest="overflow_rigor",
+        action="store_false",
+        default=True,
+        help="Disable the verification-gated overflow-rigor pass (Frama-C oracle, contract synthesis). On by default: even under --math-ints the synthesized contract is upgraded to machine-int soundness by enumerating every signed-overflow site in the body, bounding it INT_MIN<=e<=INT_MAX, and re-verifying with RTE on — adopted ONLY if WP still discharges every goal (additive; never turns a pass into a failure). Pass this to keep the PURE mathematical-integer contract (no synthesized no-overflow precondition), e.g. for exact-match against an IC3-style benchmark's golden math-int spec.",
     )
     ver.add_argument(
         "--oracle",
