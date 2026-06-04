@@ -352,10 +352,14 @@ def _escape_for_c_comment(text: str) -> str:
 
 # Characters permitted in a self-contained compound boolean C expression:
 # identifiers, whitespace, comparison/logical/arithmetic/bitwise operators,
-# parens/brackets and member access. Prose is rejected separately (by
-# _looks_like_c_expr) before this is consulted; a top-level comma is excluded
-# so we never mistake an English list for an expression.
-_PURE_BOOL_C_CHARS_RE = re.compile(r'^[\w\s!=<>&|()\[\].+\-*/%^~]+$')
+# the ternary conditional operator (``?:``), parens/brackets and member
+# access. Prose is rejected separately (by _looks_like_c_expr) before this
+# is consulted; a top-level comma is excluded so we never mistake an English
+# list for an expression. ``?:`` lets a value-pinning postcondition such as
+# ``result == (cond ? 1 : 0)`` be asserted whole instead of dropped to a
+# comment — dropping it leaves CBMC with 0 VCCs (vacuous verification), which
+# makes the sound-verify step reject an actually-correct contract.
+_PURE_BOOL_C_CHARS_RE = re.compile(r'^[\w\s!=<>&|()\[\].+\-*/%^~?:]+$')
 
 
 def _is_pure_bool_c_expr(s: str) -> bool:

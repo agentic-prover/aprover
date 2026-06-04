@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from bmc_agent.cbmc import run_cbmc
+from bmc_agent.dsl_to_cbmc import _looks_like_c_expr
 from bmc_agent.llm import LLMClient, agentic_system_prompt
 from bmc_agent.logger import get_logger
 
@@ -832,7 +833,16 @@ def _clean_expr(txt: str) -> str:
     """Extract a single postcondition expression from an LLM reply, tolerating a
     ```code fence``` and a leading keyword / trailing ``;`` even though the system
     prompt asks for a bare line (models add fences anyway — without this the first
-    'line' is the fence and the expression is silently lost)."""
+    'line' is the fence and the expression is silently lost).
+
+    The agentic backend frequently precedes the answer with a paragraph of
+    reasoning, so the FIRST non-comment line is often explanatory prose rather
+    than the postcondition. Capturing that prose verbatim corrupts the spec —
+    and, being non-assertable, it translates to a bare comment that passes the
+    soundness check vacuously (0 VCCs) and breaks downstream Frama-C. So skip
+    lines that read as prose and return the first that reads as a C/DSL
+    expression; if none does, return "" (treated as "no new information")
+    rather than leaking prose into the postcondition."""
     s = (txt or "").strip()
     m = re.search(r"```(?:c|cpp|text)?\s*\n?(.*?)```", s, re.DOTALL)
     if m:
@@ -841,7 +851,9 @@ def _clean_expr(txt: str) -> str:
         line = line.strip().strip("`").strip()
         line = re.sub(r"^(ensures|postcondition:?)\s+", "", line, flags=re.I)
         line = line.rstrip(";").strip()
-        if line and not line.startswith("//"):
+        if not line or line.startswith("//"):
+            continue
+        if _looks_like_c_expr(line):
             return line
     return ""
 
