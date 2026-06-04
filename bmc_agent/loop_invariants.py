@@ -563,6 +563,37 @@ LOOP header: {kind} ({guard})
 Output ONLY the corrected invariant lines.
 """
 
+# Appended to a refinement prompt when one or more clauses that are NEEDED to
+# imply the goal were rejected as non-inductive. Such a clause usually fails not
+# because it is wrong but because it needs an AUXILIARY companion invariant; the
+# proposer tends to re-offer the bare clause and loop forever. This steers it to
+# derive the missing companion instead.
+_AUX_REFINE_HINT = """
+
+AUXILIARY-INVARIANT NEEDED. The following clause(s) are needed to imply the goal
+but were REJECTED as non-inductive (true at entry, NOT preserved by one iteration):
+{dropped}
+A clause usually fails to be inductive not because it is false but because it
+needs an AUXILIARY companion invariant — a separate fact that, once also assumed
+at the loop head, makes the clause preserved. Re-derive preservation BY HAND:
+assume the clause at the head, symbolically execute ONE iteration's writes, and
+read off the extra fact you must already know for it to still hold afterward;
+that fact is the auxiliary invariant to add.
+Worked example: `x >= y` under `x = x + y; y = y + 1` is NOT inductive alone —
+preserving it needs `x + y >= y + 1`, i.e. `x >= 1`; so the inductive set is
+`{{x >= 1, x >= y}}` (note `x >= 1` is itself inductive given `y >= 0`).
+Output the FULL set: the auxiliary clause(s) you derived PLUS the original
+goal-relevant clause(s) — do not drop the clause that was rejected."""
+
+
+def _refine_problem(base: str, dropped) -> str:
+    """Augment a refinement ``problem`` message with the auxiliary-invariant hint
+    when goal-relevant clauses have been dropped as non-inductive."""
+    if dropped:
+        return base + _AUX_REFINE_HINT.format(
+            dropped="\n".join(f"    {c}" for c in dropped))
+    return base
+
 
 def _prep_goals_acsl(source: str) -> str:
     """For the Frama-C oracle: express every goal as an ACSL ``//@ assert`` (WP
@@ -1285,6 +1316,13 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         for o, invs in annotations.items():
             logger.info("loop-inv proposed for loop %d: %s", o, invs)
 
+        # Per-loop memory of clauses dropped as non-inductive. A clause that is
+        # goal-relevant but not self-inductive (it needs an auxiliary companion)
+        # gets pruned here, then re-proposed bare, then pruned again — an infinite
+        # cycle. Remembering the dropped text lets the next refinement ask for the
+        # auxiliary invariant that makes it stick, instead of re-offering it bare.
+        pruned_non_inductive: dict = {lp.ordinal: [] for lp in loops}
+
         for it in range(1, max_iters + 1):
             chk = _check(annotations)
             logger.info("loop-inv iter %d: verified=%s failing_inv=%s goal_failed=%s",
@@ -1346,6 +1384,13 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 # inductive behavioral ones that remain frequently suffice — also the
                 # minimality objective). Re-checked next iteration.
                 fset = set(chk.failing_invariants)
+                # Remember the TEXT of each clause dropped as non-inductive so a
+                # later refinement can request the auxiliary companion that makes it
+                # inductive, rather than silently losing a goal-relevant fact.
+                for (o, n) in fset:
+                    invs_o = annotations.get(o) or []
+                    if 0 <= n < len(invs_o) and invs_o[n] not in pruned_non_inductive.setdefault(o, []):
+                        pruned_non_inductive[o].append(invs_o[n])
                 pruned = {o: [inv for n, inv in enumerate(invs) if (o, n) not in fset]
                           for o, invs in annotations.items()}
                 if any(pruned[o] != annotations[o] for o in annotations) and any(pruned.values()):
@@ -1355,19 +1400,24 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     for ordn in {o for (o, _n) in chk.failing_invariants}:
                         lp = by_ord[ordn]
                         new = _refine(llm, config, lp, annotations[ordn],
-                                      "Some invariants are NOT preserved by the loop body (CBMC "
-                                      "refuted them). Note: an invariant holds at the TOP of the "
-                                      "body, BEFORE that iteration's writes — so a fact about the "
-                                      "element written THIS iteration is not yet true. Fix them.",
+                                      _refine_problem(
+                                          "Some invariants are NOT preserved by the loop body (the "
+                                          "verifier refuted them). Note: an invariant holds at the "
+                                          "TOP of the body, BEFORE that iteration's writes — so a "
+                                          "fact about the element written THIS iteration is not yet "
+                                          "true. Fix them.",
+                                          pruned_non_inductive.get(ordn)),
                                       goals, fn_src)
                         if new and new != annotations[ordn]:
                             annotations[ordn] = new; changed = True
             else:  # goal_failed: invariants valid but too weak
                 for lp in loops:
                     new = _refine(llm, config, lp, annotations[lp.ordinal],
-                                  "The invariants are valid but TOO WEAK: the goals are not "
-                                  "provable at loop exit. Strengthen / add invariants that "
-                                  "summarize the loop strongly enough to imply the goals.",
+                                  _refine_problem(
+                                      "The invariants are valid but TOO WEAK: the goals are not "
+                                      "provable at loop exit. Strengthen / add invariants that "
+                                      "summarize the loop strongly enough to imply the goals.",
+                                      pruned_non_inductive.get(lp.ordinal)),
                                   goals, fn_src)
                     if new and new != annotations[lp.ordinal]:
                         annotations[lp.ordinal] = new; changed = True
