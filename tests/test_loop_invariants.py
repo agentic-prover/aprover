@@ -375,3 +375,23 @@ def test_detect_accumulator_declines_non_folds():
     # fold whose counter has no 0-initializer reaching the loop -> declines (unsound otherwise)
     noinit = "int s(int *a,int n,int p){int sum=0; while(p<n){sum=sum+a[p]; p++;} return sum;}"
     assert detect_accumulator(find_loops(noinit)[0], noinit) is None
+
+
+def test_accumulator_function_contract():
+    from bmc_agent.loop_invariants import find_loops, accumulator_contracts
+    src = ("int sumArray(int *a, int n){int p=0,sum=0; while(p<n){sum=sum+a[p]; p++;} return sum;}"
+           "\nvoid main(){int arr[5]={1,2,3,4,5}; int s=sumArray(arr,5); /*@ assert s==15; */}")
+    contracts = accumulator_contracts(src, find_loops(src), entry="main")
+    assert set(contracts) == {"sumArray"}
+    block = contracts["sumArray"]
+    assert "requires n >= 0;" in block
+    assert "requires \\valid_read(a + (0 .. n-1));" in block
+    assert "assigns \\nothing;" in block
+    assert "ensures \\result == AccFold_sum_sum(a, 0, n);" in block
+    # the entry function (loop in main, no caller) gets NO contract even when the
+    # fold is fully detectable — a contract bridges a caller to a callee, and the
+    # entry has no caller.
+    from bmc_agent.loop_invariants import detect_accumulator
+    inmain = ("void main(){int A[8]; int i=0,s=0; while(i<8){s=s+A[i]; i++;} /*@ assert s==s; */}")
+    assert detect_accumulator(find_loops(inmain)[0], inmain) is not None   # fold IS detected
+    assert accumulator_contracts(inmain, find_loops(inmain), entry="main") == {}

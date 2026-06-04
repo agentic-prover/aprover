@@ -735,6 +735,54 @@ def accumulator_specs(source: str, loops: list) -> dict:
     return out
 
 
+def _function_returns_var(source: str, fn: str, var: str) -> bool:
+    """True iff ``fn``'s body has a ``return <var>;`` — i.e. the function's result
+    IS the accumulator, so an ``ensures \\result == Fn(...)`` contract is meaningful."""
+    m = re.search(rf"\b{re.escape(fn)}\s*\([^;{{)]*\)\s*{{", source)
+    if not m:
+        return False
+    open_brace = source.index("{", m.end() - 1)
+    close = _matching_brace(source, open_brace)
+    if close < 0:
+        return False
+    body = source[open_brace + 1:close]
+    return re.search(rf"\breturn\s+{re.escape(var)}\s*;", body) is not None
+
+
+def accumulator_contract_acsl(spec: "AccumulatorSpec") -> str:
+    """The function contract for an accumulator-folding function: it reads the
+    array (\\valid_read), has no side effect (assigns \\nothing), and returns the
+    fold over the whole range (\\result == Fn(a, 0, bound)). Bridges a caller's
+    goal to the callee MODULARLY (no inlining), which is the clean general spec."""
+    a, b, fn = spec.array, spec.bound, spec.fn
+    return (
+        "/*@\n"
+        f"  requires {b} >= 0;\n"
+        f"  requires \\valid_read({a} + (0 .. {b}-1));\n"
+        f"  assigns \\nothing;\n"
+        f"  ensures \\result == {fn}({a}, 0, {b});\n"
+        "*/\n"
+    )
+
+
+def accumulator_contracts(source: str, loops: list, entry: str) -> dict:
+    """Map fn-name -> contract ACSL for each NON-entry function that folds an array
+    into its return value and is side-effect-free. Such a function gets a modular
+    contract (so the caller's goal is discharged WITHOUT inlining). Functions that
+    aren't pure, don't return the accumulator, or are the entry are skipped."""
+    from bmc_agent import frama_c
+    out = {}
+    by_ord = {lp.ordinal: lp for lp in loops}
+    for ordn, spec in accumulator_specs(source, loops).items():
+        lp = by_ord[ordn]
+        fn = _enclosing_function(source, lp.start_offset)
+        if (fn and fn != entry
+                and _function_returns_var(source, fn, spec.acc)
+                and frama_c.function_assigns_nothing(source, fn)):
+            out[fn] = accumulator_contract_acsl(spec)
+    return out
+
+
 _FUNC_DEF_RX = re.compile(
     r"(?:^|[;}\s])([A-Za-z_]\w*)\s*\([^;{)]*\)\s*\{", re.M)
 # control keywords that also match name(...){ but are NOT function definitions
@@ -823,6 +871,13 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     prepped = _prep_goals_acsl(source)
     inline = _loop_function_callees(prepped, entry)
     annotated = frama_c.insert_loop_invariants_acsl(prepped, annotations, assigns)
+    # A pure array-folding callee gets a MODULAR contract (`ensures \result ==
+    # Fn(a,0,n)`), so the caller's goal is discharged through the contract rather
+    # than by inlining — drop those functions from the inline set.
+    contracts = accumulator_contracts(source, loops, entry)
+    for fn, block in contracts.items():
+        annotated = frama_c.insert_contract_block(annotated, fn, block)
+    inline = [fn for fn in inline if fn not in contracts]
     # Prepend the recursive-logic-function definition(s) for any accumulator loop
     # whose invariant references one (`acc == AccFold_*(...)`). The axiomatic must
     # precede first use; definitional axioms add no proof goals, so loop-invariant
@@ -1145,11 +1200,17 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                             annotations, final_chk = minimized, mchk
                             _log = getattr(mchk.result, "raw_output", "") or _log
                 rendered = render_loop_invariants_acsl(annotations, loops)
-                # Show the synthesized recursive-logic-function definition(s) above
-                # the invariants — but only for accumulators whose summary survived
-                # minimization (the axiomatic is otherwise unused/orphaned).
-                prelude = "".join(accumulator_axiomatic(s) for s in acc_specs.values()
-                                  if s.fn in rendered)
+                # Show the complete synthesized spec above the loop invariants — the
+                # recursive-logic-function definition(s) then the function contract(s)
+                # — but only for accumulators whose summary survived minimization (the
+                # axiomatic/contract are otherwise unused).
+                live = [s for s in acc_specs.values() if s.fn in rendered]
+                live_fns = {s.fn for s in live}
+                prelude = "".join(accumulator_axiomatic(s) for s in live)
+                if prelude and oracle == "frama-c":
+                    for fn, block in accumulator_contracts(src, loops, entry).items():
+                        if any(lf in block for lf in live_fns):   # contract for a live fold
+                            prelude += f"// contract for {fn}\n{block}"
                 return LoopSynthResult(
                     ok=True, iterations=it, annotations=annotations,
                     acsl=(prelude + "\n" + rendered if prelude else rendered), goals=goals,

@@ -173,6 +173,23 @@ def insert_contract_acsl(source: str, fn: str, requires: str = "",
     return source[:pos] + block + "\n" + source[pos:]
 
 
+def insert_contract_block(source: str, fn: str, block: str) -> str:
+    """Splice a pre-rendered ACSL contract ``block`` immediately before ``fn``'s
+    definition (no-op if empty or the definition isn't found). Unlike
+    ``insert_contract_acsl`` this takes a raw ACSL string verbatim — used for
+    synthesized contracts that must keep exact syntax (``\\valid_read``, ranges)."""
+    if not block:
+        return source
+    m = re.search(_FUNC_DEF_TMPL.format(name=re.escape(fn)), source)
+    if not m:
+        logger.info("frama-c: definition of %r not found — contract not inserted", fn)
+        return source
+    pos = m.start()
+    if source[pos] == "\n":
+        pos += 1
+    return source[:pos] + block + source[pos:]
+
+
 # --- frama-c -wp invocation + parse ------------------------------------------
 
 @dataclass
