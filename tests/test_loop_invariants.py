@@ -424,3 +424,31 @@ def test_equal_update_invariants_ignores_declaration_initializers():
     # `int t1=x; int t2=x;` are declarations, not loop-carried scalar updates
     src = "void main(){int x=0; while(unknown1()){ int t1=x; int t2=x; x=x+1; } }"
     assert equal_update_invariants(find_loops(src)[0]) == []
+
+
+# --- general (update-shape-agnostic) relational candidates --------------------
+from bmc_agent.loop_invariants import relational_equality_candidates
+
+
+def test_relational_candidates_cover_lockstep_that_syntactic_misses():
+    # lockstep i=i+1; j=j+1 keeps i==j, but the RHS differ syntactically — the
+    # syntactic detector misses it; the pairwise candidate generator includes it.
+    src = "void m(){int i=0,j=0; while(u()){ i=i+1; j=j+1; } }"
+    lp = find_loops(src)[0]
+    assert equal_update_invariants(lp) == []                 # syntactic: miss
+    assert "i == j" in relational_equality_candidates(lp)    # general: proposed
+
+
+def test_relational_candidates_all_pairs_likely_first():
+    src = "void m(){int a=0,b=0,c=0; while(u()){int s=a; a=s; b=s; c=c+1;} }"
+    cands = relational_equality_candidates(find_loops(src)[0])
+    assert set(cands) == {"a == b", "a == c", "b == c"}      # every pair
+    assert cands[0] == "a == b"                              # shared-RHS pair first
+
+
+def test_relational_candidates_capped_and_bounded():
+    # < 2 scalars → nothing; honors max_scalars cap
+    src1 = "void m(){int x=0; while(u()){ x=x+1; } }"
+    assert relational_equality_candidates(find_loops(src1)[0]) == []
+    src2 = "void m(){int a=0,b=0,c=0; while(u()){a=a+1;b=b+1;c=c+1;} }"
+    assert relational_equality_candidates(find_loops(src2)[0], max_scalars=2) == []

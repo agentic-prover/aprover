@@ -635,6 +635,25 @@ def equal_update_invariants(lp) -> list:
     return out
 
 
+def relational_equality_candidates(lp, max_scalars: int = 6) -> list:
+    """Candidate equality invariants ``a == b`` for EVERY pair of loop-carried
+    scalars — independent of HOW each variable is updated. The caller verification-
+    gates each (kept iff the augmented set still verifies = established + preserved),
+    so this proposes broadly and the prover decides which hold. Being update-shape-
+    agnostic, it catches BOTH ``x=E; y=E;`` and lockstep ``i=i+1; j=j+1;`` (which a
+    syntactic same-RHS match misses). Pairs whose updates share an RHS are ordered
+    FIRST (most likely to hold → fast wins); capped at ``max_scalars`` to bound the
+    number of prover calls. NOT tied to any specific program or variable name."""
+    scalars = list(dict.fromkeys(modified_vars(lp.body or "")[0]))
+    if len(scalars) < 2 or len(scalars) > max_scalars:
+        return []
+    likely = {frozenset(c.split(" == ")) for c in equal_update_invariants(lp)}
+    pairs = [f"{scalars[i]} == {scalars[j]}"
+             for i in range(len(scalars)) for j in range(i + 1, len(scalars))]
+    pairs.sort(key=lambda c: frozenset(c.split(" == ")) not in likely)
+    return pairs
+
+
 def _prep_goals_acsl(source: str) -> str:
     """For the Frama-C oracle: express every goal as an ACSL ``//@ assert`` (WP
     proves those natively). ``//@ assert`` stays; the executable forms
@@ -1308,6 +1327,55 @@ def _minimize_invariants(annotations: dict, check_fn, loops, logger) -> dict:
     return cur
 
 
+def _strengthen_relational(annotations: dict, check_fn, loops, by_ord,
+                           acc_specs: dict, logger):
+    """Behavioral strengthening — the DUAL of minimization. After the goal verifies,
+    ADD the strongest inductive EQUALITY invariants between loop-carried scalars that
+    the (possibly weak) goal did not force, so the spec captures what the loop actually
+    maintains (e.g. ``x == y``), per the project's behavioral-spec preference.
+
+    Candidates come from ``relational_equality_candidates`` (ALL scalar pairs — NOT a
+    syntactic update pattern), each KEPT only if the augmented set still verifies (so
+    it is established + preserved) — the verdict can never weaken. Equality
+    transitivity is tracked (union-find) so an implied pair (``a==c`` after ``a==b``,
+    ``b==c``) isn't re-added as a redundant clause. Accumulator loops are skipped:
+    their fold equation IS the behavioral summary. Returns (annotations, last_chk|None)."""
+    cur = {o: list(v) for o, v in annotations.items()}
+    final = None
+    parent: dict = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    for lp in loops:
+        if lp.ordinal in acc_specs:            # fold loops already carry the summary
+            continue
+        parent.clear()
+        for cl in cur.get(lp.ordinal, []):     # seed classes from equalities present
+            m = re.fullmatch(r"\s*(\w+)\s*==\s*(\w+)\s*", cl)
+            if m:
+                parent[find(m.group(1))] = find(m.group(2))
+        for cand in relational_equality_candidates(by_ord[lp.ordinal]):
+            a, b = (s.strip() for s in cand.split("=="))
+            if find(a) == find(b):             # already present or implied → skip
+                continue
+            trial = {o: list(v) for o, v in cur.items()}
+            trial[lp.ordinal] = cur.get(lp.ordinal, []) + [cand]
+            chk = check_fn(trial)
+            if chk.verified:
+                cur, final = trial, chk
+                parent[find(a)] = find(b)
+                logger.info("loop-inv: strengthened loop %d with behavioral "
+                            "invariant %r", lp.ordinal, cand)
+    return cur, final
+
+
 def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                max_iters: int = 6, unwind: int = 0,
                                timeout: int = 180) -> LoopSynthResult:
@@ -1405,27 +1473,15 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     # BEHAVIORAL STRENGTHENING (dual of minimization): minimization
                     # drops clauses the GOAL doesn't need; this ADDS the strongest
                     # inductive RELATIONAL invariants the goal didn't force (e.g.
-                    # `x == y` when both are updated to the same value) — the project's
-                    # behavioral-spec preference. Each candidate is kept only if the
-                    # augmented set still verifies (so it is established + preserved),
-                    # so the verdict can never weaken. Gated like the contract path.
+                    # `x == y`) — the project's behavioral-spec preference. Candidates
+                    # are ALL scalar pairs (update-shape-agnostic), each kept only if
+                    # the augmented set still verifies. Gated like the contract path.
                     if getattr(config, "enable_spec_strengthen", True):
-                        strengthened = {o: list(v) for o, v in annotations.items()}
-                        for lp in loops:
-                            have = set(strengthened.get(lp.ordinal, []))
-                            for cand in equal_update_invariants(by_ord[lp.ordinal]):
-                                if cand in have:
-                                    continue
-                                trial = {o: list(v) for o, v in strengthened.items()}
-                                trial[lp.ordinal] = strengthened.get(lp.ordinal, []) + [cand]
-                                tchk = _check(trial)
-                                if tchk.verified:
-                                    strengthened, final_chk = trial, tchk
-                                    have.add(cand)
-                                    _log = getattr(tchk.result, "raw_output", "") or _log
-                                    logger.info("loop-inv: strengthened loop %d with "
-                                                "behavioral invariant %r", lp.ordinal, cand)
-                        annotations = strengthened
+                        strengthened, schk = _strengthen_relational(
+                            annotations, _check, loops, by_ord, acc_specs, logger)
+                        if schk is not None:
+                            annotations, final_chk = strengthened, schk
+                            _log = getattr(schk.result, "raw_output", "") or _log
                 # Overflow-rigorous mode (all loops are folds, math-int on): the shown
                 # spec carries the loop variant + no-overflow precondition that the
                 # RTE-checked proof used, so the displayed contract is the sound one.
