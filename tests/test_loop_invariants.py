@@ -452,3 +452,41 @@ def test_relational_candidates_capped_and_bounded():
     assert relational_equality_candidates(find_loops(src1)[0]) == []
     src2 = "void m(){int a=0,b=0,c=0; while(u()){a=a+1;b=b+1;c=c+1;} }"
     assert relational_equality_candidates(find_loops(src2)[0], max_scalars=2) == []
+
+
+class _Chk:
+    """Mock check_fn: a clause set 'verifies' iff it includes every clause in
+    `required` (simulates load-bearing clauses for the goal)."""
+    def __init__(self, required): self.required = set(required)
+    def __call__(self, ann):
+        clauses = {c for v in ann.values() for c in v}
+        class R:  # minimal LoopCheck-like
+            pass
+        r = R(); r.verified = self.required <= clauses
+        return r
+
+
+def test_dedup_keeps_independent_drops_redundant(monkeypatch):
+    import bmc_agent.loop_invariants as li
+    # stub entailment: only `y >= 1` is entailed by the rest; `y <= 100000` is not
+    def fake_entails(rest, clause, config):
+        return clause.strip() == "y >= 1" and {"x >= 1", "x == y"} <= set(rest)
+    monkeypatch.setattr(li, "_entails", fake_entails)
+    ann = {0: ["x >= 1", "x == y", "y >= 1", "y <= 100000"]}
+    chk = _Chk(["x >= 1", "x == y"])          # goal needs only these
+    out = li._dedup_invariants(ann, chk, [], object(), li.logger)
+    assert "y >= 1" not in out[0]             # redundant -> dropped
+    assert "y <= 100000" in out[0]            # independent sound fact -> KEPT (not minimized away)
+    assert "x == y" in out[0] and "x >= 1" in out[0]
+
+
+def test_generality_gate_drops_removable_flags_loadbearing():
+    import bmc_agent.loop_invariants as li
+    # n==5 is removable (goal still proves); a[0]==1 is load-bearing here
+    ann = {0: ["0 <= i", "n == 5", "a[0] == 1", "x == y"]}
+    chk = _Chk(["0 <= i", "a[0] == 1", "x == y"])   # proof needs a[0]==1 but NOT n==5
+    out, flagged = li._generality_gate(ann, chk, [], li.logger)
+    assert "n == 5" not in out[0]             # removable caller-specific -> dropped
+    assert "a[0] == 1" in out[0]              # load-bearing caller-specific -> kept...
+    assert "a[0] == 1" in flagged             # ...and FLAGGED as non-behavioral
+    assert "x == y" in out[0] and "x == y" not in flagged   # behavioral, untouched

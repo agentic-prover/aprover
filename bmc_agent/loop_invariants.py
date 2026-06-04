@@ -1327,6 +1327,99 @@ def _minimize_invariants(annotations: dict, check_fn, loops, logger) -> dict:
     return cur
 
 
+def _entails(rest: list, clause: str, config) -> bool:
+    """True iff the conjunction of ``rest`` LOGICALLY IMPLIES ``clause`` — i.e. the
+    clause is a redundant restatement (e.g. ``y>=1`` given ``x>=1`` and ``x==y``).
+
+    A scalar CBMC query: declare every identifier as a nondet ``int``,
+    ``__CPROVER_assume`` each clause in ``rest``, ``__CPROVER_assert(clause)``; valid
+    (no counterexample) ⇒ entailed. Quantified / accumulator-fold / array / pointer
+    clauses are OUT OF SCOPE — returns False (treat as non-redundant, keep). If CBMC
+    is unavailable it returns False, so dedup degrades to keeping everything."""
+    if not rest:
+        return False
+    blob = " ".join(rest) + " || " + clause
+    if re.search(r"\\|\bforall\b|\bexists\b|AccFold|\[|\]|\*|->|\.", blob):
+        return False
+    ids = sorted(set(re.findall(r"[A-Za-z_]\w*", blob)) - _C_KEYWORDS)
+    if not ids:
+        return False
+    import tempfile as _tf
+    decls = "\n  ".join(f"int {i};" for i in ids)
+    assumes = "\n  ".join(f"__CPROVER_assume({r});" for r in rest)
+    src = (f"int main(void) {{\n  {decls}\n  {assumes}\n"
+           f"  __CPROVER_assert(({clause}), \"entail\");\n  return 0;\n}}\n")
+    try:
+        from bmc_agent.cbmc import run_cbmc
+        with _tf.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
+            tf.write(src); path = tf.name
+        res = run_cbmc(harness_path=path, function="main", unwind=2, timeout=30,
+                       cbmc_path=getattr(config, "cbmc_path", "cbmc"))
+    except Exception:
+        return False
+    return bool(getattr(res, "verified", False)) and not getattr(res, "counterexamples", None)
+
+
+def _dedup_invariants(annotations: dict, check_fn, loops, config, logger) -> dict:
+    """Remove ONLY logically-redundant clauses — those ENTAILED by the rest of the
+    same loop's invariants (``y>=1`` when ``x>=1 && x==y`` already implies it). This
+    is NOT minimization: an INDEPENDENT sound fact the goal happens not to need
+    (e.g. a loop bound ``y<=100000``) is RETAINED, because the synthesized spec is the
+    loop's behaviour, not a minimal certificate for one goal. Each drop is re-verified
+    with the same oracle (redundant ⇒ the goal still proves)."""
+    cur = {o: list(v) for o, v in annotations.items()}
+    changed = True
+    while changed:
+        changed = False
+        for o in list(cur):
+            for c in list(cur[o]):
+                if len(cur[o]) <= 1:
+                    break
+                rest = [x for x in cur[o] if x != c]
+                if not _entails(rest, c, config):
+                    continue
+                trial = {oo: list(vv) for oo, vv in cur.items()}
+                trial[o].remove(c)
+                if check_fn(trial).verified:
+                    cur = trial; changed = True
+                    logger.info("loop-inv: dedup dropped redundant clause %r "
+                                "(entailed by the rest)", c)
+                    break
+    return cur
+
+
+def _generality_gate(annotations: dict, check_fn, loops, logger):
+    """Reject caller-specific OVER-FIT. Value-pin clauses (``n==5`` / ``a[0]==1``) hold
+    only in a concrete caller context (they survive 'for free' when the callee loop is
+    inlined into the caller). Drop each one whose removal STILL leaves the goal
+    provable — it was non-load-bearing scaffolding. If the goal proves ONLY via such a
+    clause, it cannot be dropped without losing the proof: keep it but FLAG the spec as
+    goal-specific (non-behavioral). Returns (annotations, flagged_clauses).
+
+    This is the opposite force from minimization: over-fit must be removed by a
+    GENERALITY criterion (caller-specific), not a size one — caller-specific specs are
+    typically MORE minimal, so a size-minimizer would never remove them."""
+    cur = {o: list(v) for o, v in annotations.items()}
+    flagged: list = []
+    for o in list(cur):
+        for c in list(cur[o]):
+            if not _is_non_behavioral(c):
+                continue
+            if len(cur[o]) <= 1:
+                break
+            trial = {oo: list(vv) for oo, vv in cur.items()}
+            trial[o].remove(c)
+            if check_fn(trial).verified:
+                cur = trial
+                logger.info("loop-inv: generality gate dropped caller-specific "
+                            "clause %r", c)
+            else:
+                flagged.append(c)
+                logger.info("loop-inv: generality gate FLAG — proof depends on "
+                            "caller-specific clause %r (non-behavioral)", c)
+    return cur, flagged
+
+
 def _strengthen_relational(annotations: dict, check_fn, loops, by_ord,
                            acc_specs: dict, logger):
     """Behavioral strengthening — the DUAL of minimization. After the goal verifies,
@@ -1463,25 +1556,38 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 # goal by UNWINDING regardless of the invariant, so "not load-bearing"
                 # would wrongly strip the very behavioral invariant we synthesized.
                 final_chk = chk
+                gate_flagged: list = []
                 if oracle == "frama-c" or use_havoc:
-                    minimized = _minimize_invariants(annotations, _check, loops, logger)
-                    if minimized != annotations:
-                        mchk = _check(minimized)
-                        if mchk.verified:
-                            annotations, final_chk = minimized, mchk
-                            _log = getattr(mchk.result, "raw_output", "") or _log
-                    # BEHAVIORAL STRENGTHENING (dual of minimization): minimization
-                    # drops clauses the GOAL doesn't need; this ADDS the strongest
-                    # inductive RELATIONAL invariants the goal didn't force (e.g.
-                    # `x == y`) — the project's behavioral-spec preference. Candidates
-                    # are ALL scalar pairs (update-shape-agnostic), each kept only if
-                    # the augmented set still verifies. Gated like the contract path.
+                    # GENERALITY GATE (replaces size-minimization): drop caller-specific
+                    # OVER-FIT (n==5, a[0]==1) that holds only in the inlined concrete
+                    # context, when the goal still proves without it; flag it if the
+                    # proof genuinely depends on it. Size-minimization is RETIRED — it
+                    # could neither remove load-bearing over-fit (dropping breaks the
+                    # proof) nor justify dropping sound, independent behavioral facts.
+                    gated, gate_flagged = _generality_gate(annotations, _check, loops, logger)
+                    if gated != annotations:
+                        gchk = _check(gated)
+                        if gchk.verified:
+                            annotations, final_chk = gated, gchk
+                            _log = getattr(gchk.result, "raw_output", "") or _log
+                    # BEHAVIORAL STRENGTHENING: ADD the strongest inductive RELATIONAL
+                    # invariants the goal didn't force (e.g. `x == y`) — the project's
+                    # behavioral-spec preference. Each kept only if the set still verifies.
                     if getattr(config, "enable_spec_strengthen", True):
                         strengthened, schk = _strengthen_relational(
                             annotations, _check, loops, by_ord, acc_specs, logger)
                         if schk is not None:
                             annotations, final_chk = strengthened, schk
                             _log = getattr(schk.result, "raw_output", "") or _log
+                    # ENTAILMENT-DEDUP: remove ONLY logically-redundant restatements
+                    # (entailed by the rest); KEEP independent sound facts the goal
+                    # doesn't need (e.g. a loop bound) — a spec, not a minimal cert.
+                    deduped = _dedup_invariants(annotations, _check, loops, config, logger)
+                    if deduped != annotations:
+                        dchk = _check(deduped)
+                        if dchk.verified:
+                            annotations, final_chk = deduped, dchk
+                            _log = getattr(dchk.result, "raw_output", "") or _log
                 # Overflow-rigorous mode (all loops are folds, math-int on): the shown
                 # spec carries the loop variant + no-overflow precondition that the
                 # RTE-checked proof used, so the displayed contract is the sound one.
@@ -1503,10 +1609,14 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                             src, loops, entry, overflow_safe=bool(ovf_specs)).items():
                         if any(lf in block for lf in live_fns):   # contract for a live fold
                             prelude += f"// contract for {fn}\n{block}"
+                note = "invariants are inductive and prove all goals"
+                if gate_flagged:
+                    note += (" — NOTE goal-specific (non-behavioral): proof depends on "
+                             "caller-specific clause(s) " + "; ".join(gate_flagged))
                 return LoopSynthResult(
                     ok=True, iterations=it, annotations=annotations,
                     acsl=(prelude + "\n" + rendered if prelude else rendered), goals=goals,
-                    note="invariants are inductive and prove all goals (minimized)",
+                    note=note,
                     instrumented=getattr(final_chk, "instrumented", chk.instrumented),
                     cbmc_log=_log)
             if chk.unwinding_failed:
