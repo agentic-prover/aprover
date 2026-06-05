@@ -5,6 +5,8 @@
 
 **AProver — Agentic Prover for AI-Generated Code** — is a suite of LLM-driven formal verification agents. The first agent — **BMC-Agent** — is a prototype of *agentic model checking*: an architecture that pairs an LLM agent (for specification generation, counterexample classification, and spec refinement) with a sound bounded model checking backend. The agent handles semantic reasoning; the solver provides formal guarantees within the unwinding bound.
 
+> 📄 **Paper:** [*Agentic Model Checking*](https://arxiv.org/abs/2605.21434) — Youcheng Sun, Jiawen Liu, Daniel Kroening, Jason Xue (arXiv:2605.21434, 2026). This is the reference for the ideas implemented here; please [cite it](#citation) if you use AProver / BMC-Agent in your work.
+
 BMC-Agent supports two source languages with two solver backends, selected automatically by the source file's extension: **C** via CBMC, and **Rust** via Kani. The pipeline, classifier, refinement loop, and confidence tiers are shared; the parser and harness generator dispatch per language.
 
 The design principle is *agents propose, conventional tools dispose*: every soundness-relevant decision the LLM produces passes through a conventional check (CBMC query, SMT soundness guard, or runtime confirmation) before affecting the verification verdict.
@@ -318,6 +320,22 @@ BMC-Agent is an active research prototype. The pipeline and all confidence tiers
 - Self-improvement feedback loop (`--enable-feedback-loop`) with three arms (developer code-changes, function-spec invariant tightening, project-wide invariant inference) and in-sweep iteration.
 
 **Partial / planned:** spec-quality analysis at scale; evaluation corpus beyond VibeOS; manual precision audit of sampled findings; constructor-pattern precondition inference (planned for ML-kernel targets); loop-invariant generation in spec gen.
+
+## Citation
+
+If you use AProver or BMC-Agent in academic work, please cite the paper that introduces *agentic model checking*:
+
+> Youcheng Sun, Jiawen Liu, Daniel Kroening, and Jason Xue. **Agentic Model Checking.** arXiv:2605.21434, 2026. <https://arxiv.org/abs/2605.21434>
+
+```bibtex
+@article{sun2026agentic,
+  title   = {Agentic Model Checking},
+  author  = {Sun, Youcheng and Liu, Jiawen and Kroening, Daniel and Xue, Jason},
+  journal = {arXiv preprint arXiv:2605.21434},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2605.21434}
+}
+```
 
 ## License
 
