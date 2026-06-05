@@ -179,6 +179,7 @@ def test_clean_expr_skips_comment_only_first_line():
 # --- verification-gated overflow precondition --------------------------------
 from bmc_agent.assert_driven_specs import (
     overflow_preconditions, _has_signed_arith, _return_type_of,
+    _overflow_precondition_from_cbmc_failures,
 )
 
 
@@ -212,6 +213,34 @@ def test_overflow_preconditions_type_aware_bounds():
     src = "long s(long *p, long *q){ return *p + *q; }"
     out = overflow_preconditions(src, {"s": "result == *p + *q"})
     assert out == {"s": "LONG_MIN <= *p + *q <= LONG_MAX"}
+
+
+def test_overflow_precondition_from_cbmc_failures_only_repairs_overflow():
+    class CE:
+        def __init__(self, prop, desc):
+            self.failing_property = prop
+            self.description = desc
+
+    class R:
+        counterexamples = [
+            CE("validts.overflow.1", "arithmetic overflow on signed + in a + b"),
+            CE("validts.overflow.2", "arithmetic overflow on signed + in a + c"),
+            CE("main.overflow.1", "arithmetic overflow on signed + in a + b"),
+        ]
+
+    src = "int validts(int a, int b, int c) { return a + b > c; }"
+    pre = _overflow_precondition_from_cbmc_failures(R(), src, "validts")
+    assert "(-2147483647LL - 1LL) <= ((1LL * a) + (1LL * b))" in pre
+    assert "((1LL * a) + (1LL * c)) <= 2147483647LL" in pre
+    assert pre.count("(1LL * a) + (1LL * b)") == 2   # de-duplicated bound pair
+
+    class Mixed:
+        counterexamples = [
+            CE("validts.overflow.1", "arithmetic overflow on signed + in a + b"),
+            CE("validts.assertion.1", "postcondition violated"),
+        ]
+
+    assert _overflow_precondition_from_cbmc_failures(Mixed(), src, "validts") == ""
 
 
 def test_return_type_of_handles_pointer_and_qualifiers():

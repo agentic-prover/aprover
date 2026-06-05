@@ -306,6 +306,8 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     # atom (which compiles fine in C with casts intact).
     atom_norm = _normalize_casts(atom)
     m = _C_COMPARISON_RE.search(atom_norm)
+    if not m and _looks_like_c_expr(atom) and _safe_arith_bool_fallback(atom_norm):
+        return wrap(fully_parenthesize(atom))
     if m and _looks_like_c_expr(atom):
         stripped_norm = _normalize_casts(_strip_outer_parens(atom).strip()).strip()
         matched_span = m.group(0).strip()
@@ -396,7 +398,41 @@ def _is_pure_bool_c_expr(s: str) -> bool:
                 return False
     if depth != 0:
         return False
-    return _C_COMPARISON_RE.search(s) is not None
+    return re.search(r"(?:!=|==|<=|>=|<|>)", s) is not None
+
+
+def _safe_arith_bool_fallback(s: str) -> bool:
+    """True for pure arithmetic comparisons safe to wrap as C.
+
+    This fallback exists for generated no-overflow bounds whose operands contain
+    parenthesized arithmetic. Keep it narrow: function calls and dereferences are
+    intentionally left to existing specific rules, because wrapping them can add
+    side effects or require backing memory.
+    """
+    if not _is_pure_bool_c_expr(s):
+        return False
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", s):
+        return False
+    if _has_unary_deref(s):
+        return False
+    return True
+
+
+def _has_unary_deref(s: str) -> bool:
+    for i, ch in enumerate(s):
+        if ch != "*":
+            continue
+        j = i - 1
+        while j >= 0 and s[j].isspace():
+            j -= 1
+        k = i + 1
+        while k < len(s) and s[k].isspace():
+            k += 1
+        if k >= len(s) or not re.match(r"[A-Za-z_(]", s[k]):
+            continue
+        if j < 0 or s[j] in "(,=<>!&|+-*/?:":
+            return True
+    return False
 
 
 def _looks_like_c_expr(atom: str) -> bool:
@@ -492,6 +528,8 @@ def _atom_to_expr(atom: str) -> Optional[str]:
     # the prose tail makes the atom non-C.
     atom_norm = _normalize_casts(atom)
     m = _C_COMPARISON_RE.search(atom_norm)
+    if not m and _looks_like_c_expr(atom) and _safe_arith_bool_fallback(atom_norm):
+        return fully_parenthesize(_strip_outer_parens(atom).strip())
     if m and _looks_like_c_expr(atom):
         stripped_norm = _normalize_casts(_strip_outer_parens(atom).strip()).strip()
         matched_span = m.group(0).strip()
@@ -944,6 +982,10 @@ _ALWAYS_BOUND_IDENTIFIERS = frozenset({
     "int8_t", "int16_t", "int32_t", "int64_t",
     "uint8_t", "uint16_t", "uint32_t", "uint64_t",
     "off_t", "loff_t", "time_t",
+    # <limits.h> integer bounds used by generated no-overflow preconditions.
+    "CHAR_MIN", "CHAR_MAX", "SCHAR_MIN", "SCHAR_MAX",
+    "SHRT_MIN", "SHRT_MAX", "INT_MIN", "INT_MAX",
+    "LONG_MIN", "LONG_MAX", "LLONG_MIN", "LLONG_MAX",
     # Kernel primitive typedefs
     "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64",
     "__u8", "__u16", "__u32", "__u64", "__s8", "__s16", "__s32", "__s64",

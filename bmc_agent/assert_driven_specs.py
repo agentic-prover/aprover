@@ -309,6 +309,86 @@ def _run(check_src: str, config, entry: str, unwind: int, timeout: int):
     )
 
 
+def _conjoin_precondition(existing: str, added: str) -> str:
+    """Conjoin an added precondition without turning ``true`` into noise."""
+    cur = (existing or "true").strip()
+    add = (added or "").strip()
+    if not add or add in ("true", "1", "\\true"):
+        return cur or "true"
+    if cur in ("", "true", "1", "\\true"):
+        return add
+    if add in cur:
+        return cur
+    return f"({cur}) && ({add})"
+
+
+_NUMERIC_BOUNDS = {
+    "char": ("(-128LL)", "127LL"),
+    "signed char": ("(-128LL)", "127LL"),
+    "short": ("(-32768LL)", "32767LL"),
+    "int": ("(-2147483647LL - 1LL)", "2147483647LL"),
+    "long": ("(-9223372036854775807LL - 1LL)", "9223372036854775807LL"),
+    "long long": ("(-9223372036854775807LL - 1LL)", "9223372036854775807LL"),
+}
+
+
+def _widen_int_expr(expr: str) -> str:
+    """Promote scalar identifiers in a simple arithmetic expression to
+    ``long long`` arithmetic so the generated no-overflow precondition can be
+    evaluated without overflowing before it filters states."""
+    skip = {"sizeof", "true", "false", "NULL"}
+
+    def repl(m: re.Match) -> str:
+        name = m.group(0)
+        if name in skip or name.endswith(("LL", "UL")):
+            return name
+        start = m.start()
+        if start > 0 and expr[start - 1] == ".":
+            return name
+        if start > 1 and expr[start - 2:start] == "->":
+            return name
+        return f"(1LL * {name})"
+
+    return re.sub(r"\b[A-Za-z_]\w*\b", repl, expr)
+
+
+def _overflow_precondition_from_cbmc_failures(res, src: str, fn: str) -> str:
+    """Return a C/ACSL boolean precondition that rules out the signed-overflow
+    sites reported by CBMC, but only when *all* failures are overflow failures.
+
+    Specs benchmarks run with mathematical-integer intent. A candidate
+    functional postcondition such as ``result == (a + b > c ? 1 : 0)`` can be
+    semantically right yet fail the machine-int soundness gate because the body
+    and/or the postcondition expression has unbounded signed addition. In that
+    case, adding caller-proved no-overflow ``requires`` clauses is the right
+    repair. Non-overflow failures are not repaired here; they remain genuine
+    unsoundness.
+    """
+    ces = list(getattr(res, "counterexamples", []) or [])
+    if not ces:
+        return ""
+    exprs: list[str] = []
+    for ce in ces:
+        desc = (getattr(ce, "description", "") or "").strip()
+        prop = (getattr(ce, "failing_property", "") or "").lower()
+        if "overflow" not in prop and "overflow" not in desc.lower():
+            return ""
+        m = re.search(r"\bin\s+(.+)$", desc)
+        if not m:
+            continue
+        expr = m.group(1).strip()
+        if expr and expr not in exprs:
+            exprs.append(expr)
+    if not exprs:
+        return ""
+    ret = _return_type_of(src, fn)
+    lo, hi = _NUMERIC_BOUNDS.get(ret if ret in _NUMERIC_BOUNDS else "int",
+                                 _NUMERIC_BOUNDS["int"])
+    return " && ".join(
+        f"({lo} <= ({_widen_int_expr(e)})) && (({_widen_int_expr(e)}) <= {hi})"
+        for e in exprs)
+
+
 # signed-integer <limits.h> bound macros by return type (for the no-overflow
 # precondition). Unsigned types wrap by definition (no UB) → no precondition.
 _RET_BOUNDS = {
@@ -581,6 +661,23 @@ def synthesize(
             if eng is not None and _cexpr_ok(target, new_post):
                 sv = _sound_engine(eng, target, pre[target], new_post)
                 sound = bool(sv and sv.verified)
+                # Specs benchmarks assume mathematical integers, while the
+                # engine soundness gate checks machine-int C. If the only
+                # objection is signed overflow in the body/postcondition, repair
+                # the candidate by adding caller-proved no-overflow requires and
+                # retry. This keeps false goals false: the next sufficiency pass
+                # still requires the caller to establish the new precondition.
+                if (not sound and getattr(config, "math_ints", False)):
+                    ovf_pre = _overflow_precondition_from_cbmc_failures(sv, src, target)
+                    if ovf_pre:
+                        trial_pre = _conjoin_precondition(pre[target], ovf_pre)
+                        sv2 = _sound_engine(eng, target, trial_pre, new_post)
+                        if sv2 and sv2.verified:
+                            pre[target] = trial_pre
+                            sound = True
+                            logger.info(
+                                "assert-synth: added overflow precondition for '%s' "
+                                "during soundness repair (%s)", target, ovf_pre)
             else:
                 sound = _postcondition_sound(llm, config, target, sigs[target],
                                              bodies[target], new_post, unwind, timeout)

@@ -64,6 +64,20 @@ def test_kernel_macro_passes_via_always_bound():
     assert "dropped" not in body
 
 
+def test_limits_macro_arithmetic_bounds_pass_through():
+    """No-overflow preconditions use <limits.h> macros and parenthesized
+    arithmetic operands; these must remain live assumes, not comments."""
+    out = precond_to_assume(
+        "(INT_MIN <= (a + b)) && ((a + b) <= INT_MAX)",
+        params=["a", "b"],
+    )
+    body = _bodies(out)
+    assert "__CPROVER_assume(INT_MIN <= (a + b));" in body
+    assert "__CPROVER_assume((a + b) <= INT_MAX);" in body
+    assert "condition:" not in body
+    assert "dropped" not in body
+
+
 def test_loop_quantifier_leak_dropped():
     """``forall i: ...`` should be sanitized away earlier, but if a bare
     ``i`` leaks (LLM emits ``i >= 0`` without the forall wrapper), the
