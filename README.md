@@ -11,6 +11,8 @@ BMC-Agent supports two source languages with two solver backends, selected autom
 
 The design principle is *agents propose, conventional tools dispose*: every soundness-relevant decision the LLM produces passes through a conventional check (CBMC query, SMT soundness guard, or runtime confirmation) before affecting the verification verdict.
 
+The same architecture runs in reverse as a **specification synthesizer**: given a program annotated with assertions, it proposes function contracts and loop invariants and discharges them with a deductive oracle — CBMC for bounded checks, or Frama-C/WP for unbounded loops and quantified/overflow-rigorous contracts. See [Specification synthesis](#specification-synthesis).
+
 ## How it works
 
 ```
@@ -45,6 +47,7 @@ The **realism checker** (Phase 3 S4) runs an LLM audit on every `REAL_BUG` findi
 - [uv](https://github.com/astral-sh/uv)
 - [CBMC](https://github.com/diffblue/cbmc) on `PATH` (for C input)
 - [Kani](https://github.com/model-checking/kani) on `PATH` (for Rust input; optional if you only verify C)
+- [Frama-C](https://frama-c.com/) + an SMT prover (e.g. Alt-Ergo) on `PATH` (optional; only for `--oracle frama-c` specification synthesis)
 - An Anthropic API key (`ANTHROPIC_API_KEY`)
 
 ## Installation
@@ -89,18 +92,11 @@ uv run bmc-agent verify-dir \
   --enable-realism-thinking \
   --domain-knowledge "any domain notes for the LLM"
 
-# Generate + refine specs with Claude Code instead of the API
-# (reuses your local `claude` login — no ANTHROPIC_API_KEY needed).
-# Only the spec_gen + refinement roles are routed; the rest stay on the default.
+# Route spec-gen + refinement through your local Claude Code login (no API key);
+# add --claude-code-agentic to let it read the source tree (Read/Grep/Glob), or
+# --provider claude-code to route every role through the CLI.
 uv run bmc-agent verify --source examples/simple_driver.c --driver simple_driver \
                         --specs-via-claude-code
-
-# Same, but let Claude Code use read-only tools (Read/Grep/Glob) to explore the
-# source tree while drafting/refining — it can read caller sites to ground a
-# precondition instead of guessing from the prompt. Use `--provider claude-code`
-# to route *every* role through the CLI.
-uv run bmc-agent verify --source examples/simple_driver.c --driver simple_driver \
-                        --specs-via-claude-code --claude-code-agentic
 
 # CBMC-alone baseline (no LLM, no spec generation)
 uv run bmc-agent baseline --source examples/simple_driver.c \
@@ -156,6 +152,20 @@ after the fact (and pick the backend per the same role env vars):
 | Realism audit | `uv run python scripts/rerun_realism.py …` |
 | Triage (UNRESOLVED CExs) | `uv run python scripts/triage_unresolved.py --sweep-dir OUT --driver d …` |
 
+## Specification synthesis
+
+Instead of hunting bugs, BMC-Agent can synthesize the **specifications** that make a program's assertions provable. Given a file whose goals are written as `//@ assert`, `assert(...)`, `static_assert`, or `__VERIFIER_assert`, the `--specs-bench` preset auto-dispatches by program content and emits ACSL:
+
+- **no loops → function-contract synthesis** — propose a postcondition, check it makes the asserts hold (sufficiency) and is implied by the body (soundness), then strengthen toward the exact input/output relation.
+- **loops → loop-invariant synthesis** — propose inductive invariants (scalar, quantified-array, or recursive-fold) sufficient to discharge the goals.
+
+```bash
+# Synthesize + verify with the Frama-C/WP deductive oracle
+uv run bmc-agent verify --source prog.c --driver prog.c --agentic --specs-bench --oracle frama-c
+```
+
+`--specs-bench` turns on `--math-ints` (the mathematical-integer semantics these benchmarks assume). Overflow-rigor is on by default: a math-int result is re-verified with RTE on and reported as either machine-int **sound** or **math-int only** when the body genuinely overflows (`--no-overflow-rigor` to opt out). `--oracle cbmc` (the default off-preset) handles bounded loops; `--oracle frama-c` handles unbounded loops and quantified/overflow contracts.
+
 ## Configuration
 
 All settings are available as environment variables or `Config` dataclass fields.
@@ -184,10 +194,10 @@ All settings are available as environment variables or `Config` dataclass fields
 | `BMC_AGENT_CBMC_REAL_LIBC` | `false` | Skip Python-side preprocessing and let CBMC see the real libc headers; required for sources that include `stdio.h` / `stdlib.h` directly (OpenSSL, libxml2, llm.c, …) |
 | `BMC_AGENT_STRICT_DSL` | `false` | Forbid natural-language clauses in pre/post; pushes prose into the JSON `reasoning` field. Required for parser-state-heavy code where the LLM otherwise defaults to prose |
 | `BMC_AGENT_RAW_BYTES` | `false` | Treat single `const char *` parameters as raw N-byte buffers (no NUL constraint). Required for wire-format readers that may read past `strlen` |
-| `BMC_AGENT_INFER_FIELD_VALIDITY` | `false` | For struct-pointer parameters, init primitive-pointer fields (`float *`, `int *`, `double *`, …) as "NULL OR malloc'd backing buffer" instead of leaving them nondet. Prevents the harness from exploring "non-NULL but invalid" states that crash `memset(field, …)` despite a correct `if (field != NULL)` guard in source. Target audience: ML / numerics codebases (llm.c, ggml) whose struct fields are typed `float *` and aren't NUL-terminated strings |
-| `BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS` | `false` | For top-level primitive-pointer parameters (`size_t *`, `int *`, `float *`, …), size the harness backing array from the maximum literal subscript in the function body (capped by `BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS_MAX`, default 64). Prevents the harness from emitting a 1-element backing for functions that write a fixed-size parameter table (e.g. llm.c's `fill_in_parameter_sizes` writing `param_sizes[0..15]`) |
-| `BMC_AGENT_SCALE_DOWN` | `false` | Scale-down mode for ML / numerics kernels. Bounds ML parametric-size value parameters (`B`, `T`, `C`, `NH`, `V`, `Vp`, `OC`, …) to `[0, BMC_AGENT_SCALE_DOWN_SIZE]` (default 4) via `__CPROVER_assume`, auto-enables `INFER_ARRAY_PARAM_BOUNDS`, and sizes top-level primitive-pointer backing buffers to `SCALE_DOWN_SIZE³`. Required for matmul/attention/layernorm kernels which would otherwise time out exploring arbitrarily-large `B*T*C` inner loops |
-| `BMC_AGENT_SAFETY_ONLY` | `false` | Restrict the spec-generation prompt so postconditions express only memory safety, range bounds, and NaN/Inf-freedom — no functional / algebraic correctness claims. Pairs naturally with `BMC_AGENT_SCALE_DOWN` for ML kernels: the result is a clean "memory-safe + no-NaN" verdict instead of a vacuous functional-spec attempt that times out |
+| `BMC_AGENT_INFER_FIELD_VALIDITY` | `false` | Init struct primitive-pointer fields (`float *`, …) as "NULL or malloc'd buffer" so a correct `if (field != NULL)` guard isn't defeated by nondet-invalid states (ML structs) |
+| `BMC_AGENT_INFER_ARRAY_PARAM_BOUNDS` | `false` | Size a pointer parameter's harness backing array from the max literal subscript in the body (cap `…_MAX`, default 64), not 1 element |
+| `BMC_AGENT_SCALE_DOWN` | `false` | ML-kernel scale-down: bound parametric sizes (`B`, `T`, `C`, `NH`, …) to `[0, …_SIZE]` (default 4) and auto-enable array-param bounds; stops matmul/attention timeouts |
+| `BMC_AGENT_SAFETY_ONLY` | `false` | Restrict postconditions to memory safety + range + NaN/Inf-freedom (no functional claims); pairs with `SCALE_DOWN` for ML kernels |
 | `BMC_AGENT_KANI_PATH` | `kani` | Kani binary path (Rust backend) |
 | `BMC_AGENT_KANI_UNWIND` | `4` | Kani loop unwinding bound |
 | `BMC_AGENT_KANI_TIMEOUT` | `120` | Kani solver timeout per harness (seconds) |
@@ -306,20 +316,11 @@ tests/                  Unit and integration tests
 
 ## Status
 
-BMC-Agent is an active research prototype. The pipeline and all confidence tiers are stable.
+BMC-Agent is an active research prototype; the pipeline and all confidence tiers are stable.
 
-**Working:**
-- Full C verification pipeline via CBMC and full Rust verification pipeline via Kani; backend dispatch by source extension.
-- Whole-codebase `verify-dir` mode; cross-file call-graph construction.
-- Phase 3 S1 counterexample classification with structural downgrades (entry-fn postcondition, implicit-NULL precondition, structural-panic + over-refinement, path-divergent unwind).
-- Phase 3 S2 feasibility check (real callee inlining), Phase 3 S3 dynamic validation (bare-metal-compatible GCC harness), Phase 3 S4 realism checker (LLM audit with optional extended thinking and witness-pattern auto-rejection).
-- Five-tier confidence reporting (`confirmed_dynamic` / `confirmed_system_entry` / `confirmed_bmc` / `likely` / `unlikely`).
-- CEGAR spec refinement loop, callee stub postcondition constraints, FilteringOnly ablation (`--skip-refinement`), domain knowledge injection (`--domain-knowledge`), spec-quality module, prompt caching.
-- Wire-format C support (`--real-libc`, `--strict-dsl`, `--raw-bytes`, paired-pointer detection, `T**` in-out cursor pattern) — validated on OpenSSL ASN.1, libxml2, jq, protobuf upb.
-- Rust harness generator supports primitives, raw pointers, `&T`, `&[T]` slices, `Vec<T>`, `Option<T>`, `&str`, tuple returns, generics with monomorphisation, `where` clauses, `unsafe fn`, pointer-newtype detection (`SendPtr { ptr: *mut T }`); cargo-mode for multi-crate workspaces.
-- Self-improvement feedback loop (`--enable-feedback-loop`) with three arms (developer code-changes, function-spec invariant tightening, project-wide invariant inference) and in-sweep iteration.
+**Working:** full C (CBMC) and Rust (Kani) pipelines with backend dispatch by extension; whole-codebase `verify-dir` with cross-file call-graph construction; the Phase 3 classification → feasibility → dynamic-validation → realism stack with five-tier confidence reporting; CEGAR refinement with callee-stub postconditions and the FilteringOnly ablation (`--skip-refinement`); wire-format C support (`--real-libc`/`--strict-dsl`/`--raw-bytes`, validated on OpenSSL ASN.1, libxml2, jq, protobuf upb); a broad Rust harness generator (slices, `Vec`/`Option`/`&str`, generics, `unsafe fn`, cargo workspaces); the self-improvement feedback loop (`--enable-feedback-loop`); and specification synthesis (`--specs-bench`) of function contracts and loop invariants via CBMC or Frama-C/WP.
 
-**Partial / planned:** spec-quality analysis at scale; evaluation corpus beyond VibeOS; manual precision audit of sampled findings; constructor-pattern precondition inference (planned for ML-kernel targets); loop-invariant generation in spec gen.
+**Partial / planned:** spec-quality analysis at scale; evaluation corpus beyond VibeOS / llm.c; manual precision audit of sampled findings; constructor-pattern precondition inference for ML-kernel targets.
 
 ## Citation
 
