@@ -7,7 +7,7 @@ from bmc_agent.loop_invariants import (
     _parse_inv_lines, _guess_unwind, LoopSite, synthesize_loop_invariants,
     modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
     _has_array_writes, _filter_in_scope, _enclosing_function, _loop_function_callees,
-    _is_non_behavioral, _minimize_invariants, _loop_assigns,
+    _is_non_behavioral, _minimize_invariants, _loop_assigns, _enclosing_function_source,
 )
 
 
@@ -174,6 +174,29 @@ def test_filter_in_scope_drops_hallucinated_vars():
     assert kept == ["x >= y", "y >= 0", "forall k : (k < y) ==> (x >= k)"]
 
 
+def test_filter_in_scope_drops_pointer_as_integer():
+    src = "int fun(int x, int y, int *r){ while(*r >= y){ *r = *r - y; } return 0; }"
+    kept = _filter_in_scope([
+        "r == 1",
+        "r + y == 1",
+        "*r >= 0",
+        "\\valid(r)",
+    ], src)
+    assert kept == ["*r >= 0", "\\valid(r)"]
+
+
+def test_filter_in_scope_drops_unsupported_logic_calls():
+    src = (
+        "/*@ axiomatic A { logic integer Acc(int *a, integer m, integer k); } */\n"
+        "int f(int *a, int n){ while(n > 0){ n--; } return n; }"
+    )
+    kept = _filter_in_scope([
+        "power(n) == 1",
+        "Acc(a, 0, n) >= 0",
+    ], src)
+    assert kept == ["Acc(a, 0, n) >= 0"]
+
+
 def test_math_ints_injects_no_overflow():
     body = " x = t1 + t2; "
     got = _inject_no_overflow(body)
@@ -217,6 +240,17 @@ def test_enclosing_function_identifies_callee():
            "void main(){ int x[3]={1,2,3}; int s=f(x,3); /*@ assert s==6; */ }\n")
     lp = find_loops(src)[0]
     assert _enclosing_function(src, lp.start_offset) == "f"
+
+
+def test_enclosing_function_source_excludes_caller_locals():
+    src = ("void reverse(int *a, int n){ int i=0; while(i<n){ a[i]=i; i++; } }\n"
+           "void main(){ int arr[5]={1,2,3,4,5}; reverse(arr,5); /*@ assert arr[4]==4; */ }\n")
+    lp = find_loops(src)[0]
+    fn_src = _enclosing_function_source(src, lp.start_offset)
+    assert "void reverse" in fn_src
+    assert "int *a" in fn_src
+    assert "arr[5]" not in fn_src
+    assert _filter_in_scope(["a[0] == 0", "arr[4] == 4"], fn_src) == ["a[0] == 0"]
 
 
 def test_enclosing_function_skips_control_keywords():

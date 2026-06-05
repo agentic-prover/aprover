@@ -37,7 +37,8 @@ def test_insert_contract_acsl_before_function():
     src = "#include <x.h>\nint add(int *p, int *q) {\n return *p + *q;\n}\n"
     out = insert_contract_acsl(src, "add", requires="valid(p) && valid(q)",
                                ensures="result == *p + *q")
-    assert "requires (\\valid(p)) && (\\valid(q));" in out
+    assert "requires \\valid(p);" in out
+    assert "requires \\valid(q);" in out
     assert "ensures \\result == *p + *q;" in out
     assert out.index("requires") < out.index("int add(")
 

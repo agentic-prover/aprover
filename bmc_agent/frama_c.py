@@ -271,6 +271,12 @@ def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
     with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
         tf.write(source_with_acsl)
         path = tf.name
+    # Dockerized Frama-C may run as the image's configured user, while the temp
+    # file is owned by the host user with 0600 permissions by default.
+    try:
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
     cmd = [frama_c_path]
     if inline:
         fns = ", ".join(inline)

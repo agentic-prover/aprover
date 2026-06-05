@@ -1,11 +1,18 @@
 """DSL -> ACSL rendering."""
-from bmc_agent.acsl import expr_to_acsl, contract_to_acsl, loop_invariants_to_acsl
+from bmc_agent.acsl import (
+    expr_to_acsl,
+    contract_to_acsl,
+    loop_invariants_to_acsl,
+    condition_to_acsl_clauses,
+)
 
 
 def test_expr_result_and_forall():
     assert expr_to_acsl("result >= x") == "\\result >= x"
     # boolean structure is fully parenthesised (precedence-independent render)
     assert expr_to_acsl("forall k : 0 <= k < i ==> A[k] == k") == \
+        "\\forall integer k; (0 <= k < i) ==> (A[k] == k)"
+    assert expr_to_acsl("forall k, 0 <= k < i => A[k] == k") == \
         "\\forall integer k; (0 <= k < i) ==> (A[k] == k)"
 
 
@@ -33,7 +40,38 @@ def test_contract_block_drops_vacuous():
     block = contract_to_acsl("true", "result >= x && result >= y && (result == x || result == y)")
     assert block.startswith("/*@")
     assert "requires" not in block
-    assert "ensures (\\result >= x) && (\\result >= y) && ((\\result == x) || (\\result == y));" in block
+    assert "ensures \\result >= x;" in block
+    assert "ensures \\result >= y;" in block
+    assert "ensures ((\\result == x) || (\\result == y));" in block
+
+
+def test_contract_splits_conjuncts_and_drops_prose():
+    block = contract_to_acsl(
+        "true",
+        "*a <= *b && the multiset of outputs equals the original values && *b <= *c",
+    )
+    assert "ensures *a <= *b;" in block
+    assert "ensures *b <= *c;" in block
+    assert "multiset" not in block
+
+
+def test_condition_to_acsl_clauses_keeps_comma_forall():
+    assert condition_to_acsl_clauses("forall i, 0 <= i < n => a[i] == 0") == [
+        "\\forall integer i; (0 <= i < n) ==> (a[i] == 0)"
+    ]
+
+
+def test_nested_forall_and_guard_only_implication_repair():
+    assert expr_to_acsl("(forall k : 0 <= k < n) ==> a[k] == 0") == \
+        "\\forall integer k; (0 <= k < n) ==> (a[k] == 0)"
+    assert expr_to_acsl("(i == n) ==> ((forall k : 0 <= k < n) ==> (a[k] == 0))") == \
+        "(i == n) ==> (\\forall integer k; (0 <= k < n) ==> (a[k] == 0))"
+    assert expr_to_acsl(
+        "forall j : 0 <= j < i ==> (forall k : i <= k < n) ==> a[j] <= a[k]"
+    ) == (
+        "\\forall integer j; (0 <= j < i) ==> "
+        "(\\forall integer k; (i <= k < n) ==> (a[j] <= a[k]))"
+    )
 
 
 def test_contract_block_empty_when_vacuous():

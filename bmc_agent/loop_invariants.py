@@ -1013,6 +1013,30 @@ def _enclosing_function(source: str, offset: int) -> str:
     return best
 
 
+def _enclosing_function_source(source: str, offset: int) -> str:
+    """Source text for the tightest function whose body contains ``offset``.
+
+    Loop-invariant prompts and scope filtering must use the loop's function, not
+    the whole translation unit. Otherwise a callee loop can accidentally mention
+    caller-local variables that appear elsewhere in the file; CBMC may validate
+    them only in the concrete caller context, but Frama-C later rejects the ACSL
+    as an unbound variable in the callee.
+    """
+    best_start, best_end, best_open = -1, -1, -1
+    for m in _FUNC_DEF_RX.finditer(source):
+        name = m.group(1)
+        if name in _C_KEYWORDS:
+            continue
+        open_brace = source.index("{", m.end() - 1)
+        close = _matching_brace(source, open_brace)
+        if close < 0:
+            continue
+        if open_brace < offset < close and open_brace > best_open:
+            line_start = source.rfind("\n", 0, m.start()) + 1
+            best_start, best_end, best_open = line_start, close + 1, open_brace
+    return source[best_start:best_end] if best_start >= 0 else ""
+
+
 def _loop_function_callees(source: str, entry: str) -> list:
     """Functions that CONTAIN a loop and are NOT the entry — i.e. callees whose
     loop invariant must be inlined into the caller for a caller-resident goal to be
@@ -1230,6 +1254,80 @@ def _bound_vars(clause: str) -> set:
     return set(_BINDER_RE.findall(clause))
 
 
+def _pointer_vars(source: str) -> set:
+    """Best-effort pointer variable names visible in a function/source snippet."""
+    ptrs = set()
+    for m in _FUNC_DEF_RX.finditer(source):
+        open_paren = source.find("(", m.start(), m.end())
+        if open_paren < 0:
+            continue
+        params, _after = _balanced_arg(source, open_paren)
+        for p in params.split(","):
+            if "*" in p:
+                ids = re.findall(r"[A-Za-z_]\w*", p)
+                if ids:
+                    ptrs.add(ids[-1])
+    type_words = (
+        r"(?:const|volatile|unsigned|signed|long|short|int|char|float|double|void|size_t|"
+        r"struct\s+[A-Za-z_]\w*)"
+    )
+    decl_rx = re.compile(
+        rf"(?:^|[;{{]\s*){type_words}(?:\s+{type_words})*\s*\*\s*([A-Za-z_]\w*)",
+        re.M,
+    )
+    for m in decl_rx.finditer(source):
+        ptrs.add(m.group(1))
+    return ptrs
+
+
+def _logic_functions(source: str) -> set:
+    """Logic/predicate symbols declared in ACSL snippets included in ``source``."""
+    return set(re.findall(r"\b(?:logic|predicate)\b[^;{]*?\b([A-Za-z_]\w*)\s*\(", source))
+
+
+_ALLOWED_ACSL_CALLS = {
+    "valid", "valid_read", "valid_string", "valid_range", "old", "at",
+    "sum", "product", "numof", "lambda", "max", "min",
+}
+
+
+def _unsupported_logic_calls(clause: str, source: str) -> set:
+    """Function-call syntax in ACSL must refer to declared logic symbols.
+
+    A C call such as `pow(i)` or an undefined helper such as `power(i)` is not a
+    valid logic term in ACSL. Dropping such clauses is safer than producing an
+    annotation that Frama-C rejects before any proof attempt.
+    """
+    names = set(re.findall(r"(?<!\\)\b([A-Za-z_]\w*)\s*\(", clause))
+    return names - _logic_functions(source) - _ALLOWED_ACSL_CALLS - _C_KEYWORDS
+
+
+def _misused_pointer_vars(clause: str, source: str) -> set:
+    """Pointer variables used as arithmetic/integer terms instead of dereferenced.
+
+    Clauses like `r == 1` for `int *r` or `sum == count*x` for `int *sum` are
+    type-invalid ACSL. `*r`, `r[i]`, `r == \null`, and validity predicates remain
+    allowed.
+    """
+    bad = set()
+    for name in _pointer_vars(source):
+        n = re.escape(name)
+        if re.search(rf"\\valid(?:_read)?\s*\(\s*{n}\b", clause):
+            continue
+        null_cmp = rf"(?:{n}\s*(?:==|!=)\s*\\null|\\null\s*(?:==|!=)\s*{n})"
+        if re.search(null_cmp, clause):
+            continue
+        deref_or_index = rf"(?:\*\s*{n}\b|{n}\s*\[|{n}\s*->)"
+        if re.search(deref_or_index, clause):
+            continue
+        if re.search(rf"\b{n}\b\s*(?:[+\-*/%]|<=|>=|<|>|==|!=)", clause):
+            bad.add(name)
+            continue
+        if re.search(rf"(?:[+\-*/%]|<=|>=|<|>|==|!=)\s*\b{n}\b", clause):
+            bad.add(name)
+    return bad
+
+
 def _filter_in_scope(clauses: list, source: str) -> list:
     """Drop invariant clauses that reference identifiers not present in the program
     (LLM hallucinations like an invented loop counter `i`). An out-of-scope name
@@ -1239,7 +1337,18 @@ def _filter_in_scope(clauses: list, source: str) -> list:
     known = set(re.findall(r"[A-Za-z_]\w*", source))
     out = []
     for c in clauses:
-        ids = set(re.findall(r"[A-Za-z_]\w*", c)) - _bound_vars(c) - _C_KEYWORDS - known
+        bad_ptrs = _misused_pointer_vars(c, source)
+        if bad_ptrs:
+            logger.info("loop-inv: dropping clause with pointer-as-integer %s: %r",
+                        sorted(bad_ptrs), c)
+            continue
+        bad_calls = _unsupported_logic_calls(c, source)
+        if bad_calls:
+            logger.info("loop-inv: dropping clause with unsupported logic call %s: %r",
+                        sorted(bad_calls), c)
+            continue
+        ids = (set(re.findall(r"[A-Za-z_]\w*", c)) - _bound_vars(c) -
+               _C_KEYWORDS - _ALLOWED_ACSL_CALLS - known)
         if ids:
             logger.info("loop-inv: dropping clause with out-of-scope %s: %r", sorted(ids), c)
             continue
@@ -1520,8 +1629,11 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         return LoopSynthResult(ok=False, iterations=0, goals=goals,
                                note="no loops to annotate")
     uw = unwind or _guess_unwind(loops, 64)
-    fn_src = src  # whole TU as context (benchmarks are small)
     by_ord = {lp.ordinal: lp for lp in loops}
+    fn_src_by_ord = {
+        lp.ordinal: _enclosing_function_source(src, lp.start_offset) or src
+        for lp in loops
+    }
     math_ints = bool(getattr(config, "math_ints", False))
     oracle = getattr(config, "oracle", "cbmc") or "cbmc"
     if oracle == "frama-c":
@@ -1558,7 +1670,8 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                             "→ %s)", lp.ordinal, acc_specs[lp.ordinal].kind,
                             acc_specs[lp.ordinal].fn)
             else:
-                annotations[lp.ordinal] = _propose(llm, config, lp, goals, fn_src)
+                annotations[lp.ordinal] = _propose(
+                    llm, config, lp, goals, fn_src_by_ord[lp.ordinal])
         for o, invs in annotations.items():
             logger.info("loop-inv proposed for loop %d: %s", o, invs)
 
@@ -1700,7 +1813,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                           "fact about the element written THIS iteration is not yet "
                                           "true. Fix them.",
                                           pruned_non_inductive.get(ordn)),
-                                      goals, fn_src)
+                                      goals, fn_src_by_ord[ordn])
                         if new:
                             new = _reinject(new, pruned_non_inductive.get(ordn),
                                             reinjected.setdefault(ordn, set()))
@@ -1714,7 +1827,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                       "provable at loop exit. Strengthen / add invariants that "
                                       "summarize the loop strongly enough to imply the goals.",
                                       pruned_non_inductive.get(lp.ordinal)),
-                                  goals, fn_src)
+                                  goals, fn_src_by_ord[lp.ordinal])
                     if new:
                         new = _reinject(new, pruned_non_inductive.get(lp.ordinal),
                                         reinjected.setdefault(lp.ordinal, set()))
