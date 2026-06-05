@@ -224,46 +224,11 @@ Specs are expressed in a small DSL that is reliably emittable by an LLM and dire
 
 Return values use `\result`. Arithmetic operators and C comparisons are translated directly. Natural language conditions that don't match any pattern are emitted as `/* comments */`.
 
-## Evaluation — VibeOS
+## Evaluation
 
-BMC-Agent was evaluated on [VibeOS](https://github.com/kaansenol5/VibeOS/tree/main), a bare-metal ARM64 hobby OS of ~15,000 lines written with substantial LLM assistance. Running `verify-dir` over all 37 kernel modules (675 functions) with all validation tiers enabled confirmed **13 realistic bugs** after the realism filter eliminated 48 unrealistic counterexamples.
+**VibeOS** ([repo](https://github.com/kaansenol5/VibeOS/tree/main)) — a ~15,000-line bare-metal ARM64 hobby OS written with substantial LLM assistance. `verify-dir` over all 37 kernel modules (675 functions), every tier on, confirmed **13 realistic bugs** (after the realism filter dropped 48 unrealistic counterexamples) — dynamically-reproduced crashes (`net_get_mac` null deref, `stbtt__h_prefilter` stack OOB write, `stbtt_PackEnd` double-free) and `confirmed_system_entry` flaws (`vfs_lookup` deep-path stack overflow, `vfs_open_handle` `strcpy` overflow, `vfs_close_handle` use-after-free). A separate `calloc` integer overflow (CWE-190) cross-validates [VibeOS issue #26](https://github.com/kaansenol5/VibeOS/issues/26).
 
-| Function | Module | Tier | Signal | Root cause |
-|---|---|---|---|---|
-| `net_get_mac` | net.c | `confirmed_dynamic` | SIGSEGV | Null output pointer, no guard |
-| `stbtt__buf_get` | ttf.c | `confirmed_dynamic` | SIGSEGV | CFF buffer OOB read (crafted font) |
-| `stbtt__h_prefilter` | ttf.c | `confirmed_dynamic` | SIGABRT | Stack OOB write, user-controlled filter width |
-| `stbtt_PackEnd` | ttf.c | `confirmed_dynamic` | SIGABRT | Double-free of font pack state |
-| `hal_usb_keyboard_poll` | usb_hid.c | `confirmed_dynamic` | SIGSEGV | Null report buffer dereference |
-| `vfs_lookup` | vfs.c | `confirmed_system_entry` | — | `parts[32]` stack overflow on deep path; `strtok_r` misuse on non-ASCII input |
-| `vfs_open_handle` | vfs.c | `confirmed_system_entry` | — | `strcpy` overflow in path normalisation |
-| `vfs_close_handle` | vfs.c | `confirmed_system_entry` | — | Use-after-free on node data |
-| `strtok_r` | string.c | `confirmed_system_entry` | — | Tokenizer misuse |
-| `hal_serial_getc` | serial.c | `confirmed_system_entry` | — | Null dereference in serial input |
-| `align4` | dtb.c | `confirmed_system_entry` | — | Alignment violation in DTB parsing |
-| `stbtt_GetPackedQuad` | ttf.c | `confirmed_system_entry` | — | Font atlas bounds (realism: uncertain) |
-| `stbtt__csctx_rmove_to` | ttf.c | `confirmed_bmc` | — | CFF charstring NaN→int UB (CFF/OTF fonts only) |
-
-The `calloc` integer overflow (CWE-190, `nmemb * size` wraps to zero) was confirmed in an earlier run and independently cross-validates [VibeOS issue #26](https://github.com/kaansenol5/VibeOS/issues/26).
-
-## Evaluation — llm.c (ML training program)
-
-BMC-Agent was also evaluated on Karpathy's [llm.c](https://github.com/karpathy/llm.c) `train_gpt2.c` — the complete forward + backward pass for GPT-2 training, ~1100 lines of plain C with no LLM assistance. Running with the M1–M2 milestones enabled verifies **22 of 30 functions clean** at scaled-down problem sizes (`B = T = C = NH = V = Vp = OC = 4`), up from 4/30 in the unmodified pipeline. To our knowledge, this is the **first application of bounded model checking to a real ML training program**.
-
-| Verdict | v23 baseline | M1+M1.2+M2 | Δ |
-|---|---|---|---|
-| Clean (memory-safe at scale-down) | 4 | **22** | **+18** |
-| Timeout | 6 | 4 | -2 |
-| Fail / spec mismatch | 19 | 3 | -16 |
-| CBMC parse error | 1 | 1 | 0 |
-
-Highlight verdicts (all VERIFIED clean):
-- `softmax_forward` — the central probability-distribution kernel.
-- `layernorm_forward` / `layernorm_backward` — previously timed out at baseline.
-- `matmul_forward` / `matmul_forward_naive` / `matmul_backward` — the ML primitive.
-- `gpt2_zero_grad`, `gpt2_free` — the synthetic-NULL artifact class closed by M1.
-
-Full scorecard and per-function detail in [`findings/llm_c/`](findings/llm_c/). The flags `--infer-field-validity`, `--infer-array-param-bounds`, `--scale-down`, and `--safety-only` documented in the Configuration table above are the per-milestone knobs.
+**llm.c** ([repo](https://github.com/karpathy/llm.c)) — Karpathy's `train_gpt2.c`, the full GPT-2 forward+backward pass (~1100 lines, no LLM assistance). With the M1–M2 milestones (`--infer-field-validity`, `--infer-array-param-bounds`, `--scale-down`, `--safety-only`), BMC-Agent verifies **22 of 30 functions clean** at scaled-down sizes (`B=T=C=NH=V=Vp=OC=4`), up from 4/30 — including `softmax_forward`, `layernorm_forward/backward`, and `matmul_forward/backward`. To our knowledge this is the first application of bounded model checking to a real ML training program. Full scorecard in [`findings/llm_c/`](findings/llm_c/).
 
 ## Examples
 
@@ -286,32 +251,17 @@ uv run pytest tests/ -q
 
 ```
 bmc_agent/
-  config.py             Configuration dataclass
-  pipeline.py           End-to-end orchestrator
-  spec_generator.py     Phase 1: LLM spec generation (top-down, caller-driven)
-  bmc_engine.py         Phase 2: solver runner with parallel dispatch
-  cex_validator.py      Phase 3 S1/S2: counterexample classification + feasibility check
-  harness_generator.py  CBMC and GCC harness synthesis
-  dsl_to_cbmc.py        Spec DSL → __CPROVER_assume / assert translation
-  dynamic_validator.py  Phase 3 S3: GCC harness compile + run
-  realism_checker.py    Phase 3 S4: LLM realism audit (REALISTIC / UNREALISTIC / UNCERTAIN)
-  spec_quality.py       Phase 4: mutation testing, coverage, consistency checks
-  feedback_loop.py      Optional self-improvement loop (arms a/b/c, in-sweep iteration)
-  flag_selector.py      Optional per-function CBMC flag selection
-  domain_analyzer.py    Domain-knowledge injection for spec generation
-  preprocessor.py       Source preprocessing (cpp, real-libc bypass)
-  bug_reporter.py       Confidence-tier classification + bug-report assembly
-  parser.py             C parser (tree-sitter-c)
-  rust_parser.py        Rust parser (tree-sitter-rust): free fns, impl methods, generics
-  source_parser.py      Language-dispatch frontend
-  kani.py               Kani invocation + result parsing
-  cbmc.py               CBMC invocation + counterexample parsing
-  llm.py                LLM client (Anthropic, OpenRouter-compatible providers)
-  spec.py               Spec dataclass + serialization
-  evaluation/           Baselines, metrics, corpus, report generation
-  backends/             BMCBackend ABC, CBMCBackend, KaniBackend
-examples/               Synthetic and real-world C / Rust targets
-tests/                  Unit and integration tests
+  pipeline.py · config.py · spec.py · llm.py     orchestrator, config, spec model, LLM client
+  spec_generator.py · spec_quality.py            Phase 1 spec gen; Phase 4 quality checks
+  bmc_engine.py · cbmc.py · kani.py · backends/  Phase 2 solver runners (CBMC / Kani)
+  cex_validator.py · dynamic_validator.py        Phase 3 classification, feasibility, runtime confirm
+  realism_checker.py · bug_reporter.py           Phase 3 realism audit; confidence-tier reporting
+  harness_generator.py · dsl_to_cbmc.py          harness synthesis; spec-DSL → CBMC translation
+  parser.py · rust_parser.py · source_parser.py  tree-sitter C/Rust parsers + dispatch
+  feedback_loop.py · flag_selector.py · domain_analyzer.py · preprocessor.py   optional stages
+  evaluation/                                    baselines, metrics, corpus, reports
+examples/   synthetic + real-world C / Rust targets
+tests/      unit and integration tests
 ```
 
 ## Status
