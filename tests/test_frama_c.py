@@ -2,7 +2,8 @@
 (everything that doesn't need the frama-c binary)."""
 from bmc_agent.frama_c import (
     insert_loop_invariants_acsl, insert_contract_acsl, parse_wp_output, run_wp,
-    frama_c_available, WPResult, function_assigns_nothing,
+    frama_c_available, WPResult, function_assigns_nothing, function_assigns_clause,
+    function_frame_precondition,
 )
 
 
@@ -19,6 +20,30 @@ def test_function_assigns_nothing_pure_vs_impure():
     # comparisons / unknown function must not be misread as stores
     assert function_assigns_nothing("int cmp(int *p,int *q){ return *p == *q; }", "cmp")
     assert not function_assigns_nothing("int h(int x){ return x; }", "missing")
+
+
+def test_function_assigns_clause_infers_common_frames():
+    assert function_assigns_clause("int add(int *p,int *q){ return *p + *q; }", "add") == \
+        "\\nothing"
+    assert function_assigns_clause("void set(int *p,int v){ *p = v; }", "set") == "*p"
+    assert function_assigns_clause("void set(int *p,int v){ (*p) = v; }", "set") == "*p"
+    assert function_assigns_clause("void inc(int *p){ (*p)++; }", "inc") == "*p"
+    assert function_assigns_clause("void div(unsigned*q,unsigned*r){ *q=1; *r=2; }", "div") == \
+        "*q, *r"
+    assert function_assigns_clause("void z(int *a,int i){ a[i] = 1; }", "z") == "a[..]"
+    assert function_assigns_clause("void s(struct T *p){ p->f = 1; }", "s") == "p->f"
+    assert function_assigns_clause("int h(int x){ return x; }", "missing") == ""
+
+
+def test_function_frame_precondition_infers_pointer_separation():
+    src = "void div(unsigned*q,unsigned*r){ *q=1; *r=2; }"
+    assert function_frame_precondition(src, "div", "*q, *r") == "\\separated(q, r)"
+
+    src = "int incr(int *a, int const *b){ *a += *b; return *a; }"
+    assert function_frame_precondition(src, "incr", "*a") == "\\separated(a, b)"
+
+    src = "int add(int *a, int *b){ return *a + *b; }"
+    assert function_frame_precondition(src, "add", "\\nothing") == ""
 
 
 def test_insert_loop_invariants_acsl_before_loop():

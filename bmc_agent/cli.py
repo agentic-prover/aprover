@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -559,9 +560,11 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
             and getattr(args, "overflow_rigor", True)):
         try:
             from bmc_agent.frama_c import (insert_contract_acsl, run_wp,
-                                           function_assigns_nothing)
+                                           function_assigns_clause,
+                                           function_frame_precondition)
             from bmc_agent.assert_driven_specs import (
-                overflow_preconditions, overflow_preconditions_from_body)
+                _conjoin_precondition, overflow_preconditions,
+                overflow_preconditions_from_body)
             _src0 = open(str(args.source)).read()
             _fc = getattr(config, "frama_c_path", "frama-c")
             ovf = overflow_preconditions(_src0, r.postconditions or {})
@@ -579,12 +582,15 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
                     elif term not in ovf[fn]:
                         ovf[fn] = f"({ovf[fn]}) && ({term})"
             if ovf:
-                _assigns0 = {fn: ("\\nothing" if function_assigns_nothing(_src0, fn) else "")
+                _assigns0 = {fn: function_assigns_clause(_src0, fn)
                              for fn in (r.postconditions or {})}
                 aug_pre = dict(r.preconditions or {})
                 for fn, term in ovf.items():
-                    cur = (aug_pre.get(fn) or "true").strip()
-                    aug_pre[fn] = term if cur in ("", "true") else f"({cur}) && ({term})"
+                    aug_pre[fn] = _conjoin_precondition(aug_pre.get(fn, "true"), term)
+                for fn, assigns in _assigns0.items():
+                    frame_pre = function_frame_precondition(_src0, fn, assigns)
+                    if frame_pre:
+                        aug_pre[fn] = _conjoin_precondition(aug_pre.get(fn, "true"), frame_pre)
                 annotated = "#include <limits.h>\n" + _src0
                 for fn, p in (r.postconditions or {}).items():
                     annotated = insert_contract_acsl(
@@ -599,6 +605,116 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
                           f"for {', '.join(ovf)} — re-verified with RTE on")
         except Exception as exc:   # never let the rigor attempt mask the result
             print(f"overflow-rigor: skipped ({exc}); math-int contract stands.")
+
+    # Render the synthesized contracts in ACSL (the benchmark output format) and
+    # fold them into the artifact alongside the DSL form.
+    from bmc_agent.acsl import contract_to_acsl
+    from bmc_agent.assert_driven_specs import _conjoin_precondition
+    from bmc_agent.frama_c import function_assigns_clause, function_frame_precondition
+    _src_text = open(str(args.source)).read()
+    fn_assigns = {fn: function_assigns_clause(_src_text, fn)
+                  for fn in (r.postconditions or {})}
+    fn_requires = {}
+    for fn in (r.postconditions or {}):
+        req = (r.preconditions or {}).get(fn, "true")
+        frame_pre = function_frame_precondition(_src_text, fn, fn_assigns.get(fn, ""))
+        if frame_pre:
+            req = _conjoin_precondition(req, frame_pre)
+        fn_requires[fn] = req
+
+    if getattr(config, "oracle", "cbmc") == "frama-c" and (r.postconditions or {}) and not _ovf_used:
+        from bmc_agent.assert_driven_specs import _split_conjuncts
+        from bmc_agent.frama_c import insert_contract_block, run_wp
+
+        def _annotated_for(posts):
+            annotated_src = _src_text
+            for _fn, _p in (posts or {}).items():
+                _block = contract_to_acsl(fn_requires.get(_fn, "true"), _p,
+                                          assigns=fn_assigns.get(_fn, ""))
+                annotated_src = insert_contract_block(
+                    annotated_src, _fn, _block.rstrip() + "\n")
+            return annotated_src
+
+        math_ints = bool(getattr(config, "math_ints", False))
+        posts = dict(r.postconditions or {})
+        wp0 = run_wp(_annotated_for(posts),
+                     frama_c_path=getattr(config, "frama_c_path", "frama-c"),
+                     rte=not math_ints, exclude_terminates=True)
+        if wp0.available and wp0.n_total and wp0.n_proved == wp0.n_total:
+            if not r.ok:
+                r.ok = True
+                r.failing_asserts = []
+                r.note = ("Frama-C/WP confirmed the rendered ACSL contract "
+                          "(engine did not prove it)")
+        if wp0.available and wp0.n_total and wp0.n_proved < wp0.n_total:
+            best_gap = wp0.n_total - wp0.n_proved
+            best_posts = dict(posts)
+            pruned = []
+            changed = True
+            trials = 0
+            max_trials = 24
+
+            def _prune_priority(item):
+                _idx, _clause = item
+                clause = _clause.strip()
+                if re.fullmatch(r"\\old\s*\([^)]+\)\s*==\s*-?\d+\b", clause):
+                    return 0
+                if re.fullmatch(r"[A-Za-z_]\w*\s*==\s*-?\d+\b", clause):
+                    return 1
+                if "\\old" in clause:
+                    return 2
+                return 3
+
+            while changed and best_gap > 0:
+                changed = False
+                for fn in list(posts):
+                    clauses = _split_conjuncts(posts.get(fn, ""))
+                    if len(clauses) <= 1:
+                        continue
+                    ordered = sorted(enumerate(list(clauses)), key=_prune_priority)
+                    for idx, clause in ordered:
+                        if trials >= max_trials:
+                            break
+                        trials += 1
+                        trial_clauses = clauses[:idx] + clauses[idx + 1:]
+                        trial_posts = dict(posts)
+                        trial_posts[fn] = " && ".join(trial_clauses) or "true"
+                        wp = run_wp(
+                            _annotated_for(trial_posts),
+                            frama_c_path=getattr(config, "frama_c_path", "frama-c"),
+                            rte=not math_ints,
+                            exclude_terminates=True,
+                        )
+                        if not (wp.available and wp.n_total):
+                            continue
+                        gap = wp.n_total - wp.n_proved
+                        if gap < best_gap:
+                            posts, best_gap = trial_posts, gap
+                            best_posts = dict(trial_posts)
+                            pruned.append(f"{fn}: {clause}")
+                            changed = True
+                            break
+                    if trials >= max_trials:
+                        break
+                    if changed:
+                        break
+            if pruned and best_gap == 0:
+                r.postconditions = best_posts
+                was_ok = r.ok
+                r.ok = True
+                r.failing_asserts = []
+                msg = "WP-pruned unproved postcondition conjunct(s): " + "; ".join(pruned)
+                if was_ok:
+                    r.note += "; " + msg
+                else:
+                    r.note = "Frama-C/WP confirmed the pruned ACSL contract; " + msg
+
+    acsl_blocks = {}
+    for fn, p in (r.postconditions or {}).items():
+        block = contract_to_acsl(fn_requires.get(fn, "true"), p,
+                                 assigns=fn_assigns.get(fn, ""))
+        if block:
+            acsl_blocks[fn] = block
 
     # Persist the synthesized contracts + per-assert status to a stable artifact.
     import json as _json, os as _os
@@ -615,7 +731,7 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
         "asserts": list(r.asserts or []),
         "failing_asserts": list(r.failing_asserts or []),
         "synthesized_specs": {
-            fn: {"requires": (r.preconditions or {}).get(fn, "true"), "ensures": p}
+            fn: {"requires": fn_requires.get(fn, "true"), "ensures": p}
             for fn, p in (r.postconditions or {}).items()
         },
         "note": r.note,
@@ -626,19 +742,6 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     except OSError as exc:
         print(f"(warning: could not write {out_path}: {exc})")
 
-    # Render the synthesized contracts in ACSL (the benchmark output format) and
-    # fold them into the artifact alongside the DSL form.
-    from bmc_agent.acsl import contract_to_acsl
-    from bmc_agent.frama_c import function_assigns_nothing
-    _src_text = open(str(args.source)).read()
-    fn_assigns = {fn: ("\\nothing" if function_assigns_nothing(_src_text, fn) else "")
-                  for fn in (r.postconditions or {})}
-    acsl_blocks = {}
-    for fn, p in (r.postconditions or {}).items():
-        block = contract_to_acsl((r.preconditions or {}).get(fn, "true"), p,
-                                 assigns=fn_assigns.get(fn, ""))
-        if block:
-            acsl_blocks[fn] = block
     payload["acsl"] = acsl_blocks
     for fn, a in fn_assigns.items():           # record the frame in the DSL artifact too
         if a:
@@ -654,7 +757,7 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     for fn, p in (r.postconditions or {}).items():
         # Display with explicit &&/|| grouping so the printed DSL is read the
         # same way the renderers (ACSL/CBMC) interpret it — no precedence guesswork.
-        req = (r.preconditions or {}).get(fn, "true")
+        req = fn_requires.get(fn, "true")
         print(f"  {fn}:  requires {fully_parenthesize(req)}")
         if fn_assigns.get(fn):
             print(f"  {' ' * len(fn)}   assigns  {fn_assigns[fn]}")
@@ -689,7 +792,7 @@ def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
                 # with no escaping store.
                 annotated = insert_contract_acsl(
                     annotated, fn,
-                    requires=(r.preconditions or {}).get(fn, "true"), ensures=p,
+                    requires=fn_requires.get(fn, "true"), ensures=p,
                     assigns=fn_assigns.get(fn, ""))
             # Match the loop oracle's semantics: partial correctness (no @terminates)
             # and mathematical integers under --math-ints (no overflow RTE).

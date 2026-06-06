@@ -8,6 +8,9 @@ from bmc_agent.loop_invariants import (
     modified_vars, build_havoc_abstraction, _has_literal_bound, _inject_no_overflow,
     _has_array_writes, _filter_in_scope, _enclosing_function, _loop_function_callees,
     _is_non_behavioral, _minimize_invariants, _loop_assigns, _enclosing_function_source,
+    array_map_contracts, array_map_invariants, array_map_loop_assigns, array_map_specs,
+    conditional_array_set_contracts, conditional_array_set_invariants,
+    conditional_array_set_loop_assigns, conditional_array_set_specs,
 )
 
 
@@ -19,17 +22,68 @@ def test_loop_assigns_includes_for_header_counter():
     assert _loop_assigns(lp) == "i, A[..]"
 
 
-def test_loop_assigns_excludes_inline_declared_counter():
-    # `for (int i = ...)` declares i loop-locally → it is NOT part of the frame.
+def test_loop_assigns_includes_inline_declared_counter():
+    # Frama-C/WP expects the loop-local counter in the frame too; AutoSpec's
+    # verified annotations include it.
     src = "void g(){ int A[8]; for (int i = 0; i < 8; i++) { A[i] = i; } }"
     (lp,) = find_loops(src)
-    assert _loop_assigns(lp) == "A[..]"
+    assert _loop_assigns(lp) == "i, A[..]"
 
 
 def test_loop_assigns_while_counter_in_body():
     src = "void f(int n, int *a){ int s = 0, p = 0; while (p < n) { s += a[p]; p++; } }"
     (lp,) = find_loops(src)
     assert _loop_assigns(lp) == "p, s"
+
+
+def test_array_map_spec_detects_additive_update():
+    src = "void inc(int *a,int n,int c){ for(int i=0;i<n;i++){ a[i]=a[i]+c; } }"
+    specs = array_map_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.fn == "inc"
+    assert spec.array == "a"
+    assert spec.index == "i"
+    assert spec.bound == "n"
+    assert spec.value_at_k == "\\at(a[k], Pre) + c"
+    assert array_map_invariants(spec) == [
+        "0 <= i <= n",
+        "forall k : 0 <= k < i ==> a[k] == \\at(a[k], Pre) + c",
+        "forall k : i <= k < n ==> a[k] == \\at(a[k], Pre)",
+    ]
+    assert array_map_loop_assigns(spec) == "i, a[0 .. n-1]"
+    assert "assigns a[0 .. n-1];" in array_map_contracts(src, find_loops(src), "main")["inc"]
+
+
+def test_array_map_spec_detects_multiplicative_while_update():
+    src = "void dbl(int *a,unsigned n){ int p=0; while(p<n){ a[p] = a[p] * 2; p=p+1; } }"
+    specs = array_map_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.fn == "dbl"
+    assert spec.index == "p"
+    assert spec.bound == "n"
+    assert spec.value_at_k == "\\at(a[k], Pre) * 2"
+
+
+def test_conditional_array_set_detects_branch_update():
+    src = (
+        "void zero_even(int *a,int n){"
+        " for(int i=0;i<n;i++){ if(i%2==0) a[i]=0; } }"
+    )
+    specs = conditional_array_set_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.fn == "zero_even"
+    assert spec.array == "a"
+    assert spec.index == "i"
+    assert spec.bound == "n"
+    assert spec.condition_at_k == "k%2==0"
+    assert spec.value_at_k == "0"
+    assert conditional_array_set_invariants(spec) == [
+        "0 <= i <= n",
+        "forall k : 0 <= k < i && (k%2==0) ==> a[k] == 0",
+    ]
+    assert conditional_array_set_loop_assigns(spec) == "i, a[0 .. n-1]"
+    assert "assigns a[0 .. n-1];" in conditional_array_set_contracts(
+        src, find_loops(src), "main")["zero_even"]
 
 IC3 = (
     "void main(){\n"

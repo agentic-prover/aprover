@@ -135,10 +135,99 @@ def _find_brace_block(source: str, open_idx: int) -> int:
 # array element (`x[i] =`), or struct field (`x->f =` / `x.f =`), incl. compound
 # assignment and ++/--. Writes to plain local scalars don't touch the frame.
 _MEM_STORE_RX = re.compile(
-    r"(?:\*\s*[A-Za-z_]\w*|[A-Za-z_]\w*\s*\[[^\]]*\]|[A-Za-z_]\w*\s*(?:->|\.)\s*[A-Za-z_]\w*)"
+    r"(?:\*\s*\(?\s*[A-Za-z_]\w*\s*\)?|\(\s*\*\s*[A-Za-z_]\w*\s*\)|[A-Za-z_]\w*\s*\[[^\]]*\]|[A-Za-z_]\w*\s*(?:->|\.)\s*[A-Za-z_]\w*)"
     r"\s*(?:[-+*/%&|^]?=(?!=)|<<=|>>=)"
     r"|(?:\+\+|--)\s*\*?\s*[A-Za-z_]\w*\s*(?:\[|->|\.)"
-    r"|\*\s*[A-Za-z_]\w*\s*(?:\+\+|--)")
+    r"|\*\s*\(?\s*[A-Za-z_]\w*\s*\)?\s*(?:\+\+|--)"
+    r"|\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*(?:\+\+|--)")
+
+_ASSIGN_OP = r"(?:[-+*/%&|^]?=(?!=)|<<=|>>=)"
+
+
+def _function_body(source: str, fn: str) -> str | None:
+    m = re.search(_FUNC_DEF_TMPL.format(name=re.escape(fn)), source)
+    if not m:
+        return None
+    open_brace = source.index("{", m.end() - 1)
+    close = _find_brace_block(source, open_brace)
+    if close < 0:
+        return None
+    return source[open_brace + 1:close]
+
+
+def _function_signature(source: str, fn: str) -> str | None:
+    m = re.search(_FUNC_DEF_TMPL.format(name=re.escape(fn)), source)
+    if not m:
+        return None
+    open_brace = source.index("{", m.end() - 1)
+    return source[m.start():open_brace]
+
+
+def _pointer_params(source: str, fn: str) -> list[str]:
+    sig = _function_signature(source, fn)
+    if not sig:
+        return []
+    open_paren = sig.find("(")
+    close_paren = sig.rfind(")")
+    if open_paren < 0 or close_paren < open_paren:
+        return []
+    params = sig[open_paren + 1:close_paren]
+    out: list[str] = []
+    for p in params.split(","):
+        p = p.strip()
+        if not p or p == "void":
+            continue
+        if "*" not in p and "[]" not in p:
+            continue
+        ids = re.findall(r"[A-Za-z_]\w*", p)
+        if ids:
+            out.append(ids[-1])
+    return out
+
+
+def _store_targets(body: str) -> list[str]:
+    """Best-effort ACSL frame targets for escaping stores in a function body."""
+    targets: list[str] = []
+
+    def add(target: str) -> None:
+        target = re.sub(r"\s+", "", target)
+        if target and target not in targets:
+            targets.append(target)
+
+    for m in re.finditer(rf"\*\s*\(?\s*([A-Za-z_]\w*)\s*\)?\s*{_ASSIGN_OP}", body):
+        add(f"*{m.group(1)}")
+    for m in re.finditer(rf"\(\s*\*\s*([A-Za-z_]\w*)\s*\)\s*{_ASSIGN_OP}", body):
+        add(f"*{m.group(1)}")
+    for m in re.finditer(r"\*\s*\(?\s*([A-Za-z_]\w*)\s*\)?\s*(?:\+\+|--)", body):
+        add(f"*{m.group(1)}")
+    for m in re.finditer(r"(?:\+\+|--)\s*\*\s*\(?\s*([A-Za-z_]\w*)\s*\)?", body):
+        add(f"*{m.group(1)}")
+
+    for m in re.finditer(rf"\b([A-Za-z_]\w*)\s*\[[^\]]+\]\s*{_ASSIGN_OP}", body):
+        add(f"{m.group(1)}[..]")
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\[[^\]]+\]\s*(?:\+\+|--)", body):
+        add(f"{m.group(1)}[..]")
+    for m in re.finditer(r"(?:\+\+|--)\s*\b([A-Za-z_]\w*)\s*\[[^\]]+\]", body):
+        add(f"{m.group(1)}[..]")
+
+    for m in re.finditer(rf"\b([A-Za-z_]\w*)\s*->\s*([A-Za-z_]\w*)\s*{_ASSIGN_OP}", body):
+        add(f"{m.group(1)}->{m.group(2)}")
+    for m in re.finditer(rf"\b([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)\s*{_ASSIGN_OP}", body):
+        add(f"{m.group(1)}.{m.group(2)}")
+    return targets
+
+
+def _target_base(target: str) -> str:
+    m = re.match(r"\*([A-Za-z_]\w*)$", target)
+    if m:
+        return m.group(1)
+    m = re.match(r"([A-Za-z_]\w*)\[\.\.\]$", target)
+    if m:
+        return m.group(1)
+    m = re.match(r"([A-Za-z_]\w*)(?:->|\.)[A-Za-z_]\w*$", target)
+    if m:
+        return m.group(1)
+    return ""
 
 
 def function_assigns_nothing(source: str, fn: str) -> bool:
@@ -147,15 +236,52 @@ def function_assigns_nothing(source: str, fn: str) -> bool:
     Conservative: any escaping store (or inability to locate the body) => False, so
     we only ever ADD a sound frame, never claim a false one. Writes to plain local
     scalars are irrelevant to the frame and ignored."""
-    m = re.search(_FUNC_DEF_TMPL.format(name=re.escape(fn)), source)
-    if not m:
+    body = _function_body(source, fn)
+    if body is None:
         return False
-    open_brace = source.index("{", m.end() - 1)
-    close = _find_brace_block(source, open_brace)
-    if close < 0:
-        return False
-    body = source[open_brace + 1:close]
     return _MEM_STORE_RX.search(body) is None
+
+
+def function_assigns_clause(source: str, fn: str) -> str:
+    """Best-effort ACSL ``assigns`` frame for ``fn``.
+
+    Pure functions get ``\\nothing``. For direct escaping stores, emit a frame
+    clause instead of leaving it empty: an omitted ACSL frame means "may assign
+    everything", which makes modular caller proofs weaker. If the function cannot
+    be located or a store shape is too complex to map, return "" conservatively.
+    """
+    body = _function_body(source, fn)
+    if body is None:
+        return ""
+    if _MEM_STORE_RX.search(body) is None:
+        return "\\nothing"
+    targets = _store_targets(body)
+    return ", ".join(targets) if targets else ""
+
+
+def function_frame_precondition(source: str, fn: str, assigns: str = "") -> str:
+    """Best-effort alias precondition needed by precise pointer frames.
+
+    If a function writes through one pointer parameter and also has other pointer
+    parameters, postconditions about the written values or unchanged read-only
+    pointers are generally sound only for non-aliasing arguments. Emit pairwise
+    ``\\separated`` clauses for pointer params where at least one side is written.
+    """
+    ptrs = _pointer_params(source, fn)
+    if len(ptrs) < 2:
+        return ""
+    frame = assigns if assigns is not None else function_assigns_clause(source, fn)
+    written = {_target_base(t.strip()) for t in (frame or "").split(",")}
+    written.discard("")
+    written &= set(ptrs)
+    if not written:
+        return ""
+    clauses = []
+    for i, a in enumerate(ptrs):
+        for b in ptrs[i + 1:]:
+            if a in written or b in written:
+                clauses.append(f"\\separated({a}, {b})")
+    return " && ".join(clauses)
 
 
 def insert_contract_acsl(source: str, fn: str, requires: str = "",

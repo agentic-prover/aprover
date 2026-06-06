@@ -720,7 +720,8 @@ def _mine_contracts(
     """
     from bmc_agent.source_parser import parse_source_file
     from bmc_agent.frama_c import (
-        function_assigns_nothing, insert_contract_acsl, run_wp)
+        function_assigns_clause, function_frame_precondition,
+        insert_contract_acsl, run_wp)
 
     parsed = parse_source_file(str(source_file), source_text=src)
     entry = _resolve_entry(parsed, entry)        # no goals → unchanged (usually 'main')
@@ -755,8 +756,11 @@ def _mine_contracts(
     oracle = getattr(config, "oracle", "cbmc")
     math_ints = bool(getattr(config, "math_ints", False))
     fc_path = getattr(config, "frama_c_path", "frama-c")
-    fn_assigns = {c: ("\\nothing" if function_assigns_nothing(src, c) else "")
-                  for c in post}
+    fn_assigns = {c: function_assigns_clause(src, c) for c in post}
+    for c, assigns in fn_assigns.items():
+        frame_pre = function_frame_precondition(src, c, assigns)
+        if frame_pre:
+            pre[c] = _conjoin_precondition(pre.get(c, "true"), frame_pre)
 
     def _conjunct_sound(c: str, clause: str) -> bool:
         """Is a single postcondition clause implied by the body of `c`? Checked with
@@ -769,7 +773,8 @@ def _mine_contracts(
           the clause), falling back to an LLM-built harness for non-scalar params."""
         if oracle == "frama-c":
             annotated = insert_contract_acsl(
-                src, c, requires="true", ensures=clause, assigns=fn_assigns.get(c, ""))
+                src, c, requires=pre.get(c, "true"), ensures=clause,
+                assigns=fn_assigns.get(c, ""))
             wp = run_wp(annotated, frama_c_path=fc_path,
                         rte=not math_ints, exclude_terminates=True)
             if wp.available:

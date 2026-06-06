@@ -45,6 +45,21 @@ def test_contract_block_drops_vacuous():
     assert "ensures ((\\result == x) || (\\result == y));" in block
 
 
+def test_contract_block_strips_c_integer_suffixes():
+    block = contract_to_acsl(
+        "(-2147483647LL - 1LL) <= (-(1LL * val)) && (-(1LL * val)) <= 2147483647LL",
+        "result == val",
+    )
+    assert "LL" not in block
+    assert "requires (-2147483647 - 1) <= (-(1 * val));" in block
+    assert "requires (-(1 * val)) <= 2147483647;" in block
+
+
+def test_contract_block_deduplicates_rendered_clauses():
+    block = contract_to_acsl("true", "result == x && result == x")
+    assert block.count("ensures \\result == x;") == 1
+
+
 def test_contract_splits_conjuncts_and_drops_prose():
     block = contract_to_acsl(
         "true",
@@ -84,3 +99,9 @@ def test_loop_invariants_block():
     assert "loop invariant i <= 1024;" in block
     assert "loop invariant \\forall integer k; (k < i) ==> (A[k] == k);" in block
     assert "loop assigns i, A[0 .. 1023];" in block
+
+
+def test_loop_invariants_render_old_as_at_pre():
+    block = loop_invariants_to_acsl(["forall k : 0 <= k < i ==> a[k] == old(a[n-1-k])"])
+    assert "\\old" not in block
+    assert "\\at(a[n-1-k], Pre)" in block

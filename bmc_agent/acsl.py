@@ -152,6 +152,10 @@ def _normalize_logical_syntax(expr: str) -> str:
     """Normalize common LLM DSL variants before ACSL rendering."""
     expr = (expr or "").strip()
     expr = expr.replace("≤", "<=").replace("≥", ">=").replace("∧", "&&").replace("∨", "||")
+    # CBMC-side overflow guards use C integer suffixes (`1LL`, `2147483647LL`).
+    # ACSL logic integer expressions do not need those suffixes, and older
+    # Frama-C parsers reject some suffixed literals inside annotations.
+    expr = re.sub(r"\b(\d+)(?:ULL|LLU|LL|UL|LU|U|L)\b", r"\1", expr)
     # LLMs often emit `=>`; ACSL uses `==>`. Do not touch >=, <=, !=, ==>.
     expr = re.sub(r"(?<![<>=!])=>(?![=])", "==>", expr)
     return expr
@@ -288,7 +292,7 @@ def condition_to_acsl_clauses(expr: str) -> list[str]:
         if _has_obvious_prose(part):
             continue
         rendered = expr_to_acsl(part)
-        if rendered and rendered not in ("\\true", "true"):
+        if rendered and rendered not in ("\\true", "true") and rendered not in clauses:
             clauses.append(rendered)
     return clauses
 
@@ -307,11 +311,43 @@ def contract_to_acsl(requires: str = "", ensures: str = "", assigns: str = "") -
     return "/*@\n" + "\n".join(lines) + "\n*/" if lines else ""
 
 
+def _old_to_loop_pre(expr: str) -> str:
+    """Loop invariants cannot use ``\\old``; rewrite it to ``\\at(..., Pre)``."""
+    out = []
+    i = 0
+    marker = "\\old("
+    while i < len(expr):
+        j = expr.find(marker, i)
+        if j < 0:
+            out.append(expr[i:])
+            break
+        out.append(expr[i:j])
+        start = j + len(marker)
+        depth = 1
+        k = start
+        while k < len(expr) and depth:
+            if expr[k] == "(":
+                depth += 1
+            elif expr[k] == ")":
+                depth -= 1
+            k += 1
+        if depth:
+            out.append(expr[j:])
+            break
+        inner = expr[start:k - 1]
+        out.append(f"\\at({inner}, Pre)")
+        i = k
+    return "".join(out)
+
+
 def loop_invariants_to_acsl(invariants: list, assigns: str = "",
                             variant: str = "") -> str:
     """Render a loop's invariants (DSL exprs) as an ACSL loop-annotation block.
     ``variant`` (when given) adds a ``loop variant`` clause for termination."""
-    lines = [f"  loop invariant {expr_to_acsl(inv)};" for inv in (invariants or []) if inv]
+    lines = [
+        f"  loop invariant {_old_to_loop_pre(expr_to_acsl(inv))};"
+        for inv in (invariants or []) if inv
+    ]
     if assigns:
         lines.append(f"  loop assigns {assigns};")
     if variant:

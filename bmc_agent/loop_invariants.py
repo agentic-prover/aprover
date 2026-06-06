@@ -708,16 +708,26 @@ def _loop_assigns(lp) -> str:
     The scan covers the body AND, for a ``for`` loop, the header's init/increment
     clauses — the loop COUNTER is updated there (``i++``), not in the body. Omitting
     it makes the frame unsound (WP assumes ``i`` is unchanged while the loop mutates
-    it), so preservation of ``i <= N`` and the whole goal fail. A counter DECLARED
-    in the init (``for (int i = ...``) is loop-local and correctly excluded by
-    modified_vars' declared-variable filter."""
+    it), so preservation of ``i <= N`` and the whole goal fail. Frama-C also expects
+    a counter declared in the init (``for (int i = ...``) to be listed in the loop
+    frame; AutoSpec's verified annotations do this as well."""
     scan = lp.body
+    header_scalars = []
     if getattr(lp, "kind", "") == "for":
         parts = (lp.guard or "").split(";")
         init = parts[0] if parts else ""
         incr = parts[2] if len(parts) > 2 else ""
+        for rx in (
+            r"(?:\+\+\s*([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*\+\+)",
+            r"\b([A-Za-z_]\w*)\s*(?:[-+*/%]?=|<<=|>>=)",
+        ):
+            for m in re.finditer(rx, incr):
+                name = next((g for g in m.groups() if g), "")
+                if name and name not in header_scalars:
+                    header_scalars.append(name)
         scan = f"{lp.body}\n{init};\n{incr};"
     scalars, arrays = modified_vars(scan)
+    scalars = list(dict.fromkeys(header_scalars + scalars))
     return ", ".join(scalars + [f"{a}[..]" for a in arrays])
 
 
@@ -752,6 +762,27 @@ class AccumulatorSpec:
     @property
     def op(self) -> str:
         return "+" if self.kind == "sum" else "*"
+
+
+@dataclass
+class ArrayMapSpec:
+    loop_ord: int
+    fn: str
+    array: str
+    index: str
+    bound: str
+    value_at_k: str
+
+
+@dataclass
+class ConditionalArraySetSpec:
+    loop_ord: int
+    fn: str
+    array: str
+    index: str
+    bound: str
+    condition_at_k: str
+    value_at_k: str
 
 
 _SCALAR_TYPES = {"int", "char", "short", "long", "unsigned", "signed",
@@ -989,6 +1020,227 @@ def accumulator_contracts(source: str, loops: list, entry: str,
     return out
 
 
+def _loop_counter_bound(lp: LoopSite, fn_src: str) -> tuple[str, str] | None:
+    """Recognize simple 0..bound counting loops."""
+    if lp.kind == "for":
+        parts = [p.strip() for p in (lp.guard or "").split(";")]
+        if len(parts) != 3:
+            return None
+        init, cond, inc = parts
+        m = re.search(r"(?:\b[A-Za-z_]\w*\s+)*\b([A-Za-z_]\w*)\s*=\s*0\b", init)
+        if not m:
+            return None
+        idx = m.group(1)
+        m = re.fullmatch(rf"{re.escape(idx)}\s*<\s*([A-Za-z_]\w*|\d+)", cond)
+        if not m:
+            return None
+        bound = m.group(1)
+        if not re.search(rf"(?:\+\+\s*{re.escape(idx)}|{re.escape(idx)}\s*\+\+|"
+                         rf"{re.escape(idx)}\s*=\s*{re.escape(idx)}\s*\+\s*1|"
+                         rf"{re.escape(idx)}\s*\+=\s*1)", inc):
+            return None
+        return idx, bound
+
+    if lp.kind == "while":
+        m = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*<\s*([A-Za-z_]\w*|\d+)\s*", lp.guard or "")
+        if not m:
+            return None
+        idx, bound = m.group(1), m.group(2)
+        prefix = fn_src.split(lp.body, 1)[0]
+        if not re.search(rf"\b{re.escape(idx)}\s*=\s*0\s*;", prefix):
+            return None
+        if not re.search(rf"(?:\+\+\s*{re.escape(idx)}|{re.escape(idx)}\s*\+\+|"
+                         rf"{re.escape(idx)}\s*=\s*{re.escape(idx)}\s*\+\s*1|"
+                         rf"{re.escape(idx)}\s*\+=\s*1)\s*;", lp.body):
+            return None
+        return idx, bound
+    return None
+
+
+def _array_map_rhs_at_k(array: str, idx: str, rhs: str) -> str | None:
+    rhs = rhs.strip()
+    arr_i = rf"{re.escape(array)}\s*\[\s*{re.escape(idx)}\s*\]"
+    patterns = [
+        (rf"^{arr_i}\s*\+\s*(.+)$", rf"\at({array}[k], Pre) + {{}}"),
+        (rf"^(.+)\s*\+\s*{arr_i}$", rf"{{}} + \at({array}[k], Pre)"),
+        (rf"^{arr_i}\s*\*\s*(.+)$", rf"\at({array}[k], Pre) * {{}}"),
+        (rf"^(.+)\s*\*\s*{arr_i}$", rf"{{}} * \at({array}[k], Pre)"),
+        (rf"^{re.escape(idx)}\s*\*\s*(.+)$", "k * {}"),
+        (rf"^(.+)\s*\*\s*{re.escape(idx)}$", "{} * k"),
+        (rf"^{re.escape(idx)}\s*\+\s*(.+)$", "k + {}"),
+        (rf"^(.+)\s*\+\s*{re.escape(idx)}$", "{} + k"),
+    ]
+    for rx, tmpl in patterns:
+        m = re.match(rx, rhs)
+        if m:
+            other = m.group(1).strip()
+            if re.search(r"\b[A-Za-z_]\w*\s*\(", other):
+                return None
+            return tmpl.format(other)
+    return None
+
+
+def detect_array_map(lp: LoopSite, source: str) -> ArrayMapSpec | None:
+    """Detect simple array-map loops and synthesize an AutoSpec-style contract.
+
+    Covers loops such as ``a[i] = a[i] + c`` and ``a[p] = a[p] * 2``. These are a
+    common ACSL benchmark shape where the caller proof needs both a function
+    contract and a loop invariant; a bare loop invariant is not enough modularly.
+    """
+    fn = _enclosing_function(source, lp.start_offset)
+    fn_src = _enclosing_function_source(source, lp.start_offset) or source
+    if not fn:
+        return None
+    counted = _loop_counter_bound(lp, fn_src)
+    if not counted:
+        return None
+    idx, bound = counted
+    assign_rx = re.compile(
+        rf"\b([A-Za-z_]\w*)\s*\[\s*{re.escape(idx)}\s*\]\s*=\s*([^;]+);")
+    matches = assign_rx.findall(lp.body)
+    if len(matches) != 1:
+        return None
+    array, rhs = matches[0]
+    value_at_k = _array_map_rhs_at_k(array, idx, rhs)
+    if not value_at_k:
+        return None
+    return ArrayMapSpec(lp.ordinal, fn, array, idx, bound, value_at_k)
+
+
+def array_map_specs(source: str, loops: list) -> dict:
+    out = {}
+    for lp in loops:
+        spec = detect_array_map(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
+def array_map_invariants(spec: ArrayMapSpec) -> list[str]:
+    a, i, b, val = spec.array, spec.index, spec.bound, spec.value_at_k
+    return [
+        f"0 <= {i} <= {b}",
+        f"forall k : 0 <= k < {i} ==> {a}[k] == {val}",
+        f"forall k : {i} <= k < {b} ==> {a}[k] == \\at({a}[k], Pre)",
+    ]
+
+
+def array_map_contract_acsl(spec: ArrayMapSpec) -> str:
+    a, b, val = spec.array, spec.bound, spec.value_at_k
+    lines = [
+        f"  requires {b} >= 0;",
+        f"  requires \\valid({a} + (0 .. {b}-1));",
+        f"  assigns {a}[0 .. {b}-1];",
+        f"  ensures \\forall integer k; 0 <= k < {b} ==> {a}[k] == {val};",
+    ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+def array_map_loop_assigns(spec: ArrayMapSpec) -> str:
+    return f"{spec.index}, {spec.array}[0 .. {spec.bound}-1]"
+
+
+def array_map_contracts(source: str, loops: list, entry: str) -> dict:
+    out = {}
+    for spec in array_map_specs(source, loops).values():
+        if spec.fn and spec.fn != entry:
+            out[spec.fn] = array_map_contract_acsl(spec)
+    return out
+
+
+def _expr_at_k(expr: str, idx: str, array: str | None = None) -> str | None:
+    """Translate a simple C expression over the loop counter to ACSL over ``k``.
+
+    This intentionally accepts only side-effect-free scalar expressions. It is used
+    for deterministic array-update patterns, not as a general C-to-ACSL converter.
+    """
+    expr = expr.strip()
+    if re.search(r"\b[A-Za-z_]\w*\s*\(", expr):
+        return None
+    if array:
+        expr = re.sub(
+            rf"\b{re.escape(array)}\s*\[\s*{re.escape(idx)}\s*\]",
+            rf"\\at({array}[k], Pre)",
+            expr,
+        )
+    return re.sub(rf"\b{re.escape(idx)}\b", "k", expr)
+
+
+def detect_conditional_array_set(lp: LoopSite, source: str) -> ConditionalArraySetSpec | None:
+    """Detect simple conditional array writes, e.g. ``if (i % 2 == 0) a[i] = 0``.
+
+    The generated spec states only what the branch guarantees for matching
+    indices; it does not claim non-matching elements are unchanged unless the
+    benchmark needs and proves such a property through the frame.
+    """
+    fn = _enclosing_function(source, lp.start_offset)
+    fn_src = _enclosing_function_source(source, lp.start_offset) or source
+    if not fn:
+        return None
+    counted = _loop_counter_bound(lp, fn_src)
+    if not counted:
+        return None
+    idx, bound = counted
+    if_rx = re.compile(
+        rf"\bif\s*\(([^()]+)\)\s*(?:\{{\s*)?"
+        rf"([A-Za-z_]\w*)\s*\[\s*{re.escape(idx)}\s*\]\s*=\s*([^;]+);",
+        re.S,
+    )
+    matches = if_rx.findall(lp.body or "")
+    if len(matches) != 1:
+        return None
+    condition, array, rhs = matches[0]
+    if len(re.findall(rf"\b[A-Za-z_]\w*\s*\[\s*{re.escape(idx)}\s*\]\s*=", lp.body or "")) != 1:
+        return None
+    condition_at_k = _expr_at_k(condition, idx)
+    value_at_k = _expr_at_k(rhs, idx, array)
+    if not condition_at_k or not value_at_k:
+        return None
+    return ConditionalArraySetSpec(lp.ordinal, fn, array, idx, bound,
+                                   condition_at_k, value_at_k)
+
+
+def conditional_array_set_specs(source: str, loops: list) -> dict:
+    out = {}
+    for lp in loops:
+        spec = detect_conditional_array_set(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
+def conditional_array_set_invariants(spec: ConditionalArraySetSpec) -> list[str]:
+    a, i, b, cond, val = (
+        spec.array, spec.index, spec.bound, spec.condition_at_k, spec.value_at_k)
+    return [
+        f"0 <= {i} <= {b}",
+        f"forall k : 0 <= k < {i} && ({cond}) ==> {a}[k] == {val}",
+    ]
+
+
+def conditional_array_set_contract_acsl(spec: ConditionalArraySetSpec) -> str:
+    a, b, cond, val = spec.array, spec.bound, spec.condition_at_k, spec.value_at_k
+    lines = [
+        f"  requires {b} >= 0;",
+        f"  requires \\valid({a} + (0 .. {b}-1));",
+        f"  assigns {a}[0 .. {b}-1];",
+        f"  ensures \\forall integer k; 0 <= k < {b} && ({cond}) ==> {a}[k] == {val};",
+    ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+def conditional_array_set_loop_assigns(spec: ConditionalArraySetSpec) -> str:
+    return f"{spec.index}, {spec.array}[0 .. {spec.bound}-1]"
+
+
+def conditional_array_set_contracts(source: str, loops: list, entry: str) -> dict:
+    out = {}
+    for spec in conditional_array_set_specs(source, loops).values():
+        if spec.fn and spec.fn != entry:
+            out[spec.fn] = conditional_array_set_contract_acsl(spec)
+    return out
+
+
 _FUNC_DEF_RX = re.compile(
     r"(?:^|[;}\s])([A-Za-z_]\w*)\s*\([^;{)]*\)\s*\{", re.M)
 # control keywords that also match name(...){ but are NOT function definitions
@@ -1099,6 +1351,10 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     math_ints = bool(getattr(config, "math_ints", False))
     loops = find_loops(source)
     assigns = {lp.ordinal: _loop_assigns(lp) for lp in loops}
+    assigns.update({ordn: array_map_loop_assigns(spec)
+                    for ordn, spec in array_map_specs(source, loops).items()})
+    assigns.update({ordn: conditional_array_set_loop_assigns(spec)
+                    for ordn, spec in conditional_array_set_specs(source, loops).items()})
     prepped = _prep_goals_acsl(source)
     # Overflow-rigorous accumulator mode: when every loop is an array fold (and
     # math-int mode is on), emit the no-overflow precondition + per-fold stepping-
@@ -1120,6 +1376,8 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     # Fn(a,0,n)`), so the caller's goal is discharged through the contract rather
     # than by inlining — drop those functions from the inline set.
     contracts = accumulator_contracts(source, loops, entry, overflow_safe=bool(ovf_specs))
+    contracts.update(array_map_contracts(source, loops, entry))
+    contracts.update(conditional_array_set_contracts(source, loops, entry))
     for fn, block in contracts.items():
         annotated = frama_c.insert_contract_block(annotated, fn, block)
     inline = [fn for fn in inline if fn not in contracts]
@@ -1662,6 +1920,8 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         # oracle — the LLM is skipped for them (it emits the unprovable `\sum`
         # aggregate or a bound-specific ladder). Other loops use the LLM proposer.
         acc_specs = accumulator_specs(src, loops) if oracle == "frama-c" else {}
+        map_specs = array_map_specs(src, loops) if oracle == "frama-c" else {}
+        cond_set_specs = conditional_array_set_specs(src, loops) if oracle == "frama-c" else {}
         annotations = {}
         for lp in loops:
             if lp.ordinal in acc_specs:
@@ -1669,6 +1929,16 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 logger.info("loop-inv: synthesized accumulator invariant for loop %d (%s fold "
                             "→ %s)", lp.ordinal, acc_specs[lp.ordinal].kind,
                             acc_specs[lp.ordinal].fn)
+            elif lp.ordinal in map_specs:
+                annotations[lp.ordinal] = array_map_invariants(map_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized array-map invariant for loop %d (%s)",
+                            lp.ordinal, map_specs[lp.ordinal].array)
+            elif lp.ordinal in cond_set_specs:
+                annotations[lp.ordinal] = conditional_array_set_invariants(
+                    cond_set_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized conditional array-set invariant for "
+                            "loop %d (%s)", lp.ordinal,
+                            cond_set_specs[lp.ordinal].array)
             else:
                 annotations[lp.ordinal] = _propose(
                     llm, config, lp, goals, fn_src_by_ord[lp.ordinal])
@@ -1742,6 +2012,12 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 # passed for this SATISFIED set), so showing it can't misrepresent.
                 disp_assigns = ({lp.ordinal: _loop_assigns(lp) for lp in loops}
                                 if oracle == "frama-c" else {})
+                if oracle == "frama-c":
+                    disp_assigns.update({ordn: array_map_loop_assigns(spec)
+                                         for ordn, spec in array_map_specs(src, loops).items()})
+                    disp_assigns.update({ordn: conditional_array_set_loop_assigns(spec)
+                                         for ordn, spec
+                                         in conditional_array_set_specs(src, loops).items()})
                 rendered = render_loop_invariants_acsl(annotations, loops, variants, disp_assigns)
                 # Show the complete synthesized spec above the loop invariants — the
                 # recursive-logic-function definition(s) then the function contract(s)
@@ -1750,6 +2026,8 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 live = [s for s in acc_specs.values() if s.fn in rendered]
                 live_fns = {s.fn for s in live}
                 prelude = "".join(accumulator_axiomatic(s) for s in live)
+                map_contract_blocks = array_map_contracts(src, loops, entry)
+                cond_set_contract_blocks = conditional_array_set_contracts(src, loops, entry)
                 if prelude and oracle == "frama-c":
                     if ovf_specs:
                         prelude = "#include <limits.h>\n" + prelude
@@ -1757,6 +2035,12 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                             src, loops, entry, overflow_safe=bool(ovf_specs)).items():
                         if any(lf in block for lf in live_fns):   # contract for a live fold
                             prelude += f"// contract for {fn}\n{block}"
+                if map_contract_blocks and oracle == "frama-c":
+                    for fn, block in map_contract_blocks.items():
+                        prelude += f"// contract for {fn}\n{block}"
+                if cond_set_contract_blocks and oracle == "frama-c":
+                    for fn, block in cond_set_contract_blocks.items():
+                        prelude += f"// contract for {fn}\n{block}"
                 note = "invariants are inductive and prove all goals"
                 if gate_flagged:
                     note += (" — NOTE goal-specific (non-behavioral): proof depends on "
