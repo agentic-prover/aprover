@@ -11,6 +11,14 @@ from bmc_agent.loop_invariants import (
     array_map_contracts, array_map_invariants, array_map_loop_assigns, array_map_specs,
     conditional_array_set_contracts, conditional_array_set_invariants,
     conditional_array_set_loop_assigns, conditional_array_set_specs,
+    array_scan_contracts, array_scan_invariants, array_scan_loop_assigns,
+    array_scan_specs,
+    array_max_contracts, array_max_invariants, array_max_loop_assigns,
+    array_max_specs,
+    conditional_count_contracts, conditional_count_invariants,
+    conditional_count_loop_assigns, conditional_count_specs,
+    countdown_counter_contracts, countdown_counter_invariants,
+    countdown_counter_loop_assigns, countdown_counter_specs,
 )
 
 
@@ -84,6 +92,184 @@ def test_conditional_array_set_detects_branch_update():
     assert conditional_array_set_loop_assigns(spec) == "i, a[0 .. n-1]"
     assert "assigns a[0 .. n-1];" in conditional_array_set_contracts(
         src, find_loops(src), "main")["zero_even"]
+
+
+def test_array_scan_detects_membership_contract():
+    src = (
+        "int search(int *a,int x,int n){"
+        " for(int p=0;p<n;p++){ if(x == a[p]) return 1; } return 0; }"
+        "void main(){ int a[3]={1,2,3}; int r=search(a,2,3); //@ assert r == 1; }"
+    )
+    specs = array_scan_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.fn == "search"
+    assert spec.kind == "bool_present"
+    assert spec.arrays == ("a",)
+    assert spec.condition_at_k == "x == a[k]"
+    assert spec.negated_condition_at_k == "x != a[k]"
+    assert array_scan_invariants(spec) == [
+        "0 <= p <= n",
+        "forall k : 0 <= k < p ==> x != a[k]",
+    ]
+    assert array_scan_loop_assigns(spec) == "p"
+    contract = array_scan_contracts(src, find_loops(src), "main")["search"]
+    assert "requires \\valid_read(a + (0 .. n-1));" in contract
+    assert "assigns \\nothing;" in contract
+    assert "\\exists integer k; 0 <= k < n && (x == a[k])" in contract
+
+
+def test_array_scan_detects_index_find_contract():
+    src = (
+        "int find(int *arr,int n,int x){ int i=0;"
+        " for(i=0;i<n;i++){ if(arr[i] == x){ return i; } } return -1; }"
+        "void main(){ int a[3]={1,2,3}; int r=find(a,3,2); //@ assert r == 1; }"
+    )
+    specs = array_scan_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.kind == "index_find"
+    assert spec.condition_at_k == "arr[k] == x"
+    assert "arr[\\result] == x" in array_scan_contracts(src, find_loops(src), "main")["find"]
+
+
+def test_array_scan_uses_fresh_quantifier_to_avoid_capture():
+    src = (
+        "int find(int *arr,int n,int k){ int i=0;"
+        " for(i=0;i<n;i++){ if(arr[i] == k){ return i; } } return -1; }"
+        "void main(){ int a[3]={1,2,3}; int r=find(a,3,2); //@ assert r == 1; }"
+    )
+    spec = array_scan_specs(src, find_loops(src))[0]
+    assert spec.qvar != "k"
+    assert spec.condition_at_k == f"arr[{spec.qvar}] == k"
+    contract = array_scan_contracts(src, find_loops(src), "main")["find"]
+    assert f"arr[\\result] == k" in contract
+    assert f"integer {spec.qvar}" in contract
+
+
+def test_array_scan_rejects_compound_condition_negation():
+    src = (
+        "int both(int *a,int *b,int x,int y,int n){"
+        " for(int i=0;i<n;i++){ if(a[i] == x && b[i] == y) return 1; } return 0; }"
+    )
+    assert array_scan_specs(src, find_loops(src)) == {}
+
+
+def test_array_scan_rejects_extra_global_side_effect():
+    src = (
+        "int g;"
+        "int search(int *a,int x,int n){"
+        " for(int p=0;p<n;p++){ if(x == a[p]) return 1; } g = 1; return 0; }"
+    )
+    assert array_scan_specs(src, find_loops(src)) == {}
+
+
+def test_array_scan_detects_all_pass_two_arrays():
+    src = (
+        "int eq(int *a,int *b,int n){"
+        " for(int i=0;i<n;i++){ if(a[i] != b[i]) return 0; } return 1; }"
+        "int main(){ int a[2]={1,2}; int b[2]={1,2}; int r=eq(a,b,2);"
+        " //@ assert r == 1; }"
+    )
+    specs = array_scan_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.kind == "bool_all"
+    assert spec.arrays == ("a", "b")
+    assert spec.negated_condition_at_k == "a[k] == b[k]"
+    contract = array_scan_contracts(src, find_loops(src), "main")["eq"]
+    assert "requires \\valid_read(a + (0 .. n-1));" in contract
+    assert "requires \\valid_read(b + (0 .. n-1));" in contract
+    assert "\\forall integer k; 0 <= k < n ==> a[k] == b[k]" in contract
+
+
+def test_array_max_detects_while_and_for_scan_contracts():
+    src = (
+        "int m1(int *a,int n){ int i=1; int max=a[0];"
+        " while(i<n){ if(max < a[i]) max = a[i]; i=i+1; } return max; }"
+        "int m2(int *arr,int n){ int max=arr[0];"
+        " for(int i=0;i<n;i++){ if(arr[i] > max){ max=arr[i]; } } return max; }"
+        "int main(){ int a[2]={1,2}; int r=m1(a,2); //@ assert r >= a[0]; }"
+    )
+    specs = array_max_specs(src, find_loops(src))
+    assert specs[0].fn == "m1"
+    assert specs[0].array == "a"
+    assert specs[0].index == "i"
+    assert specs[0].max_var == "max"
+    assert array_max_invariants(specs[0]) == [
+        "0 <= i <= n",
+        "forall k : 0 <= k < i ==> max >= a[k]",
+    ]
+    assert array_max_loop_assigns(specs[0]) == "i, max"
+    assert specs[1].fn == "m2"
+    assert specs[1].array == "arr"
+    contract = array_max_contracts(src, find_loops(src), "main")["m1"]
+    assert "requires n > 0;" in contract
+    assert "assigns \\nothing;" in contract
+    assert "\\result >= a[k]" in contract
+
+
+def test_conditional_count_detects_output_relation_contract():
+    src = (
+        "int count_matches(int *a,int n,int x,int *out){ int p=0; int c=0; *out=0;"
+        " while(p<n){ if(a[p] == x){ c = c + 1; *out = *out + x; } p=p+1; }"
+        " return c; }"
+        "int main(){ int a[2]={1,2}; int out=0; int c=count_matches(a,2,2,&out);"
+        " //@ assert out == c*2; }"
+    )
+    specs = conditional_count_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.array == "a"
+    assert spec.count_var == "c"
+    assert spec.out_ptr == "out"
+    assert spec.addend == "x"
+    assert conditional_count_invariants(spec) == [
+        "0 <= p <= n",
+        "0 <= c <= p",
+        "*out == c * x",
+    ]
+    assert conditional_count_loop_assigns(spec) == "p, c, *out"
+    contract = conditional_count_contracts(src, find_loops(src), "main")["count_matches"]
+    assert "requires \\valid(out);" in contract
+    assert "assigns *out;" in contract
+    assert "ensures *out == \\result * x;" in contract
+
+
+def test_conditional_count_rejects_non_invariant_addend():
+    src = (
+        "int count_matches(int *a,int n,int x,int *out){ int p=0; int c=0; *out=0;"
+        " while(p<n){ if(a[p] == x){ c = c + 1; *out = *out + a[p]; } p=p+1; }"
+        " return c; }"
+    )
+    assert conditional_count_specs(src, find_loops(src)) == {}
+
+
+def test_conditional_count_rejects_extra_output_side_effect():
+    src = (
+        "int count_matches(int *a,int n,int x,int *out,int *other){ int p=0; int c=0;"
+        " *out=0; *other=0;"
+        " while(p<n){ if(a[p] == x){ c = c + 1; *out = *out + x; } p=p+1; }"
+        " return c; }"
+    )
+    assert conditional_count_specs(src, find_loops(src)) == {}
+
+
+def test_countdown_counter_detects_returned_iteration_count():
+    src = (
+        "int count_down(int x){ int a=x; int y=0;"
+        " while(a != 0){ y = y + 1; a = a - 1; } return y; }"
+        "int main(){ int r=count_down(3); //@ assert r == 3; }"
+    )
+    specs = countdown_counter_specs(src, find_loops(src))
+    spec = specs[0]
+    assert spec.counter == "a"
+    assert spec.result_var == "y"
+    assert spec.input_var == "x"
+    assert countdown_counter_invariants(spec) == [
+        "0 <= a",
+        "y + a == x",
+    ]
+    assert countdown_counter_loop_assigns(spec) == "a, y"
+    contract = countdown_counter_contracts(src, find_loops(src), "main")["count_down"]
+    assert "requires x >= 0;" in contract
+    assert "ensures \\result == x;" in contract
 
 IC3 = (
     "void main(){\n"

@@ -785,6 +785,55 @@ class ConditionalArraySetSpec:
     value_at_k: str
 
 
+@dataclass
+class ArrayScanSpec:
+    loop_ord: int
+    fn: str
+    arrays: tuple[str, ...]
+    qvar: str
+    index: str
+    bound: str
+    condition_at_k: str
+    negated_condition_at_k: str
+    early_return: str
+    default_return: str
+    kind: str              # "bool_present" | "bool_all" | "index_find"
+
+
+@dataclass
+class ArrayMaxSpec:
+    loop_ord: int
+    fn: str
+    array: str
+    qvar: str
+    index: str
+    bound: str
+    max_var: str
+    start: str
+
+
+@dataclass
+class ConditionalCountSpec:
+    loop_ord: int
+    fn: str
+    array: str
+    index: str
+    bound: str
+    condition_at_k: str
+    count_var: str
+    out_ptr: str
+    addend: str
+
+
+@dataclass
+class CountdownCounterSpec:
+    loop_ord: int
+    fn: str
+    counter: str
+    result_var: str
+    input_var: str
+
+
 _SCALAR_TYPES = {"int", "char", "short", "long", "unsigned", "signed",
                  "float", "double", "size_t"}
 
@@ -1148,7 +1197,8 @@ def array_map_contracts(source: str, loops: list, entry: str) -> dict:
     return out
 
 
-def _expr_at_k(expr: str, idx: str, array: str | None = None) -> str | None:
+def _expr_at_k(expr: str, idx: str, array: str | None = None,
+               quant_var: str = "k") -> str | None:
     """Translate a simple C expression over the loop counter to ACSL over ``k``.
 
     This intentionally accepts only side-effect-free scalar expressions. It is used
@@ -1160,10 +1210,10 @@ def _expr_at_k(expr: str, idx: str, array: str | None = None) -> str | None:
     if array:
         expr = re.sub(
             rf"\b{re.escape(array)}\s*\[\s*{re.escape(idx)}\s*\]",
-            rf"\\at({array}[k], Pre)",
+            rf"\\at({array}[{quant_var}], Pre)",
             expr,
         )
-    return re.sub(rf"\b{re.escape(idx)}\b", "k", expr)
+    return re.sub(rf"\b{re.escape(idx)}\b", quant_var, expr)
 
 
 def detect_conditional_array_set(lp: LoopSite, source: str) -> ConditionalArraySetSpec | None:
@@ -1241,6 +1291,598 @@ def conditional_array_set_contracts(source: str, loops: list, entry: str) -> dic
     return out
 
 
+def _norm_return_expr(expr: str) -> str:
+    expr = re.sub(r"\s+", "", (expr or "").strip())
+    while expr.startswith("(") and expr.endswith(")"):
+        inner = expr[1:-1].strip()
+        if not inner:
+            break
+        expr = re.sub(r"\s+", "", inner)
+    return expr
+
+
+def _array_refs_for_index(expr: str, idx: str) -> tuple[str, ...]:
+    refs: list[str] = []
+    for m in re.finditer(rf"\b([A-Za-z_]\w*)\s*\[\s*{re.escape(idx)}\s*\]", expr or ""):
+        name = m.group(1)
+        if name not in refs:
+            refs.append(name)
+    return tuple(refs)
+
+
+def _negate_simple_condition(cond: str) -> str | None:
+    cond = (cond or "").strip()
+    if "&&" in cond or "||" in cond:
+        return None
+    m = re.fullmatch(r"(.+?)\s*([!=]=)\s*(.+)", cond)
+    if m:
+        lhs, op, rhs = m.group(1).strip(), m.group(2), m.group(3).strip()
+        return f"{lhs} {'!=' if op == '==' else '=='} {rhs}"
+    return None
+
+
+def _condition_with_index(cond_at_k: str, index_expr: str) -> str:
+    return re.sub(r"\bk\b", lambda _m: index_expr, cond_at_k)
+
+
+def _fresh_logic_var(source: str, base: str = "k") -> str:
+    used = set(re.findall(r"\b[A-Za-z_]\w*\b", source or ""))
+    if base not in used:
+        return base
+    i = 0
+    while f"{base}{i}" in used:
+        i += 1
+    return f"{base}{i}"
+
+
+def _replace_logic_var(expr: str, qvar: str, replacement: str) -> str:
+    return re.sub(rf"\b{re.escape(qvar)}\b", lambda _m: replacement, expr)
+
+
+def _function_signature_and_body(source: str, fn: str) -> tuple[str, str] | None:
+    for m in _FUNC_DEF_RX.finditer(source):
+        name = m.group(1)
+        if name != fn or name in _C_KEYWORDS:
+            continue
+        open_brace = source.index("{", m.end() - 1)
+        close = _matching_brace(source, open_brace)
+        if close < 0:
+            continue
+        return source[m.start():open_brace], source[open_brace + 1:close]
+    return None
+
+
+def _names_from_decl_list(text: str) -> set[str]:
+    out: set[str] = set()
+    for part in (text or "").split(","):
+        lhs = part.split("=", 1)[0].strip()
+        lhs = re.sub(r"\[[^\]]*\]", " ", lhs)
+        ids = re.findall(r"[A-Za-z_]\w*", lhs)
+        if ids:
+            out.add(ids[-1])
+    return out
+
+
+def _function_param_names(source: str, fn: str) -> set[str]:
+    sig_body = _function_signature_and_body(source, fn)
+    if not sig_body:
+        return set()
+    sig, _body = sig_body
+    open_paren, close_paren = sig.find("("), sig.rfind(")")
+    if open_paren < 0 or close_paren < open_paren:
+        return set()
+    params = sig[open_paren + 1:close_paren].strip()
+    if not params or params == "void":
+        return set()
+    return _names_from_decl_list(params)
+
+
+def _function_local_scalar_names(body: str) -> set[str]:
+    type_rx = (
+        r"\b(?:unsigned\s+|signed\s+)?(?:int|long\s+long|long|short|char|"
+        r"size_t|u?int\d+_t|_Bool|bool|float|double)\b"
+    )
+    out: set[str] = set()
+    for m in re.finditer(type_rx + r"\s+([^;]+);", body or ""):
+        out.update(_names_from_decl_list(m.group(1)))
+    return out
+
+
+def _plain_scalar_writes_are_local_or_params(source: str, fn: str) -> bool:
+    sig_body = _function_signature_and_body(source, fn)
+    if not sig_body:
+        return False
+    _sig, body = sig_body
+    allowed = _function_param_names(source, fn) | _function_local_scalar_names(body)
+    assigned = {m.group(1) for m in _ASSIGN_RE.finditer(body or "")}
+    for m in _INCDEC_RE.finditer(body or ""):
+        assigned.add(m.group(1) or m.group(2))
+    return all(name in allowed for name in assigned if name)
+
+
+_PTR_STORE_RE = re.compile(
+    r"\*\s*\(?\s*[A-Za-z_]\w*\s*\)?\s*(?:[-+*/%&|^]?=(?!=)|<<=|>>=)"
+    r"|\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*(?:[-+*/%&|^]?=(?!=)|<<=|>>=)"
+    r"|\*\s*\(?\s*[A-Za-z_]\w*\s*\)?\s*(?:\+\+|--)"
+    r"|(?:\+\+|--)\s*\*\s*\(?\s*[A-Za-z_]\w*\s*\)?")
+_FIELD_STORE_RE = re.compile(
+    r"\b[A-Za-z_]\w*\s*(?:->|\.)\s*[A-Za-z_]\w*\s*(?:[-+*/%&|^]?=(?!=)|<<=|>>=)"
+    r"|\b[A-Za-z_]\w*\s*(?:->|\.)\s*[A-Za-z_]\w*\s*(?:\+\+|--)"
+    r"|(?:\+\+|--)\s*\b[A-Za-z_]\w*\s*(?:->|\.)\s*[A-Za-z_]\w*")
+
+
+def _body_has_escaping_store(body: str) -> bool:
+    return bool(_ARRAYW_RE.search(body or "")
+                or _PTR_STORE_RE.search(body or "")
+                or _FIELD_STORE_RE.search(body or ""))
+
+
+def _pure_function_frame_ok(source: str, fn: str) -> bool:
+    from bmc_agent import frama_c
+    sig_body = _function_signature_and_body(source, fn)
+    local_pure = bool(sig_body and not _body_has_escaping_store(sig_body[1]))
+    return ((frama_c.function_assigns_nothing(source, fn) or local_pure)
+            and _plain_scalar_writes_are_local_or_params(source, fn))
+
+
+def _function_assigns_only(source: str, fn: str, target: str) -> bool:
+    from bmc_agent import frama_c
+    clause = (frama_c.function_assigns_clause(source, fn) or "").replace(" ", "")
+    return clause == target.replace(" ", "") and _plain_scalar_writes_are_local_or_params(
+        source, fn)
+
+
+def _expr_is_loop_invariant(expr: str, lp: LoopSite, extra_forbidden: set[str] | None = None) -> bool:
+    expr = (expr or "").strip()
+    if not expr or re.search(r"\b[A-Za-z_]\w*\s*\(", expr):
+        return False
+    if "[" in expr or "]" in expr or "*" in expr:
+        return False
+    scalars, arrays = modified_vars(lp.body or "")
+    forbidden = set(scalars) | set(arrays) | set(extra_forbidden or set())
+    return not any(re.search(rf"\b{re.escape(name)}\b", expr) for name in forbidden)
+
+
+def detect_array_scan(lp: LoopSite, source: str) -> ArrayScanSpec | None:
+    """Detect read-only array scans with an early return and a default return.
+
+    Covers common ACSL read-only scan shapes:
+      * membership: ``if (a[i] == x) return 1; ... return 0;``
+      * all-pass:   ``if (a[i] != b[i]) return 0; ... return 1;``
+      * find-index: ``if (a[i] == x) return i; ... return -1;``
+
+    The loop invariant alone proves the callee body, but the caller-side target
+    assertion is modular and needs a function contract. This recognizer emits
+    both, while declining on writes or multiple early-return tests.
+    """
+    fn = _enclosing_function(source, lp.start_offset)
+    fn_src = _enclosing_function_source(source, lp.start_offset) or source
+    if not fn:
+        return None
+    if not _pure_function_frame_ok(source, fn):
+        return None
+    counted = _loop_counter_bound(lp, fn_src)
+    if not counted:
+        return None
+    idx, bound = counted
+    qvar = _fresh_logic_var(fn_src, "k")
+    # This scan recognizer is for read-only loops. Array writes are handled by
+    # array-map / conditional-array-set recognizers.
+    if _ARRAYW_RE.search(lp.body or ""):
+        return None
+    if_rx = re.compile(
+        r"\bif\s*\((.*?)\)\s*(?:\{\s*)?return\s+([^;]+);",
+        re.S,
+    )
+    matches = if_rx.findall(lp.body or "")
+    if len(matches) != 1:
+        return None
+    condition, early = matches[0]
+    arrays = _array_refs_for_index(condition, idx)
+    if not arrays:
+        return None
+    condition_at_k = _expr_at_k(condition, idx, quant_var=qvar)
+    if not condition_at_k:
+        return None
+    negated = _negate_simple_condition(condition_at_k)
+    if not negated:
+        return None
+
+    fn_range = _enclosing_function_range(source, lp.start_offset)
+    if not fn_range:
+        return None
+    _name, _start, _open, end = fn_range
+    suffix = source[lp.end_offset:end]
+    returns = re.findall(r"\breturn\s+([^;]+);", suffix)
+    if not returns:
+        return None
+    default = returns[-1]
+    early_n, default_n = _norm_return_expr(early), _norm_return_expr(default)
+
+    if early_n == idx and default_n == "-1":
+        kind = "index_find"
+    elif early_n == "1" and default_n == "0":
+        kind = "bool_present"
+    elif early_n == "0" and default_n == "1":
+        kind = "bool_all"
+    else:
+        return None
+    return ArrayScanSpec(lp.ordinal, fn, arrays, qvar, idx, bound, condition_at_k,
+                         negated, early_n, default_n, kind)
+
+
+def array_scan_specs(source: str, loops: list) -> dict:
+    out = {}
+    for lp in loops:
+        spec = detect_array_scan(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
+def array_scan_invariants(spec: ArrayScanSpec) -> list[str]:
+    return [
+        f"0 <= {spec.index} <= {spec.bound}",
+        f"forall {spec.qvar} : 0 <= {spec.qvar} < {spec.index} ==> "
+        f"{spec.negated_condition_at_k}",
+    ]
+
+
+def array_scan_loop_assigns(spec: ArrayScanSpec) -> str:
+    return spec.index
+
+
+def array_scan_contract_acsl(spec: ArrayScanSpec) -> str:
+    b = spec.bound
+    lines = [
+        f"  requires {b} >= 0;",
+        *[f"  requires \\valid_read({a} + (0 .. {b}-1));" for a in spec.arrays],
+        "  assigns \\nothing;",
+    ]
+    cond = spec.condition_at_k
+    neg = spec.negated_condition_at_k
+    if spec.kind == "bool_present":
+        lines += [
+            f"  ensures (\\exists integer {spec.qvar}; 0 <= {spec.qvar} < {b} && "
+            f"({cond})) ==> \\result == 1;",
+            f"  ensures \\result == 0 ==> (\\forall integer {spec.qvar}; "
+            f"0 <= {spec.qvar} < {b} ==> {neg});",
+        ]
+    elif spec.kind == "bool_all":
+        lines += [
+            f"  ensures (\\forall integer {spec.qvar}; 0 <= {spec.qvar} < {b} ==> "
+            f"{neg}) ==> \\result == 1;",
+            f"  ensures \\result == 0 ==> (\\exists integer {spec.qvar}; "
+            f"0 <= {spec.qvar} < {b} && ({cond}));",
+        ]
+    else:
+        cond_at_result = _replace_logic_var(cond, spec.qvar, "\\result")
+        lines += [
+            f"  ensures -1 <= \\result < {b};",
+            f"  ensures 0 <= \\result < {b} ==> ({cond_at_result});",
+            f"  ensures 0 <= \\result < {b} ==> "
+            f"(\\forall integer {spec.qvar}; 0 <= {spec.qvar} < \\result ==> {neg});",
+            f"  ensures \\result == -1 ==> "
+            f"(\\forall integer {spec.qvar}; 0 <= {spec.qvar} < {b} ==> {neg});",
+        ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+def array_scan_contracts(source: str, loops: list, entry: str) -> dict:
+    out = {}
+    for spec in array_scan_specs(source, loops).values():
+        if spec.fn and spec.fn != entry:
+            out[spec.fn] = array_scan_contract_acsl(spec)
+    return out
+
+
+def _loop_counter_bound_start(lp: LoopSite, fn_src: str) -> tuple[str, str, str] | None:
+    """Recognize simple counting loops and return (index, bound, start)."""
+    if lp.kind == "for":
+        parts = [p.strip() for p in (lp.guard or "").split(";")]
+        if len(parts) != 3:
+            return None
+        init, cond, inc = parts
+        m = re.search(r"(?:\b[A-Za-z_]\w*\s+)*\b([A-Za-z_]\w*)\s*=\s*(0|1)\b", init)
+        if not m:
+            return None
+        idx, start = m.group(1), m.group(2)
+        m = re.fullmatch(rf"{re.escape(idx)}\s*<\s*([A-Za-z_]\w*|\d+)", cond)
+        if not m:
+            return None
+        bound = m.group(1)
+        if not re.search(rf"(?:\+\+\s*{re.escape(idx)}|{re.escape(idx)}\s*\+\+|"
+                         rf"{re.escape(idx)}\s*=\s*{re.escape(idx)}\s*\+\s*1|"
+                         rf"{re.escape(idx)}\s*\+=\s*1)", inc):
+            return None
+        return idx, bound, start
+
+    if lp.kind == "while":
+        m = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*<\s*([A-Za-z_]\w*|\d+)\s*", lp.guard or "")
+        if not m:
+            return None
+        idx, bound = m.group(1), m.group(2)
+        prefix = fn_src.split(lp.body, 1)[0]
+        init = re.search(rf"\b{re.escape(idx)}\s*=\s*(0|1)\s*;", prefix)
+        if not init:
+            return None
+        if not re.search(rf"(?:\+\+\s*{re.escape(idx)}|{re.escape(idx)}\s*\+\+|"
+                         rf"{re.escape(idx)}\s*=\s*{re.escape(idx)}\s*\+\s*1|"
+                         rf"{re.escape(idx)}\s*\+=\s*1)\s*;", lp.body):
+            return None
+        return idx, bound, init.group(1)
+    return None
+
+
+def detect_array_max(lp: LoopSite, source: str) -> ArrayMaxSpec | None:
+    """Detect a read-only max scan: initialize max from a[0], update on a[i] > max."""
+    fn = _enclosing_function(source, lp.start_offset)
+    fn_src = _enclosing_function_source(source, lp.start_offset) or source
+    if not fn:
+        return None
+    if not _pure_function_frame_ok(source, fn):
+        return None
+    counted = _loop_counter_bound_start(lp, fn_src)
+    if not counted:
+        return None
+    idx, bound, start = counted
+    qvar = _fresh_logic_var(fn_src, "k")
+    if _ARRAYW_RE.search(lp.body or ""):
+        return None
+    update_rx = re.compile(
+        rf"\bif\s*\((.*?)\)\s*(?:\{{\s*)?"
+        rf"([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\[\s*{re.escape(idx)}\s*\]\s*;",
+        re.S,
+    )
+    matches = update_rx.findall(lp.body or "")
+    if len(matches) != 1:
+        return None
+    condition, max_var, array = matches[0]
+    cond = re.sub(r"\s+", "", condition)
+    if cond not in (f"{max_var}<{array}[{idx}]", f"{array}[{idx}]>{max_var}"):
+        return None
+    prefix = fn_src.split(lp.body, 1)[0]
+    if not re.search(rf"\b{re.escape(max_var)}\s*=\s*{re.escape(array)}\s*\[\s*0\s*\]\s*;", prefix):
+        return None
+    if not _function_returns_var(source, fn, max_var):
+        return None
+    return ArrayMaxSpec(lp.ordinal, fn, array, qvar, idx, bound, max_var, start)
+
+
+def array_max_specs(source: str, loops: list) -> dict:
+    out = {}
+    for lp in loops:
+        spec = detect_array_max(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
+def array_max_invariants(spec: ArrayMaxSpec) -> list[str]:
+    i, b, a, m, q = spec.index, spec.bound, spec.array, spec.max_var, spec.qvar
+    return [
+        f"0 <= {i} <= {b}",
+        f"forall {q} : 0 <= {q} < {i} ==> {m} >= {a}[{q}]",
+    ]
+
+
+def array_max_loop_assigns(spec: ArrayMaxSpec) -> str:
+    return f"{spec.index}, {spec.max_var}"
+
+
+def array_max_contract_acsl(spec: ArrayMaxSpec) -> str:
+    a, b, q = spec.array, spec.bound, spec.qvar
+    lines = [
+        f"  requires {b} > 0;",
+        f"  requires \\valid_read({a} + (0 .. {b}-1));",
+        "  assigns \\nothing;",
+        f"  ensures \\forall integer {q}; 0 <= {q} < {b} ==> \\result >= {a}[{q}];",
+    ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+def array_max_contracts(source: str, loops: list, entry: str) -> dict:
+    out = {}
+    for spec in array_max_specs(source, loops).values():
+        if spec.fn and spec.fn != entry:
+            out[spec.fn] = array_max_contract_acsl(spec)
+    return out
+
+
+def detect_conditional_count(lp: LoopSite, source: str) -> ConditionalCountSpec | None:
+    """Detect conditional count/output-sum loops.
+
+    Shape:
+      count = 0; *out = 0;
+      while (i < n) {
+        if (a[i] == x) { count = count + 1; *out = *out + x; }
+        i++;
+      }
+      return count;
+
+    The useful modular contract is the relation between the returned count and
+    output parameter, not an exact cardinality expression.
+    """
+    fn = _enclosing_function(source, lp.start_offset)
+    fn_src = _enclosing_function_source(source, lp.start_offset) or source
+    if not fn:
+        return None
+    counted = _loop_counter_bound(lp, fn_src)
+    if not counted:
+        return None
+    idx, bound = counted
+    if_matches = list(re.finditer(r"\bif\s*\(", lp.body or ""))
+    if len(if_matches) != 1:
+        return None
+    condition, after_cond = _balanced_arg(lp.body, if_matches[0].end() - 1)
+    j = after_cond
+    while j < len(lp.body) and lp.body[j].isspace():
+        j += 1
+    if j >= len(lp.body):
+        return None
+    if lp.body[j] == "{":
+        close = _matching_brace(lp.body, j)
+        if close < 0:
+            return None
+        block = lp.body[j + 1:close]
+    else:
+        semi = lp.body.find(";", j)
+        if semi < 0:
+            return None
+        block = lp.body[j:semi + 1]
+    arrays = _array_refs_for_index(condition, idx)
+    if len(arrays) != 1:
+        return None
+    condition_at_k = _expr_at_k(condition, idx)
+    if not condition_at_k:
+        return None
+    count_m = re.search(
+        r"\b([A-Za-z_]\w*)\s*=\s*\1\s*\+\s*1\s*;|\b([A-Za-z_]\w*)\s*\+=\s*1\s*;",
+        block,
+    )
+    out_m = re.search(
+        r"\*\s*([A-Za-z_]\w*)\s*=\s*\*\s*\1\s*\+\s*([^;]+?)\s*;"
+        r"|\*\s*([A-Za-z_]\w*)\s*\+=\s*([^;]+?)\s*;",
+        block,
+    )
+    if not count_m or not out_m:
+        return None
+    count_var = count_m.group(1) or count_m.group(2)
+    out_ptr = out_m.group(1) or out_m.group(3)
+    addend = (out_m.group(2) or out_m.group(4) or "").strip()
+    if not count_var or not out_ptr or not addend:
+        return None
+    if not _expr_is_loop_invariant(addend, lp, {idx, count_var, out_ptr}):
+        return None
+    prefix = fn_src.split(lp.body, 1)[0]
+    if not re.search(rf"\b{re.escape(count_var)}\s*=\s*0\s*;", prefix):
+        return None
+    if not re.search(rf"\*\s*{re.escape(out_ptr)}\s*=\s*0\s*;", prefix):
+        return None
+    if not _function_returns_var(source, fn, count_var):
+        return None
+    if not _function_assigns_only(source, fn, f"*{out_ptr}"):
+        return None
+    return ConditionalCountSpec(lp.ordinal, fn, arrays[0], idx, bound,
+                                condition_at_k, count_var, out_ptr, addend)
+
+
+def conditional_count_specs(source: str, loops: list) -> dict:
+    out = {}
+    for lp in loops:
+        spec = detect_conditional_count(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
+def conditional_count_invariants(spec: ConditionalCountSpec) -> list[str]:
+    return [
+        f"0 <= {spec.index} <= {spec.bound}",
+        f"0 <= {spec.count_var} <= {spec.index}",
+        f"*{spec.out_ptr} == {spec.count_var} * {spec.addend}",
+    ]
+
+
+def conditional_count_loop_assigns(spec: ConditionalCountSpec) -> str:
+    return f"{spec.index}, {spec.count_var}, *{spec.out_ptr}"
+
+
+def conditional_count_contract_acsl(spec: ConditionalCountSpec) -> str:
+    a, b, out = spec.array, spec.bound, spec.out_ptr
+    lines = [
+        f"  requires {b} >= 0;",
+        f"  requires \\valid_read({a} + (0 .. {b}-1));",
+        f"  requires \\valid({out});",
+        f"  assigns *{out};",
+        f"  ensures *{out} == \\result * {spec.addend};",
+    ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+def conditional_count_contracts(source: str, loops: list, entry: str) -> dict:
+    out = {}
+    for spec in conditional_count_specs(source, loops).values():
+        if spec.fn and spec.fn != entry:
+            out[spec.fn] = conditional_count_contract_acsl(spec)
+    return out
+
+
+def detect_countdown_counter(lp: LoopSite, source: str) -> CountdownCounterSpec | None:
+    """Detect a copy-and-countdown loop returning the original non-negative input."""
+    fn = _enclosing_function(source, lp.start_offset)
+    fn_src = _enclosing_function_source(source, lp.start_offset) or source
+    if not fn or lp.kind != "while":
+        return None
+    if not _pure_function_frame_ok(source, fn):
+        return None
+    m = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*!=\s*0\s*", lp.guard or "")
+    if not m:
+        return None
+    counter = m.group(1)
+    prefix = fn_src.split(lp.body, 1)[0]
+    init = re.search(rf"\b{re.escape(counter)}\s*=\s*([A-Za-z_]\w*)\s*;", prefix)
+    if not init:
+        return None
+    input_var = init.group(1)
+    zero_inits = re.findall(r"\b([A-Za-z_]\w*)\s*=\s*0\s*;", prefix)
+    candidates = []
+    for result_var in zero_inits:
+        if result_var == counter:
+            continue
+        inc = re.search(rf"\b{re.escape(result_var)}\s*=\s*{re.escape(result_var)}\s*\+\s*1\s*;"
+                        rf"|\b{re.escape(result_var)}\s*\+\+\s*;"
+                        rf"|\b{re.escape(result_var)}\s*\+=\s*1\s*;", lp.body)
+        dec = re.search(rf"\b{re.escape(counter)}\s*=\s*{re.escape(counter)}\s*-\s*1\s*;"
+                        rf"|\b{re.escape(counter)}\s*--\s*;"
+                        rf"|\b{re.escape(counter)}\s*-=\s*1\s*;", lp.body)
+        if inc and dec:
+            candidates.append(result_var)
+    if len(candidates) != 1:
+        return None
+    result_var = candidates[0]
+    if not _function_returns_var(source, fn, result_var):
+        return None
+    return CountdownCounterSpec(lp.ordinal, fn, counter, result_var, input_var)
+
+
+def countdown_counter_specs(source: str, loops: list) -> dict:
+    out = {}
+    for lp in loops:
+        spec = detect_countdown_counter(lp, source)
+        if spec:
+            out[lp.ordinal] = spec
+    return out
+
+
+def countdown_counter_invariants(spec: CountdownCounterSpec) -> list[str]:
+    return [
+        f"0 <= {spec.counter}",
+        f"{spec.result_var} + {spec.counter} == {spec.input_var}",
+    ]
+
+
+def countdown_counter_loop_assigns(spec: CountdownCounterSpec) -> str:
+    return f"{spec.counter}, {spec.result_var}"
+
+
+def countdown_counter_contract_acsl(spec: CountdownCounterSpec) -> str:
+    lines = [
+        f"  requires {spec.input_var} >= 0;",
+        "  assigns \\nothing;",
+        f"  ensures \\result == {spec.input_var};",
+    ]
+    return "/*@\n" + "\n".join(lines) + "\n*/\n"
+
+
+def countdown_counter_contracts(source: str, loops: list, entry: str) -> dict:
+    out = {}
+    for spec in countdown_counter_specs(source, loops).values():
+        if spec.fn and spec.fn != entry:
+            out[spec.fn] = countdown_counter_contract_acsl(spec)
+    return out
+
+
 _FUNC_DEF_RX = re.compile(
     r"(?:^|[;}\s])([A-Za-z_]\w*)\s*\([^;{)]*\)\s*\{", re.M)
 # control keywords that also match name(...){ but are NOT function definitions
@@ -1262,6 +1904,25 @@ def _enclosing_function(source: str, offset: int) -> str:
             continue
         if open_brace < offset < close and open_brace > best_open:
             best, best_open = name, open_brace   # tightest enclosing def wins
+    return best
+
+
+def _enclosing_function_range(source: str, offset: int) -> tuple[str, int, int, int] | None:
+    """(name, function-start, body-open, function-end) for the tightest function."""
+    best: tuple[str, int, int, int] | None = None
+    best_open = -1
+    for m in _FUNC_DEF_RX.finditer(source):
+        name = m.group(1)
+        if name in _C_KEYWORDS:
+            continue
+        open_brace = source.index("{", m.end() - 1)
+        close = _matching_brace(source, open_brace)
+        if close < 0:
+            continue
+        if open_brace < offset < close and open_brace > best_open:
+            line_start = source.rfind("\n", 0, m.start()) + 1
+            best = (name, line_start, open_brace, close + 1)
+            best_open = open_brace
     return best
 
 
@@ -1355,6 +2016,14 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
                     for ordn, spec in array_map_specs(source, loops).items()})
     assigns.update({ordn: conditional_array_set_loop_assigns(spec)
                     for ordn, spec in conditional_array_set_specs(source, loops).items()})
+    assigns.update({ordn: array_scan_loop_assigns(spec)
+                    for ordn, spec in array_scan_specs(source, loops).items()})
+    assigns.update({ordn: array_max_loop_assigns(spec)
+                    for ordn, spec in array_max_specs(source, loops).items()})
+    assigns.update({ordn: conditional_count_loop_assigns(spec)
+                    for ordn, spec in conditional_count_specs(source, loops).items()})
+    assigns.update({ordn: countdown_counter_loop_assigns(spec)
+                    for ordn, spec in countdown_counter_specs(source, loops).items()})
     prepped = _prep_goals_acsl(source)
     # Overflow-rigorous accumulator mode: when every loop is an array fold (and
     # math-int mode is on), emit the no-overflow precondition + per-fold stepping-
@@ -1378,6 +2047,10 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     contracts = accumulator_contracts(source, loops, entry, overflow_safe=bool(ovf_specs))
     contracts.update(array_map_contracts(source, loops, entry))
     contracts.update(conditional_array_set_contracts(source, loops, entry))
+    contracts.update(array_scan_contracts(source, loops, entry))
+    contracts.update(array_max_contracts(source, loops, entry))
+    contracts.update(conditional_count_contracts(source, loops, entry))
+    contracts.update(countdown_counter_contracts(source, loops, entry))
     for fn, block in contracts.items():
         annotated = frama_c.insert_contract_block(annotated, fn, block)
     inline = [fn for fn in inline if fn not in contracts]
@@ -1922,6 +2595,10 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         acc_specs = accumulator_specs(src, loops) if oracle == "frama-c" else {}
         map_specs = array_map_specs(src, loops) if oracle == "frama-c" else {}
         cond_set_specs = conditional_array_set_specs(src, loops) if oracle == "frama-c" else {}
+        scan_specs = array_scan_specs(src, loops) if oracle == "frama-c" else {}
+        max_specs = array_max_specs(src, loops) if oracle == "frama-c" else {}
+        count_specs = conditional_count_specs(src, loops) if oracle == "frama-c" else {}
+        countdown_specs = countdown_counter_specs(src, loops) if oracle == "frama-c" else {}
         annotations = {}
         for lp in loops:
             if lp.ordinal in acc_specs:
@@ -1939,6 +2616,23 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 logger.info("loop-inv: synthesized conditional array-set invariant for "
                             "loop %d (%s)", lp.ordinal,
                             cond_set_specs[lp.ordinal].array)
+            elif lp.ordinal in scan_specs:
+                annotations[lp.ordinal] = array_scan_invariants(scan_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized array-scan invariant for loop %d (%s)",
+                            lp.ordinal, scan_specs[lp.ordinal].kind)
+            elif lp.ordinal in max_specs:
+                annotations[lp.ordinal] = array_max_invariants(max_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized array-max invariant for loop %d (%s)",
+                            lp.ordinal, max_specs[lp.ordinal].array)
+            elif lp.ordinal in count_specs:
+                annotations[lp.ordinal] = conditional_count_invariants(count_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized conditional-count invariant for loop %d "
+                            "(%s)", lp.ordinal, count_specs[lp.ordinal].count_var)
+            elif lp.ordinal in countdown_specs:
+                annotations[lp.ordinal] = countdown_counter_invariants(
+                    countdown_specs[lp.ordinal])
+                logger.info("loop-inv: synthesized countdown-counter invariant for loop %d "
+                            "(%s)", lp.ordinal, countdown_specs[lp.ordinal].counter)
             else:
                 annotations[lp.ordinal] = _propose(
                     llm, config, lp, goals, fn_src_by_ord[lp.ordinal])
@@ -2018,6 +2712,18 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     disp_assigns.update({ordn: conditional_array_set_loop_assigns(spec)
                                          for ordn, spec
                                          in conditional_array_set_specs(src, loops).items()})
+                    disp_assigns.update({ordn: array_scan_loop_assigns(spec)
+                                         for ordn, spec
+                                         in array_scan_specs(src, loops).items()})
+                    disp_assigns.update({ordn: array_max_loop_assigns(spec)
+                                         for ordn, spec
+                                         in array_max_specs(src, loops).items()})
+                    disp_assigns.update({ordn: conditional_count_loop_assigns(spec)
+                                         for ordn, spec
+                                         in conditional_count_specs(src, loops).items()})
+                    disp_assigns.update({ordn: countdown_counter_loop_assigns(spec)
+                                         for ordn, spec
+                                         in countdown_counter_specs(src, loops).items()})
                 rendered = render_loop_invariants_acsl(annotations, loops, variants, disp_assigns)
                 # Show the complete synthesized spec above the loop invariants — the
                 # recursive-logic-function definition(s) then the function contract(s)
@@ -2028,6 +2734,10 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 prelude = "".join(accumulator_axiomatic(s) for s in live)
                 map_contract_blocks = array_map_contracts(src, loops, entry)
                 cond_set_contract_blocks = conditional_array_set_contracts(src, loops, entry)
+                scan_contract_blocks = array_scan_contracts(src, loops, entry)
+                max_contract_blocks = array_max_contracts(src, loops, entry)
+                count_contract_blocks = conditional_count_contracts(src, loops, entry)
+                countdown_contract_blocks = countdown_counter_contracts(src, loops, entry)
                 if prelude and oracle == "frama-c":
                     if ovf_specs:
                         prelude = "#include <limits.h>\n" + prelude
@@ -2040,6 +2750,18 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                         prelude += f"// contract for {fn}\n{block}"
                 if cond_set_contract_blocks and oracle == "frama-c":
                     for fn, block in cond_set_contract_blocks.items():
+                        prelude += f"// contract for {fn}\n{block}"
+                if scan_contract_blocks and oracle == "frama-c":
+                    for fn, block in scan_contract_blocks.items():
+                        prelude += f"// contract for {fn}\n{block}"
+                if max_contract_blocks and oracle == "frama-c":
+                    for fn, block in max_contract_blocks.items():
+                        prelude += f"// contract for {fn}\n{block}"
+                if count_contract_blocks and oracle == "frama-c":
+                    for fn, block in count_contract_blocks.items():
+                        prelude += f"// contract for {fn}\n{block}"
+                if countdown_contract_blocks and oracle == "frama-c":
+                    for fn, block in countdown_contract_blocks.items():
                         prelude += f"// contract for {fn}\n{block}"
                 note = "invariants are inductive and prove all goals"
                 if gate_flagged:
