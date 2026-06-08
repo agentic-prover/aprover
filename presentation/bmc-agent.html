@@ -196,10 +196,10 @@
         <p>CBMC / Kani exhaustively explore bounded executions, hunting an input that violates the spec.</p>
       </div>
       <div class="card cls">
-        <div class="ico">⚖</div>
-        <div class="step">03 · classify</div>
-        <h3>Classify the counterexample</h3>
-        <p>Real bug or false alarm? If the spec was wrong, CEGAR refines it and re-checks. If the bug is real, replay it under ASan.</p>
+        <div class="ico">⚕</div>
+        <div class="step">03 · diagnose</div>
+        <h3>Diagnose the counterexample</h3>
+        <p>Real bug, or a gap in the spec? Pin the root cause. If the spec was wrong, CEGAR refines it and re-checks; if the bug is real, replay it under ASan.</p>
       </div>
     </div>
   </div>
@@ -254,10 +254,10 @@
 <div class="band"><section>
   <div class="wrap">
     <div class="stats">
-      <div class="stat"><b>3</b><span>moves — spec · check · classify</span></div>
+      <div class="stat"><b>3</b><span>moves — spec · check · diagnose</span></div>
       <div class="stat"><b>CEGAR</b><span>auto-refines wrong specs</span></div>
       <div class="stat"><b>ASan</b><span>replay confirms real crashes</span></div>
-      <div class="stat"><b>OSS</b><span>real bugs in production C</span></div>
+      <div class="stat"><b>59</b><span>confirmed bugs, not guessed</span></div>
     </div>
   </div>
 </section></div>

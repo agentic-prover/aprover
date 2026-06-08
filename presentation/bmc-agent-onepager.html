@@ -329,7 +329,7 @@
       <div class="arr"><div class="flow"></div></div>
       <div class="node bmc"><div class="ico">⚙</div><div class="nm">bounded model check</div><div class="sm">CBMC · Kani</div></div>
       <div class="arr"><div class="flow" style="animation-delay:.5s"></div></div>
-      <div class="node cls"><div class="ico">⚖</div><div class="nm">classify counterexample</div><div class="sm">real bug vs. false alarm</div></div>
+      <div class="node cls"><div class="ico">⚕</div><div class="nm">diagnose the counterexample</div><div class="sm">root cause · real bug or spec gap</div></div>
       <div class="cegar">
         <svg viewBox="0 0 400 54" preserveAspectRatio="none">
           <path d="M 380 6 C 380 48, 20 48, 20 6"/>
@@ -342,19 +342,17 @@
   <!-- ============ RESULTS : confirmed-bug tally ============ -->
   <section class="scene" id="sResults" data-scene="7">
     <div class="rwrap">
-      <h2 class="rh">Real bugs, <span class="grad">confirmed in production C</span></h2>
-      <div class="rsub"><b>59</b> memory-safety bugs across <b>9</b> projects — every one replayed under <b>ASan</b></div>
-      <div class="grp"><b>OSS-Fuzz</b>&nbsp; 50 across 6 freshly-onboarded projects</div>
+      <h2 class="rh">Real, <span class="grad">confirmed bugs</span></h2>
+      <div class="rsub"><b>59</b> confirmed bugs across <b>9</b> real-world projects — every one replayed under <b>ASan</b></div>
       <div class="row"><div class="pl mono">u-boot</div><div class="track"><div class="fill" style="--w:100%;transition-delay:.05s"></div></div><div class="ct">32</div></div>
       <div class="row"><div class="pl mono">gpac</div><div class="track"><div class="fill" style="--w:31.3%;transition-delay:.12s"></div></div><div class="ct">10</div></div>
       <div class="row"><div class="pl mono">libbej</div><div class="track"><div class="fill" style="--w:12.5%;transition-delay:.19s"></div></div><div class="ct">4</div></div>
-      <div class="row"><div class="pl mono">libredwg</div><div class="track"><div class="fill" style="--w:6.3%;transition-delay:.26s"></div></div><div class="ct">2</div></div>
-      <div class="row"><div class="pl mono">libheif</div><div class="track"><div class="fill" style="--w:3.1%;transition-delay:.33s"></div></div><div class="ct">1</div></div>
-      <div class="row"><div class="pl mono">libarchive</div><div class="track"><div class="fill" style="--w:3.1%;transition-delay:.40s"></div></div><div class="ct">1</div></div>
-      <div class="grp"><b>Open-source</b>&nbsp; 9 across 3 under-fuzzed libraries</div>
-      <div class="row"><div class="pl mono">libmikmod</div><div class="track"><div class="fill os" style="--w:12.5%;transition-delay:.47s"></div></div><div class="ct">4</div></div>
-      <div class="row"><div class="pl mono">adplug</div><div class="track"><div class="fill os" style="--w:9.4%;transition-delay:.54s"></div></div><div class="ct">3</div></div>
-      <div class="row"><div class="pl mono">libmodplug</div><div class="track"><div class="fill os" style="--w:6.3%;transition-delay:.61s"></div></div><div class="ct">2</div></div>
+      <div class="row"><div class="pl mono">libmikmod</div><div class="track"><div class="fill" style="--w:12.5%;transition-delay:.26s"></div></div><div class="ct">4</div></div>
+      <div class="row"><div class="pl mono">adplug</div><div class="track"><div class="fill" style="--w:9.4%;transition-delay:.33s"></div></div><div class="ct">3</div></div>
+      <div class="row"><div class="pl mono">libredwg</div><div class="track"><div class="fill" style="--w:6.3%;transition-delay:.40s"></div></div><div class="ct">2</div></div>
+      <div class="row"><div class="pl mono">libmodplug</div><div class="track"><div class="fill" style="--w:6.3%;transition-delay:.47s"></div></div><div class="ct">2</div></div>
+      <div class="row"><div class="pl mono">libheif</div><div class="track"><div class="fill" style="--w:3.1%;transition-delay:.54s"></div></div><div class="ct">1</div></div>
+      <div class="row"><div class="pl mono">libarchive</div><div class="track"><div class="fill" style="--w:3.1%;transition-delay:.61s"></div></div><div class="ct">1</div></div>
       <div class="foot">all under embargo · coordinated disclosure</div>
     </div>
   </section>
@@ -515,7 +513,7 @@ const STEPS=[
   { scene:'wall', cap:'Everything else is checked and <span class="hl">verified</span>. Findings come tagged by how strongly they are confirmed.',
     apply(){ show('wall'); ws.className='show found verified'; engine.classList.remove('on'); } },
 
-  { scene:'results', cap:'Run at scale across OSS-Fuzz, this finds <span class="hl">real, confirmed bugs</span> — <span class="hlb">59</span> memory-safety defects in <span class="hlb">9</span> production C projects, each <span class="hlr">replayed under ASan</span>.',
+  { scene:'results', cap:'Run at scale, bounded model checking finds <span class="hl">real, confirmed bugs</span> — <span class="hlb">59</span> across <span class="hlb">9</span> projects, each <span class="hlr">replayed under ASan</span>.',
     apply(){ show('results'); } },
 
   { scene:'end', cap:'',
