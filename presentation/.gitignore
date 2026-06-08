@@ -1,0 +1,6 @@
+# playwright recording tooling (reinstall with: npm i && npx playwright install chromium)
+node_modules/
+# build_ppt.py intermediate poster — regenerated on every build
+_demo_poster.png
+# raw playwright recordings before rename/convert
+page@*.webm
