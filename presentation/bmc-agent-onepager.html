@@ -236,7 +236,7 @@
   #sResults .rwrap{width:760px}
   #sResults .rh{text-align:center;font-size:33px;font-weight:800;letter-spacing:-.4px;margin:0}
   #sResults .rsub{text-align:center;color:var(--muted);font-size:17px;margin:9px 0 20px}
-  #sResults .rsub b{color:var(--green);font-weight:700}
+  #sResults .rsub b{color:var(--red);font-weight:700}
   #sResults .grp{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;
     letter-spacing:.6px;text-transform:uppercase;margin:13px 0 6px}
   #sResults .grp::after{content:"";flex:1;height:1px;background:var(--line)}
@@ -245,8 +245,7 @@
   #sResults .pl{font-size:13.5px;text-align:right;color:var(--text)}
   #sResults .track{height:17px;background:#ffffff;border:1px solid var(--line);border-radius:5px;overflow:hidden}
   #sResults .fill{height:100%;width:0;min-width:7px;border-radius:4px;
-    background:linear-gradient(90deg,var(--blue),var(--green));transition:width 1s cubic-bezier(.2,.7,.2,1)}
-  #sResults .fill.os{background:linear-gradient(90deg,var(--violet),var(--blue))}
+    background:linear-gradient(90deg,#b52529,#d92e33);transition:width 1s cubic-bezier(.2,.7,.2,1)}
   #sResults.on .fill{width:var(--w)}
   #sResults .ct{font-size:14px;font-weight:700;color:var(--text);text-align:right}
   #sResults .foot{text-align:center;color:#6e7a88;font-size:12px;margin-top:16px}
@@ -342,7 +341,7 @@
   <!-- ============ RESULTS : confirmed-bug tally ============ -->
   <section class="scene" id="sResults" data-scene="7">
     <div class="rwrap">
-      <h2 class="rh">Real, <span class="grad">confirmed bugs</span></h2>
+      <h2 class="rh">Real, <span style="color:var(--red)">confirmed bugs</span></h2>
       <div class="rsub"><b>59</b> confirmed bugs across <b>9</b> real-world projects — every one replayed under <b>ASan</b></div>
       <div class="row"><div class="pl mono">u-boot</div><div class="track"><div class="fill" style="--w:100%;transition-delay:.05s"></div></div><div class="ct">32</div></div>
       <div class="row"><div class="pl mono">gpac</div><div class="track"><div class="fill" style="--w:31.3%;transition-delay:.12s"></div></div><div class="ct">10</div></div>
@@ -513,7 +512,7 @@ const STEPS=[
   { scene:'wall', cap:'Everything else is checked and <span class="hl">verified</span>. Findings come tagged by how strongly they are confirmed.',
     apply(){ show('wall'); ws.className='show found verified'; engine.classList.remove('on'); } },
 
-  { scene:'results', cap:'Run at scale, bounded model checking finds <span class="hl">real, confirmed bugs</span> — <span class="hlb">59</span> across <span class="hlb">9</span> projects, each <span class="hlr">replayed under ASan</span>.',
+  { scene:'results', cap:'Run at scale, bounded model checking finds <span class="hlr">real, confirmed bugs</span> — <span class="hlb">59</span> across <span class="hlb">9</span> projects, each <span class="hlr">replayed under ASan</span>.',
     apply(){ show('results'); } },
 
   { scene:'end', cap:'',
