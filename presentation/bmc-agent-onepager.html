@@ -109,7 +109,7 @@
   /* scene C/D: the system wall */
   #wallScene .wall{display:grid;grid-template-columns:repeat(8,1fr);gap:10px;
     width:1040px;height:480px;perspective:1000px}
-  .mod{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px;
+  .mod{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px;z-index:1;
     opacity:0;transform:translateY(22px) scale(.8);transition:transform .5s,opacity .5s,border-color .4s,background .4s}
   .mod .l{height:5px;border-radius:3px;margin:5px 0;background:#2b3340}
   .mod .l.b{background:var(--blue-d)} .mod .l.v{background:var(--violet-d)}
@@ -118,12 +118,27 @@
     right:6px;top:6px;opacity:0;box-shadow:0 0 0 0 #f8514988}
   #wallScene.bugs .mod.has .bug{opacity:1;animation:bugpulse 1.6s ease-out infinite}
   @keyframes bugpulse{0%{box-shadow:0 0 0 0 #f8514999}70%{box-shadow:0 0 0 12px #f8514900}100%{box-shadow:0 0 0 0 #f8514900}}
-  .qmark{position:absolute;font-size:130px;font-weight:800;color:#f85149;opacity:0;
+  .qmark{position:absolute;z-index:2;font-size:130px;font-weight:800;color:#f85149;opacity:0;
     text-shadow:0 0 40px #f8514966;transition:opacity .5s,transform .5s;transform:scale(.6)}
   #wallScene.crisis .qmark{opacity:.16;transform:scale(1)}
 
+  /* compositional structure: faint call-graph linking the modules */
+  #edges{position:absolute;z-index:0;pointer-events:none;opacity:0;transition:opacity .6s}
+  #wallScene.show #edges{opacity:.5}
+  #edges line{stroke:#39424f;stroke-width:1.3;transition:stroke .5s}
+  #wallScene.verified #edges line{stroke:#1b7a3e40}
+  /* the confirmed bug = a path threading THROUGH several components */
+  #pathlayer{position:absolute;z-index:8;pointer-events:none;opacity:0;transition:opacity .5s}
+  #wallScene.bugs #pathlayer,#wallScene.found #pathlayer{opacity:1}
+  #pathlayer polyline{fill:none;stroke:var(--red);stroke-width:2.6;stroke-linecap:round;
+    stroke-linejoin:round;filter:drop-shadow(0 0 5px #f8514999);stroke-dasharray:7 6}
+  #wallScene.bugs #pathlayer polyline{animation:dash 1s linear infinite}
+  #wallScene.found #pathlayer polyline{stroke-dasharray:none;animation:none}
+  #pathlayer circle{fill:var(--red);opacity:.9}
+  #wallScene.bugs .mod.pathmod,#wallScene.found .mod.pathmod{border-color:#f85149aa}
+
   /* scanner + engine (scene E) */
-  .scanner{position:absolute;left:0;top:0;bottom:0;width:120px;
+  .scanner{position:absolute;z-index:3;left:0;top:0;bottom:0;width:120px;
     background:linear-gradient(90deg,transparent,#58a6ff22 40%,#58a6ff55 50%,#58a6ff22 60%,transparent);
     opacity:0}
   #wallScene.scan .scanner{opacity:1;animation:sweep 2.4s ease-in-out infinite}
@@ -169,7 +184,7 @@
   .confirm .h{display:flex;align-items:center;gap:9px;color:var(--red);font-weight:700;margin-bottom:8px}
   .confirm .cex{font-size:12.5px;line-height:1.5;color:var(--muted)}
   .confirm .cex b{color:var(--text)}
-  .ring{position:absolute;width:34px;height:34px;border:3px solid var(--red);border-radius:50%;
+  .ring{position:absolute;z-index:9;width:34px;height:34px;border:3px solid var(--red);border-radius:50%;
     opacity:0;animation:ring 1.4s ease-out infinite}
   #wallScene.found .ring{opacity:1}
   @keyframes ring{0%{transform:scale(.6);opacity:.9}100%{transform:scale(1.8);opacity:0}}
@@ -344,6 +359,48 @@ for(let i=0;i<N;i++){
   cf.style.right=''; cf.style.left=(wallLeft+wallW-360)+'px'; cf.style.top=(wallTop+cy+30)+'px';
 })();
 
+/* ---------- compositional structure: call-graph + bug path -----------
+   The wall is NOT a bag of independent boxes you could check one by one.
+   Components call each other; the confirmed bug is a PATH across them.    */
+(function(){
+  const NS='http://www.w3.org/2000/svg';
+  const gap=10, wallW=1040, wallH=480;
+  const cw=(wallW-(COLS-1)*gap)/COLS, ch=(wallH-(ROWS-1)*gap)/ROWS;
+  const wallLeft=(1280-wallW)/2, wallTop=(720-wallH)/2 - 10;
+  const cc=i=>{const c=i%COLS,r=Math.floor(i/COLS);return [c*(cw+gap)+cw/2, r*(ch+gap)+ch/2];};
+  function svg(id){const s=document.createElementNS(NS,'svg'); s.id=id;
+    s.setAttribute('viewBox','0 0 '+wallW+' '+wallH);
+    s.style.cssText='left:'+wallLeft+'px;top:'+wallTop+'px;width:'+wallW+'px;height:'+wallH+'px;';
+    return s;}
+  function line(p,a,b){const l=document.createElementNS(NS,'line');
+    l.setAttribute('x1',a[0]);l.setAttribute('y1',a[1]);l.setAttribute('x2',b[0]);l.setAttribute('y2',b[1]);p.appendChild(l);}
+
+  // faint call-graph: each cell wires to a couple of neighbours (deterministic, sparse)
+  const eg=svg('edges');
+  for(let i=0;i<N;i++){ const col=i%COLS, row=Math.floor(i/COLS);
+    if(col<COLS-1 && ((i*7+row)%3===0)) line(eg, cc(i), cc(i+1));
+    if(i+COLS<N && ((i*5+1)%3===0))     line(eg, cc(i), cc(i+COLS));
+  }
+
+  // the confirmed bug threads through several connected components → its bug cell
+  const PATH=[2,10,18,19];
+  const pl=svg('pathlayer');
+  const last=PATH[PATH.length-1], lc=last%COLS, lr=Math.floor(last/COLS);
+  const pts=PATH.map((i,k)=> k===PATH.length-1
+    ? [lc*(cw+gap)+cw-11, lr*(ch+gap)+19]   // land on the bug dot / ring centre
+    : cc(i));
+  const poly=document.createElementNS(NS,'polyline');
+  poly.setAttribute('points', pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '));
+  pl.appendChild(poly);
+  pts.slice(0,-1).forEach(p=>{ const d=document.createElementNS(NS,'circle');
+    d.setAttribute('cx',p[0]); d.setAttribute('cy',p[1]); d.setAttribute('r',3.4); pl.appendChild(d); });
+  PATH.forEach(i=>{ const m=wall.children[i]; if(m) m.classList.add('pathmod'); });
+
+  const ws=document.getElementById('wallScene');
+  ws.insertBefore(eg, wall);   // graph behind the modules
+  ws.appendChild(pl);          // bug path above them
+})();
+
 /* ---------- step engine ---------- */
 const ws=document.getElementById('wallScene');
 const engine=document.getElementById('engine');
@@ -358,10 +415,10 @@ const STEPS=[
   { scene:'B', cap:'When the AI emits a <span class="hlb">short</span> function, this is fine — it is small enough to <span class="hl">read and trust</span> by eye.',
     apply(){ show('B'); } },
 
-  { scene:'wall', cap:'But AI also generates <span class="hlb">entire systems</span> — thousands of functions across hundreds of files.',
+  { scene:'wall', cap:'But AI also generates <span class="hlb">entire systems</span> — thousands of functions that <span class="hlb">call into each other</span> across hundreds of files.',
     apply(){ show('wall'); ws.className='show'; engine.classList.remove('on'); } },
 
-  { scene:'wall', cap:'Now you <span class="hlr">cannot just read it.</span> Somewhere in the noise, a <span class="hlr">memory-safety bug</span> hides — and tests may never hit it.',
+  { scene:'wall', cap:'You <span class="hlr">can’t check them one by one.</span> The bug isn’t in any single component — it emerges along a <span class="hlr">path that threads through many</span>, and tests may never hit it.',
     apply(){ show('wall'); ws.className='show bugs crisis'; engine.classList.remove('on'); } },
 
   { scene:'wall', cap:'<span class="hlv">bmc-agent</span> steps in: it <span class="hlv">synthesizes a spec</span>, runs a <span class="hlb">bounded model checker</span>, and <span style="color:var(--amber)">refines via CEGAR</span> until the verdict is solid.',
