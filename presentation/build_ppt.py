@@ -162,7 +162,7 @@ text(LX, 2.3, LW, 0.7, [("AProver proves it ", TEXT, True, 29), ("correct.", BLU
 text(LX, 3.35, LW, 1.3,
      [("Agents propose", VIOLET, True, 15.5),
       (" — specifications, counterexample verdicts, refinements.  ", MUTED, False, 15.5),
-      ("Conventional tools dispose", BLUE, True, 15.5),
+      ("Solvers verify", BLUE, True, 15.5),
       (" — every soundness-relevant claim passes a formal check before it counts.", MUTED, False, 15.5)],
      spacing=1.12)
 text(LX, 4.78, LW, 0.4,
