@@ -133,6 +133,11 @@
   #engine{position:absolute;z-index:20;inset:0;display:grid;place-items:center;opacity:0;
     transition:opacity .5s;pointer-events:none}
   #engine.on{opacity:1}
+  /* focus backdrop: darken the busy wall so the pipeline reads cleanly */
+  #engine::before{content:"";position:absolute;inset:0;
+    background:radial-gradient(62% 54% at 50% 50%,#05070bdd 0%,#05070b88 55%,transparent 100%);
+    opacity:0;transition:opacity .5s}
+  #engine.on::before{opacity:1}
   .pipe{display:flex;align-items:center;gap:0;background:#0b0f17ee;border:1px solid var(--line);
     border-radius:16px;padding:22px 26px;box-shadow:0 24px 70px #000a;position:relative}
   .node{display:flex;flex-direction:column;align-items:center;gap:8px;width:150px;text-align:center}
@@ -176,7 +181,12 @@
   .tiers{position:absolute;z-index:26;display:flex;gap:14px;bottom:120px;opacity:0;transition:.5s}
   #wallScene.verified .tiers{opacity:1}
   .tier{display:flex;align-items:center;gap:8px;background:#0b0f17ee;border:1px solid var(--line);
-    border-radius:999px;padding:7px 14px;font-size:13px}
+    border-radius:999px;padding:7px 14px;font-size:13px;
+    opacity:0;transform:translateY(8px);transition:opacity .45s,transform .45s}
+  #wallScene.verified .tier{opacity:1;transform:none}
+  #wallScene.verified .tier:nth-child(1){transition-delay:.15s}
+  #wallScene.verified .tier:nth-child(2){transition-delay:.35s}
+  #wallScene.verified .tier:nth-child(3){transition-delay:.55s}
   .tier i{width:10px;height:10px;border-radius:50%}
 
   /* end card */
@@ -358,7 +368,7 @@ const STEPS=[
     apply(){ show('wall'); ws.className='show bugs scan'; engine.classList.add('on'); } },
 
   { scene:'wall', cap:'The hidden bug is <span class="hlr">pinned to a real path</span> and <span class="hlr">replayed under ASan</span> — a confirmed crash, not a guess.',
-    apply(){ show('wall'); ws.className='show scan found'; engine.classList.remove('on'); } },
+    apply(){ show('wall'); ws.className='show found'; engine.classList.remove('on'); } },
 
   { scene:'wall', cap:'Everything else is checked and <span class="hl">verified</span>. Findings come tagged by how strongly they are confirmed.',
     apply(){ show('wall'); ws.className='show found verified'; engine.classList.remove('on'); } },
@@ -380,7 +390,7 @@ const dotsEl=document.getElementById('dots');
 STEPS.forEach((_,i)=>{const d=document.createElement('i');d.onclick=()=>go(i);dotsEl.appendChild(d);});
 
 let cur=-1, playing=true, timer=null;
-const DUR=[3200,3800,3400,4200,4600,4200,3800,6000];
+const DUR=[3800,4200,3800,4400,5400,4600,4400,6000];
 
 function render(){
   STEPS[cur].apply();
