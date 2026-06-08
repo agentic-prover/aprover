@@ -4,3 +4,5 @@ node_modules/
 _demo_poster.png
 # raw playwright recordings before rename/convert
 page@*.webm
+# QR code — regenerated on every build
+_qr.png
