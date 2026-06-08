@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>bmc-agent — proving the code AI just wrote</title>
+<title>AProver — proving the code AI just wrote</title>
 <style>
   :root{
     --bg:#0d1117; --bg2:#05070b; --panel:#161b22; --panel2:#1c2230; --line:#30363d;
@@ -32,6 +32,7 @@
   .brand .dot{width:12px;height:12px;border-radius:50%;
     background:conic-gradient(from 0deg,var(--violet),var(--blue),var(--green),var(--violet));
     box-shadow:0 0 14px var(--violet)}
+  .brand .logoicon{width:21px;height:23px;display:block;filter:drop-shadow(0 0 8px #3b82f677)}
   nav .links{display:flex;gap:22px;font-size:14px;color:var(--muted)}
   nav .links a{color:var(--muted)} nav .links a:hover{color:var(--text)}
   .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);
@@ -129,7 +130,7 @@
 <body>
 
 <nav><div class="wrap">
-  <div class="brand"><span class="dot"></span><span class="mono">bmc-agent</span></div>
+  <div class="brand"><svg class="logoicon" viewBox="0 0 120 130" aria-hidden="true"><g transform="translate(5,5)"><path d="M 60 10 L 10 120 L 26.2 120 L 60 50 L 93.8 120 L 110 120 Z" fill="#3b82f6"/><path d="M 28 80 L 60 10 L 82 58 L 50 95 Z M 41.2 89 L 60 50 L 70.4 71.5 L 50 95 Z" fill="#bae6fd" fill-rule="evenodd"/><path d="M 28 80 L 50 95 L 82 58" stroke="#10b981" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g></svg><span class="mono">AProver</span></div>
   <div class="links">
     <a href="#how">How it works</a>
     <a href="#why">Why it's hard</a>
@@ -141,10 +142,10 @@
 
 <header class="hero">
   <div class="wrap">
-    <span class="eyebrow">✦ agentic model checking</span>
+    <span class="eyebrow">✦ agentic prover for AI-generated code</span>
     <h1>Who verifies the code<br><span class="grad">the AI just wrote?</span></h1>
-    <p class="lede">AI can now generate entire systems on demand. <b style="color:var(--text)">bmc-agent</b>
-      synthesizes a formal spec, runs a bounded model checker, and refines via CEGAR —
+    <p class="lede">AI can now generate entire systems on demand. <b style="color:var(--text)">AProver</b>'s
+      <b style="color:var(--text)">BMC-Agent</b> synthesizes a formal spec, runs a bounded model checker, and refines via CEGAR —
       then replays the counterexample under ASan to confirm real bugs, not guesses.</p>
     <div class="cta">
       <a class="btn primary" href="#demo">▶ Watch the 30-second story</a>
@@ -158,16 +159,16 @@
   <div class="frame">
     <div class="titlebar">
       <i style="background:#ff5f56"></i><i style="background:#ffbd2e"></i><i style="background:#27c93f"></i>
-      <span class="t mono">bmc-agent — verifying AI-generated software at scale</span>
+      <span class="t mono">AProver — verifying AI-generated software at scale</span>
       <span class="badge"><span class="live"></span> looping</span>
     </div>
     <div class="video">
       <video poster="bmc-agent-poster.jpg" autoplay muted loop playsinline preload="metadata"
-             title="bmc-agent animated explainer">
+             title="AProver animated explainer">
         <source src="bmc-agent-demo.mp4" type="video/mp4"/>
         <source src="bmc-agent-demo.webm" type="video/webm"/>
         <!-- last-resort fallback: live vector animation -->
-        <iframe src="bmc-agent-onepager.html?embed=1" title="bmc-agent animated explainer"
+        <iframe src="bmc-agent-onepager.html?embed=1" title="AProver animated explainer"
                 loading="lazy" allow="fullscreen"></iframe>
       </video>
     </div>
@@ -212,7 +213,7 @@
       <p>At scale the system is thousands of functions that <b style="color:var(--text)">call into each other</b>.
         The dangerous bug usually isn't inside any single component — it <b style="color:var(--text)">emerges along a
         path that threads through several</b>, and your tests may never walk that path.</p>
-      <p>That's why per-component review and unit tests miss it. bmc-agent reasons over the
+      <p>That's why per-component review and unit tests miss it. AProver reasons over the
         composition and pins the bug to a concrete, reachable trace.</p>
     </div>
     <div class="path">
@@ -264,7 +265,7 @@
 <!-- ===== close ===== -->
 <section>
   <div class="wrap" style="text-align:center">
-    <h2>AI can write the system.<br><span class="grad" style="background:linear-gradient(90deg,var(--blue),var(--violet),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent">bmc-agent proves it correct.</span></h2>
+    <h2>AI can write the system.<br><span class="grad" style="background:linear-gradient(90deg,var(--blue),var(--violet),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent">AProver proves it correct.</span></h2>
     <p class="sub">LLM-synthesized specs × bounded model checking × CEGAR refinement — bugs confirmed, not guessed.</p>
     <div class="cta"><a class="btn primary" href="#demo">▶ Replay the demo</a>
       <a class="btn" href="bmc-agent-onepager.html">Open full-screen deck</a></div>
@@ -272,8 +273,8 @@
 </section>
 
 <footer><div class="wrap">
-  <div class="brand"><span class="dot"></span><span class="mono">bmc-agent</span>
-    <span style="color:#5a6573;font-weight:400;margin-left:8px">agentic model checking</span></div>
+  <div class="brand"><svg class="logoicon" viewBox="0 0 120 130" aria-hidden="true"><g transform="translate(5,5)"><path d="M 60 10 L 10 120 L 26.2 120 L 60 50 L 93.8 120 L 110 120 Z" fill="#3b82f6"/><path d="M 28 80 L 60 10 L 82 58 L 50 95 Z M 41.2 89 L 60 50 L 70.4 71.5 L 50 95 Z" fill="#bae6fd" fill-rule="evenodd"/><path d="M 28 80 L 50 95 L 82 58" stroke="#10b981" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g></svg><span class="mono">AProver</span>
+    <span style="color:#5a6573;font-weight:400;margin-left:8px">agentic prover for AI-generated code</span></div>
   <div>Verifying AI-generated software at scale.</div>
 </div></footer>
 

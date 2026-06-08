@@ -23,6 +23,7 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ICON = os.path.join(HERE, "aprover-icon.png")          # iceberg-A brand mark
 MP4 = os.path.join(HERE, "bmc-agent-demo.mp4")
 POSTER_REAL = os.path.join(HERE, "bmc-agent-poster.jpg")   # real title frame
 POSTER_GEN = os.path.join(HERE, "_demo_poster.png")        # synthetic fallback
@@ -138,10 +139,13 @@ def text(x, y, w, h, runs, size=14, color=TEXT, bold=False, align=PP_ALIGN.LEFT,
         r.font.color.rgb = C(c or color); r.font.name = font
     return tb
 
-# ---- brand ----
-dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(0.6), Inches(0.5), Inches(0.18), Inches(0.18))
-no_shadow(dot); dot.fill.solid(); dot.fill.fore_color.rgb = C(VIOLET); dot.line.fill.background()
-text(0.86, 0.4, 9, 0.4, [("AProver", TEXT, True, 19),
+# ---- brand (iceberg-A logo mark + wordmark) ----
+if os.path.exists(ICON):
+    slide.shapes.add_picture(ICON, Inches(0.58), Inches(0.42), height=Inches(0.36))
+else:
+    dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(0.6), Inches(0.5), Inches(0.18), Inches(0.18))
+    no_shadow(dot); dot.fill.solid(); dot.fill.fore_color.rgb = C(VIOLET); dot.line.fill.background()
+text(0.98, 0.4, 9, 0.4, [("AProver", TEXT, True, 19),
                          ("   ·  agentic prover for AI-generated code", MUTED, False, 13)],
      font="Consolas")
 
@@ -190,7 +194,7 @@ box(DX, DY, DW, DH_TITLE, fill=PANEL2, line=None)
 for k, dc in enumerate(["ff5f56", "ffbd2e", "27c93f"]):
     od = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(DX+0.16+k*0.19), Inches(DY+0.11), Inches(0.11), Inches(0.11))
     no_shadow(od); od.fill.solid(); od.fill.fore_color.rgb = C(dc); od.line.fill.background()
-text(DX+0.78, DY, DW-1.6, DH_TITLE, [("bmc-agent — verifying AI-generated software", MUTED, False, 10.5)],
+text(DX+0.78, DY, DW-1.6, DH_TITLE, [("AProver — verifying AI-generated software", MUTED, False, 10.5)],
      anchor=MSO_ANCHOR.MIDDLE, font="Consolas")
 text(DX+DW-1.2, DY, 1.1, DH_TITLE, [("● looping", GREEN, False, 9.5)], anchor=MSO_ANCHOR.MIDDLE, align=PP_ALIGN.RIGHT)
 

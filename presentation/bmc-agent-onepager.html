@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>bmc-agent — Verifying AI-Generated Software at Scale</title>
+<title>AProver — Verifying AI-Generated Software at Scale</title>
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --line:#30363d;
@@ -39,6 +39,7 @@
   .brand .dot{width:11px;height:11px;border-radius:50%;
     background:conic-gradient(from 0deg,var(--violet),var(--blue),var(--green),var(--violet));
     box-shadow:0 0 14px var(--violet)}
+  .brand .logoicon{width:22px;height:24px;display:block;filter:drop-shadow(0 0 9px #3b82f677)}
   .brand b{letter-spacing:.5px}
   .brand .tag{color:var(--muted);font-size:13px;margin-left:6px;border-left:1px solid var(--line);padding-left:10px}
 
@@ -155,6 +156,12 @@
   #engine.on::before{opacity:1}
   .pipe{display:flex;align-items:center;gap:0;background:#0b0f17ee;border:1px solid var(--line);
     border-radius:16px;padding:22px 26px;box-shadow:0 24px 70px #000a;position:relative}
+  .pipe .englabel{position:absolute;left:50%;top:-13px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:7px;background:#0b0f17;border:1px solid var(--line);
+    border-radius:999px;padding:3px 13px;font-size:12px;color:var(--muted);white-space:nowrap}
+  .pipe .englabel b{color:var(--violet);font-weight:600}
+  .pipe .englabel .d{width:7px;height:7px;border-radius:50%;
+    background:conic-gradient(from 0deg,var(--violet),var(--blue),var(--green),var(--violet))}
   .node{display:flex;flex-direction:column;align-items:center;gap:8px;width:150px;text-align:center}
   .node .ico{width:62px;height:62px;border-radius:14px;display:grid;place-items:center;font-size:26px;
     border:1px solid var(--line);background:var(--panel)}
@@ -206,10 +213,20 @@
 
   /* end card */
   #sEnd .wrap{text-align:center}
-  #sEnd .lead{font-size:30px;color:var(--muted);margin-bottom:10px}
-  #sEnd h1{font-size:64px}
-  #sEnd .pill{margin-top:26px;display:inline-flex;gap:10px;flex-wrap:wrap;justify-content:center}
-  #sEnd .pill span{border:1px solid var(--line);border-radius:999px;padding:8px 16px;color:var(--text);font-size:15px}
+  #sEnd .lead{font-size:27px;color:var(--muted);margin-bottom:8px}
+  #sEnd .endlogo{height:84px;width:auto;display:block;margin:0 auto 2px}
+  #sEnd .tagline{font-size:42px;font-weight:800;letter-spacing:-.5px;margin:0}
+  #sEnd .pill{margin-top:22px;display:inline-flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  #sEnd .pill span{border:1px solid var(--line);border-radius:999px;padding:7px 15px;color:var(--text);font-size:14px}
+  #sEnd .endmeta{display:flex;align-items:center;justify-content:center;gap:22px;margin-top:30px}
+  #sEnd .endmeta .qr{background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px;line-height:0}
+  #sEnd .endmeta .qr img{width:96px;height:96px;display:block;image-rendering:pixelated}
+  #sEnd .endmeta .meta{text-align:left}
+  #sEnd .endmeta .lbl{color:var(--muted);font-size:11px;letter-spacing:.8px;text-transform:uppercase}
+  #sEnd .endmeta .url{color:var(--blue);font-weight:700;font-size:18px;margin:3px 0 9px}
+  #sEnd .endmeta .paper{color:var(--text);font-size:13.5px}
+  #sEnd .endmeta .paper b{color:var(--muted);font-weight:400}
+  #sEnd .endmeta .scan{color:var(--muted);font-size:11.5px;margin-top:7px}
 
   .hint{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);color:#3a424e;font-size:12px;z-index:40;transition:opacity .6s}
   #cap{transition:opacity .6s}
@@ -222,8 +239,13 @@
 <body>
 <div id="fit"><div id="stage">
 
-  <div class="brand"><span class="dot"></span><b class="mono">bmc-agent</b>
-    <span class="tag">agentic model checking</span></div>
+  <div class="brand">
+    <svg class="logoicon" viewBox="0 0 120 130" aria-hidden="true"><g transform="translate(5,5)">
+      <path d="M 60 10 L 10 120 L 26.2 120 L 60 50 L 93.8 120 L 110 120 Z" fill="#3b82f6"/>
+      <path d="M 28 80 L 60 10 L 82 58 L 50 95 Z M 41.2 89 L 60 50 L 70.4 71.5 L 50 95 Z" fill="#bae6fd" fill-rule="evenodd"/>
+      <path d="M 28 80 L 50 95 L 82 58" stroke="#10b981" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </g></svg>
+    <b class="mono">AProver</b><span class="tag">agentic prover for AI-generated code</span></div>
 
   <!-- ============ SCENE A : title ============ -->
   <section class="scene" id="sA" data-scene="0">
@@ -279,6 +301,7 @@
   <!-- engine overlay (lives above wall, toggled in scene E) -->
   <div id="engine">
     <div class="pipe">
+      <div class="englabel"><span class="d"></span><b class="mono">BMC-Agent</b> · agentic model checking</div>
       <div class="node spec"><div class="ico">✦</div><div class="nm">LLM spec synthesis</div><div class="sm">pre / post conditions</div></div>
       <div class="arr"><div class="flow"></div></div>
       <div class="node bmc"><div class="ico">⚙</div><div class="nm">bounded model check</div><div class="sm">CBMC · Kani</div></div>
@@ -297,10 +320,25 @@
   <section class="scene" id="sEnd" data-scene="6">
     <div class="wrap">
       <div class="lead">AI can write the system.</div>
-      <h1 class="big"><span class="grad">bmc-agent</span> proves it correct.</h1>
-      <div class="sub">LLM-synthesized specs &nbsp;×&nbsp; bounded model checking &nbsp;×&nbsp; CEGAR refinement</div>
+      <svg class="endlogo" viewBox="0 0 360 130" role="img" aria-label="AProver"><g transform="translate(5,5)">
+        <path d="M 60 10 L 10 120 L 26.2 120 L 60 50 L 93.8 120 L 110 120 Z" fill="#3b82f6"/>
+        <path d="M 28 80 L 60 10 L 82 58 L 50 95 Z M 41.2 89 L 60 50 L 70.4 71.5 L 50 95 Z" fill="#bae6fd" fill-rule="evenodd"/>
+        <path d="M 28 80 L 50 95 L 82 58" stroke="#10b981" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <text x="128" y="90" font-family="-apple-system,'system-ui','Segoe UI',Helvetica,Arial,sans-serif" font-size="74" font-weight="600" fill="#f5f5f5" letter-spacing="-2">Prover</text>
+      </g></svg>
+      <div class="tagline">proves it <span class="grad">correct.</span></div>
+      <div class="sub">agents propose &nbsp;·&nbsp; conventional tools dispose</div>
       <div class="pill">
         <span>sound by construction</span><span>scales past human review</span><span>bugs confirmed, not guessed</span>
+      </div>
+      <div class="endmeta">
+        <div class="qr"><img alt="QR to github.com/agentic-prover/aprover" src="aprover-qr.png"/></div>
+        <div class="meta">
+          <div class="lbl">explore the project</div>
+          <div class="url mono">github.com/agentic-prover/aprover</div>
+          <div class="paper"><b>Paper · </b>Agentic Model Checking — arXiv:2605.21434</div>
+          <div class="scan mono">↗ scan to open</div>
+        </div>
       </div>
     </div>
   </section>
@@ -424,7 +462,7 @@ const STEPS=[
   { scene:'wall', cap:'You <span class="hlr">can’t check them one by one.</span> The bug isn’t in any single component — it emerges along a <span class="hlr">path that threads through many</span>, and tests may never hit it.',
     apply(){ show('wall'); ws.className='show bugs crisis'; engine.classList.remove('on'); } },
 
-  { scene:'wall', cap:'<span class="hlv">bmc-agent</span> steps in: it <span class="hlv">synthesizes a spec</span>, runs a <span class="hlb">bounded model checker</span>, and <span style="color:var(--amber)">refines via CEGAR</span> until the verdict is solid.',
+  { scene:'wall', cap:'<span class="hlv">AProver</span> steps in. Its <span class="hlv">BMC-Agent</span> <span class="hlv">synthesizes a spec</span>, runs a <span class="hlb">bounded model checker</span>, and <span style="color:var(--amber)">refines via CEGAR</span> until the verdict is solid.',
     apply(){ show('wall'); ws.className='show bugs scan'; engine.classList.add('on'); } },
 
   { scene:'wall', cap:'The hidden bug is <span class="hlr">pinned to a real path</span> and <span class="hlr">replayed under ASan</span> — a confirmed crash, not a guess.',
