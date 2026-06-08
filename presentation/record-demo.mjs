@@ -13,7 +13,7 @@ import { dirname, join } from 'path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const page = join(here, 'bmc-agent-onepager.html');
-const W = 1280, H = 720, MS = 38000;   // ~one full narrated loop
+const W = 1280, H = 720, MS = 44000;   // ~one full narrated loop (9 scenes)
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({

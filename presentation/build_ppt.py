@@ -209,8 +209,22 @@ else:
     pic = slide.shapes.add_picture(POSTER_GEN, Inches(vx), Inches(vy), Inches(vw), Inches(vh))
     pic.click_action.hyperlink.address = "bmc-agent.html"
     cap = "▶  click to play the live demo (bmc-agent.html)"
-text(DX, vy + vh + 0.12, DW, 0.3,
-     [(cap + "   ·   the rest of the story is in the video", "5a6573", False, 11)],
+# ---- real-bugs results strip (under the video) ----
+ry = vy + vh + 0.12
+text(DX, ry, DW, 0.3,
+     [("59", GREEN, True, 18), ("  confirmed memory-safety bugs", TEXT, True, 13.5),
+      ("   ·   every one ASan-verified", MUTED, False, 11)],
+     align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+text(DX, ry + 0.40, DW, 0.22,
+     [("OSS-Fuzz 50   ", BLUE, True, 9.5),
+      ("u-boot 32 · gpac 10 · libbej 4 · libredwg 2 · libheif 1 · libarchive 1", MUTED, False, 9.5)],
+     align=PP_ALIGN.CENTER, font="Consolas")
+text(DX, ry + 0.64, DW, 0.22,
+     [("open-source 9   ", VIOLET, True, 9.5),
+      ("libmikmod 4 · adplug 3 · libmodplug 2", MUTED, False, 9.5)],
+     align=PP_ALIGN.CENTER, font="Consolas")
+text(DX, ry + 0.90, DW, 0.2,
+     [(cap.split("—")[0].strip() + "  ·  embargoed, coordinated disclosure", "5a6573", False, 8.5)],
      align=PP_ALIGN.CENTER)
 
 prs.save(OUT)

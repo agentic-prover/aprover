@@ -228,6 +228,29 @@
   #sEnd .endmeta .paper b{color:var(--muted);font-weight:400}
   #sEnd .endmeta .scan{color:var(--muted);font-size:11.5px;margin-top:7px}
 
+  /* reusable gradient text */
+  .grad{background:linear-gradient(90deg,var(--blue),var(--violet) 60%,var(--green));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+
+  /* results scene: confirmed-bug tally */
+  #sResults .rwrap{width:760px}
+  #sResults .rh{text-align:center;font-size:33px;font-weight:800;letter-spacing:-.4px;margin:0}
+  #sResults .rsub{text-align:center;color:var(--muted);font-size:17px;margin:9px 0 20px}
+  #sResults .rsub b{color:var(--green);font-weight:700}
+  #sResults .grp{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;
+    letter-spacing:.6px;text-transform:uppercase;margin:13px 0 6px}
+  #sResults .grp::after{content:"";flex:1;height:1px;background:var(--line)}
+  #sResults .grp b{color:var(--text);font-weight:600}
+  #sResults .row{display:grid;grid-template-columns:96px 1fr 26px;align-items:center;gap:12px;margin:4px 0}
+  #sResults .pl{font-size:13.5px;text-align:right;color:var(--text)}
+  #sResults .track{height:17px;background:#0b0f17;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+  #sResults .fill{height:100%;width:0;min-width:7px;border-radius:4px;
+    background:linear-gradient(90deg,var(--blue),var(--green));transition:width 1s cubic-bezier(.2,.7,.2,1)}
+  #sResults .fill.os{background:linear-gradient(90deg,var(--violet),var(--blue))}
+  #sResults.on .fill{width:var(--w)}
+  #sResults .ct{font-size:14px;font-weight:700;color:var(--text);text-align:right}
+  #sResults .foot{text-align:center;color:#5a6573;font-size:12px;margin-top:16px}
+
   .hint{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);color:#3a424e;font-size:12px;z-index:40;transition:opacity .6s}
   #cap{transition:opacity .6s}
   /* embed mode: play like a clean looping video — no UI chrome */
@@ -316,8 +339,28 @@
     </div>
   </div>
 
+  <!-- ============ RESULTS : confirmed-bug tally ============ -->
+  <section class="scene" id="sResults" data-scene="7">
+    <div class="rwrap">
+      <h2 class="rh">Real bugs, <span class="grad">confirmed in production C</span></h2>
+      <div class="rsub"><b>59</b> memory-safety bugs across <b>9</b> projects — every one replayed under <b>ASan</b></div>
+      <div class="grp"><b>OSS-Fuzz</b>&nbsp; 50 across 6 freshly-onboarded projects</div>
+      <div class="row"><div class="pl mono">u-boot</div><div class="track"><div class="fill" style="--w:100%;transition-delay:.05s"></div></div><div class="ct">32</div></div>
+      <div class="row"><div class="pl mono">gpac</div><div class="track"><div class="fill" style="--w:31.3%;transition-delay:.12s"></div></div><div class="ct">10</div></div>
+      <div class="row"><div class="pl mono">libbej</div><div class="track"><div class="fill" style="--w:12.5%;transition-delay:.19s"></div></div><div class="ct">4</div></div>
+      <div class="row"><div class="pl mono">libredwg</div><div class="track"><div class="fill" style="--w:6.3%;transition-delay:.26s"></div></div><div class="ct">2</div></div>
+      <div class="row"><div class="pl mono">libheif</div><div class="track"><div class="fill" style="--w:3.1%;transition-delay:.33s"></div></div><div class="ct">1</div></div>
+      <div class="row"><div class="pl mono">libarchive</div><div class="track"><div class="fill" style="--w:3.1%;transition-delay:.40s"></div></div><div class="ct">1</div></div>
+      <div class="grp"><b>Open-source</b>&nbsp; 9 across 3 under-fuzzed libraries</div>
+      <div class="row"><div class="pl mono">libmikmod</div><div class="track"><div class="fill os" style="--w:12.5%;transition-delay:.47s"></div></div><div class="ct">4</div></div>
+      <div class="row"><div class="pl mono">adplug</div><div class="track"><div class="fill os" style="--w:9.4%;transition-delay:.54s"></div></div><div class="ct">3</div></div>
+      <div class="row"><div class="pl mono">libmodplug</div><div class="track"><div class="fill os" style="--w:6.3%;transition-delay:.61s"></div></div><div class="ct">2</div></div>
+      <div class="foot">all under embargo · coordinated disclosure</div>
+    </div>
+  </section>
+
   <!-- ============ END ============ -->
-  <section class="scene" id="sEnd" data-scene="6">
+  <section class="scene" id="sEnd" data-scene="8">
     <div class="wrap">
       <div class="lead">AI can write the system.</div>
       <svg class="endlogo" viewBox="0 0 360 130" role="img" aria-label="AProver"><g transform="translate(5,5)">
@@ -447,7 +490,8 @@ const ws=document.getElementById('wallScene');
 const engine=document.getElementById('engine');
 const captext=document.getElementById('captext');
 const scenes={A:document.getElementById('sA'),B:document.getElementById('sB'),
-  wall:document.getElementById('wallSceneScene'),end:document.getElementById('sEnd')};
+  wall:document.getElementById('wallSceneScene'),results:document.getElementById('sResults'),
+  end:document.getElementById('sEnd')};
 
 const STEPS=[
   { scene:'A', cap:'AI now writes code on demand. The real question is no longer <span class="hlb">“can it write it?”</span> — it is <span class="hl">“is what it wrote correct?”</span>',
@@ -471,6 +515,9 @@ const STEPS=[
   { scene:'wall', cap:'Everything else is checked and <span class="hl">verified</span>. Findings come tagged by how strongly they are confirmed.',
     apply(){ show('wall'); ws.className='show found verified'; engine.classList.remove('on'); } },
 
+  { scene:'results', cap:'Run at scale across OSS-Fuzz, this finds <span class="hl">real, confirmed bugs</span> — <span class="hlb">59</span> memory-safety defects in <span class="hlb">9</span> production C projects, each <span class="hlr">replayed under ASan</span>.',
+    apply(){ show('results'); } },
+
   { scene:'end', cap:'',
     apply(){ show('end'); } },
 ];
@@ -479,6 +526,7 @@ function show(which){
   scenes.A.classList.toggle('on', which==='A');
   scenes.B.classList.toggle('on', which==='B');
   scenes.wall.classList.toggle('on', which==='wall');
+  scenes.results.classList.toggle('on', which==='results');
   scenes.end.classList.toggle('on', which==='end');
   if(which!=='wall'){ engine.classList.remove('on'); }
 }
@@ -488,7 +536,7 @@ const dotsEl=document.getElementById('dots');
 STEPS.forEach((_,i)=>{const d=document.createElement('i');d.onclick=()=>go(i);dotsEl.appendChild(d);});
 
 let cur=-1, playing=true, timer=null;
-const DUR=[3800,4200,3800,4400,5400,4600,4400,6000];
+const DUR=[3800,4200,3800,4400,5400,4600,4400,5600,6000];
 /* loop / embed: play continuously like a video; embed also hides chrome */
 const PARAMS=new URLSearchParams(location.search);
 const LOOP=PARAMS.has('loop')||PARAMS.has('embed');
