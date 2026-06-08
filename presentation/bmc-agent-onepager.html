@@ -186,7 +186,8 @@
   #sEnd .pill{margin-top:26px;display:inline-flex;gap:10px;flex-wrap:wrap;justify-content:center}
   #sEnd .pill span{border:1px solid var(--line);border-radius:999px;padding:8px 16px;color:var(--text);font-size:15px}
 
-  .hint{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);color:#3a424e;font-size:12px;z-index:40}
+  .hint{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);color:#3a424e;font-size:12px;z-index:40;transition:opacity .6s}
+  #cap{transition:opacity .6s}
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -286,6 +287,7 @@
         <button id="play" title="Play / pause (space)">⏸</button>
         <button id="next" title="Next (→)">▶</button>
         <button id="replay" title="Restart (R)">⟳</button>
+        <button id="full" title="Fullscreen (F)">⛶</button>
       </div>
     </div>
   </div>
@@ -399,11 +401,33 @@ document.getElementById('next').onclick=()=>{playing=false;updatePlay();next();}
 document.getElementById('prev').onclick=()=>{playing=false;updatePlay();prev();};
 document.getElementById('replay').onclick=()=>{playing=true;updatePlay();go(0);};
 document.getElementById('play').onclick=()=>{playing=!playing;updatePlay();schedule();};
+/* ---------- fullscreen (presenter mode) ---------- */
+function toggleFull(){
+  if(!document.fullscreenElement){ document.documentElement.requestFullscreen?.(); }
+  else { document.exitFullscreen?.(); }
+}
+document.getElementById('full').onclick=toggleFull;
+
 addEventListener('keydown',e=>{
   if(e.key==='ArrowRight'||e.key===' '){e.preventDefault();playing=false;updatePlay();next();}
   else if(e.key==='ArrowLeft'){playing=false;updatePlay();prev();}
   else if(e.key.toLowerCase()==='r'){playing=true;updatePlay();go(0);}
+  else if(e.key.toLowerCase()==='f'){toggleFull();}
 });
+
+/* ---------- auto-hide cursor + chrome when idle (clean for projection) ---------- */
+let idle=null;
+function wake(){
+  document.body.style.cursor='';
+  document.getElementById('cap').style.opacity='1';
+  document.querySelector('.hint').style.opacity='';
+  clearTimeout(idle);
+  idle=setTimeout(()=>{
+    document.body.style.cursor='none';
+    document.querySelector('.hint').style.opacity='0';
+  },2600);
+}
+addEventListener('mousemove',wake); addEventListener('keydown',wake); wake();
 
 go(0);
 </script>
