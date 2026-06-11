@@ -1437,6 +1437,63 @@ def _emit_library_init_assumptions(parsed_file: "ParsedCFile") -> list[str]:
     ]
 
 
+def _re_global_idents(text: str) -> set[str]:
+    """Bare identifiers appearing in ``text`` (used to gate which globals are
+    in scope for the current harness)."""
+    return set(re.findall(r"(?<![A-Za-z0-9_])([A-Za-z_]\w*)(?![A-Za-z0-9_])", text))
+
+
+def _emit_global_invariant_assumptions(parsed_file: "ParsedCFile", config) -> list[str]:
+    """Return ``__CPROVER_assume(...)`` statements for EVIDENCE-grounded global
+    invariants derived from the source (bmc_agent/global_invariants.py).
+
+    This is the proactive, deterministic counterpart to the realism-driven
+    project clauses (Step 1.6): instead of waiting for a false-positive
+    counterexample, it scans the TU's own global write-sets and emits
+    ``g != NULL`` / ``g == K`` for const tables (proven) and init-set
+    singletons (init-trusted, taint-gated). Off unless
+    ``config.enable_global_invariants``.
+
+    Only globals actually referenced by some function body in the parsed file
+    are emitted, mirroring ``_emit_library_init_assumptions`` — a global
+    defined in this TU is in scope, but emitting assumes for ones no harness
+    touches is needless noise.
+    """
+    if not getattr(config, "enable_global_invariants", False):
+        return []
+    try:
+        from bmc_agent.global_invariants import (
+            extract_global_invariants, emit_assume_statements,
+        )
+        source = getattr(parsed_file, "preprocessed_source", None)
+        if not source:
+            path = getattr(parsed_file, "path", None)
+            if path:
+                with open(path, errors="replace") as fh:
+                    source = fh.read()
+        if not source:
+            return []
+        bodies = getattr(parsed_file, "function_bodies", None) or {}
+        combined_bodies = "\n".join(b for b in bodies.values() if b)
+        referenced = _re_global_idents(combined_bodies) if combined_bodies else None
+        fn_param_names: dict[str, set[str]] = {}
+        for fname, sig in (getattr(parsed_file, "functions", None) or {}).items():
+            try:
+                fn_param_names[fname] = {
+                    pn for _, pn in sig.parameters if pn and pn.strip()
+                }
+            except Exception:
+                continue
+        invs = extract_global_invariants(
+            source, referenced_names=referenced, fn_param_names=fn_param_names,
+        )
+        return emit_assume_statements(invs)
+    except Exception as exc:  # never fail harness-gen on an optimization
+        from bmc_agent.logger import get_logger
+        get_logger("harness").debug("global-invariant extraction failed: %s", exc)
+        return []
+
+
 def _extract_source_precondition_asserts(
     func_body: str, param_names: list[str]
 ) -> list[str]:
@@ -5068,6 +5125,16 @@ class HarnessGenerator:
             for s in lib_init_assumes:
                 harness_body_lines.append(f"    {s}")
 
+        # Step 1.5c: evidence-grounded global invariants derived from the
+        # source's own global write-sets (proactive; see
+        # _emit_global_invariant_assumptions).
+        gi_assumes = _emit_global_invariant_assumptions(parsed_file, self.config)
+        if gi_assumes:
+            harness_body_lines.append("")
+            harness_body_lines.append("    /* Step 1.5c: evidence-grounded global invariants */")
+            for s in gi_assumes:
+                harness_body_lines.append(f"    {s}")
+
         # Step 1.6: project-wide invariants learned from prior realism
         # rejections (feedback loop arm (c)). Off unless enable_feedback_loop.
         # Gate by current function's param names so clauses distilled from
@@ -5325,6 +5392,14 @@ class HarnessGenerator:
         if fp_inits:
             body_lines.append("    /* Step 1.5b: point library function-pointer globals at concrete stubs */")
             body_lines.extend(f"    {s}" for s in fp_inits)
+
+        # Step 1.5c: evidence-grounded global invariants derived from the
+        # source's own global write-sets (proactive; see
+        # _emit_global_invariant_assumptions).
+        gi_assumes = _emit_global_invariant_assumptions(parsed_file, self.config)
+        if gi_assumes:
+            body_lines.append("    /* Step 1.5c: evidence-grounded global invariants */")
+            body_lines.extend(f"    {s}" for s in gi_assumes)
 
         # Step 1.6: project-wide invariants learned from prior realism
         # rejections (feedback loop arm (c)). Off unless enable_feedback_loop.

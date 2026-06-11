@@ -538,6 +538,15 @@ class Config:
     # sweep so the same artifact pattern stops re-appearing. Default-on
     # as part of the recommended pipeline (use --no-feedback-loop to disable).
     enable_feedback_loop: bool = True
+    # Evidence-grounded global invariants (bmc_agent/global_invariants.py):
+    # PROACTIVELY derive `g != NULL` / `g == K` from the source's own global
+    # write-sets (const tables = proven; init-set singletons = init-trusted,
+    # taint-gated), emitted as Step 1.5c harness assumes. Complements the
+    # reactive realism->feedback_loop project-clause path (which needs a
+    # false-positive round-trip first). Default-on: Tier A is provably sound;
+    # Tier B is gated by the taint check and the threat model's trusted-input
+    # list. Disable with --no-global-invariants.
+    enable_global_invariants: bool = True
     # In-sweep convergence: after distilling a clause and persisting it,
     # immediately re-run CBMC on the same function (with the new harness
     # picking up the clause via Step 1.7). Loop until the function
