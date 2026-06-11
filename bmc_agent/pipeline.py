@@ -439,6 +439,10 @@ class AMCPipeline:
             corpus_files=[Path(source_file)],
         )
 
+        # Publish the domain summary so every role can pass it as a prompt-cache
+        # prefix (shared, byte-identical across the sweep). See LLMClient.complete.
+        self.config.domain_summary = domain_knowledge or ""  # type: ignore[attr-defined]
+
         specs = self.spec_gen.generate_specs(
             source_file=source_file,
             driver_name=driver_name,
@@ -2855,6 +2859,10 @@ class AMCPipeline:
         # ------------------------------------------------------------------
         all_results: dict[str, list[BugReport]] = {}
         total_bugs = 0
+
+        # Publish the codebase-wide domain summary for prompt-cache sharing
+        # across every role (re-set per file by run(), set here too for safety).
+        self.config.domain_summary = domain_knowledge or ""  # type: ignore[attr-defined]
 
         orig_preprocess = self.config.preprocess
         self.config.preprocess = False  # preprocessing already done in Pass 1

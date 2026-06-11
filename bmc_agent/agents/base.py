@@ -236,9 +236,14 @@ class BaseAgent(abc.ABC, Generic[T]):
         """
         from bmc_agent.llm import LLMError
         try:
+            # Share the codebase-wide domain summary as a prompt-cache prefix
+            # across agent roles (no-op when unset / on a subclass that already
+            # set it). See LLMClient.complete(cache_prefix=...).
+            _kwargs = self._llm_call_kwargs()
+            _kwargs.setdefault("cache_prefix", getattr(self.config, "domain_summary", ""))
             response = self.llm.complete(
                 self._system_prompt_for_call(), prompt, role=self.name,
-                **self._llm_call_kwargs(),
+                **_kwargs,
             )
         except LLMError as exc:
             return "", f"LLMError: {exc!r}"

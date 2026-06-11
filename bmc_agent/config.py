@@ -104,6 +104,13 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
 class Config:
     """Global configuration for a BMC-Agent verification run."""
 
+    # Codebase-wide domain summary (computed once in Pass 1.5). Stored here so
+    # any component can pass it as ``cache_prefix`` to LLMClient.complete() —
+    # it is byte-identical across every function and every agent role in a
+    # sweep, so caching it once lets all roles share one cache entry instead of
+    # re-billing it per call. Empty until the pipeline populates it.
+    domain_summary: str = ""
+
     # LLM settings
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))

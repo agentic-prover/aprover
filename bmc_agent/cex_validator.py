@@ -1195,7 +1195,8 @@ class CExValidator:
         )
 
         try:
-            response = self.llm.complete(system_prompt, user_prompt, role="realism")
+            response = self.llm.complete(system_prompt, user_prompt, role="realism",
+                                         cache_prefix=getattr(self.config, "domain_summary", ""))
             data = _parse_json_response(response)
             if data is not None:
                 is_reachable = bool(data.get("is_reachable", False))
@@ -1678,7 +1679,8 @@ class CExValidator:
     ) -> str:
         """One refinement call, with a vacuous-output critique retry on K2."""
         try:
-            response = self.llm.complete(system_prompt, user_prompt, role="refinement")
+            response = self.llm.complete(system_prompt, user_prompt, role="refinement",
+                                         cache_prefix=getattr(self.config, "domain_summary", ""))
         except LLMError as exc:
             logger.warning("LLM refinement failed: %s", exc)
             return ""
@@ -1729,6 +1731,7 @@ class CExValidator:
         try:
             critique_response = self.llm.complete(
                 system_prompt, critique, max_tokens=32768, role="refinement",
+                cache_prefix=getattr(self.config, "domain_summary", ""),
             )
         except LLMError as exc:
             logger.debug("Refinement critique LLM call failed: %s -- using original", exc)
@@ -1944,7 +1947,8 @@ class CExValidator:
         )
 
         try:
-            response = self.llm.complete(system_prompt, user_prompt, role="refinement")
+            response = self.llm.complete(system_prompt, user_prompt, role="refinement",
+                                         cache_prefix=getattr(self.config, "domain_summary", ""))
             data = _parse_json_response(response)
             if data is not None:
                 is_over_refined = bool(data.get("is_over_refined", False))
@@ -1999,7 +2003,8 @@ class CExValidator:
         )
 
         try:
-            response = self.llm.complete(system_prompt, user_prompt, role="realism")
+            response = self.llm.complete(system_prompt, user_prompt, role="realism",
+                                         cache_prefix=getattr(self.config, "domain_summary", ""))
             data = _parse_json_response(response)
             if data is not None:
                 code = data.get("reproducer_code", "").strip()

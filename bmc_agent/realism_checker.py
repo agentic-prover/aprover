@@ -470,6 +470,7 @@ class RealismChecker:
                         thinking=use_thinking,
                         thinking_budget=4000,
                         role="realism",
+                        cache_prefix=getattr(self.config, "domain_summary", ""),
                     )
                     pass2 = _parse_result(raw2, func.name)
                     if pass2.verdict != RealismVerdict.UNREALISTIC:
