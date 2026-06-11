@@ -148,12 +148,20 @@ async def chat(request: Request) -> StreamingResponse:
     if not isinstance(messages, list):
         return JSONResponse({"error": "messages must be a list"}, status_code=400)
 
+    # Bring-your-own-key: the visitor's Anthropic key arrives per request via
+    # the X-Anthropic-Key header (kept out of the JSON body so it doesn't end
+    # up in request logs). Fall back to a server-side key for local dev.
+    user_key = (
+        request.headers.get("X-Anthropic-Key", "").strip()
+        or os.environ.get("ANTHROPIC_API_KEY", "")
+    )
+
     async def gen() -> AsyncIterator[str]:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            yield _sse("error", {"message": "Server is not configured: ANTHROPIC_API_KEY missing."})
+        if not user_key:
+            yield _sse("error", {"message": "Enter your Anthropic API key to run AProver — it stays in your browser and is sent only with your own requests."})
             return
 
-        client = Anthropic()
+        client = Anthropic(api_key=user_key)
         model = os.environ.get("BMC_AGENT_LLM_MODEL", "claude-sonnet-4-6")
         convo = list(messages)
 
@@ -226,6 +234,7 @@ async def chat(request: Request) -> StreamingResponse:
                             source_code=tu.input.get("source_code", ""),
                             function=(tu.input.get("function") or None),
                             domain_knowledge=tu.input.get("domain_knowledge", ""),
+                            api_key=user_key,
                         ):
                             yield _sse("tool_progress", ev)
                             if ev.get("type") == "result":

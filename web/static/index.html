@@ -125,6 +125,15 @@
       <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 10l16-7-7 16-2-7z"/></svg>
     </button>
   </div>
+  <div class="composer-key">
+    <input
+      id="api-key"
+      type="password"
+      placeholder="your Anthropic API key (sk-ant-…)"
+      autocomplete="off"
+      spellcheck="false" />
+    <span class="key-note" id="key-note">🔒 stored only in your browser · sent only with your requests · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">get a key ↗</a></span>
+  </div>
   <div class="composer-hint">
     <span>⏎ send · ⇧⏎ newline</span>
     <span class="composer-host">claude · cbmc · 64KB cap</span>

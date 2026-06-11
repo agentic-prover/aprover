@@ -14,6 +14,23 @@ const statusDot = statusEl.querySelector(".status-dot");
 const statusText = statusEl.querySelector(".status-text");
 const msgTpl = document.getElementById("msg-tpl");
 const runTpl = document.getElementById("run-tpl");
+const apiKeyInput = document.getElementById("api-key");
+
+const API_KEY_STORE = "aprover_anthropic_key";
+
+// Bring-your-own-key: persist the visitor's Anthropic key in localStorage so
+// it survives reloads but never leaves their browser except as a per-request
+// header. Nothing key-related is stored server-side.
+if (apiKeyInput) {
+  apiKeyInput.value = localStorage.getItem(API_KEY_STORE) || "";
+  apiKeyInput.addEventListener("input", () => {
+    localStorage.setItem(API_KEY_STORE, apiKeyInput.value.trim());
+  });
+}
+
+function getApiKey() {
+  return (apiKeyInput && apiKeyInput.value.trim()) || "";
+}
 
 const history = [];
 let busy = false;
@@ -304,7 +321,10 @@ async function streamChat() {
 
   const res = await fetch("/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Anthropic-Key": getApiKey(),
+    },
     body: JSON.stringify({ messages: history }),
   });
   if (!res.ok || !res.body) {
@@ -416,6 +436,15 @@ form.addEventListener("submit", (e) => {
   if (busy) return;
   const text = input.value.trim();
   if (!text) return;
+  if (!getApiKey()) {
+    appendMsg("system", "Add your Anthropic API key below to run AProver — it stays in your browser.");
+    if (apiKeyInput) {
+      apiKeyInput.focus();
+      apiKeyInput.classList.add("key-needed");
+      setTimeout(() => apiKeyInput.classList.remove("key-needed"), 1500);
+    }
+    return;
+  }
   appendMsg("user", renderMarkdown(text), { label: "you" });
   history.push({ role: "user", content: text });
   input.value = "";

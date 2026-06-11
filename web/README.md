@@ -24,6 +24,8 @@ The Space packages:
 
 The assistant is a Claude model with one tool, `run_aprover(source_code, function?, domain_knowledge?)`. When you paste C code, the model decides whether to call the tool, the server runs the pipeline in a worker thread, and every log line + final bug summary streams back into the chat as it happens.
 
+**Bring your own key.** Visitors paste their own Anthropic API key into the UI; it is kept in browser `localStorage` and sent only as the `X-Anthropic-Key` header on their own requests, never stored server-side. Both the chat agent and the AProver pipeline run on the caller's key, so the host carries no per-visitor LLM cost. A server-side `ANTHROPIC_API_KEY` is optional and used only as a local-dev fallback.
+
 Defaults are tuned for a public demo (no dynamic validation, short refinement loop, 60s CBMC timeout, 64KB source cap). Heavier configs are available via the CLI.
 
 ## Running it locally
@@ -53,7 +55,7 @@ git clone https://huggingface.co/spaces/<you>/aprover ~/aprover-space
 cd ~/aprover-space && git add -A && git commit -m "Update AProver Space" && git push
 ```
 
-In **Space Settings → Secrets**, add `ANTHROPIC_API_KEY`. Optionally set `BMC_AGENT_LLM_MODEL` (defaults to `claude-sonnet-4-6`). The container listens on port 7860, which Spaces routes automatically.
+No secrets are required: visitors supply their own Anthropic key in the UI (see "Bring your own key" above). Optionally set `BMC_AGENT_LLM_MODEL` (defaults to `claude-sonnet-4-6`), or `ANTHROPIC_API_KEY` as a fallback for local dev. The container listens on port 7860, which Spaces routes automatically.
 
 ## Files
 

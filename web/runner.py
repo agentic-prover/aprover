@@ -40,6 +40,7 @@ def run_aprover_streaming(
     source_code: str,
     function: str | None = None,
     domain_knowledge: str = "",
+    api_key: str = "",
 ) -> Iterator[dict]:
     """Run AMCPipeline on a snippet, yielding progress events.
 
@@ -65,6 +66,11 @@ def run_aprover_streaming(
     src_path.write_text(source_code, encoding="utf-8")
 
     config = Config.from_env()
+    # Visitor-supplied key takes precedence over any server-side env key.
+    # resolved_api_key() checks llm_api_key first, so this routes the whole
+    # pipeline (spec gen + refinement) through the caller's own key.
+    if api_key:
+        config.llm_api_key = api_key
     config.artifact_dir = str(work_dir / "artifacts")
     config.enable_dynamic_validation = False
     config.enable_realism_check = False

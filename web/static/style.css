@@ -1027,6 +1027,49 @@ form#composer {
   background: var(--muted-2);
 }
 
+.composer-key {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+#api-key {
+  flex: 0 1 320px;
+  min-width: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--fg);
+  font: 12px ui-monospace, "JetBrains Mono", SFMono-Regular, monospace;
+  letter-spacing: 0.2px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+#api-key:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+#api-key::placeholder { color: var(--muted-2); }
+
+#api-key.key-needed {
+  border-color: #f87171;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18);
+}
+
+.key-note {
+  font: 11px ui-monospace, "JetBrains Mono", SFMono-Regular, monospace;
+  color: var(--muted-2);
+  letter-spacing: 0.2px;
+}
+
+.key-note a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted-2); }
+.key-note a:hover { color: var(--accent); }
+
 .composer-hint {
   display: flex;
   justify-content: space-between;
