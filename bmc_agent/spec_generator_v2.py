@@ -687,7 +687,9 @@ class SpecGeneratorV2:
         # Phase-1 speedup, especially when spec-gen is agentic (each call is a
         # slow claude-code / API round-trip): N functions in a layer run in
         # parallel instead of serially.
-        max_workers = max(1, min(self.config.batch_size, 8))
+        # Spec-gen is LLM-bound (I/O), so threads overlap the round-trips —
+        # cap at the configured worker count (not the CPU count).
+        max_workers = max(1, min(getattr(self.config, "max_workers", 8), 32))
         for layer_idx, layer in enumerate(layers):
             logger.info("v2: layer %d/%d: %s", layer_idx + 1, len(layers), layer)
             todo = []

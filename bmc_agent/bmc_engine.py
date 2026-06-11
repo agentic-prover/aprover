@@ -498,7 +498,14 @@ class BMCEngine:
             logger.warning("No functions to check in driver '%s'", driver_name)
             return verdicts
 
-        max_workers = min(len(to_check), self.config.batch_size, 8)
+        # CBMC is CPU-bound: cap at the configured worker count AND the CPU
+        # count so we don't oversubscribe cores with concurrent solver runs.
+        import os as _os
+        max_workers = min(
+            len(to_check),
+            getattr(self.config, "max_workers", 8),
+            (_os.cpu_count() or 8),
+        )
         logger.info(
             "Checking %d functions in driver '%s' with %d workers",
             len(to_check),

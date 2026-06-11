@@ -588,6 +588,69 @@ class AMCPipeline:
         # CEGAR re-runs don't re-validate and re-report the same root bug.
         confirmed_real_bugs: set[tuple[str, str]] = set()
 
+        # Dedup counterexamples once (deterministic), then optionally precompute
+        # the per-CEx validate() calls IN PARALLEL. validate() is
+        # side-effect-free on shared pipeline state (it returns a
+        # ValidationResult; the serial handler below applies spec refinements,
+        # re-queues, and reports). So concurrency only overlaps the slow,
+        # I/O/subprocess-bound work (LLM classification + CBMC refinement
+        # re-runs); all state mutation stays in the deterministic serial loop.
+        # Cache hits use the pre-pass spec snapshot; intra-pass refinements are
+        # picked up by the CEGAR re-queue (Phase 3c), so results are equivalent.
+        _deduped: "dict[str, list]" = {}
+        for _fn, _vd in verdicts.items():
+            if _vd.verified or (_vd.error and not _vd.counterexamples):
+                continue
+            if all_funcs.get(_fn) is None or current_specs.get(_fn) is None:
+                continue
+            _deduped[_fn] = list(_dedup_counterexamples(
+                _vd.counterexamples, max_per_type=self.config.dedup_max_per_type,
+            ))
+        # Cache keyed by (fn_name, cex_index). Parallelism granularity is the
+        # FUNCTION (not the individual CEx): validate()'s internal CBMC
+        # refinement re-runs write artifacts keyed by (driver, function), so
+        # different functions never collide, while a function's own CEx are
+        # validated sequentially within its task.
+        _val_cache: "dict[tuple[str, int], object]" = {}
+        _n_cex = sum(len(v) for v in _deduped.values())
+        _parallel = (
+            getattr(self.config, "parallel_validation", False)
+            and not getattr(self.config, "llm_role_overrides", None)  # role-swap isn't thread-safe
+            and len(_deduped) > 1
+            and _n_cex > 1
+        )
+        if _parallel:
+            from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
+            _mw = max(1, min(getattr(self.config, "max_workers", 8), len(_deduped)))
+            logger.info(
+                "Phase 3: validating %d counterexample(s) across %d function(s) "
+                "with %d workers", _n_cex, len(_deduped), _mw,
+            )
+
+            def _validate_fn(_fn: str) -> "list":
+                return [
+                    self.validator.validate(
+                        func=all_funcs[_fn], spec=current_specs[_fn], counterexample=_cex,
+                        all_funcs=all_funcs, all_specs=current_specs, parsed_file=parsed,
+                        driver_name=driver_name, cross_file_callers=cross_file_callers,
+                        cross_file_caller_contexts=cross_file_caller_contexts,
+                    )
+                    for _cex in _deduped[_fn]
+                ]
+
+            with _TPE(max_workers=_mw) as _ex:
+                _futs = {_ex.submit(_validate_fn, fn): fn for fn in _deduped}
+                for _fut in _ac(_futs):
+                    _fn = _futs[_fut]
+                    try:
+                        for _i, _v in enumerate(_fut.result()):
+                            _val_cache[(_fn, _i)] = _v
+                    except Exception as _exc:
+                        logger.warning(
+                            "Phase 3 parallel validate failed for '%s': %s — "
+                            "recomputing serially", _fn, _exc,
+                        )
+
         for fn_name, verdict in verdicts.items():
             if verdict.verified:
                 logger.debug("'%s' verified — no counterexamples", fn_name)
@@ -606,25 +669,24 @@ class AMCPipeline:
             if spec is None:
                 continue
 
-            for cex in _dedup_counterexamples(
-                verdict.counterexamples,
-                max_per_type=self.config.dedup_max_per_type,
-            ):
+            for _cex_i, cex in enumerate(_deduped.get(fn_name, [])):
                 logger.info(
                     "Validating counterexample for '%s' (property=%s)",
                     fn_name, cex.failing_property,
                 )
-                validation = self.validator.validate(
-                    func=func,
-                    spec=spec,
-                    counterexample=cex,
-                    all_funcs=all_funcs,
-                    all_specs=current_specs,
-                    parsed_file=parsed,
-                    driver_name=driver_name,
-                    cross_file_callers=cross_file_callers,
-                    cross_file_caller_contexts=cross_file_caller_contexts,
-                )
+                validation = _val_cache.get((fn_name, _cex_i))
+                if validation is None:
+                    validation = self.validator.validate(
+                        func=func,
+                        spec=spec,
+                        counterexample=cex,
+                        all_funcs=all_funcs,
+                        all_specs=current_specs,
+                        parsed_file=parsed,
+                        driver_name=driver_name,
+                        cross_file_callers=cross_file_callers,
+                        cross_file_caller_contexts=cross_file_caller_contexts,
+                    )
 
                 # Always persist the classification result for this counterexample
                 self.store.save_classification(driver_name, fn_name, validation)

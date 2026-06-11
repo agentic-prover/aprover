@@ -111,6 +111,18 @@ class Config:
     # re-billing it per call. Empty until the pipeline populates it.
     domain_summary: str = ""
 
+    # Parallelism. ``max_workers`` caps the per-stage thread pools (spec
+    # generation, CBMC checking, and counterexample validation). LLM/CBMC work
+    # is I/O- and subprocess-bound, so threads overlap the latency well; the
+    # CBMC pool is additionally capped at the CPU count (CPU-bound). When
+    # ``parallel_validation`` is on, the Phase-3 per-counterexample validate()
+    # calls run concurrently (they are side-effect-free; the serial outcome
+    # handler then applies results deterministically). Auto-disabled when
+    # per-role LLM overrides are set (the role-routing path mutates shared
+    # config and isn't thread-safe).
+    max_workers: int = field(default_factory=lambda: int(os.environ.get("BMC_AGENT_MAX_WORKERS", "16")))
+    parallel_validation: bool = field(default_factory=lambda: os.environ.get("BMC_AGENT_PARALLEL_VALIDATION", "1") not in ("0", "false", "False", ""))
+
     # LLM settings
     llm_model: str = "claude-sonnet-4-6"
     llm_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
