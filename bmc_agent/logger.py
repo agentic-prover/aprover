@@ -24,16 +24,32 @@ _LOGGERS: dict[str, logging.Logger] = {}
 _FILE_HANDLER: Optional[logging.FileHandler] = None
 
 
-def _ensure_file_handler(artifact_dir: str) -> logging.FileHandler:
-    """Create (or return existing) file handler for the given artifact directory."""
+def _ensure_file_handler(artifact_dir: str) -> Optional[logging.FileHandler]:
+    """Create (or return existing) file handler for the given artifact directory.
+
+    Returns ``None`` if no writable log location is available (e.g. a
+    read-only container workdir), in which case logging stays console-only
+    rather than crashing the importing process.
+    """
     global _FILE_HANDLER
     if _FILE_HANDLER is not None:
         return _FILE_HANDLER
 
-    log_path = Path(artifact_dir) / "amc.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile
 
-    _FILE_HANDLER = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    # Try the requested dir first, then a temp-dir fallback. A logger must
+    # never take down the app just because its file sink is unwritable.
+    for candidate in (artifact_dir, os.path.join(tempfile.gettempdir(), "aprover-logs")):
+        try:
+            log_path = Path(candidate) / "amc.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            _FILE_HANDLER = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+            break
+        except OSError:
+            continue
+    if _FILE_HANDLER is None:
+        return None
+
     _FILE_HANDLER.setLevel(logging.DEBUG)
     fmt = logging.Formatter(
         "%(asctime)s  %(levelname)-8s  [%(name)s]  %(message)s",
@@ -85,9 +101,14 @@ def get_logger(
 
     logger.addHandler(console_handler)
 
-    # File handler
-    file_handler = _ensure_file_handler(artifact_dir)
-    logger.addHandler(file_handler)
+    # File handler. An env override lets read-only deployments (e.g. HF
+    # Spaces) redirect logs to a writable path; if even that fails we run
+    # console-only rather than crash.
+    file_handler = _ensure_file_handler(
+        os.environ.get("BMC_AGENT_LOG_DIR", artifact_dir)
+    )
+    if file_handler is not None:
+        logger.addHandler(file_handler)
 
     _LOGGERS[component] = logger
     return logger

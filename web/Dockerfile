@@ -14,7 +14,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     UV_SYSTEM_PYTHON=1 \
-    HOME=/home/user
+    HOME=/home/user \
+    BMC_AGENT_LOG_DIR=/tmp/aprover-logs
 
 # CBMC + a C compiler (needed by the parser preprocessor and any future
 # dynamic-validator path). gcc is pulled in by build-essential.
