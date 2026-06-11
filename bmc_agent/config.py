@@ -218,6 +218,17 @@ class Config:
     # above any normal function, well below a multi-hour stall. Env override
     # BMC_AGENT_PER_FUNCTION_TIME_BUDGET_S; CLI --per-function-time-budget.
     per_function_time_budget_s: int = 1200
+    # On a CBMC TIMEOUT for a function whose unwind is high (>= threshold), the
+    # timeout is almost certainly a state-space EXPLOSION from deep loop
+    # unrolling — more time won't help (that's what BUMP_TIMEOUT is for: near-
+    # misses). Instead REDUCE the unwind and re-run. Sound because
+    # --unwinding-assertions stays on: if the loop can exceed the reduced bound,
+    # CBMC fails the unwinding assertion (routed to the refiner/spurious path,
+    # never reported clean), so we never claim "verified" for a bound we didn't
+    # cover — we only get a clean verify when the reduced bound was sufficient,
+    # or a real bug at shallow depth. Backstopped by per_function_time_budget_s.
+    enable_unwind_reduction: bool = True
+    unwind_reduction_threshold: int = 16
     # CBMC --object-bits. None = let CBMC pick its default (currently 8); with
     # cbmc_auto_scale_object_bits=True, run_cbmc will retry at 12 and 16 when
     # the "too many addressed objects" error trips. State-heavy parser files

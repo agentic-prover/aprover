@@ -127,6 +127,35 @@ class RetryAction(str, Enum):
     (OOM, UNKNOWN, or actionable class with no identifier)."""
 
 
+# Bounds for explosion-recovery unwind reduction (see plan_unwind_reduction).
+_MIN_UNWIND_ON_REDUCE = 4
+_UNWIND_REDUCE_CAP = 8
+
+
+def plan_unwind_reduction(
+    cur_unwind: int, *, threshold: int = 16, enabled: bool = True
+) -> Optional[int]:
+    """Return a REDUCED unwind bound for an explosion-class CBMC TIMEOUT, or
+    ``None`` to keep the current bound (and let the caller bump the timeout
+    instead — a low unwind that times out is more likely a near-miss than a
+    deep-loop explosion).
+
+    A high unwind that times out means the formula exploded from deep loop
+    unrolling; more time won't help, but a smaller bound makes it tractable.
+    Halve the bound, capped to a tractable level (``_UNWIND_REDUCE_CAP``) and
+    floored at ``_MIN_UNWIND_ON_REDUCE``.
+
+    SOUNDNESS is the caller's responsibility: this is safe ONLY while CBMC runs
+    with ``--unwinding-assertions`` on, so that a loop able to exceed the
+    reduced bound FAILS the unwinding assertion (routed to the refiner/spurious
+    path, never reported clean) instead of being silently assumed to terminate.
+    """
+    if not enabled or cur_unwind < int(threshold):
+        return None
+    new_unwind = max(_MIN_UNWIND_ON_REDUCE, min(cur_unwind // 2, _UNWIND_REDUCE_CAP))
+    return new_unwind if new_unwind < cur_unwind else None
+
+
 @dataclass(frozen=True)
 class RetryPlan:
     """What the pipeline should do to recover from a CBMC error."""

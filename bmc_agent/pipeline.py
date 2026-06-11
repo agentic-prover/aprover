@@ -1939,6 +1939,7 @@ class AMCPipeline:
             from bmc_agent.flag_selector import FlagSelection
             stubbed_callees: dict[str, str] = {}
             bumped_timeouts: dict[str, int] = {}
+            reduced_unwinds: dict[str, "tuple[int, int]"] = {}
             for fn_name, verdict in errored.items():
                 cbmc_res = verdict.cbmc_result
                 if cbmc_res is None:
@@ -1981,10 +1982,46 @@ class AMCPipeline:
                     stubbed_callees[fn_name] = picked
                     continue  # don't also bump-timeout this fn this round
 
-                # FALLBACK: BUMP_TIMEOUT.
                 if flag_selections is None:
                     flag_selections = {}
                 fs = flag_selections.get(fn_name)
+
+                # SECONDARY (explosion-targeted): REDUCE_UNWIND. When the per-
+                # function unwind is high, a timeout is almost certainly a
+                # state-space explosion from deep loop unrolling — more time
+                # won't help (BUMP_TIMEOUT is for near-misses). Halve the unwind
+                # (capped to a tractable level) and re-run. SOUND because
+                # --unwinding-assertions stays on: if the loop can exceed the
+                # reduced bound, CBMC fails the unwinding assertion, which
+                # cex_validator routes to the refiner/spurious path (never a
+                # clean verify) — so we never claim "verified" for a bound we
+                # didn't cover. We only get a clean verify when the reduced
+                # bound was genuinely sufficient, or a real bug at shallow depth.
+                from bmc_agent.auto_retry_registry import plan_unwind_reduction
+                cur_unwind = (
+                    fs.unwind_override
+                    if (fs is not None and getattr(fs, "unwind_override", None))
+                    else int(getattr(self.config, "cbmc_unwind", 4))
+                )
+                new_unwind = plan_unwind_reduction(
+                    cur_unwind,
+                    threshold=int(getattr(self.config, "unwind_reduction_threshold", 16)),
+                    enabled=bool(getattr(self.config, "enable_unwind_reduction", True)),
+                )
+                if new_unwind is not None:
+                    reason = (f"auto-retry: reduced unwind {cur_unwind}→{new_unwind} "
+                              f"(timeout = explosion, not a near-miss; "
+                              f"--unwinding-assertions keeps it sound)")
+                    if fs is None:
+                        flag_selections[fn_name] = FlagSelection(
+                            unwind_override=new_unwind, reasoning=reason,
+                        )
+                    else:
+                        fs.unwind_override = new_unwind
+                    reduced_unwinds[fn_name] = (cur_unwind, new_unwind)
+                    continue  # don't also bump-timeout this fn this round
+
+                # FALLBACK: BUMP_TIMEOUT.
                 current = (
                     fs.timeout_override
                     if (fs is not None and fs.timeout_override is not None)
@@ -2017,6 +2054,15 @@ class AMCPipeline:
                     "%d function(s): %s",
                     round_idx, len(bumped_timeouts),
                     ", ".join(f"{n}={t}s" for n, t in bumped_timeouts.items()),
+                )
+            if reduced_unwinds:
+                logger.info(
+                    "Phase 2b auto-retry round %d: reduced unwind (explosion "
+                    "recovery) for %d function(s): %s. Note: any property left "
+                    "unproven at the reduced bound is reported INCOMPLETE "
+                    "(unwinding-assertion → refiner/unresolved), never clean.",
+                    round_idx, len(reduced_unwinds),
+                    ", ".join(f"{n} {o}→{r}" for n, (o, r) in reduced_unwinds.items()),
                 )
 
             # Re-run CBMC for every errored function (the session sets are
