@@ -199,9 +199,6 @@ def _parse_decl(seg_masked: str, seg_real: str, span: tuple[int, int]) -> _Decl 
     sm = seg_masked.strip()
     if not sm or sm.startswith("#"):
         return None
-    # Skip anything with a top-level '(' (function proto / func-ptr / call).
-    if "(" in sm:
-        return None
     if sm.startswith(("typedef", "struct", "union", "enum")) and "=" not in sm:
         return None
     # Split off initializer (first top-level '=' that is a plain assign, not
@@ -211,6 +208,13 @@ def _parse_decl(seg_masked: str, seg_real: str, span: tuple[int, int]) -> _Decl 
     head = sm
     if eq is not None:
         head = sm[:eq]
+    # Skip a '(' in the DECLARATOR (function prototype / function-pointer
+    # variable) -- but NOT a '(' in the INITIALIZER, which is common after
+    # preprocessing (``= ((void *)0)``, ``= alloc()``). Checking the head
+    # alone is what lets preprocessed globals (NULL -> ((void *)0)) parse.
+    if "(" in head:
+        return None
+    if eq is not None:
         init_expr = seg_real.strip()
         # real initializer text (after the '=' in the real segment)
         req = _first_assign_eq(seg_real)

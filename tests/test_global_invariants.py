@@ -172,3 +172,27 @@ def test_emit_assume_statements():
 def test_no_globals_returns_empty():
     src = "int f(int x){ return x+1; }\n"
     assert emit_assume_statements(extract_global_invariants(src)) == []
+
+
+def test_preprocessed_null_initializer_with_parens():
+    # After cpp, NULL -> ((void *)0): the '(' is in the INITIALIZER, not the
+    # declarator. The decl must still parse (regression: a naive '(' check
+    # rejected the whole statement and dropped every preprocessed global).
+    src = """
+static vfs_node_t *mem_root = ((void *)0);
+static node_t *root = ((void *)0);
+void vfs_init(void) { mem_root = alloc_inode(); }
+int vfs_lookup(void){ return mem_root->size; }
+"""
+    e = _emitted(src)
+    assert "mem_root" in e
+    assert e["mem_root"].clause == "mem_root != NULL"
+    assert e["mem_root"].tier == "init-trusted"
+    # `root` is never written in an init fn -> stays NULL -> NOT emitted.
+    assert "root" not in e
+
+
+def test_func_pointer_variable_in_declarator_is_rejected():
+    # A '(' in the DECLARATOR (function-pointer variable) must still be skipped.
+    src = "static int (*handler)(int) = some_fn;\n"
+    assert "handler" not in _emitted(src)
