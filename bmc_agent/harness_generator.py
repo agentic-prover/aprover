@@ -3266,6 +3266,33 @@ def _max_literal_subscript(body: str, pname: str) -> Optional[int]:
     return max_idx
 
 
+_BYTE_TYPE_LITERALS = {
+    "char", "unsigned char", "signed char",
+    "uint8_t", "int8_t", "u_char", "uchar", "byte",
+}
+# Project byte typedefs by naming convention: stbtt_uint8, png_byte, u8, s8,
+# my_uint8_t, ... End-anchored so uint16/uint32 (multi-byte) never match.
+_BYTE_TYPEDEF_RE = re.compile(
+    r"(?:^|_)(?:u?int8(?:_t)?|[su]8|byte|uchar)$", re.IGNORECASE
+)
+
+
+def _is_byte_shaped_type(base_type: str) -> bool:
+    """True if ``base_type`` is a 1-byte char/uint8 type, directly OR via a
+    common project typedef (``stbtt_uint8`` = ``unsigned char``, etc.).
+
+    The harness's byte-pointer branch (sized backing buffer) keyed only on the
+    literal type names, so a ``T *`` whose ``T`` is a byte TYPEDEF fell through
+    to the generic single-SCALAR default — under-sizing accessor params like
+    ``ttUSHORT(stbtt_uint8 *p)`` that read ``p[0..k]`` (see the vibeos ttf
+    calibration). Resolving the typedef routes them to a real buffer.
+    """
+    b = re.sub(r"\bconst\b", "", base_type or "").strip()
+    if b in _BYTE_TYPE_LITERALS:
+        return True
+    return bool(_BYTE_TYPEDEF_RE.search(b))
+
+
 def _generate_nd_decls(
     func: FunctionInfo,
     cbmc_unwind: int = 4,
@@ -3492,7 +3519,7 @@ def _generate_nd_decls(
                     lines.append(
                         f"    /* {pname} is non-null by construction (addr of cursor) */"
                     )
-            elif clean_base in ("char", "unsigned char", "uint8_t", "int8_t", "wchar_t") and star_count == 1:
+            elif (_is_byte_shaped_type(base_type) or clean_base == "wchar_t") and star_count == 1:
                 # Single-indirection byte/wchar-shaped pointer. Strategies:
                 #
                 #  - Default for ``char`` / ``wchar_t`` (raw_bytes=False):
