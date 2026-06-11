@@ -2531,6 +2531,56 @@ class AMCPipeline:
     # Realism-feedback-driven in-sweep spec refinement
     # ------------------------------------------------------------------
 
+    def _persist_gated_refiner_clause(self, func, proposal, validation) -> None:
+        """Persist an ACCEPTED, soundness-gated spec_refiner clause to the
+        learned-constraints store as a FUNCTION_SPEC remediation, so it takes
+        effect IN-SWEEP for this function's other counterexamples and
+        re-verifications (harness Step 1.7 reads the store on every harness
+        generation) and carries across sweeps.
+
+        Mirrors ``_feedback_iterate``'s persistence, but with the targeted +
+        caller-soundness-gated clause instead of the general-distill clause.
+        FUNCTION_SPEC scope is keyed by function name, so this only affects
+        the SAME function's later re-verifications — no cross-function order
+        dependence (the reproducibility concern that keeps project clauses
+        deferred). Gated on ``enable_feedback_loop`` because Step 1.7 only
+        reads the store when that is on.
+        """
+        if not getattr(self.config, "enable_feedback_loop", False):
+            return
+        clause = (getattr(proposal, "added_clause", "") or "").strip()
+        if not clause:
+            return
+        try:
+            from bmc_agent.feedback_loop import (
+                LearnedConstraintsStore, Remediation, RemediationScope,
+            )
+            store = LearnedConstraintsStore(self.config.artifact_dir)
+            rem = Remediation(
+                scope=RemediationScope.FUNCTION_SPEC,
+                clause=clause,
+                rationale=(getattr(proposal, "rationale", "") or
+                           "soundness-gated spec_refiner clause excluding the "
+                           "realism-rejected counterexample"),
+                confidence=("high" if getattr(self.config, "enable_soundness_gate", False)
+                            else "medium"),
+            )
+            if store.record(
+                func.name, rem,
+                source_property=getattr(validation.counterexample,
+                                        "failing_property", ""),
+            ):
+                logger.info(
+                    "spec_refiner (%s): persisted gated clause '%s' to learned "
+                    "constraints (in-sweep Step 1.7 + cross-sweep)",
+                    func.name, clause,
+                )
+        except Exception as exc:
+            logger.warning(
+                "spec_refiner (%s): failed to persist gated clause: %s",
+                func.name, exc,
+            )
+
     def _spec_refine_iterate(
         self,
         validation: "ValidationResult",
@@ -2674,6 +2724,14 @@ class AMCPipeline:
                 func.name, proposal.added_clause, targeted_prop,
             )
             return validation, realism
+
+        # ACCEPTED: the soundness-gated clause excluded the targeted CEx.
+        # Persist it so it takes effect IN-SWEEP for this function's other
+        # CExs / re-verifications (harness Step 1.7) and across sweeps —
+        # otherwise this highest-quality (targeted + caller-soundness-gated)
+        # clause is used for one re-verify and then discarded, leaving only
+        # the UNGATED general-distill clause from _feedback_iterate.
+        self._persist_gated_refiner_clause(func, proposal, validation)
 
         # Targeted CEx is gone. Two sub-cases:
         if new_verdict.verified or not new_verdict.counterexamples:
