@@ -252,6 +252,110 @@ def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile
     return "".join(parts).strip()
 
 
+def _strip_comments_and_strings(text: str) -> str:
+    """Blank out C comments and string/char literals (preserving newlines and
+    length) so a brace/paren scan over the result reflects real code structure.
+    Used by the file-scope variable extractor below; not a general formatter."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        two = text[i:i + 2]
+        if two == "//":
+            while i < n and text[i] != "\n":
+                out.append(" "); i += 1
+            continue
+        if two == "/*":
+            out.append("  "); i += 2
+            while i < n and text[i:i + 2] != "*/":
+                out.append("\n" if text[i] == "\n" else " "); i += 1
+            if i < n:
+                out.append("  "); i += 2
+            continue
+        if c in "\"'":
+            quote = c
+            out.append(" "); i += 1
+            while i < n and text[i] != quote:
+                if text[i] == "\\" and i + 1 < n:
+                    out.append("  "); i += 2; continue
+                out.append("\n" if text[i] == "\n" else " "); i += 1
+            if i < n:
+                out.append(" "); i += 1
+            continue
+        out.append(c); i += 1
+    return "".join(out)
+
+
+def _extract_file_scope_var_defs(
+    source_text: str, wanted_names: "set[str]", exclude_names: "set[str]"
+) -> list[str]:
+    """Return file-scope (brace-depth-0) VARIABLE definitions whose declared
+    name is in *wanted_names* and not in *exclude_names*.
+
+    Motivation: the dynamic harness embeds function bodies that may reference a
+    module-scope variable (e.g. ``static const char *dtb_error = "No error";``
+    in dtb.c, read by ``dtb_get_error``). The brace-counting type-decl
+    extractor mishandles real sources (it ignores comments/strings) and can
+    drop such definitions, producing ``error: 'dtb_error' undeclared`` at GCC
+    compile. This recovers exactly the referenced ones.
+
+    Depth is tracked over a comment/string-masked copy so braces inside
+    function bodies, strings, or comments don't fool the scan. ``static`` is
+    stripped so the variable links in the single-TU harness; declarations
+    (no initializer, e.g. ``extern``) are skipped — they don't define storage.
+    """
+    masked = _strip_comments_and_strings(source_text)
+    # Walk statements at depth 0 (outside any {...} and any (...)).
+    defs: list[str] = []
+    seen: set[str] = set()
+    depth_brace = depth_paren = 0
+    start = 0
+    for i, ch in enumerate(masked):
+        if ch == "{":
+            depth_brace += 1
+        elif ch == "}":
+            depth_brace = max(0, depth_brace - 1)
+            start = i + 1
+        elif ch == "(":
+            depth_paren += 1
+        elif ch == ")":
+            depth_paren = max(0, depth_paren - 1)
+        elif ch == ";" and depth_brace == 0 and depth_paren == 0:
+            seg_masked = masked[start:i + 1]
+            seg_real = source_text[start:i + 1]
+            start = i + 1
+            # The segment runs from the previous statement terminator, so it
+            # can carry leading blank/comment lines (blanked in `masked`) and
+            # preprocessor directives that aren't ';'-terminated. Drop those so
+            # only the declaration itself is emitted (not stray #includes).
+            _ml = seg_masked.splitlines()
+            _rl = seg_real.splitlines()
+            _k = 0
+            while _k < len(_ml):
+                if _ml[_k].strip() == "" or (_k < len(_rl) and _rl[_k].lstrip().startswith("#")):
+                    _k += 1
+                else:
+                    break
+            seg_masked = "\n".join(_ml[_k:])
+            seg_real = "\n".join(_rl[_k:])
+            # A variable DEFINITION at file scope: has an '=' initializer and
+            # no '(' (so it's not a function prototype / function-pointer-init
+            # we can't safely reproduce). Find the declared name (token just
+            # before '=').
+            if "(" in seg_masked or "=" not in seg_masked:
+                continue
+            m = re.search(r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*=", seg_masked)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in exclude_names or name in seen or name not in wanted_names:
+                continue
+            seen.add(name)
+            cleaned = re.sub(r"\bstatic\b\s*", "", seg_real).strip()
+            defs.append(f"/* file-scope var referenced by closure */\n{cleaned}")
+    return defs
+
+
 def _extract_type_decls_heuristic(source_text: str) -> str:
     """
     Fallback: collect non-function lines using a brace-depth state machine.
@@ -4252,6 +4356,23 @@ class HarnessGenerator:
         func_def   = _strip_inline_asm(func_def)
         local_func_defs = [_strip_inline_asm(d) for d in local_func_defs]
 
+        # --- 8b. Recover file-scope variables the embedded bodies reference ---
+        # The closure/entry bodies may read module-scope variables (e.g.
+        # ``static const char *dtb_error`` in dtb.c). The type-decl extractor
+        # can drop these, yielding ``error: 'X' undeclared`` at GCC compile.
+        # Pull in exactly the referenced ones, excluding anything already
+        # provided (functions, params, names present in type_decls).
+        referenced_ids: set[str] = set()
+        for _b in [func_def, *local_func_defs]:
+            referenced_ids |= set(re.findall(r"\b([A-Za-z_]\w*)\b", _b))
+        already_defined = (
+            local_closure | external_callees | {fn_name} | entry_param_names
+            | set(re.findall(r"\b([A-Za-z_]\w*)\b", type_decls))
+        )
+        file_scope_var_defs = _extract_file_scope_var_defs(
+            source_text, wanted_names=referenced_ids, exclude_names=already_defined,
+        )
+
         # --- 9. Assemble the harness ---
         sections: list[str] = []
 
@@ -4272,6 +4393,12 @@ class HarnessGenerator:
             sections.append(
                 "/* --- Type declarations and globals from source --- */\n"
                 + type_decls
+            )
+
+        if file_scope_var_defs:
+            sections.append(
+                "/* --- File-scope variables referenced by the closure --- */\n"
+                + "\n".join(file_scope_var_defs)
             )
 
         if stub_sections:
