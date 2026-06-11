@@ -252,6 +252,28 @@ def _extract_type_decls_using_bodies(source_text: str, parsed_file: "ParsedCFile
     return "".join(parts).strip()
 
 
+# Standard libc functions the DYNAMIC (GCC) harness should resolve against the
+# real C library rather than stub. The harness now links real libc (we strip
+# the freestanding stub-libc include dirs), so renaming e.g. ``printf`` to
+# ``printf_stub`` only produces ``undefined reference to printf_stub`` at link.
+# Excluding these from the external-callee set leaves the calls intact so they
+# bind to the real implementations. (CBMC harnesses are unaffected — this set
+# is only consulted by generate_dynamic_harness.)
+_LIBC_FUNCS = frozenset({
+    "printf", "fprintf", "snprintf", "sprintf", "vprintf", "vfprintf",
+    "vsnprintf", "vsprintf", "puts", "fputs", "putchar", "putc", "fputc",
+    "fwrite", "fread", "fopen", "fclose", "fflush", "perror",
+    "memcpy", "memmove", "memset", "memcmp", "memchr",
+    "strlen", "strnlen", "strcmp", "strncmp", "strcpy", "strncpy",
+    "strcat", "strncat", "strchr", "strrchr", "strstr", "strdup", "strndup",
+    "strtol", "strtoul", "strtoll", "strtoull", "strtod", "atoi", "atol", "atoll",
+    "malloc", "calloc", "realloc", "free", "abort", "exit", "_Exit",
+    "qsort", "bsearch", "abs", "labs", "llabs", "rand", "srand",
+    "isalpha", "isdigit", "isalnum", "isspace", "isupper", "islower",
+    "toupper", "tolower",
+})
+
+
 def _strip_comments_and_strings(text: str) -> str:
     """Blank out C comments and string/char literals (preserving newlines and
     length) so a brace/paren scan over the result reflects real code structure.
@@ -4251,6 +4273,10 @@ class HarnessGenerator:
             for callee in parsed_file.call_graph.get(name, set()):
                 if callee not in all_local:
                     external_callees.add(callee)
+        # The dynamic harness links real libc, so don't stub/rename standard
+        # library functions — bind them to the real implementations. (Stubbing
+        # them yields ``undefined reference to printf_stub`` etc. at link.)
+        external_callees -= _LIBC_FUNCS
 
         # --- 3. Build runtime-safe stubs for external callees ---
         stub_sections: list[str] = []
