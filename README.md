@@ -3,6 +3,12 @@
   <img alt="AProver" src="assets/logo.svg" height="80">
 </picture>
 
+### 🌐 [**Try AProver live → www.aprover.ai**](https://www.aprover.ai)
+
+Paste C code (or a GitHub source URL) into the chat and watch BMC-Agent generate specs, run CBMC, classify counterexamples, and report confirmed bugs with evidence tiers — right in your browser, no install. Bring your own Anthropic API key (it stays in your browser).
+
+---
+
 **AProver — Agentic Prover for AI-Generated Code** — is a suite of LLM-driven formal verification agents. The first agent — **BMC-Agent** — is a prototype of *agentic model checking*: an architecture that pairs an LLM agent (for specification generation, counterexample classification, and spec refinement) with a sound bounded model checking backend. The agent handles semantic reasoning; the solver provides formal guarantees within the unwinding bound.
 
 > 📄 **Paper:** [*Agentic Model Checking*](https://arxiv.org/abs/2605.21434) — Youcheng Sun, Jiawen Liu, Daniel Kroening, Jason Xue (arXiv:2605.21434, 2026). This is the reference for the ideas implemented here; please [cite it](#citation) if you use AProver / BMC-Agent in your work.
