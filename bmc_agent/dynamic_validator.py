@@ -420,6 +420,52 @@ class DynamicValidator:
                     compile_err3 = compile_err2
                     binary_path = None
                 if binary_path is None:
+                    # --- Attempt 4: agentic harness repair (opt-in) ---
+                    # Backstop mirroring bmc_engine's CBMC-harness repair: the
+                    # DETERMINISTIC dynamic harness won't GCC-compile. Ask the
+                    # LLM to fix it from the compile error, recompile, and run.
+                    # Build-error-only -> no soundness downside (a non-building
+                    # harness yields no verdict anyway). Guarded: a repaired
+                    # harness is accepted only if it still carries the
+                    # DYNAMIC:CONFIRMED signal-oracle marker, so the LLM can't
+                    # silently strip the fault reporter and yield a bogus
+                    # NOT_TRIGGERED.
+                    cur_err = compile_err3 or compile_err2
+                    if (
+                        getattr(self.config, "enable_agentic_harness_repair", False)
+                        and self._llm is not None
+                        and cur_err
+                        and not _is_link_only_error(cur_err)
+                    ):
+                        cur_harness = harness_src2
+                        for rn in range(self._reproducer_retry_max + 1):
+                            fixed = self._regenerate_reproducer_with_error(
+                                cur_harness, cur_err, entry_func.name,
+                            )
+                            if not fixed or fixed == cur_harness:
+                                break
+                            fixed = _sanitize_reproducer_includes(fixed, self.config)
+                            if "DYNAMIC:CONFIRMED" not in fixed:
+                                logger.info(
+                                    "agentic harness repair: rejected rebuilt harness for "
+                                    "'%s' (lost the DYNAMIC:CONFIRMED oracle)", entry_func.name,
+                                )
+                                break
+                            logger.info(
+                                "agentic harness repair: dynamic harness rebuilt for '%s' "
+                                "(retry %d/%d) — recompiling",
+                                entry_func.name, rn + 1, self._reproducer_retry_max,
+                            )
+                            cur_harness = fixed
+                            binary_path, cur_err = self._compile(cur_harness, cc)
+                            if binary_path is not None:
+                                winning_harness = cur_harness
+                                logger.info(
+                                    "agentic harness repair resolved the dynamic-harness "
+                                    "build error for '%s'", entry_func.name,
+                                )
+                                break
+                if binary_path is None:
                     err_snippet = (compile_err3 or compile_err2 or "unknown")[:300]
                     return DynamicValidationResult(
                         outcome=DynamicOutcome.INCONCLUSIVE,
