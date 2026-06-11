@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,12 +105,70 @@ class BMCEngine:
         self.store = store
         self.harness_gen = HarnessGenerator(config)  # kept for backward compat
         self.backend: BMCBackend = backend or CBMCBackend(config)
+        # Cumulative CBMC wall-clock spent per function name, across ALL phases
+        # (initial check, auto-retry, Phase-3c refinement, spec_refiner re-verify).
+        # Enforces config.per_function_time_budget_s so a single pathological
+        # function (e.g. a path/parser fn the flag-selector unwinds deeply and
+        # gives a 600s timeout) can't grind the whole sweep for hours — see the
+        # check_function wrapper below.
+        self._fn_cumulative_time: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def check_function(
+        self,
+        func: FunctionInfo,
+        spec: Spec,
+        parsed_file: ParsedCFile,
+        driver_name: str,
+        all_funcs: "dict | None" = None,
+        flag_selection: "object | None" = None,
+    ) -> BMCVerdict:
+        """Per-function time-budget wrapper around the real check.
+
+        All CBMC invocations for a function (across every phase) funnel through
+        here, so this is the one chokepoint that can bound a function's TOTAL
+        wall-clock. Once the cumulative CBMC time for ``func.name`` reaches
+        ``config.per_function_time_budget_s`` (0 = unlimited), further checks
+        short-circuit to an errored verdict (verified=False, error set, no
+        counterexamples) which the pipeline already routes to UNRESOLVED — never
+        a false "verified clean". The worst-case overshoot is one in-flight CBMC
+        call (bounded by its own timeout).
+        """
+        budget = int(getattr(self.config, "per_function_time_budget_s", 0) or 0)
+        fn_name = func.name
+        if budget > 0:
+            used = self._fn_cumulative_time.get(fn_name, 0.0)
+            if used >= budget:
+                logger.warning(
+                    "Per-function time budget exhausted for '%s' "
+                    "(%.0fs used >= %ds budget) — skipping further CBMC, "
+                    "recording UNRESOLVED (timeout) instead of grinding.",
+                    fn_name, used, budget,
+                )
+                return BMCVerdict(
+                    function_name=fn_name,
+                    verified=False,
+                    counterexamples=[],
+                    error=(f"per-function-time-budget-exhausted: {used:.0f}s "
+                           f">= {budget}s budget (unresolved/timeout)"),
+                )
+        t0 = time.monotonic()
+        try:
+            return self._check_function_impl(
+                func, spec, parsed_file, driver_name,
+                all_funcs=all_funcs, flag_selection=flag_selection,
+            )
+        finally:
+            if budget > 0:
+                self._fn_cumulative_time[fn_name] = (
+                    self._fn_cumulative_time.get(fn_name, 0.0)
+                    + (time.monotonic() - t0)
+                )
+
+    def _check_function_impl(
         self,
         func: FunctionInfo,
         spec: Spec,

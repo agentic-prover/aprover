@@ -208,6 +208,16 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
+    # Per-function TOTAL CBMC wall-clock budget (seconds, 0 = unlimited). The
+    # per-CALL timeout (cbmc_timeout, raised up to 600s by the flag-selector)
+    # does NOT bound a function's total time: auto-retry doubling + Phase-3c
+    # refinement + spec_refiner re-verify can stack many 600s calls on one
+    # pathological parser fn (observed ~2h on vfs_lookup). Once a function's
+    # cumulative CBMC time crosses this, further checks short-circuit to
+    # UNRESOLVED (timeout) instead of grinding. Default 1200s (20 min): far
+    # above any normal function, well below a multi-hour stall. Env override
+    # BMC_AGENT_PER_FUNCTION_TIME_BUDGET_S; CLI --per-function-time-budget.
+    per_function_time_budget_s: int = 1200
     # CBMC --object-bits. None = let CBMC pick its default (currently 8); with
     # cbmc_auto_scale_object_bits=True, run_cbmc will retry at 12 and 16 when
     # the "too many addressed objects" error trips. State-heavy parser files
@@ -787,6 +797,7 @@ class Config:
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
             cbmc_timeout=int(os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120")),
+            per_function_time_budget_s=int(os.environ.get("BMC_AGENT_PER_FUNCTION_TIME_BUDGET_S", "1200")),
             cbmc_real_libc=os.environ.get("BMC_AGENT_CBMC_REAL_LIBC", "false").lower() == "true",
             inline_pure_callees=os.environ.get("BMC_AGENT_INLINE_PURE_CALLEES", "true").lower() != "false",
             assume_callee_postcondition=os.environ.get("BMC_AGENT_ASSUME_CALLEE_POST", "false").lower() == "true",

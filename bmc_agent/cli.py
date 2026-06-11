@@ -1055,6 +1055,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_feedback_loop = False
     if getattr(args, "no_global_invariants", False):
         config.enable_global_invariants = False
+    if getattr(args, "per_function_time_budget", None) is not None:
+        config.per_function_time_budget_s = int(args.per_function_time_budget)
     if getattr(args, "no_spec_refiner", False):
         config.enable_spec_refiner = False
     if getattr(args, "no_inlining_advisor", False):
@@ -1385,6 +1387,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_feedback_loop = False
     if getattr(args, "no_global_invariants", False):
         config.enable_global_invariants = False
+    if getattr(args, "per_function_time_budget", None) is not None:
+        config.per_function_time_budget_s = int(args.per_function_time_budget)
     if getattr(args, "no_spec_refiner", False):
         config.enable_spec_refiner = False
     if getattr(args, "no_inlining_advisor", False):
@@ -2323,6 +2327,12 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--no-global-invariants", action="store_true", default=False,
                      help="Disable evidence-grounded global-invariant assumes "
                           "(bmc_agent/global_invariants.py, harness Step 1.5c).")
+    ver.add_argument("--per-function-time-budget", type=int, default=None,
+                     metavar="SECONDS",
+                     help="Total CBMC wall-clock budget per function across all "
+                          "phases (0 = unlimited; default 1200). Past it, further "
+                          "checks short-circuit to unresolved (timeout) instead "
+                          "of grinding on a pathological parser fn.")
     ver.add_argument("--no-spec-refiner", action="store_true", default=False,
                      help="Disable in-sweep realism-feedback-driven spec refiner.")
     ver.add_argument("--enable-soundness-gate", action="store_true", default=False,
@@ -2562,6 +2572,11 @@ def build_parser() -> argparse.ArgumentParser:
     vd.add_argument("--no-global-invariants", action="store_true", default=False,
                     help="Disable evidence-grounded global-invariant assumes "
                          "(bmc_agent/global_invariants.py, harness Step 1.5c).")
+    vd.add_argument("--per-function-time-budget", type=int, default=None,
+                    metavar="SECONDS",
+                    help="Total CBMC wall-clock budget per function across all "
+                         "phases (0 = unlimited; default 1200). Past it, further "
+                         "checks short-circuit to unresolved (timeout).")
     vd.add_argument("--no-spec-refiner", action="store_true", default=False,
                     help="Disable in-sweep realism-feedback-driven spec refiner.")
     vd.add_argument("--enable-soundness-gate", action="store_true", default=False,
