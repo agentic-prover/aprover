@@ -700,8 +700,25 @@ class DynamicValidator:
         # project-internal headers (e.g. libxml.h, openssl/foo.h). Without this,
         # any harness that #includes the source file via real-libc mode fails
         # to compile because the GCC frontend can't find the project headers.
+        #
+        # BUT: freestanding targets (e.g. VibeOS kernel/libc) ship their own
+        # stub <signal.h>/<stdio.h>/<stdlib.h> that, on an -I dir, SHADOW the
+        # real system headers. Those stubs have no sig_atomic_t (compile fails)
+        # and a no-op signal()/printf() (the SIGSEGV oracle never installs or
+        # prints) — defeating dynamic validation. For the hosted GCC harness we
+        # need the REAL libc, so skip any include dir that ships stub standard
+        # headers. Soundness is unaffected: this is the runtime replay compile,
+        # not the CBMC verification.
+        import os as _os
+        def _is_stub_libc_dir(d: str) -> bool:
+            return any(_os.path.exists(_os.path.join(d, h))
+                       for h in ("signal.h", "stdio.h", "stdlib.h"))
         include_dirs = getattr(self.config, "include_dirs", None) or []
         for d in include_dirs:
+            if _is_stub_libc_dir(str(d)):
+                logger.debug("Dynamic compile: skipping stub-libc include dir %s "
+                             "(would shadow real <signal.h>/<stdio.h>)", d)
+                continue
             cmd += ["-I", str(d)]
         defines = getattr(self.config, "cbmc_defines", None) or []
         for d in defines:

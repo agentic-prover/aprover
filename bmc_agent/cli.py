@@ -169,14 +169,19 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # Component gating (both agentic presets). The CLASSIFIER stays ON: it drives
         # the spurious→refinement→soundness-gate loop (the agentic centerpiece),
         # so it must NOT be disabled by default. The dynamic reproducer is ON.
-        # Only the noisy LLM judgment layers — realism (exploitability downgrade)
-        # and triage (severity tiering) — are OFF by default. Each is
-        # independently opt-in; an explicit --enable-* (or --no- for dyn-val)
+        # Each layer is independently overridable; an explicit --enable-* / --no-*
         # wins via these arg guards, regardless of flag order.
         if not getattr(args, "no_dynamic_validation", False):
             config.enable_dynamic_validation = True  # type: ignore[attr-defined]
-        if not getattr(args, "enable_realism_check", False):
-            config.enable_realism_check = False  # type: ignore[attr-defined]
+        # Realism: keep a LIGHTWEIGHT (single-LLM-call, non-tool) realism check ON
+        # by default — it cheaply filters obvious modelling artifacts and is the
+        # one judgment layer worth its cost. The expensive multi-turn TOOL-USE
+        # augmentation is OPT-IN via --enable-realism-tools. Disable realism
+        # entirely with --no-realism-check. Set authoritatively here (not via
+        # `if not`) so the resolution is independent of arg-handling order.
+        config.enable_realism_check = not getattr(args, "no_realism_check", False)  # type: ignore[attr-defined]
+        config.enable_realism_tools = bool(getattr(args, "enable_realism_tools", False))  # type: ignore[attr-defined]
+        # Triage (severity tiering) stays OFF by default; opt in with --enable-triage.
         if not getattr(args, "enable_triage", False):
             config.enable_phase_3e_triage = False  # type: ignore[attr-defined]
         # Agentic CBMC driver: the agent decides how to configure CBMC by reading
@@ -2340,6 +2345,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Disable v2.2 spec_gen bounded tool-use branch.")
     ver.add_argument("--no-realism-tools", action="store_true", default=False,
                      help="Disable realism check's bounded tool-use augmentation.")
+    ver.add_argument("--enable-realism-tools", action="store_true", default=False,
+                     help="Opt in to the multi-turn tool-use realism augmentation "
+                          "(under --agentic the realism check is lightweight/non-tool "
+                          "by default; this re-enables the tool loop).")
     ver.add_argument("--minimal", action="store_true", default=False,
                      help=("Turn ALL default-on AI layers off (realism, "
                            "dyn-val, flag-selection, feedback-loop, spec-refiner, "
@@ -2572,6 +2581,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Disable v2.2 spec_gen bounded tool-use branch.")
     vd.add_argument("--no-realism-tools", action="store_true", default=False,
                     help="Disable realism check's bounded tool-use augmentation.")
+    vd.add_argument("--enable-realism-tools", action="store_true", default=False,
+                    help="Opt in to the multi-turn tool-use realism augmentation "
+                         "(under --agentic the realism check is lightweight/non-tool "
+                         "by default; this re-enables the tool loop).")
     vd.add_argument("--no-phase-3e-triage", action="store_true", default=False,
                     help="Disable Phase 3e triage even if env BMC_AGENT_ENABLE_PHASE_3E_TRIAGE=true.")
     vd.add_argument("--minimal", action="store_true", default=False,

@@ -1557,6 +1557,19 @@ class AMCPipeline:
                 key_concern="dynamic validation did not reproduce the fault",
                 llm_confidence="high",
             )
+        elif not self.config.enable_realism_check:
+            # Realism is disabled (e.g. the --agentic preset). The verdict
+            # would be discarded at the realism_arg gate below anyway, so do
+            # NOT spend the realism LLM call(s) computing it. Use a neutral
+            # placeholder so the feedback loop / spec refiner have nothing
+            # realism-driven to act on. (Previously the call ran here
+            # unconditionally and its result was thrown away — pure waste.)
+            realism = RealismCheckResult(
+                verdict=RealismVerdict.UNCERTAIN,
+                reasoning="realism check disabled (enable_realism_check=False); skipped to avoid wasted LLM calls",
+                key_concern="",
+                llm_confidence="low",
+            )
         else:
             # Route through check_with_tools_if_enabled so the realism
             # check optionally augments UNCERTAIN/UNREALISTIC verdicts

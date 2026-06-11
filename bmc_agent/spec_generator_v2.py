@@ -595,6 +595,11 @@ class SpecGeneratorV2:
         effect here. Accepting the kwarg also keeps v2 a drop-in for v1, which
         ``pipeline.run()`` relies on (it always passes it).
         """
+        # Stash the codebase-wide domain summary so per-function LLM calls can
+        # pass it as a prompt-cache prefix (it's byte-identical across every
+        # function in this sweep, so caching it once avoids re-billing it on
+        # every call). See LLMClient.complete(cache_prefix=...).
+        self._domain_knowledge = domain_knowledge or ""
         if cross_file_caller_contexts:
             seen = {str(p) for p in self.corpus_paths}
             for callers in cross_file_caller_contexts.values():
@@ -780,6 +785,7 @@ class SpecGeneratorV2:
         try:
             resp = self.llm.complete(
                 self._spec_system_prompt, prompt, role="spec_gen", max_tokens=1200,
+                cache_prefix=getattr(self, "_domain_knowledge", ""),
             )
         except Exception as exc:
             logger.warning(

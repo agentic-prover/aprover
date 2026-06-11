@@ -200,6 +200,7 @@ class LLMClient:
         thinking: bool = False,
         thinking_budget: int = 8000,
         role: str | None = None,
+        cache_prefix: str = "",
     ) -> str:
         """
         Send a request to the LLM and return the response text.
@@ -279,15 +280,20 @@ class LLMClient:
                         # Anthropic-only "thinking" knob — many reasoning models
                         # on this path already emit a <think>...</think> trace
                         # that _strip_reasoning_blocks() handles transparently.
-                        return self._complete_openai(system_prompt, user_prompt, max_tokens, temperature)
+                        # No prompt-cache breakpoint API here, so fold the shared
+                        # prefix into the system text to preserve its content.
+                        sys_oa = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
+                        return self._complete_openai(sys_oa, user_prompt, max_tokens, temperature)
                     if provider == "claude-code":
-                        return self._complete_claude_code(system_prompt, user_prompt, max_tokens, temperature)
+                        sys_cc = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
+                        return self._complete_claude_code(sys_cc, user_prompt, max_tokens, temperature)
                     return self._complete_anthropic(
                         system_prompt,
                         user_prompt,
                         max_tokens,
                         temperature,
                         api_kwargs,
+                        cache_prefix=cache_prefix,
                     )
                 except Exception as exc:
                     last_error = exc
@@ -343,6 +349,7 @@ class LLMClient:
         max_tokens: int,
         temperature: float,
         api_kwargs: dict | None = None,
+        cache_prefix: str = "",
     ) -> str:
         client = self._get_client()
         # Per-request timeout: without it the SDK can block indefinitely on a
@@ -350,15 +357,32 @@ class LLMClient:
         # accepts an httpx-style timeout via with_options.
         timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
         extra = api_kwargs or {}
+        # System payload + prompt-cache breakpoints. Render order is
+        # system -> messages, and a breakpoint caches the whole prefix up to
+        # and including its block. When a caller supplies ``cache_prefix`` (the
+        # codebase-wide domain summary — byte-identical across every function
+        # AND every agent role in a sweep), put it FIRST as its own cached
+        # block so all those calls share one cache entry for it. The per-role
+        # ``system_prompt`` is the second cached block (stable within a role).
+        # Without a prefix this is unchanged: a single cached system block.
+        if cache_prefix:
+            system_payload = [
+                {"type": "text", "text": cache_prefix,
+                 "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": system_prompt,
+                 "cache_control": {"type": "ephemeral"}},
+            ]
+        else:
+            system_payload = [{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }]
         response = client.with_options(timeout=timeout_s).messages.create(  # type: ignore[attr-defined]
             model=self.config.llm_model,
             max_tokens=max_tokens,
             temperature=temperature,
-            system=[{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }],
+            system=system_payload,
             messages=[{"role": "user", "content": user_prompt}],
             **extra,
         )
