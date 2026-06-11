@@ -74,6 +74,66 @@ _HEADER_TO_LIB: dict[str, str] = {
 _INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
 
 
+# Standard C / POSIX headers an LLM reproducer may legitimately include; these
+# resolve against the system toolchain and are never stripped.
+_STD_HEADERS = frozenset({
+    "assert.h", "ctype.h", "errno.h", "fenv.h", "float.h", "inttypes.h",
+    "limits.h", "locale.h", "math.h", "setjmp.h", "signal.h", "stdarg.h",
+    "stdbool.h", "stddef.h", "stdint.h", "stdio.h", "stdlib.h", "string.h",
+    "tgmath.h", "time.h", "wchar.h", "wctype.h", "stdatomic.h", "stdnoreturn.h",
+    "unistd.h", "fcntl.h", "sys/types.h", "sys/stat.h", "sys/mman.h",
+    "sys/wait.h", "sys/socket.h", "netinet/in.h", "arpa/inet.h", "pthread.h",
+    "dlfcn.h", "dirent.h", "poll.h", "memory.h", "malloc.h", "alloca.h",
+})
+
+_INCLUDE_LINE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"]+)[>"].*$',
+                              re.MULTILINE)
+
+
+def _sanitize_reproducer_includes(source: str, config: "Config") -> str:
+    """Comment out ``#include`` directives an LLM reproducer cannot compile.
+
+    LLM-generated reproducers are prompted to ``#include`` the project's public
+    header — fine for an installed, hosted library (libarchive), but for a
+    freestanding / bare-metal target (e.g. VibeOS) the named header is either
+    hallucinated (``#include <archive.h>`` for a dtb parser) or a kernel header
+    that doesn't resolve in a hosted GCC build. Either way GCC fails with
+    ``fatal error: X: No such file or directory`` and the whole reproducer is
+    wasted (and ``_detect_link_flags`` would add a bogus ``-l``).
+
+    Keep standard C/POSIX headers and any header that actually resolves in the
+    configured ``-I`` dirs; comment out the rest so the compile can proceed on
+    the reproducer's own (often self-contained) code. If a stripped header was
+    genuinely needed, the build still fails on the missing symbol and falls
+    back to the unit-level harness — no worse than the fatal include, minus the
+    wasted link attempt.
+    """
+    include_dirs = [str(d) for d in (getattr(config, "include_dirs", None) or [])]
+
+    def _resolves(hdr: str) -> bool:
+        if hdr in _STD_HEADERS:
+            return True
+        # Quoted/angle project header that exists on an -I path.
+        return any(os.path.exists(os.path.join(d, hdr)) for d in include_dirs)
+
+    dropped: list[str] = []
+
+    def _repl(m: "re.Match") -> str:
+        hdr = m.group(1)
+        if _resolves(hdr):
+            return m.group(0)
+        dropped.append(hdr)
+        return f"/* AMC: dropped unresolved #include <{hdr}> */"
+
+    out = _INCLUDE_LINE_RE.sub(_repl, source)
+    if dropped:
+        logger.info(
+            "Reproducer: dropped %d unresolved #include(s) before compile: %s",
+            len(dropped), ", ".join(sorted(set(dropped))),
+        )
+    return out
+
+
 def _detect_link_flags(source: str, config: "Config") -> list[str]:
     """Derive ``-l<libname>`` (and optional ``-L<dir>``) flags from the
     project public headers a reproducer ``#include``s.
@@ -242,6 +302,13 @@ class DynamicValidator:
             current_reproducer = system_entry_reproducer
             last_compile_err: Optional[str] = None
             for retry_n in range(self._reproducer_retry_max + 1):
+                # Drop #includes that won't resolve in a hosted build (bogus or
+                # bare-metal project headers) so a hallucinated/freestanding
+                # header doesn't fatal the compile (and doesn't drive a bogus
+                # -l link flag). Standard + resolvable project headers are kept.
+                current_reproducer = _sanitize_reproducer_includes(
+                    current_reproducer, self.config,
+                )
                 se_harness = _wrap_reproducer_with_signal_handlers(current_reproducer)
                 # Derive -l<libname> from #include'd project headers so the
                 # public-API call chain actually resolves at link time.
