@@ -633,6 +633,15 @@ class AMCPipeline:
         # Tracks (fn_name, prop_type) pairs already confirmed as real bugs so
         # CEGAR re-runs don't re-validate and re-report the same root bug.
         confirmed_real_bugs: set[tuple[str, str]] = set()
+        # Symmetric to confirmed_real_bugs: (fn_name, prop_type) pairs the
+        # in-sweep feedback loop / spec refiner drove to VERIFIED CLEAN under a
+        # soundness-gated refined precondition. Every remaining sibling CEx of
+        # that same property class is, by construction, excluded by that same
+        # precondition — re-validating + realism-checking each one is pure
+        # wasted budget (the readdir_callback pathology: 13 realism-LLM calls +
+        # 10 stale-gate hits over ~50min on ONE false positive that converged
+        # clean on its first CEx). Skip them.
+        feedback_cleared: set[tuple[str, str]] = set()
 
         # Dedup counterexamples once (deterministic), then optionally precompute
         # the per-CEx validate() calls IN PARALLEL. validate() is
@@ -716,6 +725,19 @@ class AMCPipeline:
                 continue
 
             for _cex_i, cex in enumerate(_deduped.get(fn_name, [])):
+                # Skip siblings of a property class the feedback loop already
+                # drove to VERIFIED CLEAN this sweep — the refined precondition
+                # that cleared the first CEx excludes these too.
+                _cleared_key = (fn_name, _prop_type(cex.failing_property))
+                if _cleared_key in feedback_cleared:
+                    logger.info(
+                        "Skipping counterexample for '%s' (property=%s): function "
+                        "VERIFIED CLEAN for property class '%s' under a "
+                        "soundness-gated refined precondition this sweep — "
+                        "remaining same-class siblings are excluded by it",
+                        fn_name, cex.failing_property, _cleared_key[1],
+                    )
+                    continue
                 logger.info(
                     "Validating counterexample for '%s' (property=%s)",
                     fn_name, cex.failing_property,
@@ -774,6 +796,24 @@ class AMCPipeline:
                         # bug behind the artifact.
                         if getattr(report, "confidence", "") != "unlikely":
                             confirmed_real_bugs.add(bug_key)
+                        else:
+                            # If _make_report's in-sweep feedback loop / spec
+                            # refiner drove this function to VERIFIED CLEAN
+                            # (marker set by _realism_verified), every remaining
+                            # sibling CEx of this property class is excluded by
+                            # the same soundness-gated precondition. Record it so
+                            # the loop skips them instead of paying realism per CEx.
+                            _rc = getattr(report, "realism_check", None)
+                            if _rc is not None and "[feedback-converged]" in (
+                                getattr(_rc, "key_concern", "") or ""
+                            ):
+                                feedback_cleared.add(bug_key)
+                                logger.info(
+                                    "Function '%s' VERIFIED CLEAN for property class "
+                                    "'%s' after in-sweep refinement — suppressing "
+                                    "remaining same-class sibling counterexamples",
+                                    fn_name, bug_key[1],
+                                )
                 elif validation.is_latent_bug:
                     latent_key = (fn_name, _prop_type(cex.failing_property))
                     if latent_key in confirmed_latent:
