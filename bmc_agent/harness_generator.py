@@ -5428,10 +5428,23 @@ class HarnessGenerator:
         # Step 1.5c: evidence-grounded global invariants derived from the
         # source's own global write-sets (proactive; see
         # _emit_global_invariant_assumptions).
+        # MATERIALIZE init-trusted pointer globals FIRST: a global like
+        # ``static vfs_node_t *mem_root = NULL;`` keeps its NULL initializer in
+        # the harness (the init function that sets it never runs), so a bare
+        # ``__CPROVER_assume(mem_root != NULL)`` is ``assume(NULL != NULL)`` =
+        # ``assume(false)`` -> the whole function verifies VACUOUSLY, silently
+        # masking every bug in it. ``if (!g) g = calloc(1, sizeof(*g));`` gives
+        # the assume a satisfiable witness (same materialization the dynamic
+        # harness uses), so verification is real, not vacuous. The
+        # incomplete-tree CEXs this surfaces are harness artifacts the realism
+        # gate filters (a zeroed kernel-init object is not attacker-reachable).
+        gi_inits = _emit_dynamic_global_invariant_inits(parsed_file, self.config, None)
         gi_assumes = _emit_global_invariant_assumptions(parsed_file, self.config)
-        if gi_assumes:
+        if gi_inits or gi_assumes:
             harness_body_lines.append("")
             harness_body_lines.append("    /* Step 1.5c: evidence-grounded global invariants */")
+            for s in gi_inits:
+                harness_body_lines.append(f"    {s}")
             for s in gi_assumes:
                 harness_body_lines.append(f"    {s}")
 
@@ -5698,10 +5711,14 @@ class HarnessGenerator:
 
         # Step 1.5c: evidence-grounded global invariants derived from the
         # source's own global write-sets (proactive; see
-        # _emit_global_invariant_assumptions).
+        # _emit_global_invariant_assumptions). Materialize init-trusted NULL
+        # pointer globals BEFORE the assume so it isn't vacuous (assume(NULL !=
+        # NULL) => the whole function verifies vacuously, masking every bug).
+        gi_inits = _emit_dynamic_global_invariant_inits(parsed_file, self.config, None)
         gi_assumes = _emit_global_invariant_assumptions(parsed_file, self.config)
-        if gi_assumes:
+        if gi_inits or gi_assumes:
             body_lines.append("    /* Step 1.5c: evidence-grounded global invariants */")
+            body_lines.extend(f"    {s}" for s in gi_inits)
             body_lines.extend(f"    {s}" for s in gi_assumes)
 
         # Step 1.6: project-wide invariants learned from prior realism

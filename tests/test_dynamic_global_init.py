@@ -56,3 +56,25 @@ def test_no_source_is_noop():
     out = _emit_dynamic_global_invariant_inits(SimpleNamespace(preprocessed_source=None, path=None),
                                                _cfg(), {"mem_root"})
     assert out == []
+
+
+def test_static_harness_pairs_materialization_with_assume():
+    """The vacuity fix: the STATIC (CBMC) harness emits BOTH the materialization
+    (calloc) AND the `!= NULL` assume for the same init-trusted NULL global, so
+    `assume(mem_root != NULL)` has a satisfiable witness instead of being
+    `assume(NULL != NULL)` = `assume(false)` (which would verify vacuously and
+    mask every bug in the function). Guards against the two halves drifting apart.
+    """
+    from bmc_agent.global_invariants import (
+        extract_global_invariants, emit_assume_statements,
+    )
+    inits = _emit_dynamic_global_invariant_inits(_pf(_SRC), _cfg(), {"mem_root"})
+    assumes = emit_assume_statements(
+        extract_global_invariants(_SRC, referenced_names={"mem_root"})
+    )
+    inits_j = "\n".join(inits)
+    assumes_j = "\n".join(assumes)
+    # materialization makes mem_root non-NULL ...
+    assert "mem_root = calloc(1, sizeof(*mem_root))" in inits_j
+    # ... and there is a matching `mem_root != NULL` assume it satisfies.
+    assert "mem_root != NULL" in assumes_j
