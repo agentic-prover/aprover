@@ -229,6 +229,19 @@ class Config:
     # or a real bug at shallow depth. Backstopped by per_function_time_budget_s.
     enable_unwind_reduction: bool = True
     unwind_reduction_threshold: int = 16
+    # String-copy SOURCE modeling (false-negative dual of the (buf,len) over-read
+    # fix). The harness models a char* input as a NUL-terminated string of length
+    # <= cbmc_unwind (~4), baked in at gen time, so strcpy/strcat/stpcpy INTO a
+    # fixed buffer can never overflow -> classic copy-into-fixed-buffer bugs are
+    # silently missed (vibeos vfs_open_handle). When enabled, an input that flows
+    # into such an unbounded copy SINK (see string_copy_sink.py) is modeled with
+    # a NUL position up to string_copy_source_max_len, and the BMC engine raises
+    # that function's unwind floor to (max_len + 2) so the copy loop unrolls past
+    # the overflow. Any destination smaller than max_len then overflows (caught by
+    # bounds-check) with no need to resolve the destination size. Capped modestly
+    # for tractability: destinations >= max_len stay a documented limitation.
+    enable_string_copy_source_modeling: bool = True
+    string_copy_source_max_len: int = 32
     # CBMC --object-bits. None = let CBMC pick its default (currently 8); with
     # cbmc_auto_scale_object_bits=True, run_cbmc will retry at 12 and 16 when
     # the "too many addressed objects" error trips. State-heavy parser files

@@ -2857,6 +2857,8 @@ def _emit_struct_field_init(
     infer_struct_field_validity: bool = False,
     struct_definitions: Optional[dict] = None,
     func_body: Optional[str] = None,
+    copy_source_fields: Optional[set] = None,
+    copy_source_max_len: int = 0,
 ) -> list[str]:
     """Emit harness statements that initialise a single struct field.
 
@@ -2977,11 +2979,18 @@ def _emit_struct_field_init(
         backing = f"_{obj_name}_{fname}_buf"
         if base == "char":
             # NUL-terminated string backing for char *.
+            # Copy-sink SOURCE field: widen so a strcpy/strcat into a smaller
+            # fixed buffer can overflow (FN dual of (buf,len)).
+            str_max = cbmc_unwind
+            if (copy_source_fields and fname in copy_source_fields
+                    and copy_source_max_len > str_max):
+                str_max = copy_source_max_len
+                out.append(f"    /* copy-sink source field '{fname}': widened to {str_max} chars */")
             len_var = f"_{obj_name}_{fname}_len"
-            out.append(f"    char {backing}[{buf_size}];")
+            out.append(f"    char {backing}[{str_max + 1}];")
             out.append(f"    unsigned int {len_var};")
             out.append(
-                f"    __CPROVER_assume({len_var} <= (unsigned int){cbmc_unwind});"
+                f"    __CPROVER_assume({len_var} <= (unsigned int){str_max});"
             )
             out.append(f"    {backing}[{len_var}] = '\\0';")
             out.append(f"    {obj_name}.{fname} = {backing};")
@@ -3035,6 +3044,8 @@ def _emit_struct_field_init(
                         infer_struct_field_validity=infer_struct_field_validity,
                         struct_definitions=None,  # NO further recursion
                         func_body=None,
+                        copy_source_fields=copy_source_fields,
+                        copy_source_max_len=copy_source_max_len,
                     )
                 )
             return out
@@ -3075,6 +3086,8 @@ def _emit_struct_field_init(
                             infer_struct_field_validity=infer_struct_field_validity,
                             struct_definitions=None,
                             func_body=None,
+                            copy_source_fields=copy_source_fields,
+                            copy_source_max_len=copy_source_max_len,
                         )
                     )
                 return out
@@ -3390,6 +3403,7 @@ def _generate_nd_decls(
     scale_down: bool = False,
     scale_down_size: int = 4,
     force_opaque_structs: Optional[set] = None,
+    copy_source_max_len: int = 0,
 ) -> list[str]:
     """
     Generate nondeterministic variable declarations for each parameter.
@@ -3412,6 +3426,15 @@ def _generate_nd_decls(
     """
     if nonnull_params is None:
         nonnull_params = set()
+
+    # String-copy SOURCE widening: inputs that flow into an unbounded copy SINK
+    # (strcpy/strcat/stpcpy) are modeled LONGER than the default so a
+    # copy-into-fixed-buffer overflow is reachable (FN dual of (buf,len)).
+    copy_src_params: set[str] = set()
+    copy_src_fields: set[str] = set()
+    if copy_source_max_len and copy_source_max_len > 0:
+        from .string_copy_sink import detect_copy_sources
+        copy_src_params, copy_src_fields = detect_copy_sources(func)
 
     # Collect pointer parameter names for paired-buffer analysis.
     pointer_pnames: set[str] = set()
@@ -3680,10 +3703,17 @@ def _generate_nd_decls(
                     backing_t = "wchar_t" if is_wide else "char"
                     nul_literal = "L'\\0'" if is_wide else "'\\0'"
                     descriptor = "wide " if is_wide else ""
-                    lines.append(f"    /* bounded null-terminated {descriptor}string for '{pname}' (max {cbmc_unwind} chars) */")
-                    lines.append(f"    {backing_t} {buf_name}[{cbmc_unwind + 1}];")
+                    # Copy-sink SOURCE: widen the max length so a strcpy/strcat
+                    # into a smaller fixed buffer can overflow (else baked-in
+                    # length <= cbmc_unwind hides the bug).
+                    str_max = cbmc_unwind
+                    if pname in copy_src_params and copy_source_max_len > str_max:
+                        str_max = copy_source_max_len
+                        lines.append(f"    /* copy-sink source '{pname}': widened to {str_max} chars to expose fixed-buffer overflow */")
+                    lines.append(f"    /* bounded null-terminated {descriptor}string for '{pname}' (max {str_max} chars) */")
+                    lines.append(f"    {backing_t} {buf_name}[{str_max + 1}];")
                     lines.append(f"    unsigned int {len_name};")
-                    lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){cbmc_unwind});")
+                    lines.append(f"    __CPROVER_assume({len_name} <= (unsigned int){str_max});")
                     lines.append(f"    {buf_name}[{len_name}] = {nul_literal};")
                     lines.append(f"    {ptype_stripped} {pname} = {buf_name};")
                 if pname in nonnull_params:
@@ -3732,6 +3762,8 @@ def _generate_nd_decls(
                             infer_struct_field_validity=infer_struct_field_validity,
                             struct_definitions=struct_definitions,
                             func_body=getattr(func, "body", None),
+                            copy_source_fields=copy_src_fields,
+                            copy_source_max_len=copy_source_max_len,
                         )
                     )
                 # POST-PASS: cast-pattern-driven typed init for field chains.
@@ -3989,6 +4021,8 @@ class HarnessGenerator:
             scale_down=getattr(self.config, "scale_down", False),
             scale_down_size=getattr(self.config, "scale_down_size", 4),
             force_opaque_structs=set(getattr(self.config, "session_opaque_param_structs", None) or []) or None,
+            copy_source_max_len=(getattr(self.config, "string_copy_source_max_len", 0)
+                                 if getattr(self.config, "enable_string_copy_source_modeling", True) else 0),
         )
 
         # --- 6. Precondition assumptions ---
@@ -5019,6 +5053,8 @@ class HarnessGenerator:
             scale_down=getattr(self.config, "scale_down", False),
             scale_down_size=getattr(self.config, "scale_down_size", 4),
             force_opaque_structs=set(getattr(self.config, "session_opaque_param_structs", None) or []) or None,
+            copy_source_max_len=(getattr(self.config, "string_copy_source_max_len", 0)
+                                 if getattr(self.config, "enable_string_copy_source_modeling", True) else 0),
         )
 
         # --- 6. Precondition assumptions ---
@@ -5496,6 +5532,8 @@ class HarnessGenerator:
             scale_down=getattr(self.config, "scale_down", False),
             scale_down_size=getattr(self.config, "scale_down_size", 4),
             force_opaque_structs=set(getattr(self.config, "session_opaque_param_structs", None) or []) or None,
+            copy_source_max_len=(getattr(self.config, "string_copy_source_max_len", 0)
+                                 if getattr(self.config, "enable_string_copy_source_modeling", True) else 0),
         )
 
         # Precondition assume + postcondition assert via existing DSL.

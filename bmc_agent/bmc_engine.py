@@ -240,6 +240,20 @@ class BMCEngine:
             undefined_shift_check   = bool(getattr(flag_selection, "undefined_shift_check", False))
             # Per-function unwind override (None = use global default).
             unwind_for_this_run     = getattr(flag_selection, "unwind_override", None) or self.config.cbmc_unwind
+            # Couple the unwind floor to widened string-copy SOURCES: if the
+            # harness modeled an input as a long string feeding a strcpy/strcat
+            # SINK, the copy loop must unroll past it (max_len + 2) for the
+            # fixed-buffer overflow to be reachable — else the source widening
+            # is wasted and --unwinding-assertions would flag the function
+            # incomplete rather than clean. Targeted: only fires when the body
+            # has a qualifying copy sink, so it doesn't inflate other functions.
+            if getattr(self.config, "enable_string_copy_source_modeling", True):
+                from .string_copy_sink import copy_sink_unwind_floor
+                _copy_floor = copy_sink_unwind_floor(
+                    func, getattr(self.config, "string_copy_source_max_len", 0)
+                )
+                if _copy_floor > unwind_for_this_run:
+                    unwind_for_this_run = _copy_floor
             # Per-function CBMC timeout override (None = use global default).
             timeout_for_this_run    = getattr(flag_selection, "timeout_override", None) or self.config.cbmc_timeout
 

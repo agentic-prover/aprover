@@ -1,0 +1,137 @@
+"""Tests for string-copy SOURCE detection (the FN dual of the (buf,len) fix)."""
+from __future__ import annotations
+
+from bmc_agent.parser import FunctionInfo, FunctionSignature
+from bmc_agent.string_copy_sink import (
+    detect_copy_sources,
+    copy_sink_unwind_floor,
+    _source_root,
+    _split_top_level_args,
+    _balanced_args,
+)
+
+
+def _fn(body: str, params: list[tuple[str, str]]) -> FunctionInfo:
+    return FunctionInfo(
+        name="f",
+        signature=FunctionSignature(name="f", return_type="void", parameters=params),
+        body=body,
+        callees=set(),
+        source_file="t.c",
+    )
+
+
+# ---- low-level helpers -------------------------------------------------
+
+def test_balanced_args_simple():
+    body = "strcpy(dst, src);"
+    i = body.index("(")
+    assert _balanced_args(body, i) == "dst, src"
+
+
+def test_balanced_args_nested():
+    body = "strcpy(dst, (char*)foo(a, b));"
+    i = body.index("(")
+    assert _balanced_args(body, i) == "dst, (char*)foo(a, b)"
+
+
+def test_split_top_level_args_respects_parens():
+    assert _split_top_level_args("dst, foo(a, b)") == ["dst", " foo(a, b)"]
+
+
+def test_source_root_bare():
+    assert _source_root("src") == ("src", None)
+
+
+def test_source_root_cast_and_field():
+    assert _source_root("(char*)temp->data") == ("temp", "data")
+
+
+def test_source_root_const_cast_field_dot():
+    assert _source_root("(const char *)node.name") == ("node", "name")
+
+
+def test_source_root_non_lvalue():
+    assert _source_root('"literal"') == (None, None)
+
+
+# ---- parameter sources -------------------------------------------------
+
+def test_strcpy_param_source_detected():
+    fn = _fn("void f(char *in) { char buf[16]; strcpy(buf, in); }",
+             [("char *", "in")])
+    params, fields = detect_copy_sources(fn)
+    assert params == {"in"}
+    assert fields == set()
+
+
+def test_strcat_param_source_detected():
+    fn = _fn("void f(char *in) { char b[8]; strcat(b, in); }",
+             [("char *", "in")])
+    params, _ = detect_copy_sources(fn)
+    assert params == {"in"}
+
+
+def test_dst_is_not_flagged_as_source():
+    # The DESTINATION (arg0) must never be widened — only the source (arg1).
+    fn = _fn("void f(char *dst, char *src) { strcpy(dst, src); }",
+             [("char *", "dst"), ("char *", "src")])
+    params, _ = detect_copy_sources(fn)
+    assert params == {"src"}
+    assert "dst" not in params
+
+
+# ---- struct-field sources ---------------------------------------------
+
+def test_field_source_detected():
+    fn = _fn("void f(node_t *n) { char buf[16]; strcpy(buf, (char*)n->data); }",
+             [("node_t *", "n")])
+    params, fields = detect_copy_sources(fn)
+    assert fields == {"data"}
+
+
+def test_local_struct_field_source_still_flagged_by_name():
+    # vfs_open_handle shape: source is a callee-return local's field. We can't
+    # widen the local, but the field NAME is still surfaced (harmless, helps
+    # when the same-named field IS a modeled param).
+    fn = _fn(
+        "void f(void) { node_t *t = lookup(p); char buf[256]; "
+        "strcpy(buf, (char*)t->data); }",
+        [],
+    )
+    _, fields = detect_copy_sources(fn)
+    assert fields == {"data"}
+
+
+# ---- negatives ---------------------------------------------------------
+
+def test_strncpy_is_not_a_sink():
+    fn = _fn("void f(char *in) { char b[8]; strncpy(b, in, 7); }",
+             [("char *", "in")])
+    params, fields = detect_copy_sources(fn)
+    assert params == set()
+    assert fields == set()
+
+
+def test_no_copy_no_sources():
+    fn = _fn("int f(char *in) { return in[0]; }", [("char *", "in")])
+    assert detect_copy_sources(fn) == (set(), set())
+
+
+# ---- unwind floor ------------------------------------------------------
+
+def test_unwind_floor_when_sink_present():
+    fn = _fn("void f(char *in) { char b[8]; strcpy(b, in); }",
+             [("char *", "in")])
+    assert copy_sink_unwind_floor(fn, 32) == 34
+
+
+def test_unwind_floor_zero_without_sink():
+    fn = _fn("int f(char *in) { return in[0]; }", [("char *", "in")])
+    assert copy_sink_unwind_floor(fn, 32) == 0
+
+
+def test_unwind_floor_zero_when_disabled():
+    fn = _fn("void f(char *in) { char b[8]; strcpy(b, in); }",
+             [("char *", "in")])
+    assert copy_sink_unwind_floor(fn, 0) == 0
