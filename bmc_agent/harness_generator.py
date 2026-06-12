@@ -3336,6 +3336,46 @@ def _is_byte_shaped_type(base_type: str) -> bool:
     return bool(_BYTE_TYPEDEF_RE.search(b))
 
 
+_BUF_LEN_SIZE_NAMES = {
+    "len", "length", "size", "n", "nbytes", "buflen", "bufsize", "datalen",
+    "data_len", "msglen", "pktlen", "count", "num", "nmemb", "sz",
+}
+
+
+def _detect_buf_len_pairs(parameters) -> "list[tuple[str, str, str, str]]":
+    """Find ``(byte-buffer, length)`` parameter pairs by the dominant C
+    convention: a single-indirection BYTE pointer IMMEDIATELY followed by a
+    size-named integer — ``icmp_handle(const uint8_t *pkt, uint32_t len)``,
+    ``parse(const uint8_t *data, size_t n)``. Returns
+    ``(buf_name, buf_type, len_name, len_type)`` tuples.
+
+    Adjacency + a size name keeps pairing unambiguous (no guessing which length
+    binds which buffer in multi-arg signatures). Restricted to BYTE-shaped
+    pointers (the memcpy/parser case where ``len`` is a byte count); element
+    arrays / struct pointers are left to ``infer_array_param_bounds``.
+    """
+    params = [(pt.strip(), pn) for pt, pn in parameters if pn]
+    pairs: list[tuple[str, str, str, str]] = []
+    for i in range(len(params) - 1):
+        ptype, pname = params[i]
+        ltype, lname = params[i + 1]
+        st = _strip_restrict_quals(ptype)
+        if st.count("*") != 1:           # single indirection only
+            continue
+        base = re.sub(r"\bconst\b", "", st.rstrip("*")).strip()
+        # RAW-byte pointers only (uint8_t*/unsigned char*/int8_t*/byte typedefs).
+        # Plain ``char *`` is the NUL-terminated-string convention, NOT an
+        # n-byte buffer — pairing it with a count would wrongly assume the
+        # string spans `len` bytes. Mirrors the raw/textual split in the
+        # single-pointer byte branch.
+        if base in ("char", "wchar_t") or not _is_byte_shaped_type(base):
+            continue
+        if "*" in ltype or lname.lower() not in _BUF_LEN_SIZE_NAMES:
+            continue
+        pairs.append((pname, st, lname, ltype.strip()))
+    return pairs
+
+
 def _generate_nd_decls(
     func: FunctionInfo,
     cbmc_unwind: int = 4,
@@ -3418,6 +3458,34 @@ def _generate_nd_decls(
                 lines.append(
                     f"    /* {pname} is non-null by construction (shared buffer) */"
                 )
+
+    # (buf, len) pairs: size the byte buffer to the length param so reads up to
+    # len are in-bounds AND an off-by-one PAST len is genuinely caught (buf is
+    # exactly len bytes, not an over-sized fixed buffer that would mask it).
+    # `f(const uint8_t *pkt, uint32_t len)` etc. Without this, the harness gives
+    # pkt a fixed cbmc_unwind+1 buffer while len is unconstrained-large -> every
+    # length-driven read reports a spurious OOB (the vibeos net icmp/ip/tcp_handle
+    # FPs). Emit the length FIRST (bounded) then `buf = malloc(len)`.
+    _bl_max = int(infer_array_param_bounds_max) if infer_array_param_bounds_max else 64
+    for buf_name, buf_type, len_name, len_type in _detect_buf_len_pairs(
+        func.signature.parameters
+    ):
+        if buf_name in paired_emitted or len_name in paired_emitted:
+            continue
+        lines.append(
+            f"    /* (buf,len) pair: {buf_name} sized to {len_name} "
+            f"(reads in-bounds; off-by-one past {len_name} still caught) */"
+        )
+        lines.append(f"    {len_type} {len_name};")
+        # Bound len to [0, MAX] for ANY integer type: a negative signed len
+        # casts to a huge unsigned, failing the <= MAX test.
+        lines.append(
+            f"    __CPROVER_assume((unsigned long long)({len_name}) <= {_bl_max}ull);"
+        )
+        lines.append(f"    {buf_type} {buf_name} = ({buf_type})malloc({len_name});")
+        lines.append(f"    __CPROVER_assume({buf_name} != NULL);")
+        paired_emitted.add(buf_name)
+        paired_emitted.add(len_name)
 
     # Detect double-indirection (in-out cursor) parameters: T** + optional
     # size sibling param. Pattern is endemic to C parser APIs

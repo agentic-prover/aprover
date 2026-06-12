@@ -642,18 +642,14 @@ def test_generate_nd_decls_unknown_struct_emits_nondet_pointer():
 
 
 def test_generate_nd_decls_uint8_pointer_is_raw_bytes():
-    """`uint8_t *` / `unsigned char *` single-pointer params get a raw
-    byte buffer, not a single-byte addr-of.
+    """A ``(uint8_t *src, size_t len)`` pair sizes ``src`` to ``len``.
 
-    Regression: ``nghttp2_hd_huff_encode_count(const uint8_t *src, size_t len)``
-    was previously harnessed as ``uint8_t _src_val; const uint8_t* src =
-    &_src_val;``, allocating ONE byte. The function then reads ``src[i]``
-    for i in [0, len), so any i >= 1 was OOB — every CBMC run flagged
-    pointer_dereference at the first loop iteration.
-
-    The C convention is ``unsigned char *`` / ``uint8_t *`` = binary
-    bytes, NOT NUL-terminated string, so the harness should emit a raw
-    byte buffer of cbmc_unwind+1 elements without forcing NUL.
+    ``nghttp2_hd_huff_encode_count(const uint8_t *src, size_t len)`` reads
+    ``src[i]`` for i in [0, len). The old fix gave src a FIXED 5-byte buffer,
+    which still OOBs for len > 5 (a partial fix). The (buf,len) pairing now
+    sizes src exactly to len (``src = malloc(len)``): every read in [0,len) is
+    in-bounds, and an off-by-one PAST len is still caught. Still a raw byte
+    buffer (no NUL forced).
     """
     from bmc_agent.parser import FunctionInfo, FunctionSignature
     from bmc_agent.harness_generator import _generate_nd_decls
@@ -667,11 +663,12 @@ def test_generate_nd_decls_uint8_pointer_is_raw_bytes():
                             source_file="x.c")
         out = _generate_nd_decls(func, cbmc_unwind=4)
         src = "\n".join(out)
-        # Must allocate a multi-byte buffer, not a single-byte local.
         assert "_src_val" not in src, f"naive single-byte fallback for {ptype}"
-        assert "_src_buf[5]" in src, f"expected raw 5-byte buffer for {ptype}, got: {src!r}"
+        # Sized to len, not a fixed buffer.
+        assert f"src = ({ptype})malloc(len)" in src, src
+        assert "(unsigned long long)(len) <=" in src   # len bounded
+        assert "__CPROVER_assume(src != NULL)" in src
         # No NUL terminator constraint on binary data.
-        assert "_src_len" not in src
         assert "= '\\0'" not in src
 
 
