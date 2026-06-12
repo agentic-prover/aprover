@@ -1494,6 +1494,49 @@ def _emit_global_invariant_assumptions(parsed_file: "ParsedCFile", config) -> li
         return []
 
 
+def _emit_dynamic_global_invariant_inits(
+    parsed_file: "ParsedCFile", config, referenced: "set[str] | None",
+) -> list[str]:
+    """Return C statements that ALLOCATE init-trusted pointer globals in the
+    DYNAMIC harness, so it doesn't spuriously crash on a NULL global that an
+    init function would have set.
+
+    The CBMC harness assumes ``g != NULL`` (Step 1.5c) for init-trusted globals;
+    the dynamic harness includes the source global definition (``mem_root =
+    NULL``) but never runs the init function, so a real callee that walks the
+    global (``vfs_lookup`` over ``mem_root``) NULL-derefs and reports a false
+    ``confirmed_dynamic``. Mirror the CBMC assumption concretely: for each
+    init-trusted pointer global, ``if (!g) g = calloc(1, sizeof(*g));`` (zeroed
+    => empty/valid object). Only ``init-trusted`` tier (proven const tables are
+    already non-NULL; nothing to allocate).
+    """
+    if not getattr(config, "enable_global_invariants", False):
+        return []
+    try:
+        from bmc_agent.global_invariants import extract_global_invariants
+        source = getattr(parsed_file, "preprocessed_source", None)
+        if not source:
+            path = getattr(parsed_file, "path", None)
+            if path:
+                with open(path, errors="replace") as fh:
+                    source = fh.read()
+        if not source:
+            return []
+        out: list[str] = []
+        for inv in extract_global_invariants(source, referenced_names=referenced):
+            if inv.tier == "init-trusted" and inv.clause.endswith("!= NULL"):
+                g = inv.name
+                out.append(
+                    f"    if (!{g}) {{ {g} = calloc(1, sizeof(*{g})); }}"
+                    f"  /* init-trusted global: real code runs init() first */"
+                )
+        return out
+    except Exception as exc:
+        from bmc_agent.logger import get_logger
+        get_logger("harness").debug("dynamic global-invariant init failed: %s", exc)
+        return []
+
+
 def _extract_source_precondition_asserts(
     func_body: str, param_names: list[str]
 ) -> list[str]:
@@ -4404,6 +4447,19 @@ class HarnessGenerator:
                     global_assigns.append(
                         f"    {clean_var} = {clean_val};  /* witness */"
                     )
+
+            # 6b. Allocate init-trusted pointer globals so the dynamic harness
+            # doesn't NULL-deref a global that an init function would have set
+            # (the CBMC harness assumes `g != NULL`; mirror it concretely). Gate
+            # by globals the included closure actually references, so the calloc
+            # only names symbols that are in scope (else the compile breaks).
+            _closure_text = "\n".join(
+                (parsed_file.function_bodies.get(n, "") or "") for n in all_local
+            )
+            _closure_refs = _re_global_idents(_closure_text) if _closure_text else None
+            global_assigns.extend(
+                _emit_dynamic_global_invariant_inits(parsed_file, self.config, _closure_refs)
+            )
 
         # --- 7. Build entry function call argument setup ---
         call_arg_lines: list[str] = []
