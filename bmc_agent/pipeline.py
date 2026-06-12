@@ -157,6 +157,52 @@ def _is_crash_class_property(prop: str) -> bool:
     return False
 
 
+def _stale_counterexample_reason(ce, harness_path: str) -> "str | None":
+    """Return a reason string if ``ce`` was produced by a SUPERSEDED harness.
+
+    The harness file (``<driver>/<fn>/harness.c``) is mutated in place as the
+    pipeline regenerates / agentically repairs it across phases. A finding's
+    counterexample is frozen when CBMC runs, but the file keeps changing — so a
+    CEx from an early UNDER-MODELLED harness (e.g. a fixed ``_pkt_buf[5]`` for a
+    ``(buf,len)`` parser) can be reported as confirmed even after repair
+    regenerated a correct ``malloc(len)`` harness that verifies clean (the
+    vibeos net icmp/ip/tcp_handle false positives).
+
+    Cheap, unambiguous detection: if the CEx assigns a HARNESS-LOCAL variable
+    (generated name, leading ``_``, e.g. ``_pkt_buf``) that is ABSENT from the
+    current harness source, the CEx cannot have come from the current harness —
+    it is stale. No CBMC re-run; a no-op when the harness is stable (the CEx's
+    locals all still appear), so it never touches findings on unchanged
+    harnesses. Returns None when the CEx is consistent with the harness.
+    """
+    if not harness_path:
+        return None
+    try:
+        src = Path(harness_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    va = getattr(ce, "variable_assignments", None)
+    if not isinstance(va, dict) or not va:
+        return None
+    for key in va:
+        m = re.match(r"([A-Za-z_]\w*)", str(key))
+        if not m:
+            continue
+        name = m.group(1)
+        # Only HARNESS-GENERATED locals: leading underscore, not a CPROVER
+        # builtin (``__CPROVER_*``) or other dunder. These are the names the
+        # harness generator emits (``_pkt_buf``, ``_<p>_val``, ``_path_buf``…).
+        if not name.startswith("_") or name.startswith("__"):
+            continue
+        if not re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", src):
+            return (
+                f"counterexample assigns harness-local '{name}' that is absent "
+                f"from the current harness — the CEx is from a superseded "
+                f"(regenerated/repaired) harness iteration"
+            )
+    return None
+
+
 def _ce_class_key(ce) -> str:
     """Coarse equivalence class for a counterexample.
 
@@ -1596,7 +1642,34 @@ class AMCPipeline:
         dyn = getattr(validation, "dynamic_result", None)
         ce = getattr(validation, "counterexample", None)
         failing_prop = getattr(ce, "failing_property", "") or ""
-        if (
+
+        # Stale-CEx gate: if the counterexample was produced by a harness that
+        # has since been regenerated/repaired (its harness-local variables are
+        # gone from the current harness), it is a superseded artifact — do NOT
+        # emit it as a confirmed finding. Mark UNREALISTIC without a realism-LLM
+        # call. Catches the (buf,len) under-sizing FPs that agentic harness
+        # repair later fixes (vibeos net icmp/ip/tcp_handle).
+        _stale = _stale_counterexample_reason(ce, cbmc_harness_path)
+        if _stale is not None:
+            logger.info(
+                "Stale counterexample for '%s' (property '%s'): %s — marking "
+                "artifact, not emitting as confirmed.",
+                func.name, failing_prop, _stale,
+            )
+            realism = RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(
+                    "Counterexample is stale: it was produced by an earlier "
+                    "harness iteration that has since been regenerated/repaired "
+                    "(a harness-local variable in the witness no longer exists "
+                    "in the current harness). The current harness supersedes it, "
+                    "so this witness is a model artifact, not a confirmed bug. "
+                    + _stale
+                ),
+                key_concern="counterexample superseded by harness regeneration",
+                llm_confidence="high",
+            )
+        elif (
             self.config.enable_realism_check
             and dyn is not None
             and dyn.outcome == DynamicOutcome.NOT_TRIGGERED
