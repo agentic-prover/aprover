@@ -601,6 +601,68 @@ Respond with ONLY valid JSON in this exact format:
 }}
 """
 
+GENERIC_REPRODUCER_PROMPT = """\
+You are generating a C reproducer that demonstrates a bug in a function that
+is compiled DIRECTLY into your program (this is internal project code, NOT a
+third-party library behind a public API). A crash in YOUR fabricated helper
+code does NOT validate the bug — only a crash inside the function under test
+does.
+
+A real bug was found in function '{buggy_function}'. The call chain from the
+system entry point to the buggy function is:
+{call_chain}
+
+The counterexample (variable state that triggers the bug):
+{counterexample_state}
+
+Function signatures (these are real symbols compiled WITH your program — call
+them directly; do NOT re-implement them):
+{function_signatures}
+
+Your task: emit a minimal C ``main()`` that drives the call chain to trigger
+the bug at runtime. It is compiled with GCC + AddressSanitizer +
+UndefinedBehaviorSanitizer against the project's own source; if the bug is
+real it should crash (SIGSEGV / SIGABRT / SIGFPE) or trip an ASan/UBSan report.
+
+HARD CONSTRAINTS — your reproducer will be REJECTED if it violates any of these:
+
+  1. Call ``{buggy_function}`` (and the rest of the chain) DIRECTLY. The
+     function, its parameter types, and the project's declarations are
+     compiled together with your program. Do NOT assume any specific
+     third-party library and do NOT ``#include`` a library public-API header
+     such as ``<archive.h>`` — that framing is a stray artifact of an upstream
+     step and does NOT apply to this target. Use only the standard headers you
+     actually need (``<stdint.h>``, ``<string.h>``, ``<stdlib.h>`` ...) plus
+     any project header that genuinely declares the functions you call.
+
+  2. MUST NOT re-implement the project functions inline. The link/compile step
+     uses the real symbols; any "crash" in a duplicate you define yourself is a
+     synthetic false positive, not a real bug.
+
+  3. Construct the EXACT argument values the counterexample calls for — a
+     crafted byte buffer, an out-of-range length / index / offset, a malformed
+     string. Define any input bytes inline as a ``char[]`` / ``uint8_t[]``
+     array and match each function's parameter order and types precisely.
+
+  4. Wrap the suspect call in a region marked ``// === BUG TRIGGER ===`` so a
+     reviewer can navigate to it. Free anything you allocate so LeakSanitizer
+     noise doesn't mask the bug.
+
+  5. If the counterexample requires state no caller can actually produce, emit
+     exactly ``// UNREPRODUCIBLE: <one-line reason>`` and nothing else — that's
+     the honest answer realism uses to demote the finding.
+
+Respond with ONLY valid JSON in this exact format:
+{{
+  "reproducer_code": "<complete C source — first line must be #include OR exactly the UNREPRODUCIBLE comment>",
+  "explanation": "<brief explanation of why these inputs trigger the bug>",
+  "concrete_values": {{
+    "<variable>": "<value>",
+    ...
+  }}
+}}
+"""
+
 CALLER_HEAVY_SPEC_PROMPT = """\
 Generate a specification for this function, emphasizing what CALLERS REQUIRE from it.
 Focus on: what preconditions must hold for callers' intended usage, what postconditions

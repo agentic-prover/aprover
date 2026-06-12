@@ -30,11 +30,13 @@ from bmc_agent.llm import LLMClient, LLMError
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
 from bmc_agent.prompts import (
+    GENERIC_REPRODUCER_PROMPT,
     OVER_REFINEMENT_CHECK_PROMPT,
     REACHABILITY_PROMPT,
     REFINEMENT_PROMPT,
     REPRODUCER_PROMPT,
 )
+from bmc_agent.scenario_reproducer import _is_libarchive_target
 from bmc_agent.spec import Spec
 
 logger = get_logger("cex_validator")
@@ -1995,7 +1997,17 @@ class CExValidator:
         sigs_str = "\n".join(sigs) or "No signature information available."
 
         system_prompt = "You are a formal verification expert for C programs."
-        user_prompt = REPRODUCER_PROMPT.format(
+        # De-anchor from libarchive: the system-entry reproducer prompt hardcodes
+        # `#include <archive.h>` and the libarchive public API. That is only
+        # correct when the target really IS libarchive (a .so behind a public
+        # API). For any other project — e.g. VibeOS kernel internals compiled
+        # DIRECTLY into the harness — that framing makes the LLM emit
+        # `archive_read_new()` / `ARCHIVE_OK` for a `calloc`/`vfs_*` target,
+        # which fails to compile/link and silently loses the system-entry
+        # dynamic tier. Mirror scenario_reproducer's _is_libarchive_target switch.
+        _libarchive_target = _is_libarchive_target(parsed_file)
+        _prompt = REPRODUCER_PROMPT if _libarchive_target else GENERIC_REPRODUCER_PROMPT
+        user_prompt = _prompt.format(
             buggy_function=call_chain[-1] if call_chain else "unknown",
             call_chain=" → ".join(call_chain),
             counterexample_state=state_str,
@@ -2025,6 +2037,18 @@ class CExValidator:
                     # UNREPRODUCIBLE marker so downstream knows nothing got
                     # validated against real linked code.
                     if code.startswith("// UNREPRODUCIBLE"):
+                        return code
+                    # The public-API-header guard below only makes sense for a
+                    # library-behind-a-.so target (where a missing `#include
+                    # <archive.h>` means the LLM fabricated inline stubs instead
+                    # of linking real symbols). For a direct-compiled internal
+                    # target (VibeOS kernel etc.) the function under test IS
+                    # compiled into the harness and is called directly with NO
+                    # public-API header — enforcing the include would wrongly
+                    # reject every legitimate generic reproducer. Skip the guard
+                    # there; the generic prompt's "do not re-implement" rule plus
+                    # compile-together linkage already cover the synthetic case.
+                    if not _libarchive_target:
                         return code
                     # Project-agnostic public-header detection: derive the
                     # allowlist from config.include_dirs (same heuristic
