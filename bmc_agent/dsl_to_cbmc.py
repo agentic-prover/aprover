@@ -948,9 +948,17 @@ def _sanitize_condition(condition: str) -> str:
                 safe.append(ps)
             else:
                 safe.append(ps)
-        # Return "1" (no-op assume) if everything was dropped
+        # Return "1" (no-op assume) if everything was dropped. A commented-out
+        # clause must NOT sit bare in the && chain (``A && /* c */ && B`` becomes
+        # ``A &&  && B`` — a comment is whitespace, so the && has no operand and
+        # CBMC reports "syntax error before ')'"). Give each commented clause a
+        # ``1`` operand so it's a valid no-op that still shows what was dropped.
         real = [p for p in safe if not (p.startswith("/*") and p.endswith("*/"))]
-        return " && ".join(safe) if real else "1"
+        joined = " && ".join(
+            (f"1 {p}" if (p.startswith("/*") and p.endswith("*/")) else p)
+            for p in safe
+        )
+        return joined if real else "1"
 
     condition = _sanitize_clauses(condition)
 
@@ -959,6 +967,12 @@ def _sanitize_condition(condition: str) -> str:
 
     # Strip carriage returns that may remain
     condition = condition.replace('\r', '')
+
+    # Final cleanup: a clause commented out inside parens by the structural
+    # builder leaves ``(/* ... */)`` — an empty parenthesised expression that
+    # CBMC rejects ("syntax error before ')'"). Give it a ``1`` operand so the
+    # parens hold a valid no-op while preserving the dropped-clause comment.
+    condition = re.sub(r"\(\s*(/\*.*?\*/)\s*\)", r"(1 \1)", condition)
 
     return condition.strip()
 
