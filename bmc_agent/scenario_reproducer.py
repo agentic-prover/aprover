@@ -122,6 +122,74 @@ no markdown fences, no explanation. The first line must be either
 """
 
 
+# Generic (non-libarchive) reproducer prompt. The libarchive prompt above is
+# hardcoded to that library's public API (archive.h, archive_*_open_memory, ACL
+# helpers); on any OTHER target the LLM dutifully tries to use libarchive and
+# emits garbage / "not a libarchive symbol". For internal code (a kernel VFS fn,
+# a packet handler, ...) the reproducer must CALL THE FUNCTION DIRECTLY — there
+# is no public-API wrapper. Same placeholders so .format() is interchangeable.
+_GENERIC_SCENARIO_REPRODUCER_PROMPT = """You are helping audit a C program for security bugs.
+
+A formal-verification tool (CBMC) found a counterexample in this function:
+
+  {fn_name}({fn_signature})
+
+A second LLM auditor judged the finding REALISTIC and described the
+attacker scenario as:
+
+---
+{attacker_scenario}
+---
+
+Your job: produce a SELF-CONTAINED C program (one ``main()`` plus any
+helpers) that calls ``{fn_name}`` the way the attacker scenario describes,
+to trigger the violation at runtime. It is compiled with GCC + AddressSanitizer
++ UndefinedBehaviorSanitizer. If the violation is real it should crash
+(SIGSEGV / SIGABRT / SIGFPE) or trip an ASan/UBSan report.
+
+Constraints:
+  * This is INTERNAL code — there is NO public-API wrapper. Call ``{fn_name}``
+    DIRECTLY. The function, its parameter types, and the project's own
+    declarations are compiled together with your program (the build includes
+    the source under test); do NOT redefine them. If a small helper type is
+    needed to construct an argument, declare it minimally.
+  * Do NOT assume any specific third-party library (no ``<archive.h>`` etc.).
+    Use only the standard headers you actually need (``<stdint.h>``,
+    ``<string.h>``, ``<stdlib.h>`` ...).
+  * Construct the EXACT argument values the scenario calls for — a crafted byte
+    buffer, an out-of-range length / index / offset, a malformed string.
+    Define any input bytes inline as a C array, and match {fn_name}'s parameter
+    order and types precisely.
+  * Wrap the suspect call in a region marked ``// === BUG TRIGGER ===``.
+  * Free anything you allocate so LeakSanitizer noise doesn't mask the bug.
+  * If you genuinely cannot construct one (the scenario needs state no caller
+    can produce), output exactly ``// UNREPRODUCIBLE: <one-line reason>``.
+
+Function source for reference:
+
+```c
+{fn_body}
+```
+
+Output ONLY the C program (or the UNREPRODUCIBLE line). No prose, no markdown
+fences. The first line must be ``#include`` or ``// UNREPRODUCIBLE:``.
+"""
+
+
+def _is_libarchive_target(parsed_file) -> bool:
+    """True when the target really is libarchive — only then is the libarchive-
+    specific reproducer prompt appropriate. Detected from the source path (the
+    libarchive eval runs on ``.../libarchive/...`` paths) or an ``archive.h``
+    include. Everything else gets the generic 'call the function directly' prompt.
+    """
+    path = (getattr(parsed_file, "path", "") or "")
+    primary = (getattr(parsed_file, "primary_source", "") or "")
+    if "libarchive" in (path + " " + primary).lower():
+        return True
+    pre = getattr(parsed_file, "preprocessed_source", "") or ""
+    return ("archive.h" in pre) or ("archive_entry.h" in pre)
+
+
 def generate_reproducer(
     func: "FunctionInfo",
     attacker_scenario: str,
@@ -142,7 +210,11 @@ def generate_reproducer(
     fn_signature = _format_signature(func)
     fn_body = (func.body or "(body unavailable)")[:6000]
 
-    prompt = _SCENARIO_REPRODUCER_PROMPT.format(
+    _tmpl = (
+        _SCENARIO_REPRODUCER_PROMPT if _is_libarchive_target(parsed_file)
+        else _GENERIC_SCENARIO_REPRODUCER_PROMPT
+    )
+    prompt = _tmpl.format(
         fn_name=fn_name,
         fn_signature=fn_signature,
         attacker_scenario=attacker_scenario.strip(),
