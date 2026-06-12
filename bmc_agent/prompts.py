@@ -733,19 +733,22 @@ Start by assuming this is probably a false positive, because most
 CBMC findings on real-world C code are. The common false-positive
 patterns you should rule out FIRST:
 
-  1. **Unreachable-from-public-API state**: CBMC's harness uses
+  1. **Unreachable-from-any-entry-point state**: CBMC's harness uses
      nondeterministic inputs, which gives it the ability to construct
      struct states no real caller can produce. Before voting
-     REALISTIC, you must identify the SPECIFIC public-API call (and
-     the inputs to that call) that produces the state the
+     REALISTIC, you must identify the SPECIFIC entry point an attacker
+     controls — appropriate to THIS codebase per the threat model below
+     (a library public-API call, a syscall/trap argument, a network
+     packet or file/image/format the code parses, a device/MMIO/DMA
+     interface) — AND the inputs to it that produce the state the
      counterexample requires. If you can only say "an attacker could
-     somehow corrupt this field," it's not enough — name the API.
+     somehow corrupt this field," it's not enough — name the entry point.
 
   2. **Stub-callee disconnect**: CBMC replaces external calls with
      stubs that return arbitrary values. If the bug requires the
      stub to return something the real callee cannot return (e.g.
      `malloc` returning a 2-byte buffer that the code expected to be
-     bigger; `archive_acl_text_len` returning 2 when its logic
+     bigger; a length/size accessor returning 2 when its own logic
      guarantees >= 31), it is NOT a real bug.
 
   3. **Witness-uses-uninitialized-state**: CBMC may exhibit a witness
@@ -759,7 +762,8 @@ patterns you should rule out FIRST:
      functions (byte encoders/decoders, format helpers) trivially
      crash if you pass NULL or invalid args, but real callers never
      do. The bug isn't in the helper — it's in whatever passes bad
-     args, which must itself be reachable from the public API.
+     args, which must itself be reachable from an attacker-controlled
+     entry point.
 
   5. **Theoretical overflow without practical input**: A `size_t`
      overflow that requires combining inputs whose product exceeds
@@ -768,11 +772,14 @@ patterns you should rule out FIRST:
 For your verdict to be REALISTIC, you must be able to answer YES to
 ALL of these:
 
-  (a) Can you name a specific public-API call (from <archive.h> or
-      similar) that an attacker can make?
-  (b) Can you describe what bytes the attacker supplies (file bytes,
-      argument values) to that call?
-  (c) Walking from that API call through the codebase, can you
+  (a) Can you name a specific entry point an attacker controls,
+      appropriate to THIS codebase per the threat model below (a
+      library public-API call, a syscall/trap argument, a network
+      packet or file/image/format the code parses, a device/MMIO
+      interface)?
+  (b) Can you describe what bytes/values the attacker supplies (file or
+      packet bytes, header fields, argument values) to that entry point?
+  (c) Walking from that entry point through the codebase, can you
       explain how those bytes turn into the counterexample's
       precondition state?
   (d) Does the bug class survive WITHIN the realistic input domain
@@ -823,11 +830,11 @@ DYNAMIC VALIDATION RESULT: {dynamic_result}
 CBMC HARNESS — the actual harness whose initial state produced the counterexample.
 Audit it directly: this is the most reliable signal for harness-artifact FPs.
 Look for: pointers initialized to NULL/stack/uninitialized, struct fields set
-nondeterministically without honoring public-API invariants, freed-without-NULL
-state, integer fields set to extreme values that real public-API code would not
-produce. If the harness's initial state cannot be produced by any public-API
-sequence, the counterexample is a harness artifact regardless of how realistic
-the function-level pattern looks.
+nondeterministically without honoring the invariants a real caller establishes,
+freed-without-NULL state, integer fields set to extreme values that real calling
+code would not produce. If the harness's initial state cannot be produced by any
+attacker-reachable call sequence, the counterexample is a harness artifact
+regardless of how realistic the function-level pattern looks.
 {harness_code}
 
 ---
@@ -881,13 +888,15 @@ TURN 1 — FIRST READ (no skepticism yet)
   pattern-match. Don't audit yet.
 
 TURN 2 — REACHABILITY CHALLENGE
-  Now play the skeptic. Find a public-API entry point that an
-  attacker can call which (directly or transitively) invokes
+  Now play the skeptic. Find an entry point an attacker controls (per
+  the threat model below — a library public-API call, a syscall/trap
+  argument, a network packet or file/image/format the code parses, a
+  device/MMIO interface) which (directly or transitively) invokes
   `{function_name}`. You need to commit to one of three answers:
 
   (a) BEHAVIORAL REACHABILITY (sufficient for REALISTIC):
-      You can identify a public-API entry that calls this function
-      with attacker-controllable input AND you can describe a
+      You can identify an attacker-controlled entry that calls this
+      function with attacker-controllable input AND you can describe a
       behavioral pattern in this function that misbehaves under
       hostile inputs (missing guard, length-based parser without
       bounds check, type confusion on attacker-typed field, etc).
@@ -964,8 +973,8 @@ TURN 3 — STUB-CALLEE CHALLENGE
   counterexample require any function in the codebase to return a
   value its real implementation cannot return? Examples: malloc
   returning a 2-byte buffer when the caller computed the size,
-  archive_acl_text_len returning a length its logic guarantees is
-  >= 31, a stub returning a stack address. If yes, that's a
+  a length/size accessor returning a length its own logic guarantees
+  is >= 31, a stub returning a stack address. If yes, that's a
   CBMC-harness artifact — the real callee would never produce that
   return.
 

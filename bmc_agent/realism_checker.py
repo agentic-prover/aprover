@@ -828,8 +828,17 @@ class RealismChecker:
             active_stub_contracts = "(stub-contract list unavailable)"
 
         tm = getattr(self.config, "threat_model", "security")
+        # Merge the user-supplied --threat-model-context (the TARGET's actual
+        # attack surface) into the realism prompt. Without this the prompt only
+        # carries the generic builtin note and the LLM defaults to a libarchive
+        # "public-API" framing (the example phrasing below), confabulating
+        # archive_* scenarios for non-library targets (e.g. a VibeOS kernel
+        # packet handler reached via network bytes, not <archive.h>).
+        _builtin_tm = THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"])
+        _user_tm = (getattr(self.config, "threat_model_context", "") or "").strip()
+        _tm_ctx = (_builtin_tm + "\n\n" + _user_tm) if _user_tm else _builtin_tm
         return REALISM_CHECK_PROMPT.format(
-            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
+            threat_model_context=_tm_ctx,
             function_name=func.name,
             function_signature=sig,
             # 8000 chars (~120 lines of C) accommodates mid-size leaf functions

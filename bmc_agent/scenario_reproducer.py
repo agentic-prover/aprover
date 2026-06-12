@@ -153,6 +153,12 @@ Constraints:
     declarations are compiled together with your program (the build includes
     the source under test); do NOT redefine them. If a small helper type is
     needed to construct an argument, declare it minimally.
+  * IGNORE any mention of a specific third-party library or "public API" in the
+    scenario above (e.g. libarchive / ``archive_*`` / ``<archive.h>``): that is
+    a stray framing from an upstream step, NOT this target. Do NOT output
+    UNREPRODUCIBLE merely because ``{fn_name}`` "isn't reachable from" some named
+    library's public API — it is compiled directly with your program, so call it
+    directly with the crafted arguments the scenario's CONDITION describes.
   * Do NOT assume any specific third-party library (no ``<archive.h>`` etc.).
     Use only the standard headers you actually need (``<stdint.h>``,
     ``<string.h>``, ``<stdlib.h>`` ...).
