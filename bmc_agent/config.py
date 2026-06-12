@@ -241,7 +241,17 @@ class Config:
     # bounds-check) with no need to resolve the destination size. Capped modestly
     # for tractability: destinations >= max_len stay a documented limitation.
     enable_string_copy_source_modeling: bool = True
+    # Default source widening when the destination buffer size can't be resolved
+    # from the body (e.g. malloc(strlen(x)+1) — already correctly sized, so a
+    # modest cap can't false-positive). When the destination IS a resolvable
+    # fixed size N, the source is widened to min(N, string_copy_source_max_dest)
+    # instead — exactly enough to overflow an N-byte buffer at minimal unwind
+    # cost (CBMC measured 0.29s at unwind 258 for a 256-byte dest in isolation).
     string_copy_source_max_len: int = 32
+    # Tractability ceiling on the resolved-destination widening: destinations
+    # larger than this are widened only to the ceiling (and --unwinding-assertions
+    # converts the residual to an incomplete/surfaced verdict, never silent-clean).
+    string_copy_source_max_dest: int = 256
     # CBMC --object-bits. None = let CBMC pick its default (currently 8); with
     # cbmc_auto_scale_object_bits=True, run_cbmc will retry at 12 and 16 when
     # the "too many addressed objects" error trips. State-heavy parser files

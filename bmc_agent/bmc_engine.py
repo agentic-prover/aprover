@@ -250,7 +250,8 @@ class BMCEngine:
             if getattr(self.config, "enable_string_copy_source_modeling", True):
                 from .string_copy_sink import copy_sink_unwind_floor
                 _copy_floor = copy_sink_unwind_floor(
-                    func, getattr(self.config, "string_copy_source_max_len", 0)
+                    func, getattr(self.config, "string_copy_source_max_len", 0),
+                    getattr(self.config, "string_copy_source_max_dest", 256),
                 )
                 if _copy_floor > unwind_for_this_run:
                     unwind_for_this_run = _copy_floor

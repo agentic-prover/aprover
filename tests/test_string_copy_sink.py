@@ -4,7 +4,10 @@ from __future__ import annotations
 from bmc_agent.parser import FunctionInfo, FunctionSignature
 from bmc_agent.string_copy_sink import (
     detect_copy_sources,
+    detect_copy_sinks,
+    plan_copy_source_widening,
     copy_sink_unwind_floor,
+    _resolve_dest_size,
     _source_root,
     _split_top_level_args,
     _balanced_args,
@@ -118,12 +121,82 @@ def test_no_copy_no_sources():
     assert detect_copy_sources(fn) == (set(), set())
 
 
+# ---- destination-size resolution --------------------------------------
+
+def test_resolve_dest_fixed_char_array():
+    body = "void f(char *in){ char buf[16]; strcpy(buf, in); }"
+    assert _resolve_dest_size(body, "buf") == 16
+
+
+def test_resolve_dest_malloc_literal():
+    body = "void f(char *in){ char *p = malloc(256); strcpy(p, in); }"
+    assert _resolve_dest_size(body, "p") == 256
+
+
+def test_resolve_dest_cast_malloc():
+    body = "void f(char *in){ char *p = (char*)malloc(64); strcpy(p, in); }"
+    assert _resolve_dest_size(body, "p") == 64
+
+
+def test_resolve_dest_calloc_product():
+    body = "void f(char *in){ char *p = calloc(8, 16); strcpy(p, in); }"
+    assert _resolve_dest_size(body, "p") == 128
+
+
+def test_resolve_dest_strlen_sized_is_unresolvable():
+    # malloc(strlen(x)+1) is correctly sized -> must NOT resolve to a number
+    # (so it falls back to the modest default cap and can't false-positive).
+    body = "void f(char *in){ char *p = malloc(strlen(in)+1); strcpy(p, in); }"
+    assert _resolve_dest_size(body, "p") is None
+
+
+# ---- per-sink widening plan -------------------------------------------
+
+def test_sink_carries_resolved_dest_size():
+    fn = _fn("void f(char *in){ char buf[16]; strcpy(buf, in); }",
+             [("char *", "in")])
+    sinks = detect_copy_sinks(fn)
+    assert len(sinks) == 1 and sinks[0].dest_size == 16
+
+
+def test_plan_widens_param_to_dest_size():
+    fn = _fn("void f(char *in){ char buf[16]; strcpy(buf, in); }",
+             [("char *", "in")])
+    pmax, fmax, floor = plan_copy_source_widening(fn, default_cap=32, ceiling=256)
+    assert pmax == {"in": 16}
+    assert floor == 18                       # 16 + 2
+
+
+def test_plan_large_dest_capped_by_ceiling():
+    fn = _fn("void f(char *in){ char *p = malloc(1024); strcpy(p, in); }",
+             [("char *", "in")])
+    pmax, _f, floor = plan_copy_source_widening(fn, default_cap=32, ceiling=256)
+    assert pmax == {"in": 256}               # capped
+    assert floor == 258
+
+
+def test_plan_unresolvable_dest_uses_default_cap():
+    fn = _fn("void f(char *in){ char *p = malloc(strlen(in)+1); strcpy(p, in); }",
+             [("char *", "in")])
+    pmax, _f, floor = plan_copy_source_widening(fn, default_cap=32, ceiling=256)
+    assert pmax == {"in": 32}
+    assert floor == 34
+
+
+def test_plan_field_dest_size():
+    fn = _fn("void f(node_t *n){ char buf[256]; strcpy(buf, (char*)n->data); }",
+             [("node_t *", "n")])
+    _p, fmax, floor = plan_copy_source_widening(fn, default_cap=32, ceiling=512)
+    assert fmax == {"data": 256}
+    assert floor == 258
+
+
 # ---- unwind floor ------------------------------------------------------
 
 def test_unwind_floor_when_sink_present():
     fn = _fn("void f(char *in) { char b[8]; strcpy(b, in); }",
              [("char *", "in")])
-    assert copy_sink_unwind_floor(fn, 32) == 34
+    assert copy_sink_unwind_floor(fn, 32) == 10      # dest 8 -> 8+2
 
 
 def test_unwind_floor_zero_without_sink():
