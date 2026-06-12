@@ -124,7 +124,7 @@ def _read_function_source(file_stem: str, fn: str, source_root: str | None = Non
                     head = "".join(lines[start : start + 60])
                     excerpt = head + "\n    /* ... function body truncated for report ... */\n"
                 return excerpt.rstrip(), (start + 1, end + 1)
-    return "(libarchive source not available on common paths; see file_stem above)", None
+    return "(source not found on the searched paths; see file_stem above and the committed harness.c)", None
 
 
 def _format_cex_witness(report: dict) -> str:
@@ -147,6 +147,24 @@ def _format_cex_witness(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _looks_like_libarchive(file_stem: str, source_root: "str | None", driver: "str | None") -> bool:
+    """True only when the report target really is libarchive, so the
+    libarchive-specific clone/snapshot/Target boilerplate is appropriate.
+    Everything else (a VibeOS kernel module, any other project) gets a generic
+    report keyed on the actual driver + the committed harness."""
+    blob = f"{source_root or ''} {driver or ''}".lower()
+    if "libarchive" in blob:
+        return True
+    for c in (
+        f"/tmp/libarchive_auto_corpus/{file_stem}.c",
+        f"/tmp/libarchive_bench/libarchive/libarchive/{file_stem}.c",
+        f"/tmp/libarchive_seedhunt_full/{file_stem}.c",
+    ):
+        if os.path.exists(c):
+            return True
+    return False
+
+
 def _format_report(
     br_path: str,
     report: dict,
@@ -155,6 +173,7 @@ def _format_report(
     fn_dir: str,
     rerun_cmd: str | None = None,
     source_root: str | None = None,
+    driver: str | None = None,
 ) -> str:
     fn = report.get("function_name", "unknown")
     cls_path = os.path.join(fn_dir, "classification.json")
@@ -189,7 +208,9 @@ def _format_report(
     src_lines_label = f"lines {src_lines[0]}-{src_lines[1]}" if src_lines else "(unknown lines)"
     cex_witness = _format_cex_witness(report)
 
-    repro_cmd = f"""# 1. clone libarchive at the snapshot the sweep used
+    is_libarchive = _looks_like_libarchive(file_stem, source_root, driver)
+    if is_libarchive:
+        repro_cmd = f"""# 1. clone libarchive at the snapshot the sweep used
 cd /tmp && git clone https://github.com/libarchive/libarchive
 cd libarchive && git checkout 67830f7b9c27080c0170bcd71d94fb42316c47dd
 
@@ -205,6 +226,27 @@ cbmc \\
 # (paste the harness contents from the section below into harness.c first;
 #  it is also committed alongside this report as harness.c.)
 """
+        target_block = (
+            "- **Project**: libarchive (snapshot `67830f7b9c27080c0170bcd71d94fb42316c47dd`)\n"
+            f"- **Source file**: `libarchive/{file_stem}.c`\n"
+        )
+    else:
+        # Generic (internal/non-library) target: drive the bug from the committed
+        # harness directly — there is no installed library to clone or -l link.
+        repro_cmd = f"""# Reproduce with CBMC. The self-contained harness is committed alongside this
+# report as harness.c (it includes/compiles the source under test). Re-supply
+# the SAME -I include dirs and -D defines the original run used.
+cbmc \\
+    --bounds-check --pointer-check --pointer-overflow-check \\
+    --signed-overflow-check --unwinding-assertions \\
+    --unwind 8 --timeout 120 \\
+    --function main \\
+    {os.path.basename(fn_dir)}/harness.c
+"""
+        target_block = (
+            f"- **Project**: {driver or '(internal target)'}\n"
+            f"- **Source file**: `{file_stem}.c`\n"
+        )
 
     return f"""# bmc-agent-sec confirmed finding: `{fn}`
 
@@ -213,9 +255,7 @@ cbmc \\
 
 ## Target
 
-- **Project**: libarchive (snapshot `67830f7b9c27080c0170bcd71d94fb42316c47dd`)
-- **Source file**: `libarchive/{file_stem}.c`
-- **Function**: `{fn}` ({src_lines_label})
+{target_block}- **Function**: `{fn}` ({src_lines_label})
 - **Violated property**: `{prop}` (CBMC-reported)
 - **Call chain established**: `{call_chain}`
 
@@ -303,7 +343,7 @@ def generate_reports(sweep_output: str | Path, driver: str, rerun_cmd: str | Non
         if len(parts) < 2:
             continue
         file_stem, fn = parts[0], parts[1]
-        md = _format_report(br_path, d, rc, file_stem, fn_dir, rerun_cmd)
+        md = _format_report(br_path, d, rc, file_stem, fn_dir, rerun_cmd, driver=driver)
         out_path = os.path.join(report_dir, f"{fn}.md")
         try:
             with open(out_path, "w") as f:
