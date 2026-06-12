@@ -763,6 +763,97 @@ def _c_expressible_postcondition(post: str, param_names: list, return_var: str =
     return expr
 
 
+def _emit_copy_source_return_stub(
+    callee_name: str,
+    ret_type: str,
+    struct_definitions: Optional[dict],
+    copy_field_maxlen: Optional[dict],
+) -> Optional[list[str]]:
+    """If ``callee_name`` returns a pointer to a struct (with a visible body)
+    one of whose ``char *`` fields is a copy SOURCE in the function under test
+    (i.e. it appears in ``copy_field_maxlen``), emit a return-value model that
+    points at a STATIC-backed struct whose copy-source field is a WIDENED
+    NUL-terminated string -- so a ``strcpy(fixed_buf, ret->field)`` in the
+    caller can overflow (FN dual of (buf,len), for callee-RETURN sources like
+    vibeos ``temp = vfs_lookup(...); strcpy(path_copy, temp->data)``).
+
+    The NULL return is still explored (soundness: the caller's ``if (!ret)``
+    early-out path stays reachable). This is STRICTLY MORE FAITHFUL than the
+    default nondet-pointer return, which also admits a non-NULL-but-invalid
+    garbage pointer (itself a historic FP source) -- here the non-NULL case is
+    a valid allocated object. Returns ``None`` (caller keeps default havoc)
+    when no qualifying struct/field is found.
+    """
+    if not copy_field_maxlen or not struct_definitions:
+        return None
+    rt = ret_type.strip()
+    if rt.count("*") != 1:                      # single-indirection return only
+        return None
+    base = re.sub(r"\bconst\b", "", rt.rstrip("*")).strip()
+    struct_name = _resolve_struct_name(base, struct_definitions)
+    if not struct_name:
+        return None
+    fields = struct_definitions.get(struct_name) or []
+    # Find a char*-typed field that is a copy source in the caller.
+    target = None
+    for ftype, fname in fields:
+        if fname in copy_field_maxlen:
+            ft = re.sub(r"\bconst\b", "", ftype or "").strip()
+            if ft.count("*") == 1 and re.sub(r"\*", "", ft).strip() == "char":
+                target = (fname, copy_field_maxlen[fname])
+                break
+    if target is None:
+        return None
+    fname, maxlen = target
+    tag = re.sub(r"\W", "_", callee_name)
+    buf = f"_ret_{tag}_{fname}"
+    ln = f"_ret_{tag}_{fname}_len"
+    rt = ret_type.strip()
+    # typedef alias vs bare tag: struct_definitions keys can be either; emit the
+    # form that names the type so ``malloc(sizeof(...))`` is well-typed.
+    type_for_size = struct_name if base == struct_name else f"struct {struct_name}"
+    # Use malloc (NOT a static array): malloc'd memory has NONDET contents (a
+    # static array is zero-initialised -> buf[0]==0 -> empty string -> the
+    # overflow is unreachable) AND heap lifetime (survives the stub return, so
+    # no dead-object on the caller's deref). CBMC's malloc may also return NULL,
+    # which keeps the caller's ``if (!ret) return`` early-out path reachable
+    # (soundness) -- strictly more faithful than the default nondet-garbage ptr.
+    return [
+        f"    /* copy-source RETURN modeling: '{fname}' is strcpy'd into a fixed",
+        f"       buffer in the caller -- widen it ({maxlen} chars, nondet contents)",
+        f"       so the overflow is reachable; NULL is still explored (soundness). */",
+        f"    {rt} result = malloc(sizeof({type_for_size}));",
+        f"    if (result) {{",
+        f"        char *{buf} = malloc((unsigned int){maxlen} + 1);",
+        f"        if ({buf}) {{",
+        f"            unsigned int {ln};",
+        f"            __CPROVER_assume({ln} <= (unsigned int){maxlen});",
+        f"            {buf}[{ln}] = '\\0';",
+        f"            result->{fname} = {buf};",
+        f"        }}",
+        f"    }}",
+        f"    return result;",
+    ]
+
+
+def _copy_field_plan(config, fn) -> dict:
+    """The function-under-test's copy-source FIELD -> widened-length map (used to
+    widen matching struct-pointer stub returns). Empty when disabled/none."""
+    if not getattr(config, "enable_string_copy_source_modeling", True):
+        return {}
+    cap = getattr(config, "string_copy_source_max_len", 0)
+    if not cap or cap <= 0:
+        return {}
+    try:
+        from .string_copy_sink import plan_copy_source_widening
+        _p, fmax, _floor = plan_copy_source_widening(
+            fn, cap, getattr(config, "string_copy_source_max_dest", 256)
+        )
+        return fmax
+    except Exception:
+        return {}
+
+
 def _generate_stub(
     callee_name: str,
     callee_spec: Optional[Spec],
@@ -770,6 +861,8 @@ def _generate_stub(
     extern_sigs: Optional[dict] = None,
     assume_postcondition: bool = False,
     verified_sound: Optional[set] = None,
+    copy_field_maxlen: Optional[dict] = None,
+    struct_definitions: Optional[dict] = None,
 ) -> str:
     """Generate a C stub function for a callee.
 
@@ -846,6 +939,17 @@ def _generate_stub(
     if ret_type_bare == "void":
         lines.append("    /* void return — nothing to havoc */")
     else:
+        # Copy-source RETURN modeling: if this callee returns a struct pointer
+        # whose char* field is strcpy'd into a fixed buffer in the caller, point
+        # the return at a static struct with that field WIDENED so the overflow
+        # is reachable (callee-return source variant of the string-copy FN fix).
+        _copy_ret = _emit_copy_source_return_stub(
+            callee_name, ret_type, struct_definitions, copy_field_maxlen
+        )
+        if _copy_ret is not None:
+            lines.extend(_copy_ret)
+            lines.append("}")
+            return "\n".join(lines)
         # Havoc the return value: declare it, constrain by postcondition.
         # Strip storage class — ``static void result;`` would be invalid
         # (void can't be a variable type) and ``static int result;`` is
@@ -3989,6 +4093,8 @@ class HarnessGenerator:
                     assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
                     verified_sound=(getattr(self.config, "verified_sound_functions", None)
                                     if getattr(self.config, "assume_verified_callee_postcondition", False) else None),
+                    copy_field_maxlen=_copy_field_plan(self.config, caller),
+                    struct_definitions=getattr(parsed_file, "struct_definitions", None),
                 )
                 stubs_to_substitute.add(cname)
             stub_sections.append(stub_src)
@@ -4302,6 +4408,8 @@ class HarnessGenerator:
                 assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
                     verified_sound=(getattr(self.config, "verified_sound_functions", None)
                                     if getattr(self.config, "assume_verified_callee_postcondition", False) else None),
+                copy_field_maxlen=_copy_field_plan(self.config, func),
+                struct_definitions=getattr(parsed_file, "struct_definitions", None),
             )
             # _generate_stub emits a sentinel comment when it can't find a
             # signature and falls through to ``void X_stub(void)``. Skip
@@ -4961,6 +5069,8 @@ class HarnessGenerator:
                 assume_postcondition=getattr(self.config, "assume_callee_postcondition", False),
                     verified_sound=(getattr(self.config, "verified_sound_functions", None)
                                     if getattr(self.config, "assume_verified_callee_postcondition", False) else None),
+                copy_field_maxlen=_copy_field_plan(self.config, func),
+                struct_definitions=getattr(parsed_file, "struct_definitions", None),
             )
             stub_sections.append(stub_src)
 
