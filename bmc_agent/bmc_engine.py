@@ -46,6 +46,32 @@ _HARNESS_BUILD_ERROR_MARKERS = (
 )
 
 
+import re as _re
+
+# Widths recorded by the harness generator's string-copy SOURCE widening comments:
+#   /* copy-sink source 'p': widened to 256 chars ... */          (param)
+#   /* copy-source source field 'f': widened to 256 chars */      (struct field)
+#   /* copy-source RETURN modeling: 'f' ... widen it (256 chars... */ (stub return)
+_COPY_WIDEN_RE = _re.compile(r"widened to (\d+) chars|widen it \((\d+) chars")
+
+
+def _copy_widen_floor_from_harness(harness_src: "str | None") -> int:
+    """Per-function unwind floor implied by the string-copy SOURCE widths the
+    harness actually applied: the copy loop must unroll past the widest source
+    (max width + 2) for the fixed-buffer overflow to be reachable. 0 when none.
+
+    Reads the harness TEXT so the floor is consistent with the modeling even
+    when func.body still carries an unexpanded macro destination size."""
+    if not harness_src:
+        return 0
+    widest = 0
+    for m in _COPY_WIDEN_RE.finditer(harness_src):
+        w = int(m.group(1) or m.group(2))
+        if w > widest:
+            widest = w
+    return (widest + 2) if widest else 0
+
+
 def _is_harness_build_error(err: "str | None") -> bool:
     """True iff a CBMC error string looks like a harness BUILD failure (parse /
     conversion / incomplete-type), as opposed to a verification result or a
@@ -248,11 +274,16 @@ class BMCEngine:
             # incomplete rather than clean. Targeted: only fires when the body
             # has a qualifying copy sink, so it doesn't inflate other functions.
             if getattr(self.config, "enable_string_copy_source_modeling", True):
-                from .string_copy_sink import copy_sink_unwind_floor
-                _copy_floor = copy_sink_unwind_floor(
-                    func, getattr(self.config, "string_copy_source_max_len", 0),
-                    getattr(self.config, "string_copy_source_max_dest", 256),
-                )
+                # Derive the copy-source unwind floor from the GENERATED HARNESS
+                # TEXT, not from func.body: a fixed dest like malloc(VFS_MAX_PATH)
+                # only resolves to its literal size (256) after the preprocessing
+                # the harness assembly applies, whereas func.body (and even
+                # parsed_file.function_bodies) may still carry the raw macro and
+                # under-resolve. The harness's widening comments record the EXACT
+                # width applied to each copy source, so reading them keeps the
+                # unwind floor consistent with the modeling (the strcpy loop must
+                # unroll past the widened source to reach the overflow).
+                _copy_floor = _copy_widen_floor_from_harness(harness_src)
                 if _copy_floor > unwind_for_this_run:
                     unwind_for_this_run = _copy_floor
             # Per-function CBMC timeout override (None = use global default).
