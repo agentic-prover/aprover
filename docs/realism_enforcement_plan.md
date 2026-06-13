@@ -42,6 +42,16 @@ Freeze regression oracle: irq/vfs over-confirm result; cross-codebase 0/7 demote
 (libredwg/openjpeg/libtiff/brotli); VibeOS 0/8 reals demoted; `vfs_open_handle`/`ip_handle`
 always kept.
 
+> **Finding (2026-06-13, from code+CEx analysis during impl).** The irq residual over-confirms
+> (`wsod_draw_line`, 1×`sleep_ms`) are held by blocker-flaw #1 (`evidence_strong` keys on
+> `harness_kind`), so their numeric demotion is **Phase 2a's** job, not the harness-refiner's. Most
+> irq FPs are nondet-arg signed-overflow CEx (x,y,ms→INT/UINT_MAX), already demoted by the uniform
+> reachability tier. The harness-refiner is the **sound empirical demotion channel for the NULL-deref
+> artifact class** (e.g. the vfs tree-model FP, b4aa03c): calloc(1,…) is the smallest non-NULL
+> object, so a real OOB re-crashes and is kept — it can clean a NULL deref but never mask an overflow.
+> Phase 1 gate is therefore read soundly: refiner KEEPS the fb_width-loop FPs (safe) and never
+> demotes a real bug; the irq numeric demotion is verified under Phase 2/3.
+
 ### Phase 1 — Harness-refinement outcome C (KEYSTONE; makes enforcement safe)
 - 1a. Branch in the realism-verdict consumer: if `key_concern` names a NULL-init-trusted-global or
   nondet unit-arg artifact -> route to a new `harness_refiner` (not the spec-clause loop).

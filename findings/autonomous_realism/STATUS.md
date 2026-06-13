@@ -1,28 +1,39 @@
 STATE: RUNNING
-Phase: 1 (harness-refinement outcome C) — Phase 0 DONE.
+Phase: 1 (harness-refinement outcome C) — core landed, wiring next.
 
-## Just did (iter 1)
-- Phase 0 baseline lock (no code). Froze the regression oracle in
-  `findings/autonomous_realism/baseline_oracle.md` from completed runs already on disk:
-  - vfs (phase1_regress_vfs2): `vfs_open_handle` confirmed_dynamic ×3 = REAL keep-anchor; reals listed.
-  - irq (step3_shadow_irq = baseline verdicts): FPs over-confirmed = `wsod_draw_line`,
-    `wsod_draw_sad_mac`, `sleep_ms`; the wsod SEMANTIC set already `unlikely`.
-  - Identified the residual GAP from step4_live_irq: existing uniform/live tier model already
-    demotes `wsod_draw_sad_mac`, but `wsod_draw_line` + one `sleep_ms` are STILL confirmed —
-    that is the `fb_base=NULL` NULL-init-trusted-global class Phase 1+2 must close.
-- Committed Phase 0 (oracle + plan status + this file) to main and pushed.
+## Done so far
+- Phase 0 (committed): froze baseline regression oracle in `baseline_oracle.md`.
+  Keep-anchor `vfs_open_handle` confirmed_dynamic; irq FPs = wsod_draw_line / wsod_draw_sad_mac /
+  sleep_ms; residual still-confirmed under current uniform tier = wsod_draw_line + 1×sleep_ms.
+- Phase 1 core (committed, UNWIRED ⇒ zero behavior risk): `bmc_agent/harness_refiner.py` +
+  `tests/test_harness_refiner.py` (11 green). Detects undefined boot-init-trusted EXTERN globals
+  defined in a sibling .c (NULL/0 init, assigned only in an *_init fn), materializes them
+  (pointer → calloc(1,sizeof) — b4aa03c model) so a confirmed_dynamic finding can be re-run:
+  clean ⇒ NULL-default artifact ⇒ demote; still crashes ⇒ keep.
 
-## Test/gate results
-- Phase 0 GATE: oracle frozen and self-consistent against on-disk completed runs. PASS (no code).
-- Safety anchors confirmed present in baseline: `vfs_open_handle` confirmed_dynamic. OK.
+## Important honest finding (drives the rest of the plan)
+Deeper code+CEx analysis refines the plan's attribution:
+- The irq FPs are mostly **nondet-arg signed-overflow** CEx (x,y,ms driven to INT/UINT_MAX),
+  NOT pure fb_base NULL-derefs. wsod_draw_sad_mac is ALREADY demoted by the existing uniform
+  reachability tier (step4_live_irq). The residual wsod_draw_line + 1×sleep_ms stay confirmed
+  because `evidence_strong` keys on `harness_kind=="system_entry"` (plan blocker-flaw #1).
+- ⇒ The precise fix for the irq residual is **Phase 2a** (drop harness_kind from the evidence
+  axis; use formal CBMC reachability only). The harness-refiner is the SOUND empirical demotion
+  channel for the NULL-deref artifact class (e.g. the vfs tree-model FP from b4aa03c); by design
+  (calloc(1,...)) it conservatively KEEPS the fb_width-loop FPs — safe, never masks a real OOB.
+- Net: harness-refiner = trustworthiness keystone (can't demote a real bug); Phase 2a does the
+  irq numeric demotion. Both shadow-gated. Plan file to be annotated with this.
 
-## Next (Phase 1)
-- 1a. Branch in the realism-verdict consumer (bug_reporter.py / pipeline.py): when key_concern names
-  a NULL-init-trusted-global or nondet unit-arg artifact, route to a NEW `harness_refiner`
-  (shadow/logging first — no verdict change), gated behind a flag.
-- 1b. `materialize_trusted_globals()` — init boot-set globals (`fb_base`) in the dynamic harness
-  (mirror b4aa03c which did this for CBMC); re-run the dynamic validator.
-- 1c. Decide from re-run; GATE = re-shadow irq so `wsod_draw_line`/`sleep_ms` drop, vfs_open_handle kept.
+## Next (this line, in order)
+1. Wire the refiner: `DynamicValidator.refine_and_revalidate(...)` (clean-recompile to find undefined
+   externs → materialize → re-run) + a SHADOW pipeline hook behind a new
+   `--harness-refinement {off,shadow,live}` flag (default off). Shadow logs WOULD-demote/keep only.
+2. Shadow-run irq + vfs; verify `vfs_open_handle` re-crashes on the materialized buffer (KEPT) and
+   no real bug is demoted. (This is the Phase 1 GATE, soundly scoped.)
+3. Then Phase 2a (harness_kind → formal_reach) in shadow; re-shadow irq for the numeric demotion.
 
-## Decisions the user must make
-- None yet. Will STOP at Phase 4 (default/immunity flip) for explicit OK.
+## Decisions for the user
+- None blocking. NOTE for the morning: the plan's Phase 1 gate ("re-shadow irq → wsod_* no longer
+  confirmed") is partly Phase-2a's job, not the harness-refiner's, per the finding above. I am
+  proceeding soundly (refiner = safe NULL-deref channel; 2a = irq numeric demotion) and will keep
+  both shadow-only. Will STOP at Phase 4 for explicit OK.
