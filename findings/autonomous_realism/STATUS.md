@@ -1,39 +1,38 @@
 STATE: RUNNING
-Phase: 1 (harness-refinement outcome C) — core landed, wiring next.
+Phase: 1 (harness-refinement outcome C) — IMPLEMENTED + WIRED; shadow runs in flight.
 
-## Done so far
-- Phase 0 (committed): froze baseline regression oracle in `baseline_oracle.md`.
-  Keep-anchor `vfs_open_handle` confirmed_dynamic; irq FPs = wsod_draw_line / wsod_draw_sad_mac /
-  sleep_ms; residual still-confirmed under current uniform tier = wsod_draw_line + 1×sleep_ms.
-- Phase 1 core (committed, UNWIRED ⇒ zero behavior risk): `bmc_agent/harness_refiner.py` +
-  `tests/test_harness_refiner.py` (11 green). Detects undefined boot-init-trusted EXTERN globals
-  defined in a sibling .c (NULL/0 init, assigned only in an *_init fn), materializes them
-  (pointer → calloc(1,sizeof) — b4aa03c model) so a confirmed_dynamic finding can be re-run:
-  clean ⇒ NULL-default artifact ⇒ demote; still crashes ⇒ keep.
+## Done so far (committed + pushed to main)
+- Phase 0: baseline regression oracle frozen (`baseline_oracle.md`).
+- Phase 1 core: `bmc_agent/harness_refiner.py` (detect undefined boot-init-trusted externs in a
+  sibling .c, materialize pointer = calloc(1,sizeof)); 11 unit tests green.
+- Phase 1 wiring: `DynamicValidator.refine_and_revalidate()` + `pipeline._maybe_refine_harness()`
+  behind `--harness-refinement {off,shadow,live}` (DEFAULT OFF = zero change to existing runs).
+  Synthetic GCC end-to-end tests prove soundness: NULL deref cleaned after materialization
+  (artifact), real OOB still faults on the 1-element buffer (kept). 14 refiner tests +
+  355 touched-area tests green.
 
-## Important honest finding (drives the rest of the plan)
-Deeper code+CEx analysis refines the plan's attribution:
-- The irq FPs are mostly **nondet-arg signed-overflow** CEx (x,y,ms driven to INT/UINT_MAX),
-  NOT pure fb_base NULL-derefs. wsod_draw_sad_mac is ALREADY demoted by the existing uniform
-  reachability tier (step4_live_irq). The residual wsod_draw_line + 1×sleep_ms stay confirmed
-  because `evidence_strong` keys on `harness_kind=="system_entry"` (plan blocker-flaw #1).
-- ⇒ The precise fix for the irq residual is **Phase 2a** (drop harness_kind from the evidence
-  axis; use formal CBMC reachability only). The harness-refiner is the SOUND empirical demotion
-  channel for the NULL-deref artifact class (e.g. the vfs tree-model FP from b4aa03c); by design
-  (calloc(1,...)) it conservatively KEEPS the fb_width-loop FPs — safe, never masks a real OOB.
-- Net: harness-refiner = trustworthiness keystone (can't demote a real bug); Phase 2a does the
-  irq numeric demotion. Both shadow-gated. Plan file to be annotated with this.
+## In flight (background, --harness-refinement shadow, log-only)
+- irq: findings/phase1_refine_shadow_irq/run.log  (pid 1311000)
+- vfs: findings/phase1_refine_shadow_vfs/run.log  (pid 1312004)  ← SAFETY-critical (vfs_open_handle)
+Both started ~23:21Z, expected ~20-30 min. Watching for `HARNESS-REFINE [shadow]` lines and the
+final verdict table.
 
-## Next (this line, in order)
-1. Wire the refiner: `DynamicValidator.refine_and_revalidate(...)` (clean-recompile to find undefined
-   externs → materialize → re-run) + a SHADOW pipeline hook behind a new
-   `--harness-refinement {off,shadow,live}` flag (default off). Shadow logs WOULD-demote/keep only.
-2. Shadow-run irq + vfs; verify `vfs_open_handle` re-crashes on the materialized buffer (KEPT) and
-   no real bug is demoted. (This is the Phase 1 GATE, soundly scoped.)
-3. Then Phase 2a (harness_kind → formal_reach) in shadow; re-shadow irq for the numeric demotion.
+## Phase 1 GATE being checked (soundly scoped)
+- vfs_open_handle: refined harness must STILL crash (strcpy overflow survives materialization) =>
+  KEPT confirmed. (Absolute safety anchor.)
+- No real bug WOULD-demoted anywhere (every HARNESS-REFINE "ARTIFACT" must be a genuine FP).
+- irq: observe which NULL-default FPs the refiner WOULD demote (the fb_width-loop FPs are expected
+  to be KEPT by the refiner — they re-crash; their numeric demotion is Phase 2a's job, per the
+  recorded attribution finding).
+
+## Next
+1. Read both shadow results; confirm gate. If any real bug would-demote → that's a bug in the
+   refiner → fix before proceeding (safety gate).
+2. Phase 2a: in `_maybe_ground_immunity`, `evidence_strong = formal_reach` (drop the
+   `harness_kind=="system_entry"` axis = blocker-flaw #1). Shadow-test on irq.
 
 ## Decisions for the user
-- None blocking. NOTE for the morning: the plan's Phase 1 gate ("re-shadow irq → wsod_* no longer
-  confirmed") is partly Phase-2a's job, not the harness-refiner's, per the finding above. I am
-  proceeding soundly (refiner = safe NULL-deref channel; 2a = irq numeric demotion) and will keep
-  both shadow-only. Will STOP at Phase 4 for explicit OK.
+- None blocking. Stop at Phase 4 for explicit OK.
+- FYI: pre-existing stale test `test_agentic_keeps_classifier_off_realism_triage_keeps_dynval`
+  asserts realism OFF under --agentic; realism is now ON (matches the plan's scope facts). Not
+  touched by me; flagging in case you want it updated.
