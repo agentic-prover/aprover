@@ -18,7 +18,9 @@ class _LLM:
         self._calls = 0
     def complete(self, system_prompt, user_prompt, **kw):
         self._calls += 1
-        if "ORIGINATES" in system_prompt:
+        # The origin (channel-guard) prompt asks for an "origin" verdict; the
+        # reachability prompt asks for "attacker_reachable".
+        if '"origin"' in system_prompt:
             return '{"origin":"%s","why":"x"}' % self._origin
         return '{"attacker_reachable":"%s","why":"x"}' % (self._reach or "yes")
 

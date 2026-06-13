@@ -115,13 +115,22 @@ def extract_call_sites(fn_name: str, all_funcs: dict, source_globs: "list[str] |
 # LLM judgments
 # ---------------------------------------------------------------------------
 _ORIGIN_SYS = (
-    "You analyze a C function crash reported by a bounded model checker. Decide where the "
-    "value that CAUSES the crash (the faulting index / length / size / bounds / pointer "
-    "offset) ORIGINATES. Answer ONLY JSON: {\"origin\":\"argument|internal\",\"why\":\"<=15 words\"}. "
-    "argument = it comes directly from a scalar parameter the function receives. "
-    "internal = it is READ from memory inside the body: a pointer's contents, a struct field "
-    "reached through a pointer, a global variable, or an MMIO/device register read. "
-    "When unsure, answer internal (the conservative, bug-preserving choice)."
+    "A bounded model checker reported a memory-safety crash in a C function. Identify the "
+    "ONE value that controls whether the access goes out of bounds (the faulting index, "
+    "length, size, count, or pointer offset) and decide WHERE THAT CONTROLLING VALUE comes "
+    "from. Answer ONLY JSON: {\"origin\":\"argument|internal\",\"why\":\"<=15 words\"}. "
+    "Focus ONLY on the origin of that controlling value. IGNORE whatever else the function "
+    "reads or writes — writing to a global buffer/array does NOT by itself make it internal. "
+    "argument = the controlling value is a PARAMETER the function receives, or is computed "
+    "from parameters: a scalar index/length, or a pointer whose valid range the caller sets "
+    "(even if the function then uses it to index a global). Call sites can constrain it. "
+    "internal = the controlling value is itself READ FROM MEMORY inside the body: a field of "
+    "a struct reached through a pointer, the contents a pointer points at, a global counter, "
+    "or an MMIO/device register — the dangerous magnitude comes from DATA, not a parameter. "
+    "Call sites cannot see it. Examples: index = y*width + x where x is a parameter -> argument "
+    "(even though it writes the global framebuffer); copy length = strlen(p->data) where p->data "
+    "is file contents read inside the body -> internal; len = hdr->total_len read from a packet "
+    "struct field -> internal. When genuinely unsure, answer internal (conservative)."
 )
 
 _REACH_SYS = (
