@@ -1715,11 +1715,14 @@ class AMCPipeline:
             # WEAK for a unit-level nondet harness.
             dyn = getattr(validation, "dynamic_result", None)
             hkind = getattr(dyn, "harness_kind", "unit") if dyn is not None else "unit"
-            evidence_strong = (
-                hkind == "system_entry"
-                or bool(getattr(validation, "system_entry_reached", False))
-                or bool(getattr(validation, "caller_path", None))
-            )
+            # Evidence is STRONG only when the dynamic crash was driven through a
+            # REAL caller path (a system-entry / scenario reproducer). The function
+            # merely HAVING callers in the call graph (caller_path) or CBMC tracing
+            # the CEx to an entry (system_entry_reached) does NOT mean THIS crash —
+            # produced by a unit harness on nondet args — is reachable through them.
+            # Conflating "has callers" with "crash is reachable" is exactly the bug
+            # this refactor removes, so evidence_strong keys ONLY on harness_kind.
+            evidence_strong = (hkind == "system_entry")
             if action == "demote":
                 new_tier = "unlikely"            # reachability refuted
             elif evidence_strong:
