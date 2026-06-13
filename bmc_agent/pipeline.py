@@ -802,6 +802,7 @@ class AMCPipeline:
                         # report.confidence after _make_report returns).
                         logger.info("Real-bug candidate (awaiting realism) in '%s'", fn_name)
                         report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
+                        self._maybe_ground_immunity(report, func, validation, all_funcs, source_file)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
                         # Log post-realism outcome so the log shows what
@@ -1674,6 +1675,43 @@ class AMCPipeline:
 
         payload["report"] = report
         br_path.write_text(_json.dumps(payload, indent=2, default=str))
+
+    def _maybe_ground_immunity(self, report, func, validation, all_funcs, source_file):
+        """Channel-guarded grounded-reachability check on a confirmed_dynamic finding.
+
+        Mode (config.reachability_grounding):
+          - 'off'    (default): no-op.
+          - 'shadow': compute the advisory decision and LOG what it WOULD do; the
+                      verdict is unchanged. Used to gather production-scale evidence
+                      that the gate never demotes a real bug before going live.
+          - 'live'  : additionally apply a 'demote' by downgrading the finding to
+                      'unlikely' (only ever fires on an argument-driven crash whose
+                      grounded call sites show no attacker can reach the value).
+
+        Only acts on confirmed_dynamic findings (the immune tier). Fully fail-safe:
+        any uncertainty keeps the finding. Never raises into the pipeline.
+        """
+        mode = getattr(self.config, "reachability_grounding", "off") or "off"
+        if mode == "off" or getattr(report, "confidence", "") != "confirmed_dynamic":
+            return
+        try:
+            import os
+            from bmc_agent.reachability_grounding import grounded_immunity_decision
+            globs = [os.path.join(os.path.dirname(source_file) or ".", "*.c")]
+            action, reason = grounded_immunity_decision(
+                func, validation.counterexample, all_funcs, self.llm,
+                threat_context=getattr(self.config, "threat_model_context", "") or "",
+                source_globs=globs,
+            )
+            logger.info("GROUNDING [%s] '%s': would %s — %s",
+                        mode, getattr(func, "name", "?"), action.upper(), reason)
+            if mode == "live" and action == "demote":
+                report.confidence = "unlikely"
+                logger.info("GROUNDING [live] DEMOTED '%s' confirmed_dynamic → unlikely "
+                            "(arg-driven, grounded-unreachable)", getattr(func, "name", "?"))
+        except Exception as exc:
+            logger.debug("grounded-immunity check failed for '%s' (keeping finding): %s",
+                         getattr(func, "name", "?"), exc)
 
     def _make_report(
         self,

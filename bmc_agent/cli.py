@@ -1028,6 +1028,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
     _apply_threat_model_context(config, args)
+    config.reachability_grounding = getattr(args, "reachability_grounding", "off")  # type: ignore[attr-defined]
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
@@ -1358,6 +1359,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     if getattr(args, "threat_model", None):
         config.threat_model = args.threat_model
     _apply_threat_model_context(config, args)
+    config.reachability_grounding = getattr(args, "reachability_grounding", "off")  # type: ignore[attr-defined]
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
@@ -2335,6 +2337,12 @@ def build_parser() -> argparse.ArgumentParser:
                           "of grinding on a pathological parser fn.")
     ver.add_argument("--no-spec-refiner", action="store_true", default=False,
                      help="Disable in-sweep realism-feedback-driven spec refiner.")
+    ver.add_argument("--reachability-grounding", choices=["off", "shadow", "live"],
+                     default="off", dest="reachability_grounding",
+                     help="Channel-guarded grounded-reachability check on confirmed_dynamic "
+                          "findings. 'shadow' logs what it WOULD do (no verdict change); "
+                          "'live' demotes arg-driven, grounded-unreachable crashes to "
+                          "'unlikely'. Fail-safe: never demotes channel-driven/uncertain bugs.")
     ver.add_argument("--enable-soundness-gate", action="store_true", default=False,
                      dest="enable_soundness_gate",
                      help="Caller-grounded soundness gate on refinement: block a "
