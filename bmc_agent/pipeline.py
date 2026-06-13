@@ -553,7 +553,8 @@ class AMCPipeline:
         # clean verdict).
         _variadic_targets = [
             n for n, f in funcs_to_check.items()
-            if any(pt == "..." for pt, _ in (getattr(f.signature, "parameters", None) or []))
+            if any(pt == "..." or "va_list" in (pt or "")
+                   for pt, _ in (getattr(f.signature, "parameters", None) or []))
         ]
         if _variadic_targets:
             funcs_to_check = {n: f for n, f in funcs_to_check.items() if n not in _variadic_targets}

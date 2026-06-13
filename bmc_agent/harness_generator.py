@@ -637,7 +637,8 @@ def _should_inline_callee(
     # overnight sweep's 64 printf CONVERSION errors). Always stub a variadic
     # callee instead; stubbing is the sound compositional default (a stub never
     # produces a false-clean), so this only recovers tractability, never soundness.
-    if any(pt == "..." for pt, _ in (getattr(cfi.signature, "parameters", None) or [])):
+    if any(pt == "..." or "va_list" in (pt or "")
+           for pt, _ in (getattr(cfi.signature, "parameters", None) or [])):
         return False, "variadic callee (va_list) — CBMC cannot model the body; always stub"
     # The parser's tree-sitter path doesn't include the storage class in
     # signature.return_type (it strips to the bare base type), so

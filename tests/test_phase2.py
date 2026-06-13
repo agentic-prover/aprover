@@ -2639,6 +2639,21 @@ def test_inline_rejects_variadic_callee(tmp_path: Path):
     assert "variadic" in reason
 
 
+def test_inline_rejects_va_list_callee(tmp_path: Path):
+    """A va_list parameter (not ... but the same un-modellable class) is also
+    force-stubbed — CBMC can't model va_arg operations."""
+    src = (
+        "static int vfmt(const char *fmt, va_list args) {\n"
+        "    int n = 0;\n"
+        "    return n;\n"
+        "}\n"
+        "int caller(const char *fmt, va_list a) { return vfmt(fmt, a); }\n"
+    )
+    ok, reason = _eligible("vfmt", src, tmp_path)
+    assert not ok
+    assert "variadic" in reason
+
+
 def test_inline_rejects_non_static(tmp_path: Path):
     """Non-static (linkage-visible) functions are part of the public API
     surface; we don't inline them — callers expect the contract, not the
