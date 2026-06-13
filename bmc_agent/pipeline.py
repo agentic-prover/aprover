@@ -542,6 +542,27 @@ class AMCPipeline:
                             source_file)
                 return []
 
+        # Variadic functions (printf / sprintf / ... — a ``...`` parameter) cannot
+        # be verified AS A TARGET: CBMC cannot synthesize a harness that passes
+        # varargs, so it emits a CONVERSION ERROR that wastes a verification slot
+        # and floods the run (the printf-family case — 64 CONVERSION errors in the
+        # overnight sweep, all on variadic targets). Drop them from the target set;
+        # they remain in all_funcs as callees (force-stubbed, see
+        # _should_inline_callee), so their callers are still verified. Skipping an
+        # un-modellable target is sound (it was only ever producing errors, never a
+        # clean verdict).
+        _variadic_targets = [
+            n for n, f in funcs_to_check.items()
+            if any(pt == "..." for pt, _ in (getattr(f.signature, "parameters", None) or []))
+        ]
+        if _variadic_targets:
+            funcs_to_check = {n: f for n, f in funcs_to_check.items() if n not in _variadic_targets}
+            logger.info(
+                "Skipping %d variadic function(s) as BMC targets (CBMC cannot model "
+                "varargs; they remain stubbed callees): %s",
+                len(_variadic_targets), ", ".join(sorted(_variadic_targets)),
+            )
+
         # ------------------------------------------------------------------
         # Phase 1.5: Per-function CBMC flag selection [AGENTIC]
         # ------------------------------------------------------------------
