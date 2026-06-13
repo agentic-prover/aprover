@@ -803,6 +803,7 @@ class AMCPipeline:
                         logger.info("Real-bug candidate (awaiting realism) in '%s'", fn_name)
                         report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                         self._maybe_ground_immunity(report, func, validation, all_funcs, source_file)
+                        self._maybe_refine_harness(report, func, validation, source_file)
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
                         # Log post-realism outcome so the log shows what
@@ -1756,6 +1757,84 @@ class AMCPipeline:
         except Exception as exc:
             logger.debug("grounded-reachability check failed for '%s' (keeping finding): %s",
                          getattr(func, "name", "?"), exc)
+
+    def _collect_sibling_sources(self, source_file: str) -> "dict[str, str]":
+        """Read every sibling ``.c`` translation unit (the source file's own
+        directory + configured include dirs) so the harness-refiner can locate
+        a boot-init-trusted global's definition (e.g. ``fb_base`` in ``fb.c``)."""
+        import os, glob
+        out: dict[str, str] = {}
+        dirs = [os.path.dirname(source_file) or "."]
+        dirs += [str(d) for d in (getattr(self.config, "include_dirs", None) or [])]
+        for d in dirs:
+            for path in glob.glob(os.path.join(d, "*.c")):
+                if path in out:
+                    continue
+                try:
+                    with open(path, errors="replace") as fh:
+                        out[path] = fh.read()
+                except Exception:
+                    continue
+        return out
+
+    def _maybe_refine_harness(self, report, func, validation, source_file):
+        """Phase-1 harness-refinement (realism-enforcement plan, outcome C).
+
+        On a ``confirmed_dynamic`` crash whose unit harness left a boot-init-
+        trusted EXTERN global at its NULL/0 default, MATERIALIZE that global and
+        RE-RUN. Modes (``config.harness_refinement``):
+          - 'off'    (default): no-op.
+          - 'shadow': compute + LOG the would-be decision; verdict unchanged.
+          - 'live'  : demote a confirmed NULL-default artifact to 'unlikely'.
+
+        Fully fail-safe and SOUND: only ever fires on a ``confirmed_dynamic``
+        unit-harness crash with NO formal/system-entry reachability, and the
+        materialization (calloc(1,sizeof)) cannot mask a real OOB — a genuine
+        out-of-bounds re-crashes the refined run and the finding is KEPT.
+        Never raises into the pipeline.
+        """
+        mode = getattr(self.config, "harness_refinement", "off") or "off"
+        if mode == "off":
+            return
+        if getattr(report, "confidence", "") != "confirmed_dynamic":
+            return  # only the immune dynamic tier; never touch system-entry/bmc
+        # Never refine a formally-reachable / system-entry-traced crash.
+        if getattr(validation, "system_entry_reached", False):
+            return
+        dyn = getattr(validation, "dynamic_result", None)
+        if dyn is None:
+            return
+        harness = getattr(dyn, "harness_source", None)
+        if not harness or getattr(dyn, "harness_kind", "unit") != "unit":
+            return
+        try:
+            dyn_validator = getattr(self.validator, "_dynamic_validator", None)
+            if dyn_validator is None:
+                return
+            sibs = self._collect_sibling_sources(source_file)
+            out = dyn_validator.refine_and_revalidate(harness, sibs)
+        except Exception as exc:
+            logger.debug("harness-refinement failed for '%s' (keeping finding): %s",
+                         getattr(func, "name", "?"), exc)
+            return
+        if out is None:
+            return
+        res, plan = out
+        from bmc_agent.dynamic_validator import DynamicOutcome
+        names = ", ".join(g.name for g in plan)
+        cleaned = res.outcome == DynamicOutcome.NOT_TRIGGERED
+        logger.info(
+            "HARNESS-REFINE [%s] '%s': materialized {%s}; refined run=%s -> %s",
+            mode, getattr(func, "name", "?"), names, res.outcome.value,
+            "ARTIFACT (NULL-default)" if cleaned else "REAL (fault survives)",
+        )
+        if mode == "live" and cleaned:
+            report.confidence = "unlikely"
+            logger.info(
+                "HARNESS-REFINE [live] DEMOTED '%s' confirmed_dynamic -> unlikely "
+                "(boot-init-trusted global {%s} materialized; refined harness ran clean)",
+                getattr(func, "name", "?"), names,
+            )
 
     def _make_report(
         self,

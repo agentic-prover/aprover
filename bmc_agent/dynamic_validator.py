@@ -991,6 +991,60 @@ class DynamicValidator:
             reasoning="Dynamic harness produced no recognizable output.",
         )
 
+    def refine_and_revalidate(
+        self,
+        winning_harness: "str | None",
+        sibling_sources: "dict[str, str]",
+        referenced_idents: "set[str] | None" = None,
+    ):
+        """Phase 1 (realism-enforcement): re-run the dynamic harness with
+        boot-init-trusted EXTERN globals MATERIALIZED, to tell a NULL-default
+        harness artifact apart from a real fault. See ``harness_refiner``.
+
+        Returns ``(DynamicValidationResult, [TrustedGlobal])`` for the refined
+        run, or ``None`` when refinement does not apply (harness links cleanly
+        already, no trusted externs to materialize, or the refined harness
+        won't build). Pure analysis: never mutates the original finding.
+
+        Soundness: the materialization is ``calloc(1, sizeof(*g))`` (smallest
+        non-NULL object) — a real out-of-bounds access still faults on the
+        1-element buffer, so a genuine bug re-crashes and the caller keeps it.
+        """
+        cc = self.config.dynamic_cc_path
+        if not winning_harness or not shutil.which(cc):
+            return None
+        from bmc_agent import harness_refiner as _hr
+
+        # 1. Clean compile (no unresolved-symbols relaxation) to surface the
+        #    externs the unit harness left to default-to-0/NULL.
+        binp, err = self._compile(winning_harness, cc)
+        if binp is not None:
+            _unlink(binp)
+            return None  # already links clean -> not the unresolved-extern artifact
+        plan = _hr.plan_refinement(err, sibling_sources, referenced_idents)
+        if not plan:
+            return None  # nothing boot-init-trusted to materialize -> keep finding
+
+        block = _hr.synthesize_materialization(plan)
+        refined = _hr.inject_materialization(winning_harness, block)
+        binp2, err2 = self._compile(refined, cc)
+        if binp2 is None:
+            # Other (untrusted) externs may still be undefined — let THOSE
+            # default to 0 so the run proceeds; the trusted globals we model are
+            # already materialized, which is the only change that matters.
+            binp2, _err3 = self._compile(
+                refined, cc, extra_flags=["-Wl,--unresolved-symbols=ignore-all"],
+            )
+        if binp2 is None:
+            return None
+        try:
+            res = self._run(binp2)
+        finally:
+            _unlink(binp2)
+        res.harness_source = refined
+        res.harness_kind = "unit_refined"
+        return res, plan
+
 
 # ---------------------------------------------------------------------------
 # Utility

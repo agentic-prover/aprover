@@ -1029,6 +1029,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.threat_model = args.threat_model
     _apply_threat_model_context(config, args)
     config.reachability_grounding = getattr(args, "reachability_grounding", "off")  # type: ignore[attr-defined]
+    config.harness_refinement = getattr(args, "harness_refinement", "off")  # type: ignore[attr-defined]
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
@@ -1360,6 +1361,7 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.threat_model = args.threat_model
     _apply_threat_model_context(config, args)
     config.reachability_grounding = getattr(args, "reachability_grounding", "off")  # type: ignore[attr-defined]
+    config.harness_refinement = getattr(args, "harness_refinement", "off")  # type: ignore[attr-defined]
     if getattr(args, "lite_mode", False):
         config.lite_mode = True
     if getattr(args, "legacy_spec_gen", False):
@@ -2345,6 +2347,15 @@ def build_parser() -> argparse.ArgumentParser:
                           "applies the full new tier model (evidence-quality x reachability -> "
                           "confirmed|likely|unlikely), re-tiering weak unit-harness crashes off "
                           "the top tier. Fail-safe: never demotes channel-driven/uncertain bugs.")
+    ver.add_argument("--harness-refinement", choices=["off", "shadow", "live"],
+                     default="off", dest="harness_refinement",
+                     help="Phase-1 harness-refinement (realism-enforcement). On a confirmed_dynamic "
+                          "crash whose unit harness left a boot-init-trusted EXTERN global at its "
+                          "NULL/0 default, MATERIALIZE that global (calloc(1,sizeof)) and RE-RUN: "
+                          "refined harness clean => NULL-default artifact; still crashes => real. "
+                          "'shadow' logs the would-be decision (no verdict change); 'live' demotes "
+                          "a confirmed NULL-default artifact to 'unlikely'. Sound: a real OOB still "
+                          "faults on the 1-element buffer, so a genuine bug is never demoted.")
     ver.add_argument("--enable-soundness-gate", action="store_true", default=False,
                      dest="enable_soundness_gate",
                      help="Caller-grounded soundness gate on refinement: block a "
