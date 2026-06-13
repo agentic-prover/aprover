@@ -1693,72 +1693,68 @@ class AMCPipeline:
                       forward form of replacing immunity; still flag-gated, the
                       immunity special-case is NOT deleted (default 'off' unchanged).
 
-        Only acts on confirmed_dynamic findings (the immune tier). Fully fail-safe:
+        Acts on ALL confirmed-class findings (static + dynamic) — genuinely
+        uniform reachability, not just the dynamic immune tier. Fully fail-safe:
         any uncertainty keeps the finding. Never raises into the pipeline.
         """
         mode = getattr(self.config, "reachability_grounding", "off") or "off"
-        if mode == "off" or getattr(report, "confidence", "") != "confirmed_dynamic":
+        conf = getattr(report, "confidence", "")
+        if mode == "off" or conf not in ("confirmed_dynamic", "confirmed_system_entry", "confirmed_bmc"):
             return
         try:
             import os
             from bmc_agent.reachability_grounding import grounded_immunity_decision
-            globs = [os.path.join(os.path.dirname(source_file) or ".", "*.c")]
-            action, reason = grounded_immunity_decision(
-                func, validation.counterexample, all_funcs, self.llm,
-                threat_context=getattr(self.config, "threat_model_context", "") or "",
-                source_globs=globs,
-            )
-            logger.info("GROUNDING [%s] '%s': would %s — %s",
-                        mode, getattr(func, "name", "?"), action.upper(), reason)
 
-            # TIER-SHADOW (refactor step 1): compute the NEW tier model — split
-            # the conflated 'confirmed_dynamic' into evidence-quality x reachability
-            # — and log the delta vs the old tier. No verdict change here (that's
-            # 'live' below); this gathers the cross-codebase impact before the
-            # immunity code is deleted. Evidence is STRONG when the crash was driven
-            # through a real caller path (system-entry harness / traced caller chain),
-            # WEAK for a unit-level nondet harness.
+            is_dynamic = (conf == "confirmed_dynamic")
             dyn = getattr(validation, "dynamic_result", None)
-            hkind = getattr(dyn, "harness_kind", "unit") if dyn is not None else "unit"
-            # Evidence is STRONG only when the dynamic crash was driven through a
-            # REAL caller path (a system-entry / scenario reproducer). The function
-            # merely HAVING callers in the call graph (caller_path) or CBMC tracing
-            # the CEx to an entry (system_entry_reached) does NOT mean THIS crash —
-            # produced by a unit harness on nondet args — is reachable through them.
-            # Conflating "has callers" with "crash is reachable" is exactly the bug
-            # this refactor removes, so evidence_strong keys ONLY on harness_kind.
-            evidence_strong = (hkind == "system_entry")
-            if action == "demote":
-                new_tier = "unlikely"            # reachability refuted
-            elif evidence_strong:
-                new_tier = "confirmed"           # strong evidence, reachability not refuted
-            else:
-                new_tier = "likely"              # weak (unit-nondet) evidence, not refuted
-            if new_tier != "confirmed_dynamic":
-                logger.info("TIER-SHADOW '%s': old=confirmed_dynamic new=%s "
-                            "(evidence=%s[%s], reachability=%s)",
-                            getattr(func, "name", "?"), new_tier,
-                            "strong" if evidence_strong else "weak", hkind, action)
+            hkind = getattr(dyn, "harness_kind", None) if dyn is not None else None
+            # FORMAL reachability: CBMC traced the CEx to a system entry (a no-caller
+            # attack-surface function). That is a proven attacker path, so the LLM
+            # call-site judgment must NOT override it.
+            formal_reach = bool(getattr(validation, "system_entry_reached", False)) \
+                or conf == "confirmed_system_entry"
+            # STRONG evidence = the reachability basis is a real/traced path: a
+            # system-entry dynamic crash, or formal entry-reachability. A unit-harness
+            # nondet crash and a confirmed_bmc 'a caller can produce it with nondet
+            # inputs' are both WEAK — neither shows an ATTACKER reaches the state.
+            evidence_strong = formal_reach or (is_dynamic and hkind == "system_entry")
 
-            if mode == "uniform":
-                # Apply the NEW tier model in full: re-tier this confirmed_dynamic
-                # finding by evidence-quality x reachability (confirmed | likely |
-                # unlikely). This is what replacing immunity looks like — a
-                # unit-harness nondet crash is no longer auto-top-tier. Still
-                # flag-gated and default-off; the immunity special-case is NOT
-                # deleted, so 'off' behaviour is unchanged.
-                if new_tier != "confirmed":
-                    report.confidence = new_tier
-                    logger.info("GROUNDING [uniform] RE-TIERED '%s' confirmed_dynamic → %s "
-                                "(evidence=%s, reachability=%s)",
-                                getattr(func, "name", "?"), new_tier,
-                                "strong" if evidence_strong else "weak", action)
+            if formal_reach:
+                action, reason, new_tier = "keep", "formal system-entry reachability (CBMC-traced)", "confirmed"
+            else:
+                globs = [os.path.join(os.path.dirname(source_file) or ".", "*.c")]
+                action, reason = grounded_immunity_decision(
+                    func, validation.counterexample, all_funcs, self.llm,
+                    threat_context=getattr(self.config, "threat_model_context", "") or "",
+                    source_globs=globs,
+                )
+                if action == "demote":
+                    new_tier = "unlikely"        # reachability refuted (arg-driven, no caller)
+                elif evidence_strong:
+                    new_tier = "confirmed"
+                else:
+                    new_tier = "likely"          # weak evidence (unit crash / nondet-caller), not refuted
+            logger.info("GROUNDING [%s] '%s' (%s): %s — %s",
+                        mode, getattr(func, "name", "?"), conf, action.upper(), reason)
+            if new_tier != conf:
+                logger.info("TIER-SHADOW '%s': old=%s new=%s (evidence=%s[%s], reachability=%s)",
+                            getattr(func, "name", "?"), conf, new_tier,
+                            "strong" if evidence_strong else "weak", hkind or "static", action)
+
+            # Apply, per mode. 'live' only demotes refuted findings; 'uniform' applies
+            # the full evidence x reachability re-tier. Both now span static + dynamic.
             if mode == "live" and action == "demote":
                 report.confidence = "unlikely"
-                logger.info("GROUNDING [live] DEMOTED '%s' confirmed_dynamic → unlikely "
-                            "(arg-driven, grounded-unreachable)", getattr(func, "name", "?"))
+                logger.info("GROUNDING [live] DEMOTED '%s' %s → unlikely "
+                            "(arg-driven, grounded-unreachable)", getattr(func, "name", "?"), conf)
+            elif mode == "uniform" and new_tier != conf:
+                report.confidence = new_tier
+                logger.info("GROUNDING [uniform] RE-TIERED '%s' %s → %s "
+                            "(evidence=%s, reachability=%s)",
+                            getattr(func, "name", "?"), conf, new_tier,
+                            "strong" if evidence_strong else "weak", action)
         except Exception as exc:
-            logger.debug("grounded-immunity check failed for '%s' (keeping finding): %s",
+            logger.debug("grounded-reachability check failed for '%s' (keeping finding): %s",
                          getattr(func, "name", "?"), exc)
 
     def _make_report(
