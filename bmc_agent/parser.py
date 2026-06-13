@@ -845,6 +845,19 @@ def _extract_sig_ts(node, src_bytes: bytes) -> Optional[FunctionSignature]:
         ret_type = ret_type + " " + pointer_stars
 
     is_static = "static" in ret_type.split()
+    # Tree-sitter parses the ``static`` storage-class specifier as a separate
+    # node and strips it from the ``type`` field, so the ret_type heuristic
+    # above misses it (signature.is_static was silently False for every
+    # tree-sitter-parsed static function). Recover it from the source span
+    # between the function-definition start and the return-type node — that
+    # span holds exactly the storage-class / qualifier prefix.
+    if not is_static and type_node is not None:
+        try:
+            _prefix = src_bytes[node.start_byte:type_node.start_byte].decode("utf-8", "replace")
+            if re.search(r"\bstatic\b", _prefix):
+                is_static = True
+        except Exception:
+            pass
     return FunctionSignature(name=fn_name, return_type=ret_type, parameters=params, is_static=is_static)
 
 

@@ -631,6 +631,14 @@ def _should_inline_callee(
     cfi = parsed_file.get_function_info(callee_name)
     if cfi is None:
         return False, "callee not defined in parsed file (extern)"
+    # Variadic callees (``va_list`` / ``...``) cannot be modelled by CBMC:
+    # inlining the body triggers a CONVERSION ERROR that poisons the WHOLE
+    # caller's verification (the printf-family ``vprintf_internal`` case — the
+    # overnight sweep's 64 printf CONVERSION errors). Always stub a variadic
+    # callee instead; stubbing is the sound compositional default (a stub never
+    # produces a false-clean), so this only recovers tractability, never soundness.
+    if any(pt == "..." for pt, _ in (getattr(cfi.signature, "parameters", None) or [])):
+        return False, "variadic callee (va_list) — CBMC cannot model the body; always stub"
     # The parser's tree-sitter path doesn't include the storage class in
     # signature.return_type (it strips to the bare base type), so
     # signature.is_static is unreliable for tree-sitter-parsed sources.

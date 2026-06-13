@@ -2623,6 +2623,22 @@ def test_inline_eligible_small_static_predicate(tmp_path: Path):
     assert ok, f"expected eligible, got: {reason}"
 
 
+def test_inline_rejects_variadic_callee(tmp_path: Path):
+    """Variadic callees (va_list / ...) can't be modelled by CBMC — inlining
+    the body triggers a CONVERSION ERROR that poisons the whole caller's
+    verification (the printf-family vprintf_internal case). Always stub them."""
+    src = (
+        "static int vprintf_internal(const char *fmt, ...) {\n"
+        "    int n = 0;\n"
+        "    return n;\n"
+        "}\n"
+        "int caller(const char *fmt) { return vprintf_internal(fmt); }\n"
+    )
+    ok, reason = _eligible("vprintf_internal", src, tmp_path)
+    assert not ok
+    assert "variadic" in reason
+
+
 def test_inline_rejects_non_static(tmp_path: Path):
     """Non-static (linkage-visible) functions are part of the public API
     surface; we don't inline them — callers expect the contract, not the
