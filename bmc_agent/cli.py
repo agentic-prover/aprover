@@ -2337,12 +2337,14 @@ def build_parser() -> argparse.ArgumentParser:
                           "of grinding on a pathological parser fn.")
     ver.add_argument("--no-spec-refiner", action="store_true", default=False,
                      help="Disable in-sweep realism-feedback-driven spec refiner.")
-    ver.add_argument("--reachability-grounding", choices=["off", "shadow", "live"],
+    ver.add_argument("--reachability-grounding", choices=["off", "shadow", "live", "uniform"],
                      default="off", dest="reachability_grounding",
-                     help="Channel-guarded grounded-reachability check on confirmed_dynamic "
-                          "findings. 'shadow' logs what it WOULD do (no verdict change); "
-                          "'live' demotes arg-driven, grounded-unreachable crashes to "
-                          "'unlikely'. Fail-safe: never demotes channel-driven/uncertain bugs.")
+                     help="Channel-guarded grounded-reachability on confirmed_dynamic findings. "
+                          "'shadow' logs what it WOULD do (no verdict change); 'live' demotes "
+                          "arg-driven, grounded-unreachable crashes to 'unlikely'; 'uniform' "
+                          "applies the full new tier model (evidence-quality x reachability -> "
+                          "confirmed|likely|unlikely), re-tiering weak unit-harness crashes off "
+                          "the top tier. Fail-safe: never demotes channel-driven/uncertain bugs.")
     ver.add_argument("--enable-soundness-gate", action="store_true", default=False,
                      dest="enable_soundness_gate",
                      help="Caller-grounded soundness gate on refinement: block a "

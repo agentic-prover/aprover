@@ -1687,6 +1687,11 @@ class AMCPipeline:
           - 'live'  : additionally apply a 'demote' by downgrading the finding to
                       'unlikely' (only ever fires on an argument-driven crash whose
                       grounded call sites show no attacker can reach the value).
+          - 'uniform': apply the full NEW tier model — re-tier the confirmed_dynamic
+                      finding by evidence-quality (system-entry vs unit harness) x
+                      reachability into confirmed | likely | unlikely. This is the
+                      forward form of replacing immunity; still flag-gated, the
+                      immunity special-case is NOT deleted (default 'off' unchanged).
 
         Only acts on confirmed_dynamic findings (the immune tier). Fully fail-safe:
         any uncertainty keeps the finding. Never raises into the pipeline.
@@ -1735,6 +1740,19 @@ class AMCPipeline:
                             getattr(func, "name", "?"), new_tier,
                             "strong" if evidence_strong else "weak", hkind, action)
 
+            if mode == "uniform":
+                # Apply the NEW tier model in full: re-tier this confirmed_dynamic
+                # finding by evidence-quality x reachability (confirmed | likely |
+                # unlikely). This is what replacing immunity looks like — a
+                # unit-harness nondet crash is no longer auto-top-tier. Still
+                # flag-gated and default-off; the immunity special-case is NOT
+                # deleted, so 'off' behaviour is unchanged.
+                if new_tier != "confirmed":
+                    report.confidence = new_tier
+                    logger.info("GROUNDING [uniform] RE-TIERED '%s' confirmed_dynamic → %s "
+                                "(evidence=%s, reachability=%s)",
+                                getattr(func, "name", "?"), new_tier,
+                                "strong" if evidence_strong else "weak", action)
             if mode == "live" and action == "demote":
                 report.confidence = "unlikely"
                 logger.info("GROUNDING [live] DEMOTED '%s' confirmed_dynamic → unlikely "
