@@ -192,7 +192,34 @@ class BugReporter:
         # encodes the LLM-generated postcondition — that is harness noise, not ground
         # truth, and the realism checker must be allowed to filter it.
         _harness_assertion = cex.failing_property.startswith("main.assertion")
-        _immune = confidence == "confirmed_dynamic" and not _harness_assertion
+
+        # Internal-helper immunity gate (Phase 1). A confirmed_dynamic crash is
+        # trustworthy when an attacker can actually drive the function to the
+        # faulting state. For a ``static`` (internal-linkage) helper whose crash
+        # was NEVER traced to a system entry point, the runtime fault was produced
+        # by the unit-level harness feeding NONDET arguments the function's real
+        # in-tree callers never pass (e.g. a panic-screen drawing helper handed
+        # base_y=INT_MAX, or a formatter handed an undersized buffer). Those are
+        # harness artifacts, not attacker-reachable bugs; immunity must NOT shield
+        # them from the realism auditor. Public functions (the attack surface) and
+        # any crash with a traced system-entry path keep full immunity, so genuine
+        # confirmed_dynamic bugs (e.g. vfs_open_handle) are never affected.
+        _internal_unreachable = (
+            getattr(getattr(func, "signature", None), "is_static", False)
+            and not getattr(validation_result, "system_entry_reached", False)
+        )
+        _immune = (
+            confidence == "confirmed_dynamic"
+            and not _harness_assertion
+            and not _internal_unreachable
+        )
+        if _internal_unreachable and confidence == "confirmed_dynamic" and not _harness_assertion:
+            logger.info(
+                "confirmed_dynamic immunity SUSPENDED for '%s': static internal "
+                "helper with no system-entry-reachable path — realism may downgrade "
+                "(unit-harness nondet-arg artifact, not attacker-reachable)",
+                func.name,
+            )
         if (
             realism_check is not None
             and realism_check.verdict == RealismVerdict.UNREALISTIC
