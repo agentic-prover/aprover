@@ -1705,6 +1705,33 @@ class AMCPipeline:
             )
             logger.info("GROUNDING [%s] '%s': would %s — %s",
                         mode, getattr(func, "name", "?"), action.upper(), reason)
+
+            # TIER-SHADOW (refactor step 1): compute the NEW tier model — split
+            # the conflated 'confirmed_dynamic' into evidence-quality x reachability
+            # — and log the delta vs the old tier. No verdict change here (that's
+            # 'live' below); this gathers the cross-codebase impact before the
+            # immunity code is deleted. Evidence is STRONG when the crash was driven
+            # through a real caller path (system-entry harness / traced caller chain),
+            # WEAK for a unit-level nondet harness.
+            dyn = getattr(validation, "dynamic_result", None)
+            hkind = getattr(dyn, "harness_kind", "unit") if dyn is not None else "unit"
+            evidence_strong = (
+                hkind == "system_entry"
+                or bool(getattr(validation, "system_entry_reached", False))
+                or bool(getattr(validation, "caller_path", None))
+            )
+            if action == "demote":
+                new_tier = "unlikely"            # reachability refuted
+            elif evidence_strong:
+                new_tier = "confirmed"           # strong evidence, reachability not refuted
+            else:
+                new_tier = "likely"              # weak (unit-nondet) evidence, not refuted
+            if new_tier != "confirmed_dynamic":
+                logger.info("TIER-SHADOW '%s': old=confirmed_dynamic new=%s "
+                            "(evidence=%s[%s], reachability=%s)",
+                            getattr(func, "name", "?"), new_tier,
+                            "strong" if evidence_strong else "weak", hkind, action)
+
             if mode == "live" and action == "demote":
                 report.confidence = "unlikely"
                 logger.info("GROUNDING [live] DEMOTED '%s' confirmed_dynamic → unlikely "

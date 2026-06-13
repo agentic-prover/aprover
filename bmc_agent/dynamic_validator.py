@@ -198,6 +198,14 @@ class DynamicValidationResult:
     run_error: Optional[str] = None
     reasoning: str = ""
     harness_source: Optional[str] = None  # the C source that was compiled and run
+    # Which harness produced this outcome — the EVIDENCE-QUALITY signal:
+    #   "system_entry" — driven through a real caller path (LLM system-entry
+    #                    reproducer / scenario reproducer): a crash here is
+    #                    reachability-meaningful (strong evidence).
+    #   "unit"         — unit-level harness with nondet args: a crash only proves
+    #                    "this code faults on SOME input" (weak evidence — barely
+    #                    stronger than the BMC counterexample it validates).
+    harness_kind: str = "unit"
     # Step A — fault-site classification. Possible values:
     #   "in_fut"      — fault fired inside or after the FUT call
     #                   (real-bug-shaped signal)
@@ -324,6 +332,7 @@ class DynamicValidator:
                     finally:
                         _unlink(binary_path_se)
                     result.harness_source = se_harness
+                    result.harness_kind = "system_entry"
                     logger.info(
                         "System-entry dynamic validation for '%s': %s%s%s",
                         entry_func.name,
@@ -482,6 +491,7 @@ class DynamicValidator:
             _unlink(binary_path)
 
         result.harness_source = winning_harness
+        result.harness_kind = "unit"
         # Step B — input-realism triage on CONFIRMED outcomes. Off by
         # default; gate via BMC_AGENT_DYNVAL_INPUT_TRIAGE=1. Catches
         # cases that Step A's fault_site check couldn't (the FUT WAS
@@ -726,6 +736,7 @@ class DynamicValidator:
         finally:
             _unlink(binary_path)
         new_result.harness_source = new_src
+        new_result.harness_kind = "system_entry"
         return new_result
 
     # ------------------------------------------------------------------
