@@ -826,41 +826,48 @@ def test_step_b_tolerates_agent_exception(monkeypatch):
 
 
 def test_step_c_artifact_regen_prompt_has_diagnosis():
-    """Verify DynamicReproAgent's artifact-mode prompt includes the
-    artifact class + triage reasoning."""
-    from bmc_agent.agents.dynamic_repro import DynamicReproAgent
+    """Verify ReproducerAgent's artifact-mode seed prompt includes the
+    artifact class + triage reasoning (merged from DynamicReproAgent)."""
+    from bmc_agent.agents.reproducer_tools import ReproducerAgent
 
-    agent = DynamicReproAgent(config=MagicMock(), llm=MagicMock())
+    agent = ReproducerAgent(config=MagicMock(), llm=MagicMock())
     prompt = agent.build_prompt(
+        function_name="foo",
+        cbmc_property="p",
+        counterexample="x = 1",
         previous_reproducer="int main(void) {}",
-        func_name="foo",
-        artifact_class="caller-checks-nonnull",
-        triage_reasoning="The harness lets p be NULL but every in-tree caller checks it.",
-        signal_name="SIGSEGV",
+        failure_context=(
+            "artifact_class=caller-checks-nonnull; signal=SIGSEGV; "
+            "triage_reasoning=The harness lets p be NULL but every in-tree "
+            "caller checks it."
+        ),
+        failure_kind="artifact",
     )
     assert "caller-checks-nonnull" in prompt
     assert "every in-tree caller" in prompt
     assert "SIGSEGV" in prompt
+    assert "MODELING ARTIFACT" in prompt
     # The compile-error template must NOT be active
-    assert "failed to compile" not in prompt
+    assert "FAILED TO COMPILE" not in prompt
 
 
 def test_step_c_compile_error_mode_still_works():
-    """Verify the original compile-error mode is preserved when
-    artifact_class is not supplied."""
-    from bmc_agent.agents.dynamic_repro import DynamicReproAgent
+    """Verify the compile-error seed mode is preserved on ReproducerAgent."""
+    from bmc_agent.agents.reproducer_tools import ReproducerAgent
 
-    agent = DynamicReproAgent(config=MagicMock(), llm=MagicMock())
+    agent = ReproducerAgent(config=MagicMock(), llm=MagicMock())
     prompt = agent.build_prompt(
+        function_name="foo",
+        cbmc_property="p",
+        counterexample="x = 1",
         previous_reproducer="int main(void) {}",
-        func_name="foo",
-        compile_error="error: 'foo' undeclared",
+        failure_context="error: 'foo' undeclared",
+        failure_kind="compile_error",
     )
-    assert "failed to compile" in prompt
+    assert "FAILED TO COMPILE" in prompt
     assert "'foo' undeclared" in prompt
     # Artifact-mode template must NOT be active
-    assert "artifact_class" not in prompt
-    assert "HARNESS-ARTIFACT" not in prompt
+    assert "MODELING ARTIFACT" not in prompt
 
 
 def test_step_c_regen_on_artifact_then_real_bug_preserves_confirmed(monkeypatch):
@@ -904,13 +911,22 @@ def test_step_c_regen_on_artifact_then_real_bug_preserves_confirmed(monkeypatch)
         lambda self, **kw: AgentResult(output=next(triage_responses)),
     )
 
-    # DynamicReproAgent returns a new harness in artifact mode.
-    import bmc_agent.agents.dynamic_repro as m_r
+    # ReproducerAgent (merged) returns a new harness in artifact mode.
+    from bmc_agent.agents import reproducer_tools as m_r
     new_harness = "/* harness v2 — tighter inputs */"
     monkeypatch.setattr(
-        m_r.DynamicReproAgent, "run",
+        m_r.ReproducerAgent, "run",
         lambda self, **kw: AgentResult(output=new_harness),
     )
+    # _post_confirm_triage normally runs inside validate(), which seeds
+    # _repro_ctx; set it here since this test calls the step directly.
+    dv._repro_ctx = {
+        "entry_func": _make_fake_func(),
+        "counterexample": _make_fake_counterexample(),
+        "parsed_file": None, "all_funcs": {}, "caller_path": None,
+        "corpus_paths": [],
+    }
+    dv._agent_repro_used = False
 
     # Mock compile + run to succeed on the regen and produce a
     # CONFIRMED outcome (so the loop re-triages and the new triage
@@ -967,13 +983,20 @@ def test_step_c_regen_unreproducible_falls_through_to_reclassify(monkeypatch):
             artifact_class="caller-checks-nonnull",
         )),
     )
-    import bmc_agent.agents.dynamic_repro as m_r
+    from bmc_agent.agents import reproducer_tools as m_r
     monkeypatch.setattr(
-        m_r.DynamicReproAgent, "run",
+        m_r.ReproducerAgent, "run",
         lambda self, **kw: AgentResult(
             output="// UNREPRODUCIBLE: cannot tighten without losing the trigger"
         ),
     )
+    dv._repro_ctx = {
+        "entry_func": _make_fake_func(),
+        "counterexample": _make_fake_counterexample(),
+        "parsed_file": None, "all_funcs": {}, "caller_path": None,
+        "corpus_paths": [],
+    }
+    dv._agent_repro_used = False
 
     out = dv._post_confirm_triage(
         initial, _make_fake_func(), _make_fake_counterexample(),
@@ -1010,11 +1033,18 @@ def test_step_c_regen_compile_failure_falls_through_to_reclassify(monkeypatch):
             artifact_class="unbounded_input",
         )),
     )
-    import bmc_agent.agents.dynamic_repro as m_r
+    from bmc_agent.agents import reproducer_tools as m_r
     monkeypatch.setattr(
-        m_r.DynamicReproAgent, "run",
+        m_r.ReproducerAgent, "run",
         lambda self, **kw: AgentResult(output="/* new harness */"),
     )
+    dv._repro_ctx = {
+        "entry_func": _make_fake_func(),
+        "counterexample": _make_fake_counterexample(),
+        "parsed_file": None, "all_funcs": {}, "caller_path": None,
+        "corpus_paths": [],
+    }
+    dv._agent_repro_used = False
     # Compile fails on the regen
     monkeypatch.setattr(
         dv, "_compile",

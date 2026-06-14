@@ -140,12 +140,16 @@ class ReproducerAgent(BaseAgent[str]):
         config: "Config",
         llm: "LLMClient",
         *,
-        parsed_file: "ParsedCFile",
-        corpus_paths: "list[Path]",
+        parsed_file: "Optional[ParsedCFile]" = None,
+        corpus_paths: "Optional[list[Path]]" = None,
         all_specs: "Optional[dict[str, Spec]]" = None,
     ) -> None:
+        # parsed_file / corpus_paths are optional so the agent can also be
+        # constructed for the REPAIR / ARTIFACT-REGEN entry points (where the
+        # caller seeds a failing reproducer) — grep_corpus simply finds nothing
+        # when corpus_paths is empty, and lookup_* degrade gracefully.
         self.parsed_file = parsed_file
-        self.corpus_paths = list(corpus_paths)
+        self.corpus_paths = list(corpus_paths or [])
         self.all_specs = dict(all_specs or {})
         super().__init__(config, llm)
         self._last_tool_use_result = None
@@ -198,6 +202,9 @@ class ReproducerAgent(BaseAgent[str]):
         function_source: str = "",
         public_api_hint: Optional[str] = None,
         threat_context: Optional[str] = None,
+        previous_reproducer: Optional[str] = None,
+        failure_context: Optional[str] = None,
+        failure_kind: str = "",
         **_: Any,
     ) -> str:
         chain_txt = self._render_call_chain(call_chain)
@@ -213,6 +220,35 @@ class ReproducerAgent(BaseAgent[str]):
             "=== CALL CHAIN TO A PUBLIC-API ENTRY POINT ===",
             chain_txt,
         ]
+        # REPAIR / ARTIFACT-REGEN seed: a prior reproducer attempt exists and
+        # failed (compile error, or its crash was judged a modeling artifact).
+        # Seed the loop with it so the model fixes rather than starts over.
+        if previous_reproducer:
+            if failure_kind == "artifact":
+                why = (
+                    "Its crash was judged a MODELING ARTIFACT, not a genuine "
+                    "fault. Rework it so any crash comes from the REAL fault "
+                    "above (avoid the artifact below); if you cannot, emit the "
+                    "// UNREPRODUCIBLE: line."
+                )
+            else:
+                why = (
+                    "It FAILED TO COMPILE. Fix the specific build error below "
+                    "(missing #include, wrong struct field, mis-typed argument) "
+                    "and keep iterating until it compiles AND reproduces the "
+                    "fault via the public API."
+                )
+            parts += [
+                "",
+                "=== PREVIOUS REPRODUCER ATTEMPT (repair this; do not restart) ===",
+                why,
+                "```c",
+                str(previous_reproducer)[:6000],
+                "```",
+                "",
+                "=== FAILURE FROM THAT ATTEMPT ===",
+                (str(failure_context or "(none given)")).strip()[:1500],
+            ]
         if public_api_hint:
             parts += [
                 "",

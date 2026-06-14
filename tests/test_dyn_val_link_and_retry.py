@@ -169,26 +169,41 @@ def test_is_link_only_error_empty_returns_false():
 # _regenerate_reproducer_with_error
 # ---------------------------------------------------------------------------
 
-def _make_validator_for_regen(llm):
-    """Skip __init__ — we only need self._llm, self.config, and
-    self._reproducer_retry_max for the regen path."""
+def _make_validator_for_regen(llm, with_ctx=True):
+    """Skip __init__ — we only need self._llm, self.config, the retry cap,
+    and (for the merged ReproducerAgent path) self._repro_ctx, which validate()
+    normally seeds. JSON-parsing robustness now lives in ReproducerAgent.parse
+    (see test_reproducer_agent.py), so these tests mock ReproducerAgent.run and
+    assert only the DynamicValidator-side delegation contract."""
     from bmc_agent.dynamic_validator import DynamicValidator
     from bmc_agent.config import Config
     v = object.__new__(DynamicValidator)
     v._llm = llm
     v.config = Config(llm_api_key="test")
     v._reproducer_retry_max = 2
+    v._agent_repro_used = False
+    if with_ctx:
+        v._repro_ctx = {
+            "entry_func": None, "counterexample": None,
+            "parsed_file": None, "all_funcs": {},
+            "caller_path": None, "corpus_paths": [],
+        }
     return v
 
 
+def _patch_repro_run(monkeypatch, result):
+    """Patch the tool-using ReproducerAgent.run that _regenerate now drives."""
+    from bmc_agent.agents import reproducer_tools as m_r
+    monkeypatch.setattr(m_r.ReproducerAgent, "run", lambda self, **kw: result)
+
+
 def test_regenerate_returns_corrected_source(monkeypatch):
-    """LLM returns JSON with a corrected source — method returns that source."""
-    llm = MagicMock()
-    llm.complete.return_value = (
-        '{"reproducer_code": "#include <archive.h>\\n'
-        'int main(void){ archive_match_new(); return 0; }"}'
-    )
-    v = _make_validator_for_regen(llm)
+    """ReproducerAgent produces a corrected source — method returns it and
+    trips the once-per-validate() guard."""
+    from bmc_agent.agents.base import AgentResult
+    src = "#include <archive.h>\nint main(void){ archive_match_new(); return 0; }"
+    _patch_repro_run(monkeypatch, AgentResult(output=src))
+    v = _make_validator_for_regen(MagicMock())
     out = v._regenerate_reproducer_with_error(
         previous_reproducer='#include <archive.h>\nint main(void){...}',
         compile_error="/tmp/foo.c:5:3: error: 'archive_matchnew' undeclared",
@@ -196,79 +211,40 @@ def test_regenerate_returns_corrected_source(monkeypatch):
     )
     assert out is not None
     assert "archive_match_new" in out
-    # complete() called once
-    assert llm.complete.call_count == 1
-    # The prompt to the LLM must include the previous source AND the error
-    call_kwargs = llm.complete.call_args
-    args = call_kwargs.args if call_kwargs.args else ()
-    user_prompt = args[1] if len(args) >= 2 else ""
-    assert "archive_match_new" in user_prompt
-    assert "undeclared" in user_prompt
+    # The heavy tool-loop agent is invoked at most once per validate().
+    assert v._agent_repro_used is True
 
 
-def test_regenerate_passes_through_unreproducible_marker():
-    """LLM honestly says 'I can't fix this' via UNREPRODUCIBLE — pass
-    through verbatim (caller bails out)."""
-    llm = MagicMock()
-    llm.complete.return_value = (
-        '{"reproducer_code": "// UNREPRODUCIBLE: needs -larchive linker flag"}'
-    )
-    v = _make_validator_for_regen(llm)
-    out = v._regenerate_reproducer_with_error(
-        "src", "err", "f",
-    )
-    assert out is not None
-    assert out.startswith("// UNREPRODUCIBLE")
+def test_regenerate_returns_none_on_unreproducible(monkeypatch):
+    """Agent says UNREPRODUCIBLE → None, so the caller falls through to the
+    unit-level harness (the merged path returns None rather than echoing the
+    sentinel, which the old loop would have tried to compile)."""
+    from bmc_agent.agents.base import AgentResult
+    _patch_repro_run(monkeypatch, AgentResult(
+        output="// UNREPRODUCIBLE: needs -larchive linker flag"))
+    v = _make_validator_for_regen(MagicMock())
+    assert v._regenerate_reproducer_with_error("src", "err", "f") is None
 
 
-def test_regenerate_handles_fenced_markdown():
-    """LLM wraps JSON in ```json fences — parser must still extract it."""
-    llm = MagicMock()
-    llm.complete.return_value = (
-        '```json\n'
-        '{"reproducer_code": "fixed source"}\n'
-        '```'
-    )
-    v = _make_validator_for_regen(llm)
-    out = v._regenerate_reproducer_with_error("s", "e", "f")
-    assert out == "fixed source"
-
-
-def test_regenerate_handles_embedded_json_in_prose():
-    """LLM prepends prose before the JSON — embedded-JSON recovery."""
-    llm = MagicMock()
-    llm.complete.return_value = (
-        'Here is the corrected reproducer:\n'
-        '{"reproducer_code": "fixed source"}\n'
-        'Done.'
-    )
-    v = _make_validator_for_regen(llm)
-    out = v._regenerate_reproducer_with_error("s", "e", "f")
-    assert out == "fixed source"
-
-
-def test_regenerate_returns_none_on_unparseable_response():
-    """Malformed LLM response — return None so caller falls through."""
-    llm = MagicMock()
-    llm.complete.return_value = "this isn't json at all"
-    v = _make_validator_for_regen(llm)
+def test_regenerate_returns_none_when_empty_output(monkeypatch):
+    """Agent returns empty source → None (caller bails)."""
+    from bmc_agent.agents.base import AgentResult
+    _patch_repro_run(monkeypatch, AgentResult(output=""))
+    v = _make_validator_for_regen(MagicMock())
     assert v._regenerate_reproducer_with_error("s", "e", "f") is None
 
 
-def test_regenerate_returns_none_when_empty_code():
-    """LLM returns empty reproducer_code → None (caller bails)."""
-    llm = MagicMock()
-    llm.complete.return_value = '{"reproducer_code": ""}'
-    v = _make_validator_for_regen(llm)
+def test_regenerate_returns_none_when_agent_errors(monkeypatch):
+    """Agent run errors → None (logged, caller falls through)."""
+    from bmc_agent.agents.base import AgentResult
+    _patch_repro_run(monkeypatch, AgentResult(error="LLMError: network timeout"))
+    v = _make_validator_for_regen(MagicMock())
     assert v._regenerate_reproducer_with_error("s", "e", "f") is None
 
 
-def test_regenerate_returns_none_when_llm_errors():
-    """LLM exception → None (logged, caller falls through)."""
-    from bmc_agent.llm import LLMError
-    llm = MagicMock()
-    llm.complete.side_effect = LLMError("network timeout")
-    v = _make_validator_for_regen(llm)
+def test_regenerate_returns_none_when_no_ctx():
+    """No _repro_ctx (validator used outside validate()) → no-op None."""
+    v = _make_validator_for_regen(MagicMock(), with_ctx=False)
     assert v._regenerate_reproducer_with_error("s", "e", "f") is None
 
 

@@ -278,6 +278,7 @@ class DynamicValidator:
         all_specs: Optional[dict] = None,
         caller_path: Optional[list[str]] = None,
         system_entry_reproducer: Optional[str] = None,
+        corpus_paths: Optional[list] = None,
     ) -> DynamicValidationResult:
         """
         Attempt to confirm the counterexample by compiling and running a dynamic harness.
@@ -304,6 +305,21 @@ class DynamicValidator:
 
         # winning_harness: the C source that successfully compiled (for realism checker)
         winning_harness: Optional[str] = None
+
+        # Context for the tool-using ReproducerAgent repair / artifact-regen
+        # entry points (merged from the former one-shot DynamicReproAgent).
+        # The agent loops compile->run->fix internally, so it is invoked at most
+        # ONCE per validate() (the _agent_repro_used guard) instead of inside the
+        # per-retry loop.
+        self._repro_ctx = {
+            "entry_func": entry_func,
+            "counterexample": counterexample,
+            "parsed_file": parsed_file,
+            "all_funcs": all_funcs or {},
+            "caller_path": caller_path,
+            "corpus_paths": list(corpus_paths or []),
+        }
+        self._agent_repro_used = False
 
         # --- Attempt 0: system-entry reproducer (LLM-generated, call chain intact) ---
         if system_entry_reproducer and _looks_like_c_code(system_entry_reproducer):
@@ -350,6 +366,7 @@ class DynamicValidator:
                     and self._llm is not None
                     and compile_err
                     and not _is_link_only_error(compile_err)
+                    and not self._agent_repro_used
                 ):
                     fixed = self._regenerate_reproducer_with_error(
                         current_reproducer, compile_err, entry_func.name,
@@ -687,25 +704,31 @@ class DynamicValidator:
         triage,
         entry_func: FunctionInfo,
     ) -> "Optional[DynamicValidationResult]":
-        """Step C: ask DynamicReproAgent to regenerate the harness with
-        the artifact diagnosis as guidance, then compile + run.
+        """Step C: ask the tool-using ReproducerAgent (merged from the former
+        one-shot DynamicReproAgent) to regenerate the harness with the artifact
+        diagnosis as guidance, then compile + run.
         Returns the new DynamicValidationResult, or None when:
           - the agent returned UNREPRODUCIBLE / no change
           - the regenerated harness failed to compile
         """
         try:
-            from bmc_agent.agents.dynamic_repro import DynamicReproAgent
-            agent = DynamicReproAgent(config=self.config, llm=self._llm)
+            agent, run_kwargs = self._make_reproducer_agent()
+            if agent is None:
+                return None
+            artifact_diag = (
+                f"artifact_class={triage.artifact_class or 'unspecified'}; "
+                f"signal={result.signal_name or 'unknown'}; "
+                f"triage_reasoning={triage.reasoning or ''}"
+            )
             outcome = agent.run(
                 previous_reproducer=(result.harness_source or ""),
-                func_name=entry_func.name,
-                artifact_class=triage.artifact_class or "unspecified",
-                triage_reasoning=triage.reasoning,
-                signal_name=result.signal_name or "unknown",
+                failure_context=artifact_diag,
+                failure_kind="artifact",
+                **run_kwargs,
             )
         except Exception as exc:
             logger.debug(
-                "DynamicReproAgent (artifact mode) raised on '%s': %s",
+                "ReproducerAgent (artifact mode) raised on '%s': %s",
                 entry_func.name, exc,
             )
             return None
@@ -768,43 +791,82 @@ class DynamicValidator:
             )
             return None
 
+    def _make_reproducer_agent(self):
+        """Build a tool-using ``ReproducerAgent`` from the per-validate
+        context. Returns (agent, run_kwargs) where run_kwargs carry the
+        fault description (property / counterexample / call chain / source)
+        so a seeded repair reproduces the SAME fault. Returns (None, None)
+        when context is unavailable."""
+        ctx = getattr(self, "_repro_ctx", None)
+        if self._llm is None or not ctx:
+            return None, None
+        from bmc_agent.agents.reproducer_tools import ReproducerAgent
+        entry_func = ctx.get("entry_func")
+        cex = ctx.get("counterexample")
+        cex_str = ""
+        try:
+            cex_str = ", ".join(
+                f"{k} = {v}" for k, v in (cex.variable_assignments or {}).items()
+            )
+        except Exception:
+            cex_str = ""
+        agent = ReproducerAgent(
+            self.config, self._llm,
+            parsed_file=ctx.get("parsed_file"),
+            corpus_paths=ctx.get("corpus_paths") or [],
+        )
+        run_kwargs = {
+            "function_name": getattr(entry_func, "name", "unknown"),
+            "cbmc_property": getattr(cex, "failing_property", "") or "",
+            "counterexample": cex_str,
+            "call_chain": ctx.get("caller_path") or [getattr(entry_func, "name", "")],
+            "function_source": (getattr(entry_func, "body", "") or ""),
+            "threat_context": getattr(self.config, "threat_model_context", None),
+        }
+        return agent, run_kwargs
+
     def _regenerate_reproducer_with_error(
         self,
         previous_reproducer: str,
         compile_error: str,
         func_name: str,
     ) -> Optional[str]:
-        """Ask the LLM to fix the previous reproducer based on the GCC
-        compile error. Returns the corrected C source, or None if the
-        LLM declined / errored.
-
-        Delegates to ``DynamicReproAgent`` (C2 step 9, commit 68c815d).
-        The agent owns the prompt template, the response parser, and
-        the routing role (``dynamic_repro`` — previously this call
-        piggybacked on ``role="realism"`` which conflated two distinct
-        LLM tasks under a single env-var override). The cex_validator's
-        downstream ``_reproducer_uses_public_api`` gate still re-runs
-        on whatever we return; UNREPRODUCIBLE marker pass-through is
-        preserved by the agent's parse path.
+        """Repair a reproducer that failed to compile, via the tool-using
+        ``ReproducerAgent`` (merged from the former one-shot DynamicReproAgent).
+        The agent loops compile->run->read-error->fix internally on a compiler
+        that mirrors ``_compile``, so it is invoked at most ONCE per validate()
+        (guarded by ``_agent_repro_used``); its output already compiled+ran in
+        the mirror env. Returns the corrected C source, or None (declined /
+        errored / UNREPRODUCIBLE) so the caller falls back to the unit harness.
+        The downstream ``_reproducer_uses_public_api`` gate still re-runs.
         """
-        if self._llm is None:
+        self._agent_repro_used = True
+        agent, run_kwargs = self._make_reproducer_agent()
+        if agent is None:
             return None
-        from bmc_agent.agents.dynamic_repro import DynamicReproAgent
-        agent = DynamicReproAgent(config=self.config, llm=self._llm)
-        result = agent.run(
-            previous_reproducer=previous_reproducer,
-            compile_error=compile_error,
-            func_name=func_name,
-        )
+        try:
+            result = agent.run(
+                previous_reproducer=previous_reproducer,
+                failure_context=compile_error,
+                failure_kind="compile_error",
+                **run_kwargs,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ReproducerAgent repair raised for '%s': %s", func_name, exc,
+            )
+            return None
         if not result.ok:
             if result.error:
                 logger.warning(
-                    "DynamicReproAgent reproducer regeneration failed for "
-                    "'%s': %s",
+                    "ReproducerAgent reproducer repair failed for '%s': %s",
                     func_name, result.error,
                 )
             return None
-        return result.output
+        out = result.output or ""
+        if not out or "UNREPRODUCIBLE" in out:
+            return None
+        return out
 
     def _compile(
         self, harness_src: str, cc: str, extra_flags: "list[str] | None" = None

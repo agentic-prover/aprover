@@ -2218,6 +2218,7 @@ class CExValidator:
             all_specs=all_specs,
             caller_path=caller_path,
             system_entry_reproducer=validation_result.system_entry_input,
+            corpus_paths=list(getattr(self, "corpus_paths", []) or []),
         )
         validation_result.dynamic_result = dynamic_result
 
