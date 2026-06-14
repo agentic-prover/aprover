@@ -1,8 +1,11 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T16:30:00Z iter-note: 3 enforcement runs healthy + deep into agentic stages
-(vfs at CBMC verdict; irq in refinement; net in tool-loop). Started a background waiter (re-invokes me
-on DONE). Committed launcher + adjudicate_enforce.sh. Will adjudicate the gate when the waiter fires.
+Heartbeat: 2026-06-14T16:42:00Z iter-note: runs still in CBMC stage, all alive + progressing
+(vfs 554 ln churning past vfs_set_cwd unwind-34; irq 2275 ln; net 1284 ln w/ 4 CBMC children).
+Background waiter (pid alive) will re-invoke me at DONE. No code change this iter; verified the
+cross-codebase invariant is MECHANISM-level: Phase-4b's _immune flips ONLY for confirmed_dynamic, so
+any confirmed_system_entry real keeps its baseline (0/7) outcome by construction. Cross-codebase
+empirical run queued behind VibeOS (avoid CBMC contention).
 
 WHY FRESH RUNS: the existing phase2_retier_{irq,vfs} runs are STALE for this gate -- they ran at
 14:59/15:10 local, BEFORE the immunity removal landed (cf569da @ 20:16 local), so immunity was still ON
