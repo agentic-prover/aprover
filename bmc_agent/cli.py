@@ -1069,6 +1069,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = False
     if getattr(args, "no_inlining_advisor", False):
         config.enable_inlining_advisor = False
+    if getattr(args, "enable_bmc_config_agent", False):
+        # Merged tool-using BMC-config agent (Phase 2b): supersedes the single-call
+        # FlagSelector + InliningAdvisor. Opt-in; default off.
+        config.enable_bmc_config_agent = True  # type: ignore[attr-defined]
+    if getattr(args, "enable_reproducer_agent", False):
+        # Tool-using reproducer agent (Phase 2-REPRO). Opt-in; default off.
+        config.enable_reproducer_agent = True  # type: ignore[attr-defined]
     if getattr(args, "no_spec_gen_tools", False):
         config.enable_spec_gen_tools = False
     if getattr(args, "no_realism_tools", False):
@@ -1409,6 +1416,13 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = False
     if getattr(args, "no_inlining_advisor", False):
         config.enable_inlining_advisor = False
+    if getattr(args, "enable_bmc_config_agent", False):
+        # Merged tool-using BMC-config agent (Phase 2b): supersedes the single-call
+        # FlagSelector + InliningAdvisor. Opt-in; default off.
+        config.enable_bmc_config_agent = True  # type: ignore[attr-defined]
+    if getattr(args, "enable_reproducer_agent", False):
+        # Tool-using reproducer agent (Phase 2-REPRO). Opt-in; default off.
+        config.enable_reproducer_agent = True  # type: ignore[attr-defined]
     if getattr(args, "no_spec_gen_tools", False):
         config.enable_spec_gen_tools = False
     if getattr(args, "no_realism_tools", False):
@@ -2341,6 +2355,16 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Restore the old confirmed_dynamic immunity (realism does NOT "
                           "downgrade dynamic findings). Default: enforcement on (immunity "
                           "removed) -- realism re-tiers UNREALISTIC dynamic findings to 'unlikely'.")
+    ver.add_argument("--enable-bmc-config-agent", action="store_true", default=False,
+                     dest="enable_bmc_config_agent",
+                     help="Use the merged tool-using BMC-config agent (reads real callee "
+                          "bodies / array sizes / loop bounds) instead of the single-call "
+                          "FlagSelector + InliningAdvisor. OPT-IN; default off.")
+    ver.add_argument("--enable-reproducer-agent", action="store_true", default=False,
+                     dest="enable_reproducer_agent",
+                     help="Use the tool-using reproducer agent (loops compile->run->fix) "
+                          "for the system-entry reproducer instead of the one-shot call. "
+                          "OPT-IN; default off.")
     ver.add_argument("--no-dynamic-validation", action="store_true", default=False,
                      help="Disable building + running the GCC reproducer.")
     ver.add_argument("--no-flag-selection", action="store_true", default=False,
@@ -2614,6 +2638,14 @@ def build_parser() -> argparse.ArgumentParser:
                     dest="keep_dynamic_immunity",
                     help="Restore the old confirmed_dynamic immunity (realism does NOT "
                          "downgrade dynamic findings). Default: enforcement on (immunity removed).")
+    vd.add_argument("--enable-bmc-config-agent", action="store_true", default=False,
+                    dest="enable_bmc_config_agent",
+                    help="Use the merged tool-using BMC-config agent instead of the "
+                         "single-call FlagSelector + InliningAdvisor. OPT-IN; default off.")
+    vd.add_argument("--enable-reproducer-agent", action="store_true", default=False,
+                    dest="enable_reproducer_agent",
+                    help="Use the tool-using reproducer agent (compile->run->fix loop) "
+                         "for the system-entry reproducer. OPT-IN; default off.")
     vd.add_argument("--no-dynamic-validation", action="store_true", default=False,
                     help="Disable building + running the GCC reproducer.")
     vd.add_argument("--no-flag-selection", action="store_true", default=False,

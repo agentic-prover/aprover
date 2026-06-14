@@ -5042,6 +5042,18 @@ class HarnessGenerator:
         # leaves the mechanical-rule decision intact.
         if (
             getattr(self.config, "inline_pure_callees", True)
+            and getattr(self.config, "enable_bmc_config_agent", False)
+        ):
+            # Merged BMC-config agent already decided inline-vs-stub at the
+            # flag-selection phase (reading real callee bodies via tools). Apply
+            # its promotions here in place of the single-call InliningAdvisor.
+            # Promote-only: never demotes a mechanically-inlined callee.
+            overrides = getattr(self.config, "agent_inline_overrides", None) or {}
+            for cname in overrides.get(fn_name, set()):
+                if cname in local_callees:
+                    inline_local_callees.add(cname)
+        elif (
+            getattr(self.config, "inline_pure_callees", True)
             and getattr(self.config, "enable_inlining_advisor", False)
         ):
             try:

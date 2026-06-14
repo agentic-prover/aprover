@@ -1971,6 +1971,46 @@ class CExValidator:
     # System entry reproducer generation
     # ------------------------------------------------------------------
 
+    def _reproducer_agent_attempt(
+        self,
+        call_chain: list[str],
+        counterexample: Counterexample,
+        all_funcs: dict[str, FunctionInfo],
+        parsed_file: ParsedCFile,
+    ) -> "Optional[str]":
+        """Phase 2-REPRO: try the tool-using ReproducerAgent. Returns a real
+        reproducer source on success, or None to fall through to the one-shot
+        generator (agent error, empty output, or UNREPRODUCIBLE). Never raises."""
+        fut = call_chain[-1] if call_chain else "unknown"
+        try:
+            from bmc_agent.agents.reproducer_tools import ReproducerAgent
+            fi = all_funcs.get(fut) or parsed_file.get_function_info(fut)
+            fsrc = (getattr(fi, "body", "") if fi else "") or ""
+            state_str = ", ".join(
+                f"{k} = {v}" for k, v in counterexample.variable_assignments.items()
+            )
+            agent = ReproducerAgent(
+                self.config, self.llm,
+                parsed_file=parsed_file,
+                corpus_paths=list(getattr(self, "corpus_paths", []) or []),
+            )
+            res = agent.run(
+                function_name=fut,
+                cbmc_property=counterexample.failing_property,
+                counterexample=state_str,
+                call_chain=list(call_chain),
+                function_source=fsrc,
+                threat_context=getattr(self.config, "threat_model_context", None),
+            )
+        except Exception as exc:
+            logger.debug("ReproducerAgent raised for '%s': %s", fut, exc)
+            return None
+        src = (res.output or "") if res is not None else ""
+        if not src or "UNREPRODUCIBLE" in src:
+            return None
+        logger.info("ReproducerAgent produced a system-entry reproducer for '%s'", fut)
+        return src
+
     def _generate_system_entry_reproducer(
         self,
         call_chain: list[str],
@@ -1979,6 +2019,18 @@ class CExValidator:
         parsed_file: ParsedCFile,
     ) -> str:
         """Generate a C test case that triggers the bug from the system entry point."""
+        # Phase 2-REPRO: when the tool-using reproducer agent is enabled, try it
+        # FIRST (it loops compile->run->read-error->fix, reading real headers /
+        # structs / the call chain). Fall through to the one-shot path below on
+        # any miss (agent error or UNREPRODUCIBLE), so behaviour is unchanged when
+        # off and never worse when on.
+        if getattr(self.config, "enable_reproducer_agent", False):
+            _agent_src = self._reproducer_agent_attempt(
+                call_chain, counterexample, all_funcs, parsed_file
+            )
+            if _agent_src is not None:
+                return _agent_src
+
         state_str = ", ".join(
             f"{k} = {v}"
             for k, v in counterexample.variable_assignments.items()

@@ -578,7 +578,33 @@ class AMCPipeline:
         # agentic, would fan out into one claude-code call per corpus function
         # instead of per checked function.
         flag_selections: dict = {}
-        if getattr(self.config, "enable_flag_selection", False):
+        if getattr(self.config, "enable_bmc_config_agent", False):
+            # Merged tool-using BMC-config agent (Phase 2b): one investigation per
+            # function produces BOTH the flag/unwind/timeout selection AND the
+            # inline-vs-stub promotions, reading real callee bodies via tools.
+            from bmc_agent.agents.bmc_config_tools import BmcConfigAgent
+            logger.info("--- Phase 1.5: BMC-config agent (merged flags+inline, %d fn) ---",
+                        len(funcs_to_check))
+            corpus_paths = list(getattr(self.spec_gen, "corpus_paths", []) or [])
+            agent = BmcConfigAgent(self.config, self.llm,
+                                   parsed_file=parsed, corpus_paths=corpus_paths)
+            stub_candidates = {
+                name: [c for c in (getattr(fi, "callees", []) or [])
+                       if parsed.get_function_info(c) is not None]
+                for name, fi in funcs_to_check.items()
+            }
+            bmc_configs = agent.select_all(funcs_to_check, parsed, stub_candidates)
+            flag_selections = {name: cfg.flags for name, cfg in bmc_configs.items()}
+            # Stash inline promotions (caller -> {callees to inline}) for the
+            # harness generator to consume in place of the InliningAdvisor.
+            overrides = {
+                name: set(cfg.promotions().keys())
+                for name, cfg in bmc_configs.items()
+            }
+            self.config.agent_inline_overrides = {  # type: ignore[attr-defined]
+                k: v for k, v in overrides.items() if v
+            }
+        elif getattr(self.config, "enable_flag_selection", False):
             from bmc_agent.flag_selector import FlagSelector
             logger.info("--- Phase 1.5: Selecting per-function CBMC flags (%d fn) ---",
                         len(funcs_to_check))
