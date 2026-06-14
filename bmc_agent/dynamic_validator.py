@@ -1020,13 +1020,28 @@ class DynamicValidator:
         binp, err = self._compile(winning_harness, cc)
         if binp is not None:
             _unlink(binp)
-            return None  # already links clean -> not the unresolved-extern artifact
-        plan = _hr.plan_refinement(err, sibling_sources, referenced_idents)
-        if not plan:
-            return None  # nothing boot-init-trusted to materialize -> keep finding
+            # Links clean — but the unit harness may still NULL-DEFINE a
+            # boot-init-trusted global itself (e.g. ``vfs_node_t *mem_root =
+            # NULL;`` pulled from the file under test, b4aa03c) and never
+            # materialize it. That is a runtime NULL-deref artifact, not a link
+            # error, so ``parse_undefined_externs`` never sees it. Detect the
+            # NULL-defined case here.
+            plan = _hr.plan_refinement_null_defined(
+                winning_harness, sibling_sources, referenced_idents
+            )
+            if not plan:
+                return None  # no NULL-defined boot-init-trusted global -> keep finding
+        else:
+            plan = _hr.plan_refinement(err, sibling_sources, referenced_idents)
+            if not plan:
+                return None  # nothing boot-init-trusted to materialize -> keep finding
 
         block = _hr.synthesize_materialization(plan)
-        refined = _hr.inject_materialization(winning_harness, block)
+        # NULL-defined globals are already declared earlier in the harness; their
+        # reassign-only constructor must be appended at the end (not injected
+        # after the includes, where the symbol is not yet declared).
+        _at_end = any(getattr(g, "already_defined", False) for g in plan)
+        refined = _hr.inject_materialization(winning_harness, block, at_end=_at_end)
         binp2, err2 = self._compile(refined, cc)
         if binp2 is None:
             # Other (untrusted) externs may still be undefined — let THOSE

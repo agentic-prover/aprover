@@ -49,6 +49,12 @@ class TrustedGlobal:
     ctype: str          # e.g. "uint32_t *"  or  "uint32_t"
     is_pointer: bool
     init_fn: str        # the *_init function that sets it (evidence of boot-init-trusted)
+    already_defined: bool = False
+    # ``already_defined``: the harness ALREADY defines this global (as
+    # ``T *g = NULL;`` pulled in from the file under test) and left it NULL — so
+    # the link succeeds and the artifact is a runtime NULL-deref, not an
+    # undefined-reference link error. Materialization must only REASSIGN it (in a
+    # pre-main constructor), never re-define it (that would be a duplicate symbol).
 
 
 def parse_undefined_externs(compile_err: str | None) -> list[str]:
@@ -64,6 +70,84 @@ def parse_undefined_externs(compile_err: str | None) -> list[str]:
     for m in _UNDEF_RE.finditer(compile_err):
         seen.setdefault(m.group(1), None)
     return list(seen)
+
+
+# A file-scope pointer-global DEFINITION with a NULL/0 initializer, e.g.
+#   ``vfs_node_t *mem_root = NULL;``   ``static uint32_t * fb = (void*)0;``
+# Captures (base-type, name). Requires the ``*`` so we only ever materialize
+# pointer globals (the only kind a NULL-deref artifact can come from).
+_NULL_PTR_DEF_RE = re.compile(
+    r"^[ \t]*(?:static\s+)?"
+    r"([A-Za-z_][\w \t]*?[\w])\s*\*\s*"      # base type + the pointer star
+    r"([A-Za-z_]\w*)\s*"                      # the global's name
+    r"=\s*(?:NULL|\(\(void\s*\*\)0\)|\(void\s*\*\)0|0)\s*;",
+    re.M,
+)
+
+
+def parse_null_defined_pointer_globals(harness_source: str | None) -> list[tuple[str, str]]:
+    """Pointer globals the harness DEFINES at their NULL/0 default and never
+    reassigns anywhere in the harness body.
+
+    These are the boot-init-trusted globals (e.g. ``vfs_node_t *mem_root =
+    NULL;`` pulled in from the file under test) that the unit harness links
+    cleanly but leaves NULL — a runtime NULL-deref, NOT a link error, so
+    ``parse_undefined_externs`` never sees them.
+
+    Returns a list of ``(name, "base_type *")`` for each such global. A global
+    that is reassigned elsewhere in the harness (e.g. the dynamic
+    global-invariant init already emitted ``g = calloc(...)``) is EXCLUDED: it is
+    already materialized, so re-running would not change the outcome and there is
+    nothing for the refiner to clean.
+    """
+    if not harness_source:
+        return []
+    s = _strip_comments(harness_source)
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for m in _NULL_PTR_DEF_RE.finditer(s):
+        base_type = m.group(1).strip()
+        name = m.group(2)
+        if name in seen:
+            continue
+        # Excluded if the harness assigns it anywhere OTHER than this NULL
+        # definition (``name =`` that is not ``==`` and not the def's own init).
+        assign_re = re.compile(r"(?<![=!<>])\b" + re.escape(name) + r"\s*=(?!=)")
+        assigns = list(assign_re.finditer(s))
+        # one assignment is the NULL definition itself; >1 => reassigned => skip
+        if len(assigns) > 1:
+            continue
+        seen.add(name)
+        out.append((name, base_type + " *"))
+    return out
+
+
+def plan_refinement_null_defined(
+    harness_source: str | None,
+    sibling_sources: dict[str, str],
+    referenced_idents: set[str] | None = None,
+) -> list[TrustedGlobal]:
+    """Boot-init-trusted globals the harness NULL-DEFINES (and never reassigns)
+    that should be materialized in a re-run. Counterpart to ``plan_refinement``
+    for the *link-succeeds* case: the harness defines ``T *g = NULL;`` itself, so
+    there is no undefined-reference link error to key on.
+
+    Each returned global is confirmed boot-init-trusted against the sibling
+    sources (same classifier as the link-error path) and flagged
+    ``already_defined`` so the materializer only reassigns it."""
+    out: list[TrustedGlobal] = []
+    for name, _ctype in parse_null_defined_pointer_globals(harness_source):
+        if referenced_idents is not None and name not in referenced_idents:
+            continue
+        tg = classify_boot_init_trusted(name, sibling_sources)
+        if tg is not None and tg.is_pointer:
+            out.append(
+                TrustedGlobal(
+                    name=tg.name, ctype=tg.ctype, is_pointer=True,
+                    init_fn=tg.init_fn, already_defined=True,
+                )
+            )
+    return out
 
 
 def _strip_comments(src: str) -> str:
@@ -168,22 +252,28 @@ def _top_level_functions(stripped_src: str) -> list[tuple[int, int, str]]:
 
 
 def synthesize_materialization(globals_: list[TrustedGlobal]) -> str:
-    """C source block that DEFINES the trusted externs and materializes pointers
-    to a single zeroed element via a constructor (runs before main()). Scalars
-    get a plain zero-init definition so the link resolves without changing their
-    value (conservative: no guessed dimensions)."""
+    """C source block that materializes boot-init-trusted pointer globals to a
+    single zeroed element via a constructor (runs before main()).
+
+    For an ``already_defined`` global (the harness links cleanly and already
+    defines it as ``T *g = NULL;``) the block ONLY reassigns it — never
+    re-defines it, which would be a duplicate symbol. For an undefined-extern
+    global (link-error path) the block also DEFINES it; scalars get a plain
+    zero-init definition so the link resolves without changing their value
+    (conservative: no guessed dimensions)."""
     if not globals_:
         return ""
     lines = ["", "/* AMC harness-refinement: materialize boot-init-trusted externs */"]
     body = []
     for g in globals_:
         if g.is_pointer:
-            lines.append(f"{g.ctype}{g.name} = (void*)0;")
+            if not g.already_defined:
+                lines.append(f"{g.ctype}{g.name} = (void*)0;")
             body.append(
                 f"    if (!{g.name}) {{ {g.name} = calloc(1, sizeof(*{g.name})); }}"
                 f"  /* {g.name}: real boot runs {g.init_fn}() first */"
             )
-        else:
+        elif not g.already_defined:
             lines.append(f"{g.ctype} {g.name};")
     lines.append("#include <stdlib.h>")
     lines.append("__attribute__((constructor)) static void __amc_materialize_trusted(void){")
@@ -192,11 +282,19 @@ def synthesize_materialization(globals_: list[TrustedGlobal]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def inject_materialization(harness_source: str, block: str) -> str:
-    """Insert the materialization block after the last top-of-file #include so
-    the definitions precede any use. If there is no #include, prepend."""
+def inject_materialization(harness_source: str, block: str, at_end: bool = False) -> str:
+    """Insert the materialization block.
+
+    Default: after the last top-of-file ``#include`` so the global DEFINITIONS
+    precede any use (undefined-extern path). With ``at_end=True`` the block is
+    APPENDED at the end of the harness (NULL-defined path): it only REASSIGNS
+    globals the harness already defines earlier (the file under test pulled them
+    in), so a top-of-file constructor would not yet see them."""
     if not block:
         return harness_source
+    if at_end:
+        sep = "" if harness_source.endswith("\n") else "\n"
+        return harness_source + sep + block
     lines = harness_source.splitlines(keepends=True)
     last_inc = -1
     for idx, ln in enumerate(lines):
