@@ -1,8 +1,9 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T18:15:00Z iter-note: FIXTURE DONE -> ip_handle anchor GREEN (genuine real confirmed_dynamic KEPT under enforcement). vfs_open_handle not CBMC-surfaceable (modeling FN, not an enforcement issue). Live runs: 0 enforcement-caused demotions, all confirmed_dynamic kept. Awaiting live-run finish for final tiers; net is slow pole.
-ENFORCED-OFF lines); vfs_write stays confirmed. Fixture: ip_handle GREEN, vfs_open_handle pending.
-Waiters armed: bncil5lx8 (fixture-only, decisive) + b8u6ytv6q (all-4).
+Heartbeat: 2026-06-14T18:15:00Z iter-note: FIXTURE DONE -> ip_handle anchor GREEN (genuine real
+confirmed_dynamic KEPT under enforcement). vfs_open_handle not CBMC-surfaceable (modeling FN, not an
+enforcement issue). Live runs: 0 enforcement-caused demotions. Awaiting live-run finish for final
+tiers; net is the slow pole. Waiter b8u6ytv6q armed (all-4 DONE).
 
 FIXTURE GATE RESULT (run DONE):
 - ip_handle (restored OOB read, GENUINE real): CBMC verified=False, dynamic CONFIRMED, realism
