@@ -32,6 +32,17 @@ from bmc_agent.logger import get_logger
 
 logger = get_logger("llm")
 
+
+#: Anthropic model families that reject the ``temperature`` parameter (newer
+#: tiers deprecate it -> HTTP 400 "temperature is deprecated for this model").
+#: For these we omit ``temperature`` from the request entirely.
+_TEMP_UNSUPPORTED = ("opus-4-8",)
+
+
+def _model_rejects_temperature(model: str) -> bool:
+    m = (model or "").lower()
+    return any(s in m for s in _TEMP_UNSUPPORTED)
+
 # Sentinel so we can detect a missing key at call time, not import time.
 _UNSET = object()
 
@@ -396,13 +407,19 @@ class LLMClient:
                 "text": system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }]
-        response = client.with_options(timeout=timeout_s).messages.create(  # type: ignore[attr-defined]
+        create_kwargs: dict = dict(
             model=self.config.llm_model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system_payload,
             messages=[{"role": "user", "content": user_prompt}],
             **extra,
+        )
+        # Newer models (e.g. claude-opus-4-8) reject ``temperature`` outright;
+        # only send it where the model still accepts it.
+        if not _model_rejects_temperature(self.config.llm_model):
+            create_kwargs["temperature"] = temperature
+        response = client.with_options(timeout=timeout_s).messages.create(  # type: ignore[attr-defined]
+            **create_kwargs
         )
         usage = getattr(response, "usage", None)
         if usage:
