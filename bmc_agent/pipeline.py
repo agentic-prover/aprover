@@ -1812,7 +1812,11 @@ class AMCPipeline:
             if dyn_validator is None:
                 return
             sibs = self._collect_sibling_sources(source_file)
-            out = dyn_validator.refine_and_revalidate(harness, sibs)
+            cex = getattr(validation, "counterexample", None)
+            cex_va = getattr(cex, "variable_assignments", None)
+            out = dyn_validator.refine_and_revalidate(
+                harness, sibs, cex_variable_assignments=cex_va
+            )
         except Exception as exc:
             logger.debug("harness-refinement failed for '%s' (keeping finding): %s",
                          getattr(func, "name", "?"), exc)

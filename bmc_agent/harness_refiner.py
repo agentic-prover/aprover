@@ -43,6 +43,40 @@ from dataclasses import dataclass
 _UNDEF_RE = re.compile(r"undefined reference to [`'\"]?([A-Za-z_]\w*)[`'\"]?")
 
 
+def is_null_cex_value(value: "str | None") -> bool:
+    """True iff a CBMC counterexample value string denotes a NULL / zero pointer.
+
+    CBMC renders a null pointer in several shapes:
+      ``NULL`` · ``((uint32_t *)NULL)`` · ``((const char *)NULL)`` · ``0`` ·
+      ``0ul`` · ``(void *)0``. A non-null pointer renders as an object name
+      (``dynamic_object``, ``_buf_buf!0@1``, ``&x``), which must NOT match.
+    """
+    if value is None:
+        return False
+    v = value.strip()
+    if re.search(r"\bNULL\b", v):
+        return True
+    # bare zero (optionally cast / parenthesised): 0, 0u, 0ul, (0), ((void*)0)
+    return bool(re.fullmatch(r"\(*\s*(?:\(\s*void\s*\*\s*\)\s*)?0[uUlL]*\s*\)*", v))
+
+
+def globals_null_in_cex(
+    variable_assignments: "dict[str, str] | None", names: "list[str]"
+) -> list[str]:
+    """Subset of ``names`` whose value in the counterexample is NULL / a zero
+    pointer.
+
+    This is the CEx-witness gate for harness refinement: a boot-init-trusted
+    global is only the NULL-default ARTIFACT when it is actually NULL at the
+    crashing trace. If it is non-NULL in the CEx (e.g. ``mem_root`` already
+    materialized to ``dynamic_object``), the fault is something else and
+    materializing the global would change nothing -- so it must not be refined.
+    Gating here can only make the refiner fire LESS, never demote a real bug.
+    """
+    va = variable_assignments or {}
+    return [n for n in names if n in va and is_null_cex_value(str(va.get(n)))]
+
+
 @dataclass
 class TrustedGlobal:
     name: str

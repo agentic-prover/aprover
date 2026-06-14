@@ -88,6 +88,29 @@ always kept.
   still crashes -> real -> keep `confirmed`.
 - GATE (shadow): re-shadow irq/vfs -> `wsod_*` no longer confirmed, `vfs_open_handle` still confirmed,
   0 reals lost.
+- 1d. **CEx-witness gate (added 2026-06-14).** Only attempt materialization for a boot-init-trusted
+  global that is ACTUALLY NULL in the counterexample (`harness_refiner.globals_null_in_cex`, threaded
+  through `refine_and_revalidate(cex_variable_assignments=...)`). Strictly more conservative (fires
+  LESS, never demotes a real bug); logs an explanatory KEEP line when candidates exist but none is
+  NULL-in-CEx, so a silent 0-hits becomes self-documenting.
+
+> **EMPIRICAL FINDING (2026-06-14, from the irq2/vfs2 re-shadow + CEx-gate validation against the saved
+> counterexamples).** The harness-refiner correctly fired **0 times**, and the original Phase-1 GATE
+> premise was WRONG: NONE of the confirmed_dynamic findings in either run is the boot-init-trusted
+> NULL-global artifact class. In EVERY counterexample, `mem_root` is already `dynamic_object` (non-NULL)
+> and `fb_base` renders as an unconstrained object (`{'name':'unknown'}`), never literal NULL; the real
+> `fb_base` deref is guarded by `if (fb_base && fb_width>0 && fb_height>0)` (irq.c:400/596) and the CBMC
+> harness already DROPS the `fb_base != 0` clause as unbound. The actual FP drivers here are OTHER
+> classes, handled by OTHER channels:
+> - nondet-arg **signed overflow** (`wsod_draw_line/text`, `handle_serror`, `sleep_ms`, `wsod_delay`
+>   `*.overflow.N`) -> the reachability tier (Phase 2a), not the harness-refiner.
+> - **too-short baked buffer** (`wsod_hex.pointer_dereference` on a 5-byte `buf`) -> buffer/string
+>   SOURCE modeling (the `string_copy_sink` family, [[project_fn_string_source_modeling_2026_06_12]]).
+> - **callee-returns-NULL deref** (`vfs_delete_recursive` derefs a NULL `vfs_lookup` return) -> a spec
+>   post-`lookup` null-check, or it is a genuine missing-null-check bug, not a harness artifact.
+> Conclusion: the harness-refiner is sound and correctly silent here; it is NOT the lever for these
+> findings. The keystone for the irq/vfs over-confirms is the reachability tier + buffer-source modeling,
+> not harness refinement. Do not force the refiner to fire on non-NULL-global findings (it would be unsound).
 
 ### Phase 2 — Trustworthy reachability evidence + tool-grounding
 - **2-REPRO. Reproducer agent (do FIRST — it may change 2a).** Today the system-entry reproducer is a

@@ -13,7 +13,36 @@ from bmc_agent.harness_refiner import (
     inject_materialization,
     plan_refinement,
     plan_refinement_null_defined,
+    is_null_cex_value,
+    globals_null_in_cex,
 )
+
+
+# --- CEx-witness gate: only refine a trusted global that is NULL in the trace ---
+
+def test_is_null_cex_value_recognises_null_shapes():
+    for v in ("NULL", "((uint32_t *)NULL)", "((const char *)NULL)",
+              "0", "0u", "0ul", "(void *)0", "((void *)0)", " 0 "):
+        assert is_null_cex_value(v), v
+
+
+def test_is_null_cex_value_rejects_nonnull():
+    for v in ("dynamic_object", "_buf_buf!0@1", "&x", "0x40000000",
+              "1", "17472ul", "alloc_size!0@1", None, ""):
+        assert not is_null_cex_value(v), v
+
+
+def test_globals_null_in_cex_selects_only_null_pointers():
+    va = {
+        "fb_base": "((uint32_t *)NULL)",   # NULL  -> the artifact
+        "mem_root": "dynamic_object",      # already materialized -> NOT artifact
+        "fb_width": "0",                   # zero scalar (still "null-like")
+        "other": "&g",
+    }
+    assert globals_null_in_cex(va, ["fb_base", "mem_root"]) == ["fb_base"]
+    # a name absent from the CEx is not selected
+    assert globals_null_in_cex(va, ["absent"]) == []
+    assert globals_null_in_cex(None, ["fb_base"]) == []
 
 
 # A sibling translation unit modelled on VibeOS vfs.c: a boot-init-trusted

@@ -996,6 +996,7 @@ class DynamicValidator:
         winning_harness: "str | None",
         sibling_sources: "dict[str, str]",
         referenced_idents: "set[str] | None" = None,
+        cex_variable_assignments: "dict[str, str] | None" = None,
     ):
         """Phase 1 (realism-enforcement): re-run the dynamic harness with
         boot-init-trusted EXTERN globals MATERIALIZED, to tell a NULL-default
@@ -1035,6 +1036,29 @@ class DynamicValidator:
             plan = _hr.plan_refinement(err, sibling_sources, referenced_idents)
             if not plan:
                 return None  # nothing boot-init-trusted to materialize -> keep finding
+
+        # CEx-witness gate: a boot-init-trusted global is only the NULL-default
+        # ARTIFACT when it is actually NULL at the crashing trace. Drop any
+        # candidate that is non-NULL in the counterexample (e.g. ``mem_root``
+        # already materialized to ``dynamic_object``) -- materializing it would
+        # change nothing and the fault is a different (kept) finding. This can
+        # only make the refiner fire LESS, so it never demotes a real bug.
+        if cex_variable_assignments is not None:
+            null_names = set(
+                _hr.globals_null_in_cex(
+                    cex_variable_assignments, [g.name for g in plan]
+                )
+            )
+            gated = [g for g in plan if g.name in null_names]
+            if not gated:
+                logger.info(
+                    "harness-refine: %d boot-init-trusted candidate(s) {%s} but NONE "
+                    "is NULL in the counterexample -> not the NULL-default artifact "
+                    "class -> KEEP finding",
+                    len(plan), ", ".join(g.name for g in plan),
+                )
+                return None
+            plan = gated
 
         block = _hr.synthesize_materialization(plan)
         # NULL-defined globals are already declared earlier in the harness; their
