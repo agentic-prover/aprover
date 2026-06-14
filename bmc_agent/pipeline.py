@@ -974,18 +974,19 @@ class AMCPipeline:
         #                          (bare clause) and enqueue.
         #   * INCONCLUSIVE       → attach for review only.
         # ------------------------------------------------------------------
-        for fn_name in {r.function_name for r in bug_reports}:
-            try:
-                if self._diagnose_oracle_disagreements(driver_name, fn_name):
-                    # SPEC_REFINE / HARNESS_ENCODING persisted a clause
-                    # — Phase 3c picks it up via _emit_learned_clauses
-                    # and re-runs BMC under the tighter PRE.
-                    self_recheck_queue.add(fn_name)
-            except Exception as exc:
-                logger.warning(
-                    "Oracle-disagreement diagnosis failed for '%s': %s",
-                    fn_name, exc,
-                )
+        if getattr(self.config, "enable_oracle_disagreement_diagnosis", False):
+            for fn_name in {r.function_name for r in bug_reports}:
+                try:
+                    if self._diagnose_oracle_disagreements(driver_name, fn_name):
+                        # SPEC_REFINE / HARNESS_ENCODING persisted a clause
+                        # — Phase 3c picks it up via _emit_learned_clauses
+                        # and re-runs BMC under the tighter PRE.
+                        self_recheck_queue.add(fn_name)
+                except Exception as exc:
+                    logger.warning(
+                        "Oracle-disagreement diagnosis failed for '%s': %s",
+                        fn_name, exc,
+                    )
 
         # ------------------------------------------------------------------
         # Phase 3c: Re-run BMC on refined functions (CEGAR loop)

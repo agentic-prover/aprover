@@ -519,6 +519,11 @@ class Config:
     # V2 features
     enable_dual_spec: bool = True    # generate spec twice with different emphases, flag disagreements
     enable_spec_quality: bool = False  # run Phase 5 spec quality analysis (expensive)
+    # Phase 3d: LLM diagnosis of three-oracle contradictions (BMC=FAIL +
+    # realism=REALISTIC + dyn-val=NOT_TRIGGERED). Auto-applies PROPERTY_FP
+    # downgrade / SPEC_REFINE / HARNESS_ENCODING. Default OFF (disabled); env
+    # BMC_AGENT_ENABLE_ORACLE_DISAGREEMENT_DIAGNOSIS=true to re-enable.
+    enable_oracle_disagreement_diagnosis: bool = False
 
     # V3 features
     skip_refinement: bool = False    # filtering-only ablation: classify spurious but skip spec update + caller requeue
@@ -895,6 +900,7 @@ class Config:
             batch_size=int(os.environ.get("BMC_AGENT_BATCH_SIZE", "10")),
             enable_dual_spec=os.environ.get("BMC_AGENT_ENABLE_DUAL_SPEC", "true").lower() != "false",
             enable_spec_quality=os.environ.get("BMC_AGENT_ENABLE_SPEC_QUALITY", "false").lower() == "true",
+            enable_oracle_disagreement_diagnosis=(os.environ.get("BMC_AGENT_ENABLE_ORACLE_DISAGREEMENT_DIAGNOSIS") or "false").lower() == "true",
             skip_refinement=os.environ.get("BMC_AGENT_SKIP_REFINEMENT", "false").lower() == "true",
             max_requeue_per_function=int(os.environ.get("BMC_AGENT_MAX_REQUEUE_PER_FUNCTION", "3")),
             include_dirs=[d for d in os.environ.get("BMC_AGENT_INCLUDE_DIRS", "").split(":") if d],
