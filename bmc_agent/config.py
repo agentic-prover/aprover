@@ -5,6 +5,7 @@ Configuration dataclass for BMC-Agent.
 from __future__ import annotations
 
 import os
+from bmc_agent.agent_registry import AGENT_ROLES
 from dataclasses import dataclass, field
 
 
@@ -70,19 +71,7 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
     # just makes it env-overridable; the call site code uses whatever
     # string it always uses. ``classifier`` is retained for back-compat
     # though no current call site uses it.
-    for role in (
-        "spec_gen",
-        "feedback_distill",
-        "refinement",
-        "realism",
-        "classifier",
-        "disagreement_diagnose",
-        "triage",
-        "dynamic_repro",
-        "dynval_triage",
-        "cbmc_driver",
-        "harness_gen",
-    ):
+    for role in AGENT_ROLES:
         ru = role.upper()
         model = os.environ.get(f"BMC_AGENT_LLM_{ru}_MODEL", "")
         base = os.environ.get(f"BMC_AGENT_LLM_{ru}_BASE_URL", "")

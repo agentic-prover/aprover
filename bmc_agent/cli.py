@@ -15,6 +15,8 @@ import re
 import sys
 from pathlib import Path
 
+from bmc_agent.agent_registry import AGENT_ROLES
+
 
 def _resolve_domain_knowledge(raw: str) -> str:
     """Return domain knowledge text: read from file if raw is a valid existing path, else use as-is."""
@@ -104,11 +106,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     # Claude Code agent (strongest, code-reading). The conventional core (CBMC,
     # deterministic harness translation, compile+run dynamic validation) has no
     # LLM and is unaffected.
-    ALL_AGENT_ROLES = (
-        "spec_gen", "refinement", "realism", "triage",
-        "disagreement_diagnose", "feedback_distill", "classifier",
-        "dynamic_repro", "dynval_triage", "cbmc_driver", "harness_gen",
-    )
+    ALL_AGENT_ROLES = AGENT_ROLES
     # Which roles are FORCED onto the Claude Code CLI:
     #   --agentic-claude-code -> EVERY agent role (the "all claude-code" preset)
     #   --agentic-refine      -> refinement only (LEAN; rest stay on the default
