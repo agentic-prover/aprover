@@ -10,6 +10,33 @@ Under `--agentic`, make the realism verdict **bite on dynamic findings too** (re
 Trustworthiness comes from giving an UNREALISTIC verdict a **harness-refinement** outcome (C)
 and tool-grounding the judgment. **Shadow-first; no default/immunity flip without explicit user OK.**
 
+## DESIGN PRINCIPLE (governs realism, reachability, soundness gate, reproducer)
+**Determinism and soundness are orthogonal.** Soundness requires only one thing: *no real bug is
+ever silently removed.* Therefore:
+
+> **An agentic (non-deterministic) judgment may RE-TIER a finding's confidence, but only a
+> deterministic/formal check or a self-verifying witness may DELETE a sound finding.**
+
+Why: a finding's exclusion is a NARROWING — it can only hide bugs, never invent them, so the two
+error directions are asymmetric. A wrong "safe to exclude" hides a real bug (soundness loss); a wrong
+"keep it" only adds noise (precision loss). So we arrange every removal to rest on a justification
+that cannot wrongly hide a bug:
+- **DETERMINISTIC_VERIFIER** — a formal check proves the exclusion (CBMC re-verify under a clause that
+  is ALSO shown to hold at every call site by a deterministic caller-check). May DELETE.
+- **SELF_VERIFYING_WITNESS** — the artifact is its own proof: a reproducer that compiles and reproduces
+  the exact fault, or a materialized-harness re-run. Generation may be non-deterministic; the compile+run
+  is deterministic ground truth, so it cannot falsely accept (given the public-API + matching-property
+  guards). May DELETE.
+- **AGENTIC_JUDGMENT** — any LLM verdict (realism, reachability, spec-soundness). May only RE-TIER
+  (lower confidence). MUST NEVER be the sole justification for removing a finding.
+
+Enforced in code by `bmc_agent/soundness_policy.py` (tested). Current compliance: realism UNREALISTIC ->
+downgrade to `unlikely` (re-tier, OK); harness-refiner live -> downgrade (re-tier, OK); reproducer ->
+self-verifying (OK). **Open item:** the spec-refiner soundness gate currently rests on a non-deterministic
+`SoundnessAgent` judgment whose approved clause can EXCLUDE a CEx (effective delete) without a
+deterministic caller-check -> must become RE-TIER unless the clause is deterministically caller-checked.
+(Wiring tracked as a Phase-2 task; validate against the regression oracle.)
+
 ## Scope facts (verified in code)
 - Config is `--agentic` (`cli.py:158-196`): realism **ON but lightweight** (single LLM call,
   non-tool). Tool-use (`--enable-realism-tools`) and a Claude-Code realism backend are **opt-in**,
