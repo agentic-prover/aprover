@@ -1,7 +1,8 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T17:05:00Z iter-note: DISCOVERY -- the live VibeOS source has PATCHED both
-gate-anchor bugs. Built a buggy fixture to test the gate properly; fixture + 3 live runs in flight.
+Heartbeat: 2026-06-14T17:20:00Z iter-note: all 4 runs healthy + progressing (net churning through its
+many packet handlers; fixture young at ~2min/708ln; vfs 4494ln; irq 2830ln). None DONE yet. Harness
+waiter b8u6ytv6q armed to re-invoke me at all-4-DONE. No code change this iter. Nothing stuck.
 
 *** KEY DISCOVERY THIS ITER (changes how the gate must be validated) ***
 The live VibeOS tree (examples/vibeos/repo/kernel, gitignored working copy) has been PATCHED for BOTH
