@@ -1,38 +1,36 @@
 STATE: RUNNING
-Phase: 1 (harness-refinement outcome C) — IMPLEMENTED + WIRED; shadow runs in flight.
+Phase: 1 GATE (shadow in flight) + Phase 2 (spec-refiner soundness-policy wiring landed)
+Heartbeat: 2026-06-14T10:47:43Z iter-note: Phase-1 irq/vfs shadow runs in flight (~11min, still in
+CBMC flag-selection; HARNESS-REFINE adjudication lines come at the report stage). Used the wait window
+to land the Phase-2 spec-refiner soundness-policy wiring (committed+pushed b666eed). Polling shadow.
 
-## Done so far (committed + pushed to main)
-- Phase 0: baseline regression oracle frozen (`baseline_oracle.md`).
-- Phase 1 core: `bmc_agent/harness_refiner.py` (detect undefined boot-init-trusted externs in a
-  sibling .c, materialize pointer = calloc(1,sizeof)); 11 unit tests green.
-- Phase 1 wiring: `DynamicValidator.refine_and_revalidate()` + `pipeline._maybe_refine_harness()`
-  behind `--harness-refinement {off,shadow,live}` (DEFAULT OFF = zero change to existing runs).
-  Synthetic GCC end-to-end tests prove soundness: NULL deref cleaned after materialization
-  (artifact), real OOB still faults on the 1-element buffer (kept). 14 refiner tests +
-  355 touched-area tests green.
+Done since last STATUS:
+- Verified Phase-1 wiring + tests green: harness_refiner (32 tests) + soundness_policy all pass.
+- Re-launched irq/vfs Phase-1 shadow (detached, via tools/reshadow_phase1.sh) with the NULL-defined-
+  trusted-global detection fix (c31b3b5). PIDs 1914837 (irq) / 1914836 (vfs), started 14:35 local.
+  Output: findings/phase1_refine_shadow_irq2 + _vfs2. Both still running (~11 min, CBMC stage).
+- Phase 2 (STATUS next-item #2) LANDED + pushed (b666eed): wired soundness_policy into the
+  spec-refiner accept path. New opt-in flag --enforce-spec-refiner-retier (default OFF, does NOT
+  change --agentic default). When ON, an accepted clause that is not deterministically caller-checked
+  RE-TIERS the finding ('unlikely' lead) instead of marking it VERIFIED CLEAN (an unsound DELETE on an
+  agentic-only SoundnessAgent judgment), and the clause is not persisted. Strictly more conservative:
+  can only RESCUE a wrongly-deleted bug, never demote a real one -> safety gate preserved by construction.
+  _clause_deterministically_caller_checked() returns False today = the explicit DETERMINISTIC_VERIFIER
+  hook for future sound deletion. New test tests/test_spec_refiner_retier.py; 81 tests pass.
 
-## In flight (background, --harness-refinement shadow, log-only)
-- irq: findings/phase1_refine_shadow_irq/run.log  (pid 1311000)
-- vfs: findings/phase1_refine_shadow_vfs/run.log  (pid 1312004)  ← SAFETY-critical (vfs_open_handle)
-Both started ~23:21Z, expected ~20-30 min. Watching for `HARNESS-REFINE [shadow]` lines and the
-final verdict table.
+Gate results so far:
+- Phase 1 shadow: PENDING (no HARNESS-REFINE lines yet; runs in CBMC flag-selection stage).
+- Phase 2 unit gate: GREEN (81 passed across refiner/soundness suite; CLI parses new flag; config
+  default False + env loader True verified).
 
-## Phase 1 GATE being checked (soundly scoped)
-- vfs_open_handle: refined harness must STILL crash (strcpy overflow survives materialization) =>
-  KEPT confirmed. (Absolute safety anchor.)
-- No real bug WOULD-demoted anywhere (every HARNESS-REFINE "ARTIFACT" must be a genuine FP).
-- irq: observe which NULL-default FPs the refiner WOULD demote (the fb_width-loop FPs are expected
-  to be KEPT by the refiner — they re-crash; their numeric demotion is Phase 2a's job, per the
-  recorded attribution finding).
+Next (in order):
+1. POLL findings/phase1_refine_shadow_{irq2,vfs2}/run.log for HARNESS-REFINE adjudication lines.
+   GATE to verify: wsod_* NULL-deref -> ARTIFACT (would-demote); vfs_open_handle strcpy -> REAL/kept;
+   0 reals lost. Adjudicate when both runs finish (DONE markers in run.log).
+2. Validate the Phase-2 retier change against the regression oracle (cross-codebase 0/7, VibeOS 0/8)
+   with --enforce-spec-refiner-retier ON: confirm 0 real-bug demotions (RETIER cannot demote by
+   construction; verify empirically + measure FP-precision delta).
+3. Phase 2-REPRO: tool-using ReproducerAgent (do before the 2a harness_kind decision).
 
-## Next
-1. Read both shadow results; confirm gate. If any real bug would-demote → that's a bug in the
-   refiner → fix before proceeding (safety gate).
-2. Phase 2a: in `_maybe_ground_immunity`, `evidence_strong = formal_reach` (drop the
-   `harness_kind=="system_entry"` axis = blocker-flaw #1). Shadow-test on irq.
-
-## Decisions for the user
-- None blocking. Stop at Phase 4 for explicit OK.
-- FYI: pre-existing stale test `test_agentic_keeps_classifier_off_realism_triage_keeps_dynval`
-  asserts realism OFF under --agentic; realism is now ON (matches the plan's scope facts). Not
-  touched by me; flagging in case you want it updated.
+Constraints unchanged: shadow-only; STOP at Phase 4 (needs user OK); never flip --agentic default /
+delete confirmed_dynamic immunity. Safety gate absolute: any real-bug demotion -> revert + stop line.
