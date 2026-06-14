@@ -144,9 +144,14 @@ Run uniform on irq + vfs + one OSS target with Phases 1+2 in place; the dynamic 
 - GATE: `wsod_*` -> unlikely/dropped; `vfs_open_handle`/`ip_handle`/OSS OOB-readers -> confirmed/likely;
   ZERO real-bug demotions across all five codebases.
 
-### Phase 4 — Decision point (EXPLICIT USER OK REQUIRED)
-Only if 1-3 gates green: (a) make enforcement default under `--agentic`, and/or (b) delete the
-`confirmed_dynamic` immunity special-case. Do NOT flip either autonomously.
+### Phase 4 — Decision point (USER-AUTHORIZED 2026-06-14)
+- **(b) DONE / LANDED (cf569da).** The `confirmed_dynamic` immunity is removed by default:
+  `config.enforce_realism_on_dynamic=True` makes an UNREALISTIC realism verdict RE-TIER a
+  confirmed_dynamic finding to 'unlikely' (a re-tier, never a delete -> still reported -> sound per
+  soundness_policy). Escape hatch: `--keep-dynamic-immunity` / `BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC=false`.
+- **(a) `--agentic` default-on DONE (74dad0b).**
+- REMAINING: validate the safety gate end-to-end with enforcement ON (Phase 3 sweep) and AUTO-REVERT the
+  default if any real bug is demoted. This is the autonomous loop's current job.
 
 > **Note (2026-06-14):** Separately from this plan, the user explicitly authorized making the
 > **`--agentic` stack itself the default** (`cli.py` `--agentic` is now `BooleanOptionalAction`,
