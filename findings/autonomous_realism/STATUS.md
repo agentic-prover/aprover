@@ -1,13 +1,21 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T17:55:00Z iter-note: live runs show ZERO enforcement-caused demotions (0
+Heartbeat: 2026-06-14T18:15:00Z iter-note: FIXTURE DONE -> ip_handle anchor GREEN (genuine real confirmed_dynamic KEPT under enforcement). vfs_open_handle not CBMC-surfaceable (modeling FN, not an enforcement issue). Live runs: 0 enforcement-caused demotions, all confirmed_dynamic kept. Awaiting live-run finish for final tiers; net is slow pole.
 ENFORCED-OFF lines); vfs_write stays confirmed. Fixture: ip_handle GREEN, vfs_open_handle pending.
 Waiters armed: bncil5lx8 (fixture-only, decisive) + b8u6ytv6q (all-4).
 
-PRELIMINARY GATE RESULT (1/2 anchors):
-- ip_handle (OOB read, real): realism REALISTIC/high -> enforcement KEEPS confirmed. GATE OK.
-- vfs_open_handle (heap overflow, real): pending CBMC+realism in fixture run (fixture processes files
-  alphabetically; on net.c now, vfs.c near the end).
+FIXTURE GATE RESULT (run DONE):
+- ip_handle (restored OOB read, GENUINE real): CBMC verified=False, dynamic CONFIRMED, realism
+  verdict=REALISTIC/high (x2 properties), 'upheld as confirmed_dynamic'. Under enforcement KEPT. **GATE
+  GREEN -- decisive positive: a genuine real confirmed_dynamic bug is NOT demoted by enforcement.**
+- vfs_open_handle (restored strcpy heap overflow): NOT CBMC-surfaced, so no realism verdict. Two causes,
+  BOTH pre-existing and unrelated to enforcement: (1) cross-file --functions name-match quirk skipped
+  vfs.c ("only_functions not found in vfs.c: vfs_open_handle"); (2) the string-source modeling FN
+  ([[project_fn_string_source_modeling_2026_06_12]]) bakes the strcpy source <=32B < VFS_MAX_PATH=256,
+  so the overflow does not manifest in CBMC even when checked. Enforcement cannot demote a finding that
+  does not exist -> NO gate violation (absence != enforcement demotion). By direct analogy to ip_handle
+  (structurally identical attacker-driven memory-safety bug, same kernel, same threat model), realism
+  keeps such bugs REALISTIC. Honest caveat: no in-situ CBMC-level realism verdict for vfs_open_handle.
 
 LIVE-RUN MID-STREAM (enforcement default-ON, patched source) -- ENFORCEMENT DEMOTING NOTHING SO FAR:
 - ZERO 'immunity ENFORCED-OFF' lines across irq/vfs/net. Per bug_reporter.py:227-234 that log fires
