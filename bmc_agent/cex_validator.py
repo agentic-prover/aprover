@@ -2005,8 +2005,12 @@ class CExValidator:
         except Exception as exc:
             logger.debug("ReproducerAgent raised for '%s': %s", fut, exc)
             return None
-        src = (res.output or "") if res is not None else ""
-        if not src or "UNREPRODUCIBLE" in src:
+        src = res.output if res is not None else None
+        # Require a real source string: a healthy agent always returns one, but
+        # guard against a non-str (a misbehaving agent / test double) so it can
+        # never leak downstream into the dynamic-validation include sanitizer —
+        # fall through to the one-shot generator instead.
+        if not isinstance(src, str) or not src or "UNREPRODUCIBLE" in src:
             return None
         logger.info("ReproducerAgent produced a system-entry reproducer for '%s'", fut)
         return src

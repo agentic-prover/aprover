@@ -733,7 +733,7 @@ class DynamicValidator:
             )
             return None
 
-        if outcome is None or not outcome.output:
+        if outcome is None or not isinstance(outcome.output, str) or not outcome.output:
             return None
         new_src = outcome.output
         if new_src == result.harness_source:
@@ -863,8 +863,12 @@ class DynamicValidator:
                     func_name, result.error,
                 )
             return None
-        out = result.output or ""
-        if not out or "UNREPRODUCIBLE" in out:
+        out = result.output
+        # Require a real source string before handing it back to the compile
+        # loop. A healthy agent always returns str; guard against a non-str
+        # (misbehaving agent / test double) so it can't reach the include
+        # sanitizer — fall through to the unit harness instead.
+        if not isinstance(out, str) or not out or "UNREPRODUCIBLE" in out:
             return None
         return out
 
