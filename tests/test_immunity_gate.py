@@ -69,3 +69,43 @@ def test_static_helper_with_realistic_verdict_unaffected():
                                    key_concern="k", llm_confidence="high")
     assert _confidence("wsod_draw_text", is_static=True, system_entry_reached=False,
                        realism=realistic) == "confirmed_dynamic"
+
+
+# --- Phase 4b: enforce_realism_on_dynamic removes the immunity entirely ---
+
+def _confidence_enforced(name, is_static, system_entry_reached, realism=_UNREALISTIC):
+    r = BugReporter(store=None)
+    r.enforce_realism_on_dynamic = True
+    return r.create_report(
+        _validation(name, system_entry_reached), _func(name, is_static),
+        realism_check=realism).confidence
+
+
+def test_enforced_public_fn_unrealistic_is_retiered():
+    # With enforcement ON, the confirmed_dynamic immunity is gone: an UNREALISTIC
+    # verdict re-tiers even a public fn to 'unlikely' (re-tier, not delete -- the
+    # finding is still reported).
+    assert _confidence_enforced("vfs_open_handle", is_static=False,
+                                system_entry_reached=False) == "unlikely"
+
+
+def test_enforced_keeps_real_bug_when_realism_realistic():
+    # Enforcement only lets the verdict THROUGH; a REALISTIC verdict keeps the bug.
+    realistic = RealismCheckResult(verdict=RealismVerdict.REALISTIC, reasoning="r",
+                                   key_concern="k", llm_confidence="high")
+    assert _confidence_enforced("vfs_open_handle", is_static=False,
+                                system_entry_reached=False,
+                                realism=realistic) == "confirmed_dynamic"
+
+
+def test_enforced_is_a_retier_not_a_delete():
+    # The downgraded finding is STILL produced (a report object exists) -- the
+    # soundness-policy invariant that an agentic judgment may re-tier but never
+    # delete a finding.
+    r = BugReporter(store=None)
+    r.enforce_realism_on_dynamic = True
+    rep = r.create_report(_validation("vfs_open_handle", False),
+                          _func("vfs_open_handle", False), realism_check=_UNREALISTIC)
+    assert rep is not None
+    assert rep.confidence == "unlikely"
+    assert rep.function_name == "vfs_open_handle"

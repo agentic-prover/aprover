@@ -370,6 +370,11 @@ class AMCPipeline:
             harness_gen=self.harness_gen,
         )
         self.reporter = BugReporter(self.store)
+        # Realism-enforcement Phase 4b: remove the confirmed_dynamic immunity so the
+        # realism verdict bites on dynamic findings too (re-tier to 'unlikely').
+        self.reporter.enforce_realism_on_dynamic = bool(
+            getattr(config, "enforce_realism_on_dynamic", True)
+        )
         self.realism_checker = RealismChecker(config, self.llm)
         self.propagation_events: list[PropagationEvent] = []
 

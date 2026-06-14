@@ -122,6 +122,12 @@ class BugReporter:
         self._reports: list[BugReport] = []
         self._latent_reports: list[BugReport] = []
         self._unresolved: list = []
+        # Realism-enforcement Phase 4b: when True, the confirmed_dynamic immunity
+        # is removed so an UNREALISTIC realism verdict RE-TIERS dynamic findings to
+        # 'unlikely' too (a re-tier, never a delete). Set from config by the
+        # pipeline. Default False here so direct construction (e.g. tests) keeps the
+        # historical immune behaviour unless explicitly enabled.
+        self.enforce_realism_on_dynamic: bool = False
 
     def create_report(
         self,
@@ -213,6 +219,19 @@ class BugReporter:
             and not _harness_assertion
             and not _internal_unreachable
         )
+        # Phase 4b enforcement (user-authorized 2026-06-14): remove the
+        # confirmed_dynamic immunity entirely so the realism verdict bites on ALL
+        # static AND dynamic artifacts. The downgrade is to 'unlikely' (a RE-TIER,
+        # not a delete -- the finding stays reported), so this stays sound under
+        # soundness_policy: an agentic judgment may re-tier but never delete.
+        if self.enforce_realism_on_dynamic and _immune:
+            _immune = False
+            if realism_check is not None and realism_check.verdict == RealismVerdict.UNREALISTIC:
+                logger.info(
+                    "confirmed_dynamic immunity ENFORCED-OFF for '%s': realism "
+                    "verdict now applies to dynamic findings (re-tier, not delete)",
+                    func.name,
+                )
         if _internal_unreachable and confidence == "confirmed_dynamic" and not _harness_assertion:
             logger.info(
                 "confirmed_dynamic immunity SUSPENDED for '%s': static internal "

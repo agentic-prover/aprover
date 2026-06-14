@@ -570,6 +570,14 @@ class Config:
 
     # Realism checker settings (Phase 3 post-validation LLM audit)
     enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
+    # Enforce the realism verdict on DYNAMIC findings too (realism-enforcement plan,
+    # Phase 4b). When True (default, user-authorized 2026-06-14), the
+    # confirmed_dynamic immunity is removed: a UNREALISTIC realism verdict RE-TIERS a
+    # confirmed_dynamic finding to 'unlikely' (a re-tier, never a delete -- the
+    # finding stays in the report, so this is sound per soundness_policy: an agentic
+    # judgment may only re-tier). Set False (--keep-dynamic-immunity) to restore the
+    # old behaviour where confirmed_dynamic crashes are immune to realism downgrade.
+    enforce_realism_on_dynamic: bool = True
 
     # Counterexample classifier (Phase 3 S1 = CExValidator): the LLM+conventional
     # step that labels each CBMC cex REAL_BUG / SPURIOUS / UNRESOLVED (and drives
@@ -885,6 +893,7 @@ class Config:
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
             enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
+            enforce_realism_on_dynamic=(os.environ.get("BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC") or "true").lower() == "true",
             enable_classifier=(os.environ.get("BMC_AGENT_ENABLE_CLASSIFIER") or "true").lower() == "true",
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",

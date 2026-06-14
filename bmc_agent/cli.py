@@ -1051,6 +1051,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     # --no-<flag> escape hatches (override the default-on AI layers).
     if getattr(args, "no_realism_check", False):
         config.enable_realism_check = False
+    if getattr(args, "keep_dynamic_immunity", False):
+        # Restore the old confirmed_dynamic immunity (realism does NOT downgrade
+        # dynamic findings). Default is enforcement-on (immunity removed).
+        config.enforce_realism_on_dynamic = False  # type: ignore[attr-defined]
     if getattr(args, "no_dynamic_validation", False):
         config.enable_dynamic_validation = False
     if getattr(args, "no_flag_selection", False):
@@ -1387,6 +1391,10 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     # --no-<flag> escape hatches (override the default-on AI layers).
     if getattr(args, "no_realism_check", False):
         config.enable_realism_check = False
+    if getattr(args, "keep_dynamic_immunity", False):
+        # Restore the old confirmed_dynamic immunity (realism does NOT downgrade
+        # dynamic findings). Default is enforcement-on (immunity removed).
+        config.enforce_realism_on_dynamic = False  # type: ignore[attr-defined]
     if getattr(args, "no_dynamic_validation", False):
         config.enable_dynamic_validation = False
     if getattr(args, "no_flag_selection", False):
@@ -2328,6 +2336,11 @@ def build_parser() -> argparse.ArgumentParser:
     # ablations, parity comparisons, or zero-LLM-cost smoke runs.
     ver.add_argument("--no-realism-check", action="store_true", default=False,
                      help="Disable the LLM realism filter on CExs.")
+    ver.add_argument("--keep-dynamic-immunity", action="store_true", default=False,
+                     dest="keep_dynamic_immunity",
+                     help="Restore the old confirmed_dynamic immunity (realism does NOT "
+                          "downgrade dynamic findings). Default: enforcement on (immunity "
+                          "removed) -- realism re-tiers UNREALISTIC dynamic findings to 'unlikely'.")
     ver.add_argument("--no-dynamic-validation", action="store_true", default=False,
                      help="Disable building + running the GCC reproducer.")
     ver.add_argument("--no-flag-selection", action="store_true", default=False,
@@ -2597,6 +2610,10 @@ def build_parser() -> argparse.ArgumentParser:
     # --no-<flag> escape hatches (mirror --verify).
     vd.add_argument("--no-realism-check", action="store_true", default=False,
                     help="Disable the LLM realism filter on CExs.")
+    vd.add_argument("--keep-dynamic-immunity", action="store_true", default=False,
+                    dest="keep_dynamic_immunity",
+                    help="Restore the old confirmed_dynamic immunity (realism does NOT "
+                         "downgrade dynamic findings). Default: enforcement on (immunity removed).")
     vd.add_argument("--no-dynamic-validation", action="store_true", default=False,
                     help="Disable building + running the GCC reproducer.")
     vd.add_argument("--no-flag-selection", action="store_true", default=False,
