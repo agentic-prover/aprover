@@ -531,6 +531,17 @@ class Config:
 
     # Flag selector settings (Phase 1.5: per-function CBMC flag selection)
     enable_flag_selection: bool = True       # LLM selects per-function CBMC flags (e.g. --unsigned-overflow-check)
+    # Merged tool-using BMC-config agent (Phase 2b): replaces the single-call
+    # FlagSelector + InliningAdvisor with ONE agent that reads real callee bodies
+    # / array sizes / loop bounds via tools before choosing flags+unwind+inline.
+    # OPT-IN (default off); env BMC_AGENT_ENABLE_BMC_CONFIG_AGENT. When on it
+    # supersedes both single-call configurators.
+    enable_bmc_config_agent: bool = False
+    # Tool-using reproducer agent (Phase 2-REPRO): replaces the one-shot
+    # system-entry reproducer with an agent that loops compile->run->read-error->
+    # fix (reads headers/structs/call-chain). OPT-IN (default off); env
+    # BMC_AGENT_ENABLE_REPRODUCER_AGENT. Falls back to the one-shot path on failure.
+    enable_reproducer_agent: bool = False
 
     # Agentic harness gen: replace the deterministic HarnessGenerator with an
     # LLM tool-using call (bmc_agent/agentic_harness_gen.py). The LLM reads
@@ -898,6 +909,8 @@ class Config:
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
+            enable_bmc_config_agent=(os.environ.get("BMC_AGENT_ENABLE_BMC_CONFIG_AGENT") or "false").lower() == "true",
+            enable_reproducer_agent=(os.environ.get("BMC_AGENT_ENABLE_REPRODUCER_AGENT") or "false").lower() == "true",
             enable_soundness_gate=os.environ.get("BMC_AGENT_ENABLE_SOUNDNESS_GATE", "false").lower()
             in ("1", "true", "yes"),
             enforce_spec_refiner_retier=os.environ.get("BMC_AGENT_ENFORCE_SPEC_REFINER_RETIER", "false").lower()
