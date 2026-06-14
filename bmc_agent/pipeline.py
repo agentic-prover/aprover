@@ -2873,6 +2873,21 @@ class AMCPipeline:
     # Realism-feedback-driven in-sweep spec refinement
     # ------------------------------------------------------------------
 
+    def _clause_deterministically_caller_checked(self, func, proposal) -> bool:
+        """Whether the refiner's clause is guaranteed at EVERY call site by a
+        DETERMINISTIC check (not an agentic judgment).
+
+        This is the ``soundness_policy.DETERMINISTIC_VERIFIER`` hook: only when a
+        formal/deterministic caller-check proves the clause holds at all call
+        sites may the refiner DELETE the finding (mark it VERIFIED CLEAN). The
+        current pipeline has no such deterministic caller-check — the only
+        caller-validity signal is the agentic ``SoundnessAgent`` (AGENTIC_JUDGMENT,
+        which may only RE-TIER). So this returns ``False`` today; it is the single
+        place a future deterministic caller-validity check would plug in to
+        re-enable sound deletion. Kept as a method (not an inline ``False``) so the
+        soundness contract is auditable and the extension point is explicit."""
+        return False
+
     def _persist_gated_refiner_clause(self, func, proposal, validation) -> None:
         """Persist an ACCEPTED, soundness-gated spec_refiner clause to the
         learned-constraints store as a FUNCTION_SPEC remediation, so it takes
@@ -3067,11 +3082,39 @@ class AMCPipeline:
             )
             return validation, realism
 
-        # ACCEPTED: the soundness-gated clause excluded the targeted CEx.
-        # Persist it so it takes effect IN-SWEEP for this function's other
-        # CExs / re-verifications (harness Step 1.7) and across sweeps —
-        # otherwise this highest-quality (targeted + caller-soundness-gated)
-        # clause is used for one re-verify and then discarded, leaving only
+        # ACCEPTED: the clause excluded the targeted CEx. CBMC has PROVEN the
+        # exclusion, but NOT that the clause holds at every call site — that
+        # validity rests only on the (agentic) SoundnessAgent above. Per the
+        # soundness policy (an agentic judgment may RE-TIER but never DELETE a
+        # sound finding), marking this finding VERIFIED CLEAN is an unsound DELETE
+        # unless the clause is ALSO deterministically caller-checked.
+        from bmc_agent import soundness_policy as _sp
+        caller_checked = self._clause_deterministically_caller_checked(func, proposal)
+        action = _sp.refiner_exclusion_action(
+            cbmc_excluded_cex=True,
+            clause_caller_checked_deterministically=caller_checked,
+        )
+        if (action is _sp.Action.RETIER
+                and getattr(self.config, "enforce_spec_refiner_retier", False)):
+            # RE-TIER, do not DELETE: keep the counterexample as a downgraded
+            # ('unlikely') lead via the original UNREALISTIC realism verdict, and
+            # do NOT persist the clause (persisting would exclude the CEx on the
+            # next sweep — an effective delete). Strictly more conservative: this
+            # can only RESCUE a wrongly-deleted bug, never demote a real one.
+            logger.info(
+                "spec_refiner (%s): clause '%s' excludes CEx %s but is not "
+                "deterministically caller-checked (rests on agentic soundness "
+                "judgment) — RE-TIER not DELETE per soundness policy; keeping the "
+                "counterexample as an 'unlikely' lead.",
+                func.name, proposal.added_clause, targeted_prop,
+            )
+            return validation, realism
+
+        # DELETE permitted (clause is deterministically caller-checked, or the
+        # retier policy is off): persist it so it takes effect IN-SWEEP for this
+        # function's other CExs / re-verifications (harness Step 1.7) and across
+        # sweeps — otherwise this highest-quality (targeted + caller-soundness-
+        # gated) clause is used for one re-verify and then discarded, leaving only
         # the UNGATED general-distill clause from _feedback_iterate.
         self._persist_gated_refiner_clause(func, proposal, validation)
 

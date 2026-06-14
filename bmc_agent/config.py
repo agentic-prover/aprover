@@ -334,6 +334,22 @@ class Config:
     # ``BMC_AGENT_ENABLE_SOUNDNESS_GATE``.
     enable_soundness_gate: bool = False
 
+    # Soundness-policy compliance for the spec-refiner accept path
+    # (realism-enforcement plan, Phase 2). When the refiner's clause excludes the
+    # targeted counterexample, CBMC proves the EXCLUSION but NOT that the clause
+    # holds at every call site — that validity rests only on the (agentic)
+    # SoundnessAgent. Per the design principle (``soundness_policy.py``: an agentic
+    # judgment may RE-TIER but never DELETE a sound finding), marking such a
+    # finding VERIFIED CLEAN is an unsound DELETE. With this flag ON, an
+    # accept whose clause is NOT deterministically caller-checked RE-TIERS the
+    # finding (keeps the counterexample as a downgraded/``unlikely`` lead) instead
+    # of deleting it, and does not persist the clause. Strictly more conservative
+    # for soundness (it can only RESCUE a wrongly-deleted bug, never demote a real
+    # one). Opt-in; default OFF so the ``--agentic`` default is unchanged.
+    # Toggle: ``--enforce-spec-refiner-retier`` /
+    # ``BMC_AGENT_ENFORCE_SPEC_REFINER_RETIER``.
+    enforce_spec_refiner_retier: bool = False
+
     # LLM-driven inline-vs-stub advisor for callees that the mechanical
     # rule (file-local static, ≤30 LoC, no loops/alloc/recursion) marked
     # STUB. The advisor reconsiders them and may PROMOTE some to inline
@@ -874,6 +890,8 @@ class Config:
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
             enable_soundness_gate=os.environ.get("BMC_AGENT_ENABLE_SOUNDNESS_GATE", "false").lower()
+            in ("1", "true", "yes"),
+            enforce_spec_refiner_retier=os.environ.get("BMC_AGENT_ENFORCE_SPEC_REFINER_RETIER", "false").lower()
             in ("1", "true", "yes"),
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
             enable_agentic_harness_repair=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR", "false").lower()

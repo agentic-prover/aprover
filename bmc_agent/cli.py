@@ -1038,6 +1038,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_soundness_gate", False):
         config.enable_soundness_gate = True
+    if getattr(args, "enforce_spec_refiner_retier", False):
+        config.enforce_spec_refiner_retier = True
     if getattr(args, "enable_agentic_harness_repair", False):
         config.enable_agentic_harness_repair = True
     if getattr(args, "enable_classifier", False):
@@ -1370,6 +1372,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_soundness_gate", False):
         config.enable_soundness_gate = True
+    if getattr(args, "enforce_spec_refiner_retier", False):
+        config.enforce_spec_refiner_retier = True
     if getattr(args, "enable_agentic_harness_repair", False):
         config.enable_agentic_harness_repair = True
     if getattr(args, "enable_classifier", False):
@@ -2362,6 +2366,13 @@ def build_parser() -> argparse.ArgumentParser:
                           "refiner clause that isn't caller-guaranteed (keeps the CEx "
                           "as a real-bug lead instead of assuming it away). Best with "
                           "--specs-via-claude-code --claude-code-agentic.")
+    ver.add_argument("--enforce-spec-refiner-retier", action="store_true", default=False,
+                     dest="enforce_spec_refiner_retier",
+                     help="Soundness-policy compliance (realism-enforcement Phase 2): when the "
+                          "spec-refiner's clause excludes the CEx but is NOT deterministically "
+                          "caller-checked (the SoundnessAgent is agentic), RE-TIER the finding to "
+                          "'unlikely' instead of deleting it (marking VERIFIED CLEAN). Strictly "
+                          "more conservative for soundness; default off (does not change --agentic).")
     ver.add_argument("--enable-agentic-harness-repair", action="store_true", default=False,
                      dest="enable_agentic_harness_repair",
                      help="On a CBMC harness BUILD error (conversion / incomplete-type / "
@@ -2606,6 +2617,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "refiner clause that isn't caller-guaranteed (keeps the CEx "
                          "as a real-bug lead instead of assuming it away). Best with "
                          "--specs-via-claude-code --claude-code-agentic.")
+    vd.add_argument("--enforce-spec-refiner-retier", action="store_true", default=False,
+                    dest="enforce_spec_refiner_retier",
+                    help="Soundness-policy compliance (realism-enforcement Phase 2): RE-TIER "
+                         "a spec-refiner accept to 'unlikely' instead of deleting it when the "
+                         "clause is not deterministically caller-checked. Default off.")
     vd.add_argument("--enable-agentic-harness-repair", action="store_true", default=False,
                     dest="enable_agentic_harness_repair",
                     help="On a CBMC harness BUILD error (conversion / incomplete-type / "
