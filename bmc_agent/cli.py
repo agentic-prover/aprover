@@ -1970,21 +1970,23 @@ def build_parser() -> argparse.ArgumentParser:
     def _add_provider_args(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--agentic",
-            action="store_true",
-            default=False,
+            action=argparse.BooleanOptionalAction,
+            default=True,
             dest="agentic",
             help=(
-                "GENERAL agentic stack: make EVERY LLM agent role (spec-gen, "
+                "GENERAL agentic stack (DEFAULT ON; pass --no-agentic for the plain "
+                "non-agentic core). Makes EVERY LLM agent role (spec-gen, "
                 "refinement, realism, triage, disagreement, …) an investigating "
-                "agent and enable the soundness gate + agentic harness-repair + "
-                "split spec-gen + component gating — but DO NOT force any backend. "
+                "agent and enables the soundness gate + agentic harness-repair + "
+                "split spec-gen + component gating — but DOES NOT force any backend. "
                 "Each role is instantiated by whatever its routing says: a per-role "
                 "BMC_AGENT_LLM_<ROLE>_PROVIDER/_MODEL override, else the global "
                 "default (--provider / BMC_AGENT_LLM_DEFAULT_*), else the "
                 "auto-resolved provider — so roles may be a mix of API / "
                 "claude-code / codex / etc. The conventional core (CBMC, harness "
                 "translation, compile+run) is unaffected. Use --agentic-claude-code "
-                "to force every role onto the local Claude Code CLI."
+                "to force every role onto the local Claude Code CLI; --no-agentic to "
+                "disable the whole agentic stack."
             ),
         )
         p.add_argument(

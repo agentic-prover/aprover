@@ -834,8 +834,11 @@ def test_specs_via_claude_code_routes_only_spec_roles(monkeypatch):
     from bmc_agent.cli import build_parser, _apply_provider_args, _apply_model_arg
     from bmc_agent.config import Config
 
+    # --no-agentic isolates the role-routing under test from the now-default
+    # agentic stack (which would otherwise turn on claude_code read-only tools).
     args = build_parser().parse_args(
-        ["verify", "--source", "x.c", "--driver", "d", "--specs-via-claude-code"]
+        ["verify", "--source", "x.c", "--driver", "d",
+         "--no-agentic", "--specs-via-claude-code"]
     )
     cfg = Config.from_env()
     _apply_model_arg(cfg, args)
@@ -868,7 +871,12 @@ def test_no_provider_flags_is_noop(monkeypatch):
     from bmc_agent.cli import build_parser, _apply_provider_args
     from bmc_agent.config import Config
 
-    args = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d"])
+    # --no-agentic: with the agentic stack on by default a bare invocation would
+    # turn on claude_code read-only tools; --no-agentic restores the plain core so
+    # this stays a true provider-routing no-op.
+    args = build_parser().parse_args(
+        ["verify", "--source", "x.c", "--driver", "d", "--no-agentic"]
+    )
     cfg = Config.from_env()
     before_provider, before_overrides = cfg.llm_provider, dict(cfg.llm_role_overrides)
     _apply_provider_args(cfg, args)

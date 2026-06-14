@@ -18,15 +18,40 @@ def _cfg(argv):
 _BASE = ["verify-dir", "--source-dir", "x", "--driver", "d"]
 
 
-def test_agentic_keeps_classifier_off_realism_triage_keeps_dynval():
+def test_agentic_keeps_classifier_on_lightweight_realism_on_triage_off_dynval_on():
     # The classifier drives the spurious->refinement->soundness-gate loop, so it
-    # MUST stay on under --agentic. Only realism (exploitability downgrade) and
-    # triage are off by default. Dynamic reproducer on.
+    # MUST stay on under --agentic. A LIGHTWEIGHT (single-call, non-tool) realism
+    # check is also on by default; the expensive realism TOOLS are opt-in. Triage
+    # stays off. Dynamic reproducer on.
     _, c = _cfg(_BASE + ["--agentic"])
     assert c.enable_classifier is True           # refinement + soundness gate stay live
-    assert c.enable_realism_check is False
+    assert c.enable_realism_check is True         # lightweight realism on by default
+    assert c.enable_realism_tools is False        # expensive tool-use realism is opt-in
     assert c.enable_phase_3e_triage is False
     assert c.enable_dynamic_validation is True   # reproducer on
+
+
+def test_agentic_is_default_on():
+    # --agentic is now the DEFAULT: a bare invocation already runs the agentic
+    # stack (soundness gate + agentic harness-repair + split spec-gen), with no
+    # backend forced.
+    a, c = _cfg(_BASE)
+    assert a.agentic is True
+    assert c.enable_soundness_gate is True
+    assert c.enable_agentic_harness_repair is True
+    assert c.enable_split_spec_gen is True
+
+
+def test_no_agentic_disables_the_stack():
+    # --no-agentic is the escape hatch to the plain non-agentic core: the agentic
+    # gating block does not run, so the agentic-only layers (soundness gate,
+    # agentic harness-repair, split spec-gen) are off. The conventional core
+    # (CBMC config, dynamic validation) keeps its own Config defaults.
+    a, c = _cfg(_BASE + ["--no-agentic"])
+    assert a.agentic is False
+    assert c.enable_soundness_gate is False
+    assert c.enable_agentic_harness_repair is False
+    assert c.enable_split_spec_gen is False
 
 
 def test_per_component_optin_wins_under_agentic():

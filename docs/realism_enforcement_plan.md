@@ -125,6 +125,13 @@ Run uniform on irq + vfs + one OSS target with Phases 1+2 in place; the dynamic 
 Only if 1-3 gates green: (a) make enforcement default under `--agentic`, and/or (b) delete the
 `confirmed_dynamic` immunity special-case. Do NOT flip either autonomously.
 
+> **Note (2026-06-14):** Separately from this plan, the user explicitly authorized making the
+> **`--agentic` stack itself the default** (`cli.py` `--agentic` is now `BooleanOptionalAction`,
+> `default=True`; `--no-agentic` is the escape hatch to the plain core). This is the agentic-PRESET
+> default, NOT the realism-enforcement flip: the `confirmed_dynamic` immunity is UNTOUCHED, so (a)/(b)
+> above still require their own sign-off. Net effect: the realism-enforcement gates are now the
+> default-path quality story rather than an opt-in one.
+
 ## Carried gates (every phase)
 cross-codebase 0/7 demoted · VibeOS 0/8 reals demoted · `vfs_open_handle`/`ip_handle` always kept.
 Any real-bug demotion stops the line.
@@ -139,5 +146,6 @@ Any real-bug demotion stops the line.
 - `bmc_agent/cli.py` — `--agentic` block (158-196), `--reachability-grounding {off,shadow,live,uniform}`.
 
 ## Standing constraints
-Do NOT make uniform/enforcement default, do NOT delete immunity, do NOT change `--agentic` default
-without explicit user OK. Commit messages end with the Co-Authored-By trailer.
+Do NOT make uniform/enforcement default, do NOT delete immunity without explicit user OK.
+(The `--agentic` stack being default-ON was explicitly user-authorized 2026-06-14 and is now done;
+the immunity/enforcement flip remains gated.) Commit messages end with the Co-Authored-By trailer.
