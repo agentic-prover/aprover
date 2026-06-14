@@ -1,6 +1,6 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T17:40:00Z iter-note: FIXTURE GATE -- first anchor GREEN. The buggy-fixture run
+Heartbeat: 2026-06-14T17:55:00Z iter-note: live runs show ZERO enforcement-caused demotions (0 ENFORCED-OFF lines); vfs_write stays confirmed. Fixture: ip_handle GREEN, vfs_open_handle pending. Waiters armed.
 reached ip_handle: CBMC verified=False (OOB found), dynamic-validation real-bug candidate, and
 **Realism verdict=REALISTIC confidence=high** => under enforcement ip_handle is KEPT (not demoted).
 Awaiting vfs_open_handle (fixture now processing vfs.c). Waiters: bncil5lx8 (fixture-only, decisive)
@@ -8,7 +8,20 @@ Awaiting vfs_open_handle (fixture now processing vfs.c). Waiters: bncil5lx8 (fix
 
 PRELIMINARY GATE RESULT (1/2 anchors):
 - ip_handle (OOB read, real): realism REALISTIC/high -> enforcement KEEPS confirmed. GATE OK.
-- vfs_open_handle (heap overflow, real): pending CBMC+realism in fixture run.
+- vfs_open_handle (heap overflow, real): pending CBMC+realism in fixture run (fixture processes files
+  alphabetically; on net.c now, vfs.c near the end).
+
+LIVE-RUN MID-STREAM (enforcement default-ON, patched source) -- ENFORCEMENT DEMOTING NOTHING SO FAR:
+- ZERO 'immunity ENFORCED-OFF' lines across irq/vfs/net. Per bug_reporter.py:227-234 that log fires
+  whenever enforcement would re-tier a confirmed_dynamic finding; its absence => NO confirmed_dynamic
+  finding got an UNREALISTIC verdict => enforcement has demoted NOTHING. The wsod_* -> unlikely demotions
+  are the reachability-tier / always-on realism path, NOT the Phase-4b immunity removal.
+- vfs_write (baseline KEEP real): one property UNREALISTIC+demoted but others REALISTIC and the function
+  is 'upheld as confirmed_dynamic' -> stays confirmed at function level. No real demoted.
+- NOTE on baseline: the frozen baseline (2026-06-13) was created with realism LLM RATE-LIMITED (400s),
+  so its tiers reflect realism-OFF behavior; now-working realism legitimately demotes some per-property
+  FPs. The revert trigger is specifically enforcement-CAUSED demotion of a genuine real (tracked via
+  'immunity ENFORCED-OFF' + final function tier), which is 0 so far.
 
 *** KEY DISCOVERY THIS ITER (changes how the gate must be validated) ***
 The live VibeOS tree (examples/vibeos/repo/kernel, gitignored working copy) has been PATCHED for BOTH
