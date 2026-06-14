@@ -34,8 +34,11 @@ per-role models keep working.
 from __future__ import annotations
 
 import abc
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
+
+from bmc_agent import agent_telemetry as _telemetry
 
 if TYPE_CHECKING:
     from bmc_agent.config import Config
@@ -149,43 +152,56 @@ class BaseAgent(abc.ABC, Generic[T]):
         a quick success/failure boolean, or inspect ``output`` / ``error``
         directly.
         """
+        # Telemetry: time the whole invocation and record outcome in finally,
+        # so every return path (build_prompt error, success, exhausted retries)
+        # is captured. Recording is best-effort and never raises.
+        _t0 = time.perf_counter()
+        result: "AgentResult[T]" = AgentResult(error="run: did not complete")
         try:
-            prompt = self.build_prompt(**kwargs)
-        except Exception as exc:
-            return AgentResult(error=f"build_prompt: {exc!r}")
-
-        last_err = ""
-        last_raw = ""
-        for attempt in range(self.max_retries + 1):
-            # Tool-using subclasses stash the ToolUseResult on the
-            # instance before _call_llm returns; non-tool agents leave
-            # it None.
-            self._last_tool_use_result = None
-            raw, llm_err = self._call_llm(prompt)
-            if llm_err is not None:
-                last_err = llm_err
-                last_raw = raw or ""
-                continue
-
             try:
-                output = self.parse(raw or "")
+                prompt = self.build_prompt(**kwargs)
             except Exception as exc:
-                last_err = f"parse: {exc!r}"
-                last_raw = raw or ""
-                continue
-            if output is None:
-                last_err = "parse: returned None (unparseable response)"
-                last_raw = raw or ""
-                continue
-            tu = getattr(self, "_last_tool_use_result", None)
-            return AgentResult(
-                output=output,
-                raw_response=raw or "",
-                tool_calls_made=(tu.tool_calls_made if tu else 0),
-                tool_use_result=tu,
-            )
+                result = AgentResult(error=f"build_prompt: {exc!r}")
+                return result
 
-        return AgentResult(raw_response=last_raw, error=last_err)
+            last_err = ""
+            last_raw = ""
+            for attempt in range(self.max_retries + 1):
+                # Tool-using subclasses stash the ToolUseResult on the
+                # instance before _call_llm returns; non-tool agents leave
+                # it None.
+                self._last_tool_use_result = None
+                raw, llm_err = self._call_llm(prompt)
+                if llm_err is not None:
+                    last_err = llm_err
+                    last_raw = raw or ""
+                    continue
+
+                try:
+                    output = self.parse(raw or "")
+                except Exception as exc:
+                    last_err = f"parse: {exc!r}"
+                    last_raw = raw or ""
+                    continue
+                if output is None:
+                    last_err = "parse: returned None (unparseable response)"
+                    last_raw = raw or ""
+                    continue
+                tu = getattr(self, "_last_tool_use_result", None)
+                result = AgentResult(
+                    output=output,
+                    raw_response=raw or "",
+                    tool_calls_made=(tu.tool_calls_made if tu else 0),
+                    tool_use_result=tu,
+                )
+                return result
+
+            result = AgentResult(raw_response=last_raw, error=last_err)
+            return result
+        finally:
+            _telemetry.record_agent_result(
+                self.name, time.perf_counter() - _t0, result,
+            )
 
     # ------------------------------------------------------------------
     # Hook for subclass overrides (tool-use, retry, critique, …)

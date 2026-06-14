@@ -568,16 +568,31 @@ class AgenticHarnessGen(BaseAgent[str]):
         include_dirs: Optional[list[str]] = None,
         defines: Optional[list[str]] = None,
     ) -> HarnessResult:
-        self._tools_invoked = []
-        self._include_dirs = list(include_dirs or [])
-        self._defines = list(defines or [])
+        import time as _time
+        _t0 = _time.perf_counter()
+        _res = None
+        try:
+            self._tools_invoked = []
+            self._include_dirs = list(include_dirs or [])
+            self._defines = list(defines or [])
 
-        initial_ctx = self._build_initial_context(func, all_funcs_global)
-        messages: list[dict] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": initial_ctx},
-        ]
-        return self._run_emit_loop(messages)
+            initial_ctx = self._build_initial_context(func, all_funcs_global)
+            messages: list[dict] = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": initial_ctx},
+            ]
+            _res = self._run_emit_loop(messages)
+            return _res
+        finally:
+            try:
+                from bmc_agent import agent_telemetry as _tel
+                _tel.record(
+                    "harness_gen", _time.perf_counter() - _t0,
+                    outcome=("ok" if _res is not None else "error"),
+                    tool_calls=len(getattr(self, "_tools_invoked", []) or []),
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Claude Code agent path (stronger harness; reads real code itself)

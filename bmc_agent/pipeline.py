@@ -417,7 +417,25 @@ class AMCPipeline:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(
+    def run(self, source_file, driver_name, *args, **kwargs):
+        """Public entry: reset per-run agent telemetry, run the pipeline, then
+        dump a telemetry summary (JSON + log table). Logic lives in _run_impl."""
+        from bmc_agent import agent_telemetry as _tel
+        import os as _os
+        _tel.reset()
+        try:
+            return self._run_impl(source_file, driver_name, *args, **kwargs)
+        finally:
+            try:
+                _tel.log_summary()
+                _tel.dump(_os.path.join(
+                    getattr(self.config, "artifact_dir", ".") or ".",
+                    "agent_telemetry.json",
+                ))
+            except Exception:
+                pass
+
+    def _run_impl(
         self,
         source_file: str,
         driver_name: str,

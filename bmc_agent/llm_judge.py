@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from bmc_agent.logger import get_logger
 import re
@@ -348,33 +349,46 @@ class JudgeAgent:
     # ------------------------------------------------------------------
 
     def judge(self, func: FunctionInfo, counterexample, cbmc_result=None) -> JudgeResult:
-        self._full_trace = list(getattr(counterexample, "trace", None) or [])
-        self._tools_invoked = []
+        _t0 = time.perf_counter()
+        result = None
+        try:
+            self._full_trace = list(getattr(counterexample, "trace", None) or [])
+            self._tools_invoked = []
 
-        initial_ctx = self._build_initial_context(func, counterexample, cbmc_result)
-        messages: list[dict] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": initial_ctx},
-        ]
+            initial_ctx = self._build_initial_context(func, counterexample, cbmc_result)
+            messages: list[dict] = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": initial_ctx},
+            ]
 
-        result = self._run_tool_loop(
-            messages,
-            max_turns=MAX_TURNS,
-            label="primary",
-        )
+            result = self._run_tool_loop(
+                messages,
+                max_turns=MAX_TURNS,
+                label="primary",
+            )
 
-        # After UNREALISTIC, hunt for OTHER bugs in this function or nearby
-        # — the LLM inspects all the information it has plus anything it
-        # fetches via tools, and emits structured bug hypotheses. Each one
-        # is then a candidate for downstream validation (another CBMC run
-        # against a tightened harness, or a focused judge call per hypothesis).
-        if result.verdict == "unrealistic":
-            adjacent = self._search_adjacent_bugs(messages, primary_result=result)
-            if adjacent:
-                primary = result.adjacent_bugs if isinstance(result.adjacent_bugs, list) else []
-                extra = adjacent if isinstance(adjacent, list) else []
-                result.adjacent_bugs = primary + extra
-        return result
+            # After UNREALISTIC, hunt for OTHER bugs in this function or nearby
+            # — the LLM inspects all the information it has plus anything it
+            # fetches via tools, and emits structured bug hypotheses. Each one
+            # is then a candidate for downstream validation (another CBMC run
+            # against a tightened harness, or a focused judge call per hypothesis).
+            if result.verdict == "unrealistic":
+                adjacent = self._search_adjacent_bugs(messages, primary_result=result)
+                if adjacent:
+                    primary = result.adjacent_bugs if isinstance(result.adjacent_bugs, list) else []
+                    extra = adjacent if isinstance(adjacent, list) else []
+                    result.adjacent_bugs = primary + extra
+            return result
+        finally:
+            try:
+                from bmc_agent import agent_telemetry as _tel
+                _tel.record(
+                    "classifier", time.perf_counter() - _t0,
+                    outcome=("ok" if result is not None else "error"),
+                    tool_calls=len(getattr(self, "_tools_invoked", []) or []),
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Inner tool-use loop (reused for primary verdict + adjacent search)
