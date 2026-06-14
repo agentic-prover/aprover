@@ -1,7 +1,8 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T16:25:00Z iter-note: launched 3 fresh enforcement shadow runs (vfs/irq/net)
-detached with the CURRENT default config (enforce_realism_on_dynamic=True). Polling their logs next iters.
+Heartbeat: 2026-06-14T16:30:00Z iter-note: 3 enforcement runs healthy + deep into agentic stages
+(vfs at CBMC verdict; irq in refinement; net in tool-loop). Started a background waiter (re-invokes me
+on DONE). Committed launcher + adjudicate_enforce.sh. Will adjudicate the gate when the waiter fires.
 
 WHY FRESH RUNS: the existing phase2_retier_{irq,vfs} runs are STALE for this gate -- they ran at
 14:59/15:10 local, BEFORE the immunity removal landed (cf569da @ 20:16 local), so immunity was still ON
