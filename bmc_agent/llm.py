@@ -186,6 +186,24 @@ class LLMClient:
     def __init__(self, config: Config) -> None:
         self.config = config
         self._client: Optional[object] = None  # lazy init
+        # Cumulative token usage across every completion on this client.
+        # The agent layer (agents/base.py) snapshots usage_total_tokens per
+        # invocation to attribute tokens (-> dollars/finding) into agent_telemetry.
+        self.usage_total_prompt_tokens = 0
+        self.usage_total_completion_tokens = 0
+        self.usage_total_tokens = 0
+
+    def _add_usage(self, prompt_tokens, completion_tokens) -> None:
+        """Accumulate one completion token usage. Best-effort: non-numeric
+        or None values count as 0 and never raise."""
+        try:
+            p = int(prompt_tokens or 0)
+            c = int(completion_tokens or 0)
+        except (TypeError, ValueError):
+            return
+        self.usage_total_prompt_tokens += p
+        self.usage_total_completion_tokens += c
+        self.usage_total_tokens += p + c
 
     # ------------------------------------------------------------------
     # Public interface
@@ -396,6 +414,10 @@ class LLMClient:
                 getattr(usage, "cache_creation_input_tokens", 0),
                 getattr(usage, "cache_read_input_tokens", 0),
             )
+            self._add_usage(
+                getattr(usage, "input_tokens", 0),
+                getattr(usage, "output_tokens", 0),
+            )
         # Skip thinking blocks (only present when api_kwargs enabled extended thinking).
         text = ""
         for block in response.content:
@@ -493,6 +515,7 @@ class LLMClient:
                 usage.get("completion_tokens"),
                 usage.get("total_tokens"),
             )
+            self._add_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
         choices = data.get("choices") or []
         if not choices:
@@ -920,6 +943,7 @@ def _add_complete_with_tools_to_llm():
                     usage.get("completion_tokens"),
                     usage.get("total_tokens"),
                 )
+                self._add_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
             choices = data.get("choices") or []
             if not choices:

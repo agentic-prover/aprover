@@ -127,12 +127,15 @@ def record(
         pass
 
 
-def record_agent_result(role: str, duration_s: float, result: Any) -> None:
+def record_agent_result(
+    role: str, duration_s: float, result: Any, *, tokens: int = 0
+) -> None:
     """Derive outcome/iterations/tool_calls from a BaseAgent ``AgentResult``
     and record it. ``result`` may be None (agent raised). Never raises."""
+    _tok = max(0, int(tokens or 0))
     try:
         if result is None:
-            record(role, duration_s, outcome="error", error="run raised")
+            record(role, duration_s, outcome="error", error="run raised", tokens=_tok)
             return
         err = getattr(result, "error", None)
         if err:
@@ -147,7 +150,7 @@ def record_agent_result(role: str, duration_s: float, result: Any) -> None:
         record(
             role, duration_s,
             outcome=outcome, iterations=iterations or 1,
-            tool_calls=tool_calls, error=err or "",
+            tool_calls=tool_calls, tokens=_tok, error=err or "",
         )
     except Exception:  # pragma: no cover - defensive
         pass

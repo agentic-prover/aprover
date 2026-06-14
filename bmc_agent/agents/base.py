@@ -40,6 +40,15 @@ from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
 from bmc_agent import agent_telemetry as _telemetry
 
+
+def _usage_snapshot(llm: "Any") -> int:
+    """Cumulative tokens on an LLMClient, or 0 when unavailable.
+
+    Guards against test doubles (e.g. MagicMock) where the attribute would
+    resolve to a non-int and otherwise poison the telemetry delta math."""
+    v = getattr(llm, "usage_total_tokens", 0)
+    return v if isinstance(v, int) else 0
+
 if TYPE_CHECKING:
     from bmc_agent.config import Config
     from bmc_agent.llm import LLMClient
@@ -156,6 +165,7 @@ class BaseAgent(abc.ABC, Generic[T]):
         # so every return path (build_prompt error, success, exhausted retries)
         # is captured. Recording is best-effort and never raises.
         _t0 = time.perf_counter()
+        _tok0 = _usage_snapshot(self.llm)
         result: "AgentResult[T]" = AgentResult(error="run: did not complete")
         try:
             try:
@@ -201,6 +211,7 @@ class BaseAgent(abc.ABC, Generic[T]):
         finally:
             _telemetry.record_agent_result(
                 self.name, time.perf_counter() - _t0, result,
+                tokens=_usage_snapshot(self.llm) - _tok0,
             )
 
     # ------------------------------------------------------------------
