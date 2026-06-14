@@ -1,6 +1,6 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T18:15:00Z iter-note: FIXTURE DONE -> ip_handle anchor GREEN (genuine real
+Heartbeat: 2026-06-14T18:35:00Z iter-note: launched cross-codebase enforcement run (libredwg reedsolomon.c, --agentic, enforcement ON) -> findings/phase3_enforce_libredwg. 3 live VibeOS runs still finishing (net slow pole, on tcp_*). Waiter bz1mgtba1 armed for all 4. Gate so far: ip_handle GREEN, 0 enforcement-caused demotions.
 confirmed_dynamic KEPT under enforcement). vfs_open_handle not CBMC-surfaceable (modeling FN, not an
 enforcement issue). Live runs: 0 enforcement-caused demotions. Awaiting live-run finish for final
 tiers; net is the slow pole. Waiter b8u6ytv6q armed (all-4 DONE).
