@@ -81,6 +81,7 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
         "dynamic_repro",
         "dynval_triage",
         "cbmc_driver",
+        "harness_gen",
     ):
         ru = role.upper()
         model = os.environ.get(f"BMC_AGENT_LLM_{ru}_MODEL", "")
@@ -563,9 +564,11 @@ class Config:
     # compile-checks with retry), then re-run CBMC. Distinct from
     # ``enable_agentic_harness`` (which uses the agentic builder as the PRIMARY
     # generator): this only fires on a build error, so there is no soundness
-    # downside — a non-building harness yields no verdict either way. Opt-in:
-    # ``--enable-agentic-harness-repair`` / ``BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR``.
-    enable_agentic_harness_repair: bool = False
+    # downside — a non-building harness yields no verdict either way. Default ON
+    # (it is a fail-safe fallback that only fires on a build error and keeps the
+    # original verdict on any failure); disable with --no-agentic-harness-repair
+    # / BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR=false.
+    enable_agentic_harness_repair: bool = True
 
     # Split spec generation (pass 1 / pass 2). When True, V2 keeps its
     # caller-grounded POSTCONDITION + callee stubs (pass 1, where reading real
@@ -923,7 +926,7 @@ class Config:
             enforce_spec_refiner_retier=os.environ.get("BMC_AGENT_ENFORCE_SPEC_REFINER_RETIER", "false").lower()
             in ("1", "true", "yes"),
             enable_agentic_harness=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS", "false").lower() == "true",
-            enable_agentic_harness_repair=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR", "false").lower()
+            enable_agentic_harness_repair=os.environ.get("BMC_AGENT_ENABLE_AGENTIC_HARNESS_REPAIR", "true").lower()
             in ("1", "true", "yes"),
             enable_split_spec_gen=os.environ.get("BMC_AGENT_SPEC_GEN_SPLIT", "false").lower()
             in ("1", "true", "yes"),

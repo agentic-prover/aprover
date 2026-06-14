@@ -51,8 +51,14 @@ def test_repair_flag_on_verify_and_verify_dir(monkeypatch):
         ["verify-dir", "--source-dir", "x", "--driver", "d", "--enable-agentic-harness-repair"])
     assert a2.enable_agentic_harness_repair is True
     a3 = build_parser().parse_args(["verify", "--source", "x.c", "--driver", "d"])
-    assert a3.enable_agentic_harness_repair is False
-    assert Config().enable_agentic_harness_repair is False
+    assert a3.enable_agentic_harness_repair is False  # the --enable arg flag itself
+    assert a3.no_agentic_harness_repair is False
+    # Default ON now: the fail-safe build-error fallback runs unless disabled.
+    assert Config().enable_agentic_harness_repair is True
+    # --no-agentic-harness-repair is the off-switch.
+    a4 = build_parser().parse_args(
+        ["verify", "--source", "x.c", "--driver", "d", "--no-agentic-harness-repair"])
+    assert a4.no_agentic_harness_repair is True
 
 
 def test_repair_flag_env(monkeypatch):

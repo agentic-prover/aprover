@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from bmc_agent.agents.base import BaseAgent
 from bmc_agent.config import Config
 from bmc_agent.llm import LLMClient
 from bmc_agent.llm_tool_loop import LLMToolClient
@@ -500,8 +501,19 @@ class HarnessResult:
         }
 
 
-class AgenticHarnessGen:
-    """LLM-driven harness builder. One tool-using call per function."""
+class AgenticHarnessGen(BaseAgent[str]):
+    """LLM-driven harness builder. One tool-using call per function.
+
+    A ``BaseAgent`` so it routes its LLM via its own ``harness_gen`` role
+    (instead of borrowing ``realism``) and is part of the agent inventory /
+    ``--agentic`` routing. It is driven by ``generate()`` /
+    ``generate_via_claude_code()`` — a multi-tool ``LLMToolClient`` loop — not
+    ``BaseAgent.run()``, so ``build_prompt`` / ``parse`` are intentionally
+    unused (they raise; harness extraction lives in ``_extract_c_code``).
+    """
+
+    name = "harness_gen"
+    system_prompt = SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -509,7 +521,9 @@ class AgenticHarnessGen:
         parsed_files: dict[str, ParsedCFile],
         corpus_root: Path,
     ) -> None:
-        self.config = config
+        # This agent drives its own multi-tool LLMToolClient loop (self._llm),
+        # not BaseAgent's single-shot self.llm — pass llm=None to the base.
+        super().__init__(config, llm=None)  # type: ignore[arg-type]
         self.parsed_files = dict(parsed_files)
         self.corpus_root = Path(corpus_root)
 
@@ -522,7 +536,21 @@ class AgenticHarnessGen:
                 self._struct_to_file.setdefault(name, path)
 
         self._llm = LLMToolClient(
-            config=config, tools_schema=_TOOLS, role="realism",
+            config=config, tools_schema=_TOOLS, role=self.name,
+        )
+
+    # BaseAgent abstract contract — this agent is driven via generate(), not
+    # run(); these guard against accidental run() use.
+    def build_prompt(self, **kwargs: Any) -> str:
+        raise NotImplementedError(
+            "AgenticHarnessGen is driven via generate()/generate_via_claude_code(), "
+            "not BaseAgent.run()."
+        )
+
+    def parse(self, response: str) -> "Optional[str]":
+        raise NotImplementedError(
+            "AgenticHarnessGen is driven via generate(); harness extraction is "
+            "_extract_c_code()."
         )
         self._tools_invoked: list[tuple[str, str]] = []
         # Per-call CBMC compile-check context (include_dirs, defines)

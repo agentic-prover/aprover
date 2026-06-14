@@ -45,12 +45,14 @@ def test_agentic_is_default_on():
 def test_no_agentic_disables_the_stack():
     # --no-agentic is the escape hatch to the plain non-agentic core: the agentic
     # gating block does not run, so the agentic-only layers (soundness gate,
-    # agentic harness-repair, split spec-gen) are off. The conventional core
-    # (CBMC config, dynamic validation) keeps its own Config defaults.
+    # split spec-gen) are off. The conventional core (CBMC config, dynamic
+    # validation) keeps its own Config defaults. NOTE: agentic harness-repair is
+    # now a default-ON fail-safe fallback (decoupled from --agentic), so it stays
+    # on here; --no-agentic-harness-repair is its dedicated off-switch.
     a, c = _cfg(_BASE + ["--no-agentic"])
     assert a.agentic is False
     assert c.enable_soundness_gate is False
-    assert c.enable_agentic_harness_repair is False
+    assert c.enable_agentic_harness_repair is True
     assert c.enable_split_spec_gen is False
 
 

@@ -107,7 +107,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     ALL_AGENT_ROLES = (
         "spec_gen", "refinement", "realism", "triage",
         "disagreement_diagnose", "feedback_distill", "classifier",
-        "dynamic_repro", "dynval_triage", "cbmc_driver",
+        "dynamic_repro", "dynval_triage", "cbmc_driver", "harness_gen",
     )
     # Which roles are FORCED onto the Claude Code CLI:
     #   --agentic-claude-code -> EVERY agent role (the "all claude-code" preset)
@@ -1048,6 +1048,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enforce_spec_refiner_retier = True
     if getattr(args, "enable_agentic_harness_repair", False):
         config.enable_agentic_harness_repair = True
+    if getattr(args, "no_agentic_harness_repair", False):
+        config.enable_agentic_harness_repair = False
     if getattr(args, "enable_classifier", False):
         config.enable_classifier = True
     if getattr(args, "enable_triage", False):
@@ -1397,6 +1399,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enforce_spec_refiner_retier = True
     if getattr(args, "enable_agentic_harness_repair", False):
         config.enable_agentic_harness_repair = True
+    if getattr(args, "no_agentic_harness_repair", False):
+        config.enable_agentic_harness_repair = False
     if getattr(args, "enable_classifier", False):
         config.enable_classifier = True
     if getattr(args, "enable_triage", False):
@@ -2437,7 +2441,10 @@ def build_parser() -> argparse.ArgumentParser:
                      dest="enable_agentic_harness_repair",
                      help="On a CBMC harness BUILD error (conversion / incomplete-type / "
                           "parse), rebuild the harness with the agentic code-reading "
-                          "generator and re-run. Fires only on build errors.")
+                          "generator and re-run. Fires only on build errors. Default ON.")
+    ver.add_argument("--no-agentic-harness-repair", action="store_true", default=False,
+                     dest="no_agentic_harness_repair",
+                     help="Disable the agentic harness-repair fallback.")
     ver.add_argument("--enable-classifier", action="store_true", default=False,
                      dest="enable_classifier",
                      help="Force the CEx classifier ON (REAL/SPURIOUS/UNRESOLVED + the "
@@ -2705,7 +2712,10 @@ def build_parser() -> argparse.ArgumentParser:
                     dest="enable_agentic_harness_repair",
                     help="On a CBMC harness BUILD error (conversion / incomplete-type / "
                          "parse), rebuild the harness with the agentic code-reading "
-                         "generator and re-run. Fires only on build errors.")
+                         "generator and re-run. Fires only on build errors. Default ON.")
+    vd.add_argument("--no-agentic-harness-repair", action="store_true", default=False,
+                    dest="no_agentic_harness_repair",
+                    help="Disable the agentic harness-repair fallback.")
     vd.add_argument("--enable-classifier", action="store_true", default=False,
                     dest="enable_classifier",
                     help="Force the CEx classifier ON (REAL/SPURIOUS/UNRESOLVED + the "
