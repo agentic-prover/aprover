@@ -203,13 +203,19 @@ def _print_ai_layers(config) -> None:
     individually disable. Visible at startup so users can audit what
     a given run actually exercises.
     """
+    # When the merged BMC-config agent is on it SUPERSEDES the single-call flag
+    # selector + inlining advisor (pipeline.py / harness_generator.py if/elif), so
+    # display those two as dormant to avoid implying both run.
+    bmc_cfg = getattr(config, "enable_bmc_config_agent", False)
     layers = [
         ("realism check",        getattr(config, "enable_realism_check", False)),
         ("dynamic validation",   getattr(config, "enable_dynamic_validation", False)),
-        ("flag selection",       getattr(config, "enable_flag_selection", False)),
+        ("bmc-config agent (merged flags+inline)", bmc_cfg),
+        ("flag selection",       getattr(config, "enable_flag_selection", False) and not bmc_cfg),
         ("feedback loop",        getattr(config, "enable_feedback_loop", False)),
         ("spec refiner",         getattr(config, "enable_spec_refiner", False)),
-        ("inlining advisor",     getattr(config, "enable_inlining_advisor", False)),
+        ("inlining advisor",     getattr(config, "enable_inlining_advisor", False) and not bmc_cfg),
+        ("reproducer agent",     getattr(config, "enable_reproducer_agent", False)),
         ("spec-gen tools (v2.2)",getattr(config, "enable_spec_gen_tools", False)),
         ("realism tools",        getattr(config, "enable_realism_tools", False)),
     ]
@@ -1071,11 +1077,15 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_inlining_advisor = False
     if getattr(args, "enable_bmc_config_agent", False):
         # Merged tool-using BMC-config agent (Phase 2b): supersedes the single-call
-        # FlagSelector + InliningAdvisor. Opt-in; default off.
+        # FlagSelector + InliningAdvisor. Default ON; --no-bmc-config-agent to disable.
         config.enable_bmc_config_agent = True  # type: ignore[attr-defined]
+    if getattr(args, "no_bmc_config_agent", False):
+        config.enable_bmc_config_agent = False  # type: ignore[attr-defined]
     if getattr(args, "enable_reproducer_agent", False):
-        # Tool-using reproducer agent (Phase 2-REPRO). Opt-in; default off.
+        # Tool-using reproducer agent (Phase 2-REPRO). Default ON; --no-reproducer-agent to disable.
         config.enable_reproducer_agent = True  # type: ignore[attr-defined]
+    if getattr(args, "no_reproducer_agent", False):
+        config.enable_reproducer_agent = False  # type: ignore[attr-defined]
     if getattr(args, "no_spec_gen_tools", False):
         config.enable_spec_gen_tools = False
     if getattr(args, "no_realism_tools", False):
@@ -1418,11 +1428,15 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_inlining_advisor = False
     if getattr(args, "enable_bmc_config_agent", False):
         # Merged tool-using BMC-config agent (Phase 2b): supersedes the single-call
-        # FlagSelector + InliningAdvisor. Opt-in; default off.
+        # FlagSelector + InliningAdvisor. Default ON; --no-bmc-config-agent to disable.
         config.enable_bmc_config_agent = True  # type: ignore[attr-defined]
+    if getattr(args, "no_bmc_config_agent", False):
+        config.enable_bmc_config_agent = False  # type: ignore[attr-defined]
     if getattr(args, "enable_reproducer_agent", False):
-        # Tool-using reproducer agent (Phase 2-REPRO). Opt-in; default off.
+        # Tool-using reproducer agent (Phase 2-REPRO). Default ON; --no-reproducer-agent to disable.
         config.enable_reproducer_agent = True  # type: ignore[attr-defined]
+    if getattr(args, "no_reproducer_agent", False):
+        config.enable_reproducer_agent = False  # type: ignore[attr-defined]
     if getattr(args, "no_spec_gen_tools", False):
         config.enable_spec_gen_tools = False
     if getattr(args, "no_realism_tools", False):
@@ -2359,12 +2373,19 @@ def build_parser() -> argparse.ArgumentParser:
                      dest="enable_bmc_config_agent",
                      help="Use the merged tool-using BMC-config agent (reads real callee "
                           "bodies / array sizes / loop bounds) instead of the single-call "
-                          "FlagSelector + InliningAdvisor. OPT-IN; default off.")
+                          "FlagSelector + InliningAdvisor. Default ON.")
+    ver.add_argument("--no-bmc-config-agent", action="store_true", default=False,
+                     dest="no_bmc_config_agent",
+                     help="Disable the merged BMC-config agent; fall back to the single-call "
+                          "FlagSelector + InliningAdvisor.")
     ver.add_argument("--enable-reproducer-agent", action="store_true", default=False,
                      dest="enable_reproducer_agent",
                      help="Use the tool-using reproducer agent (loops compile->run->fix) "
                           "for the system-entry reproducer instead of the one-shot call. "
-                          "OPT-IN; default off.")
+                          "Default ON.")
+    ver.add_argument("--no-reproducer-agent", action="store_true", default=False,
+                     dest="no_reproducer_agent",
+                     help="Disable the reproducer agent; use the one-shot reproducer call.")
     ver.add_argument("--no-dynamic-validation", action="store_true", default=False,
                      help="Disable building + running the GCC reproducer.")
     ver.add_argument("--no-flag-selection", action="store_true", default=False,
@@ -2641,11 +2662,18 @@ def build_parser() -> argparse.ArgumentParser:
     vd.add_argument("--enable-bmc-config-agent", action="store_true", default=False,
                     dest="enable_bmc_config_agent",
                     help="Use the merged tool-using BMC-config agent instead of the "
-                         "single-call FlagSelector + InliningAdvisor. OPT-IN; default off.")
+                         "single-call FlagSelector + InliningAdvisor. Default ON.")
+    vd.add_argument("--no-bmc-config-agent", action="store_true", default=False,
+                    dest="no_bmc_config_agent",
+                    help="Disable the merged BMC-config agent; fall back to the single-call "
+                         "FlagSelector + InliningAdvisor.")
     vd.add_argument("--enable-reproducer-agent", action="store_true", default=False,
                     dest="enable_reproducer_agent",
                     help="Use the tool-using reproducer agent (compile->run->fix loop) "
-                         "for the system-entry reproducer. OPT-IN; default off.")
+                         "for the system-entry reproducer. Default ON.")
+    vd.add_argument("--no-reproducer-agent", action="store_true", default=False,
+                    dest="no_reproducer_agent",
+                    help="Disable the reproducer agent; use the one-shot reproducer call.")
     vd.add_argument("--no-dynamic-validation", action="store_true", default=False,
                     help="Disable building + running the GCC reproducer.")
     vd.add_argument("--no-flag-selection", action="store_true", default=False,
