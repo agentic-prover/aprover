@@ -1,42 +1,43 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T16:42:00Z iter-note: runs still in CBMC stage, all alive + progressing
-(vfs 554 ln churning past vfs_set_cwd unwind-34; irq 2275 ln; net 1284 ln w/ 4 CBMC children).
-Background waiter (pid alive) will re-invoke me at DONE. No code change this iter; verified the
-cross-codebase invariant is MECHANISM-level: Phase-4b's _immune flips ONLY for confirmed_dynamic, so
-any confirmed_system_entry real keeps its baseline (0/7) outcome by construction. Cross-codebase
-empirical run queued behind VibeOS (avoid CBMC contention).
+Heartbeat: 2026-06-14T17:05:00Z iter-note: DISCOVERY -- the live VibeOS source has PATCHED both
+gate-anchor bugs. Built a buggy fixture to test the gate properly; fixture + 3 live runs in flight.
 
-WHY FRESH RUNS: the existing phase2_retier_{irq,vfs} runs are STALE for this gate -- they ran at
-14:59/15:10 local, BEFORE the immunity removal landed (cf569da @ 20:16 local), so immunity was still ON
-and the real bugs were shielded by immunity rather than by a REALISTIC verdict. Worse, retier_vfs did
-not even surface vfs_open_handle (LLM-transient-error nondeterminism in spec-gen). So they cannot
-adjudicate the enforcement gate. Re-running fresh with enforcement default-ON.
+*** KEY DISCOVERY THIS ITER (changes how the gate must be validated) ***
+The live VibeOS tree (examples/vibeos/repo/kernel, gitignored working copy) has been PATCHED for BOTH
+safety-gate anchor bugs:
+- vfs_open_handle: the unbounded `strcpy(path_copy, temp->data)` is now a bounded manual loop
+  (vfs.c:293-303, mtime Jun 12). Heap overflow FIXED in source.
+- ip_handle: net.c:342 now has `if (total_len < ihl || total_len > len) return;`. OOB read FIXED.
+Consequence: the live tree can NO LONGER prove the gate "a REAL confirmed_dynamic bug is not demoted",
+because neither anchor is a live bug. Absence-because-fixed is sound (not an enforcement demotion), but
+it is not a gate test. ALSO: the Jun-13 baseline realism "upheld" verdicts are UNUSABLE -- that run's
+realism LLM 400'd out (workspace API limit, "regain access 2026-07-01"), so "upheld" meant
+realism-errored-and-kept, not a real REALISTIC verdict. Today's native-Anthropic LLM works (smoke OK).
 
-DONE THIS ITER:
-- Verified config: enforce_realism_on_dynamic default=True (config.py:580); escape hatch
-  --keep-dynamic-immunity / BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC=false (cli.py:1054/1394).
-- Read the enforcement code path (bug_reporter.py:217-257): enforcement re-tiers a confirmed_dynamic
-  finding to 'unlikely' ONLY when realism verdict==UNREALISTIC with llm_confidence in (high,medium).
-  => GATE is GREEN iff realism judges each real bug REALISTIC (or not high/med-UNREALISTIC).
-- LLM smoke test PASS (native Anthropic claude-sonnet-4-6, ~1.7s).
-- Unit tests PASS: tests/test_immunity_gate.py 7/7, incl. Phase-4b cases:
-  * test_enforced_public_fn_unrealistic_is_retiered (vfs_open_handle + UNREALISTIC -> unlikely)
-  * test_enforced_keeps_real_bug_when_realism_realistic (REALISTIC -> stays confirmed_dynamic)
-  * test_enforced_is_a_retier_not_a_delete (re-tier, still reported -> sound).
-- Wrote tools/validate_phase3_enforce.sh (sources ~/.config/bmc-agent/env; runs vfs/irq/net at default).
+VALIDATION REDESIGN (the sound way to test the gate):
+- Built /tmp/p3_buggy/kernel = copy of the kernel with BOTH bugs restored verbatim
+  (unbounded strcpy in vfs_open_handle; total_len guard removed in ip_handle).
+- Running: verify-dir --functions vfs_open_handle,ip_handle --agentic (enforcement default-ON) +
+  VibeOS --threat-model-context (de-anchored realism). -> findings/phase3_gate_fixture/run.log
+- GATE PASS iff realism judges both bugs REALISTIC (not high/med UNREALISTIC) so enforcement KEEPS
+  them confirmed/likely. If realism wrongly demotes either -> gate FAILS -> revert default to False.
+  Launcher: tools/validate_phase3_gate_fixture.sh.
 
-IN FLIGHT (detached, ~20-40 min each, launched 16:22 UTC):
-- findings/phase3_enforce_vfs/run.log  (vfs_open_handle anchor; vfs_delete_recursive expected demote)
-- findings/phase3_enforce_irq/run.log  (wsod_* nondet-arg FPs expected demote; no real to lose)
-- findings/phase3_enforce_net/run.log  (ip_handle; NOTE net.c now has a total_len bounds guard at :342,
-  modified Jun 12 -- ip_handle may be absent/guarded now; absence != demotion)
+IN FLIGHT (detached; waiter pid alive, re-invokes me at DONE):
+- findings/phase3_gate_fixture/run.log   (DECISIVE: real bugs vfs_open_handle + ip_handle)
+- findings/phase3_enforce_{vfs,irq,net}/run.log  (live patched source: FP-demotion side --
+  wsod_* nondet-arg + vfs_delete_recursive expected to re-tier; confirm no OTHER real demoted)
 
-GATE (absolute): vfs_open_handle + ip_handle stay confirmed/likely (NOT 'unlikely'); 0/8 VibeOS reals
-demoted; 0/7 cross-codebase reals demoted. Cross-codebase reals are all confirmed_system_entry (never
-confirmed_dynamic), so Phase-4b structurally cannot newly-demote them (immunity it removes only ever
-covered confirmed_dynamic) -- still attempting >=1 cross-codebase empirical run after VibeOS.
+MECHANISM FACTS (verified, hold regardless of selection nondeterminism):
+- Enforcement re-tiers a finding to 'unlikely' ONLY if confidence==confirmed_dynamic AND realism
+  verdict==UNREALISTIC with llm_confidence in (high,medium) (bug_reporter.py:217-257). Re-tier, not
+  delete -> sound. Unit tests tests/test_immunity_gate.py 7/7 incl. Phase-4b cases.
+- Cross-codebase 0/7: all those reals are confirmed_system_entry, whose downgrade path was ALREADY
+  live pre-Phase-4b (baseline 0/7), so enforcement cannot newly-demote them. Empirical cross-codebase
+  run queued behind VibeOS to avoid CBMC contention.
 
-NEXT: poll the 3 run.logs; adjudicate realism verdicts for vfs_open_handle / ip_handle / wsod_* /
-vfs_delete_recursive. If any real bug demoted -> set config.enforce_realism_on_dynamic default=False,
-commit+push, STATE: BLOCKED. If green -> set up a cross-codebase enforcement run, then STATE: DONE.
+NEXT: when runs finish -> adjudicate. Fixture: vfs_open_handle/ip_handle must stay confirmed/likely.
+Live: wsod_*/vfs_delete_recursive expected demote, no other real demoted. If any real demoted ->
+config.enforce_realism_on_dynamic default=False + commit+push + STATE: BLOCKED. Else cross-codebase
+run, then STATE: DONE.
