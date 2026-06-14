@@ -1,10 +1,8 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T17:55:00Z iter-note: live runs show ZERO enforcement-caused demotions (0 ENFORCED-OFF lines); vfs_write stays confirmed. Fixture: ip_handle GREEN, vfs_open_handle pending. Waiters armed.
-reached ip_handle: CBMC verified=False (OOB found), dynamic-validation real-bug candidate, and
-**Realism verdict=REALISTIC confidence=high** => under enforcement ip_handle is KEPT (not demoted).
-Awaiting vfs_open_handle (fixture now processing vfs.c). Waiters: bncil5lx8 (fixture-only, decisive)
-+ b8u6ytv6q (all-4). No code change this iter.
+Heartbeat: 2026-06-14T17:55:00Z iter-note: live runs show ZERO enforcement-caused demotions (0
+ENFORCED-OFF lines); vfs_write stays confirmed. Fixture: ip_handle GREEN, vfs_open_handle pending.
+Waiters armed: bncil5lx8 (fixture-only, decisive) + b8u6ytv6q (all-4).
 
 PRELIMINARY GATE RESULT (1/2 anchors):
 - ip_handle (OOB read, real): realism REALISTIC/high -> enforcement KEEPS confirmed. GATE OK.
