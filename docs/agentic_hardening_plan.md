@@ -3,9 +3,35 @@
 Resume anchor for the `--agentic` work. Branch: **`reproducer-agent-merge`**
 (NOT pushed, NOT merged to main — this repo works linearly on main).
 
+## HOW TO RESUME (two modes)
+
+### A. Interactive, with permissions bypassed
+Launch Claude with bypass (no prompts), then point it here:
+```
+claude --dangerously-skip-permissions
+```
+Prompt: "Resume the AProver --agentic hardening. SSH to syc@135.181.215.190,
+cd ~/AProver, git checkout reproducer-agent-merge, read
+docs/agentic_hardening_plan.md, and continue the budget-free track autonomously
+(start by wiring agent_registry.py). Validate every change against the
+54-failure baseline AND run test_phase3.py in isolation."
+
+### B. Unattended overnight (headless, on the box)
+```
+nohup ~/AProver/tools/overnight_agentic_hardening.sh > /tmp/overnight_hardening.out 2>&1 &
+```
+Loops headless `claude` on the box: each iteration does the single next
+incomplete budget-free step, validates, commits; reverts+stops on any new
+failure; stops on BUDGET_FREE_TRACK_COMPLETE or an 8-iter cap. Never runs the
+budget-gated track. Watch: `tail -f /tmp/overnight_hardening.out`; per-iter logs
+in `findings/overnight_hardening/`. Stop: `rm -f /tmp/agentic_hardening.lock &&
+pkill -f overnight_agentic_hardening`.
+
 ## Done this session (committed on the branch)
 
 ```
+7193ae6 tools: unattended overnight runner for the budget-free hardening track
+6d655bf wip: agent-registry draft (not yet wired) + hardening plan/resume doc
 5f2700b docs: agent telemetry + soundness gate usage and next steps
 41dbcc8 soundness: standing tiering-logic guard + adjudication checker
 b46fd28 telemetry: per-agent runtime instrumentation
@@ -25,16 +51,15 @@ dynval_triage, realism-tools, triage, agentic-harness-primary.
 ## Validation discipline (use for EVERY change)
 - Full suite: `python3 -m pytest tests/ -q -p no:cacheprovider` — baseline is **54 failures**
   (all pre-existing/unrelated: rust-parser ModuleNotFoundError, cache_prefix threat-model
-  drift, phase/kani env). A change is clean iff `comm -13 baseline now` is empty.
+  drift, phase/kani env). A change is clean iff it adds ZERO new failures (count stays 54).
 - ALSO run `tests/test_phase3.py` ALONE — full-suite ordering masks regressions (this is how
   the reproducer non-str leak slipped through once). Isolated baseline = 3 failures.
 
 ## Plan (re-sequenced: budget-free first, since the live sweep is on hold)
 
-### Budget-free track — NO LLM/CBMC, do autonomously
-1. **Agent registry (IN PROGRESS — see below).** Collapse the 3 hand-synced role lists into
-   one source. DRAFT MODULE ALREADY ADDED: `bmc_agent/agent_registry.py` (AGENT_ROLES +
-   REGISTRY + label_for). It is NOT yet wired — nothing imports it. Remaining steps:
+### Budget-free track — NO LLM/CBMC, do autonomously (this is what the overnight runner does)
+1. **Agent registry (IN PROGRESS).** DRAFT MODULE COMMITTED: `bmc_agent/agent_registry.py`
+   (AGENT_ROLES + REGISTRY + label_for, 11 roles). NOT yet wired — nothing imports it. Remaining:
    - `config.py`: replace the literal role tuple in the env-routing loop
      (`for role in ( "spec_gen", ... "harness_gen" ):`) with `for role in AGENT_ROLES:`,
      add `from bmc_agent.agent_registry import AGENT_ROLES`.
@@ -43,8 +68,7 @@ dynval_triage, realism-tools, triage, agentic-harness-primary.
    - Add `tests/test_agent_registry.py` pinning AGENT_ROLES to the exact historical 11-role
      set {spec_gen, feedback_distill, refinement, realism, classifier, disagreement_diagnose,
      triage, dynamic_repro, dynval_triage, cbmc_driver, harness_gen} so accidental drift fails.
-   - Optionally fold the AI-layers printout labels onto `label_for` (lower priority; printout
-     is keyed on enable_* flags, not roles).
+   - Optionally fold the AI-layers printout labels onto `label_for` (lower priority).
 2. **Token plumbing into telemetry.** Thread `usage` (prompt/completion tokens) out of
    `LLMClient.complete()` / `complete_with_tools()` (llm.py logs it at ~117/389 but doesn't
    return it) into `agent_telemetry` (the `tokens` field is reserved, currently 0). Turns
@@ -73,10 +97,9 @@ Run the empirical gate once more, decide branch/merge strategy, land on main.
 ## Loose ends
 - Branch `reproducer-agent-merge` is unpushed / unmerged.
 - Repo `git gc` / "too many unreachable loose objects" warning — a one-time `git gc` clears it.
-- Permissions: full bypass is set in the LOCAL Claude Code `.claude/settings.local.json`
-  (`permissions.defaultMode = bypassPermissions`, `skipDangerousModePermissionPrompt = true`).
 
 ## Tooling reference
 - Telemetry: `bmc_agent/agent_telemetry.py`; per-run dump at `<artifact_dir>/agent_telemetry.json`.
 - Soundness: `tests/test_soundness_corpus.py` (deterministic), `tools/check_soundness_gate.py`
   (empirical, over a real findings dir). See `docs/agent_telemetry_and_soundness.md`.
+- Overnight runner: `tools/overnight_agentic_hardening.sh` (mode B above).
