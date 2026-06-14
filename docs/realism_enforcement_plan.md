@@ -63,13 +63,31 @@ always kept.
   0 reals lost.
 
 ### Phase 2 — Trustworthy reachability evidence + tool-grounding
+- **2-REPRO. Reproducer agent (do FIRST — it may change 2a).** Today the system-entry reproducer is a
+  ONE-SHOT LLM call (`scenario_reproducer.py:199`) that falls open to UNREPRODUCIBLE, losing reals that
+  just needed a header/type fix. Build a tool-using `ReproducerAgent` (BaseAgent, pattern of
+  `spec_gen_tools.py`): tools = read headers / call-chain / structs; loop compile->run->read-error->fix.
+  Constrained by the existing `_reproducer_uses_public_api` guard (cannot fabricate a wrong-reason crash);
+  the crash must match the CBMC property. OPT-IN flag. **Synergy:** driving the REAL init path initializes
+  trusted globals (e.g. `fb_base`) -> the spurious NULL-deref disappears -> `harness_kind=system_entry`
+  becomes reliable evidence again. RE-EVALUATE 2a in light of this (may rescue harness_kind instead of dropping it).
 - 2a. Drop `harness_kind` from evidence axis in `_maybe_ground_immunity` (pipeline.py):
-  `evidence_strong = formal_reach` (CBMC `system_entry_reached` only).
-- 2b. Route realism through the tool-enabled path (`check_with_tools_if_enabled`,
+  `evidence_strong = formal_reach` (CBMC `system_entry_reached` only). **Conditional on 2-REPRO outcome** —
+  if the reproducer agent makes system-entry evidence reliable, KEEP harness_kind but gate it on a
+  real-init-path reproducer instead.
+- 2c. Route realism through the tool-enabled path (`check_with_tools_if_enabled`,
   `--enable-realism-tools`) so it reads init/caller code for the NULL-init-global judgment;
   optionally route the `"realism"` role to a capable agentic backend (sonnet-4.5+/Claude-Code,
   NOT the churny subscription path).
 - GATE (shadow): cross-codebase 0/7, VibeOS 0/8 unchanged; no REALISTIC->UNREALISTIC flip on a real bug.
+
+### Phase 2b — Flag-selector tools-agent (independent quality lever; OPT-IN)
+Today `FlagSelector` (`flag_selector.py:328`) + `InliningAdvisor` are SINGLE LLM calls on a 1500-char
+truncated body; under `--agentic` they only get an investigation prompt framing, no real tools. Build
+opt-in tool-using variants (BaseAgent + tool loop, like `triage_tools.py`) that READ real loop bounds /
+array sizes / full callee bodies / headers to choose unwind, per-fn checks, and inline-vs-stub. Gated
+like the other `_tools` agents; NOT default (latency cost; keep the paper's "only check-selection is the
+agent" framing intact). GATE: no regression in confirmed-bug count or FP rate on the baseline oracle set.
 
 ### Phase 3 — Enforce realism on dynamic (shadow, end-to-end)
 Run uniform on irq + vfs + one OSS target with Phases 1+2 in place; the dynamic verdict now bites.
