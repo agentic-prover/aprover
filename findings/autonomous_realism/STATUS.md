@@ -1,8 +1,14 @@
 STATE: RUNNING
 Phase: 3 ENFORCEMENT VALIDATION + SAFETY GATE (enforcement default-ON, cf569da)
-Heartbeat: 2026-06-14T17:20:00Z iter-note: all 4 runs healthy + progressing (net churning through its
-many packet handlers; fixture young at ~2min/708ln; vfs 4494ln; irq 2830ln). None DONE yet. Harness
-waiter b8u6ytv6q armed to re-invoke me at all-4-DONE. No code change this iter. Nothing stuck.
+Heartbeat: 2026-06-14T17:40:00Z iter-note: FIXTURE GATE -- first anchor GREEN. The buggy-fixture run
+reached ip_handle: CBMC verified=False (OOB found), dynamic-validation real-bug candidate, and
+**Realism verdict=REALISTIC confidence=high** => under enforcement ip_handle is KEPT (not demoted).
+Awaiting vfs_open_handle (fixture now processing vfs.c). Waiters: bncil5lx8 (fixture-only, decisive)
++ b8u6ytv6q (all-4). No code change this iter.
+
+PRELIMINARY GATE RESULT (1/2 anchors):
+- ip_handle (OOB read, real): realism REALISTIC/high -> enforcement KEEPS confirmed. GATE OK.
+- vfs_open_handle (heap overflow, real): pending CBMC+realism in fixture run.
 
 *** KEY DISCOVERY THIS ITER (changes how the gate must be validated) ***
 The live VibeOS tree (examples/vibeos/repo/kernel, gitignored working copy) has been PATCHED for BOTH
