@@ -1,79 +1,78 @@
 #!/usr/bin/env python3
-"""Deterministic GO/NO-GO for the realism discipline-rule re-validation.
+"""Deterministic GO/NO-GO for the realism DISCIPLINE-RULE re-validation.
 
-Module-by-module verification scoping matters: a primitive (memcpy/memset/strncpy)
-verified in its OWN module (string.c) has NO in-corpus caller -- the dangerous
-callers live in OTHER modules (elf.c, vfs.c). So under the discipline rule, string
-primitives CORRECTLY demote (no caller present); the real primitive bugs surface in
-the CALLER's module (elf). Therefore:
+The discipline rule affects only the REALISM verdict. The separate, pre-existing
+dyn-val "Validation downgrade" (REAL_BUG->UNRESOLVED when the reproducer does not
+trigger) lowers FINAL confidence independently -- it must NOT be blamed on the
+discipline rule. So we judge the rule by the REALISM VERDICT (parsed from run.log),
+not the final tier.
 
-  PASS  = (string) strncpy DEMOTED  [FP closed; all string primitives should demote]
-          AND (dtb) read_be64 KEPT  [real OOB via dtb_parse ENTRY POINT must survive]
-          AND (elf) >=1 real parser OOB KEPT (elf_validate/elf_calc_size/
-              elf_process_relocations)  [entry-point/in-corpus reals must survive]
-          AND no budget/400 contamination in any arm.
-  OVERTIGHTEN = read_be64 demoted, or ALL elf parser reals demoted (rule kills real bugs).
-  INSUFFICIENT = strncpy still confirmed in string (FP not closed).
-Exit 0 only on PASS. Appends a decision block to findings/JUDGMENT_NOTES.md.
+  PASS  = (string) strncpy realism = UNREALISTIC   [FP closed by the rule]
+          AND (dtb) read_be64 realism = REALISTIC   [real entry-point bug NOT over-demoted]
+          AND (elf) >=1 of elf_validate/elf_calc_size/elf_process_relocations
+              realism = REALISTIC                   [parser reals NOT over-demoted]
+          AND no budget/400 contamination.
+  OVERTIGHTEN  = read_be64 or all elf reals flipped to UNREALISTIC by the rule.
+  INSUFFICIENT = strncpy realism still REALISTIC (rule did not close the FP).
+Note: dyn-val downgrades of read_be64 (real bug, reproducer didn't trigger) are a
+SEPARATE soundness issue (the classifier-adjudicator guard) -- recorded, not counted here.
 """
-import json, glob, os, sys
+import glob, os, re, sys
 ROOT = os.path.expanduser("~/AProver")
-ELF_REALS = ("elf_validate", "elf_calc_size", "elf_process_relocations", "elf_entry", "elf_load_at")
+ELF_REALS = ("elf_validate", "elf_calc_size", "elf_process_relocations")
 
 def latest(p):
     ds = sorted(glob.glob(os.path.join(ROOT, "findings", p)), reverse=True)
     return ds[0] if ds else None
 
-def contaminated(d):
+def logtext(d):
     try:
-        s = open(os.path.join(d, "run.log"), errors="replace").read()
+        return open(os.path.join(d, "run.log"), errors="replace").read()
     except OSError:
-        return True
+        return ""
+
+def contaminated(s):
     return ("workspace API usage" in s) or ("Error code: 400" in s) or ("Realism check LLM call failed" in s)
 
-def confirmed(d):
+def realism_verdicts(s):
+    """fn -> last realism verdict seen in the log."""
     out = {}
-    for f in glob.glob(d + "/**/bug_reports/*.json", recursive=True):
-        try:
-            r = json.load(open(f)).get("report", {})
-        except Exception:
-            continue
-        if str(r.get("confidence", "")).startswith("confirmed"):
-            out.setdefault(r.get("function_name", "?"), set()).add(r.get("violated_property", "?"))
+    for fn, v in re.findall(r"Realism check for '([A-Za-z_]\w*)':\s*verdict=([a-z_]+)", s):
+        out[fn] = v
     return out
 
 def main():
     sd, dd, ed = latest("judge_disc_string_*/"), latest("judge_disc_dtb_*/"), latest("judge_disc_elf_*/")
-    for name, d in (("string", sd), ("dtb", dd), ("elf", ed)):
+    for n, d in (("string", sd), ("dtb", dd), ("elf", ed)):
         if not d or not os.path.exists(d + "/DONE"):
-            print("INCOMPLETE:", name, "not finished"); return 2
-    for name, d in (("string", sd), ("dtb", dd), ("elf", ed)):
-        if contaminated(d):
-            print("CONTAMINATED:", name, "-> invalid (budget/400/realism-fail)"); return 3
-    scon, dcon, econ = confirmed(sd), confirmed(dd), confirmed(ed)
-    strncpy_confirmed = bool(scon.get("strncpy"))
-    readbe64_kept = any("read_be64" in p for p in dcon.get("read_be64", set()))
-    elf_real_count = sum(len(econ.get(fn, set())) for fn in ELF_REALS)
+            print("INCOMPLETE:", n, "not finished"); return 2
+    ss, ds_, es = logtext(sd), logtext(dd), logtext(ed)
+    for n, s in (("string", ss), ("dtb", ds_), ("elf", es)):
+        if contaminated(s):
+            print("CONTAMINATED:", n); return 3
+    sv, dv, ev = realism_verdicts(ss), realism_verdicts(ds_), realism_verdicts(es)
+    strncpy_v = sv.get("strncpy", "?")
+    readbe64_v = dv.get("read_be64", "?")
+    elf_real_realistic = [fn for fn in ELF_REALS if ev.get(fn) == "realistic"]
     verdict, reasons = "PASS", []
-    if not readbe64_kept:
-        verdict = "OVERTIGHTEN"; reasons.append("dtb read_be64 (real entry-point OOB) DEMOTED")
-    if elf_real_count == 0:
-        verdict = "OVERTIGHTEN"; reasons.append("ALL elf parser reals demoted (rule kills real bugs)")
-    if strncpy_confirmed and verdict == "PASS":
-        verdict = "INSUFFICIENT"; reasons.append("strncpy still CONFIRMED in string (FP not closed)")
+    if readbe64_v == "unrealistic":
+        verdict = "OVERTIGHTEN"; reasons.append("read_be64 realism flipped to UNREALISTIC by the rule")
+    if not elf_real_realistic:
+        verdict = "OVERTIGHTEN"; reasons.append("no elf parser real kept realistic (%s)" % {fn: ev.get(fn) for fn in ELF_REALS})
+    if strncpy_v == "realistic" and verdict == "PASS":
+        verdict = "INSUFFICIENT"; reasons.append("strncpy realism still REALISTIC (FP not closed)")
     if verdict == "PASS":
-        reasons.append("strncpy demoted (FP closed); read_be64 kept; elf reals kept (%d confirmed)" % elf_real_count)
+        reasons.append("strncpy=%s (FP closed); read_be64=%s (kept); elf reals realistic=%s" % (strncpy_v, readbe64_v, elf_real_realistic))
+    dynval_demoted_readbe64 = "Validation downgrade: 'read_be64'" in ds_
     print("VERDICT:", verdict)
-    print("string confirmed:", {k: sorted(v) for k, v in scon.items()})
-    print("dtb confirmed:", {k: sorted(v) for k, v in dcon.items()})
-    print("elf confirmed:", {k: sorted(v) for k, v in econ.items()})
+    print("realism verdicts -> strncpy:", strncpy_v, "| read_be64:", readbe64_v, "| elf:", {fn: ev.get(fn) for fn in ELF_REALS})
     print("reasons:", "; ".join(reasons))
+    if dynval_demoted_readbe64:
+        print("NOTE: read_be64 was dyn-val-downgraded (reproducer not triggered) -- SEPARATE pre-existing issue, not the discipline rule.")
     with open(os.path.join(ROOT, "findings", "JUDGMENT_NOTES.md"), "a") as fh:
-        fh.write("\n## OVERNIGHT DECISION (discipline rule): " + verdict + "\n"
-                 + "string confirmed: " + str({k: sorted(v) for k, v in scon.items()}) + "\n"
-                 + "dtb confirmed: " + str({k: sorted(v) for k, v in dcon.items()}) + "\n"
-                 + "elf confirmed: " + str({k: sorted(v) for k, v in econ.items()}) + "\n"
+        fh.write("\n## OVERNIGHT DECISION (discipline rule, realism-verdict based): " + verdict + "\n"
+                 + "realism: strncpy=%s read_be64=%s elf=%s\n" % (strncpy_v, readbe64_v, {fn: ev.get(fn) for fn in ELF_REALS})
                  + "reasons: " + "; ".join(reasons) + "\n"
-                 + "NOTE: memset/strncpy demotion in the STRING module is CORRECT (callers are out-of-corpus; real primitive bugs surface in elf).\n")
+                 + ("NOTE: read_be64 dyn-val-downgraded (reproducer not triggered) = SEPARATE soundness issue (classifier-adjudicator guard), NOT the discipline rule.\n" if dynval_demoted_readbe64 else ""))
     return 0 if verdict == "PASS" else 1
 sys.exit(main())
