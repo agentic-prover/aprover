@@ -49,3 +49,20 @@ def test_claude_code_backend_falls_back_to_flat(monkeypatch):
     raw, err = agent._call_llm("prompt")
     assert raw == "FLAT" and err is None
     agent.llm.complete_with_tools.assert_not_called()
+
+
+def test_classifier_adjudicator_parse_and_verdict():
+    from bmc_agent.agents.classifier_tools import ClassifierAdjudicatorAgent
+    from unittest.mock import MagicMock
+    c = _cfg(); a = ClassifierAdjudicatorAgent(c, LLMClient(c))
+    assert a.name == "classifier"
+    assert a.parse('{"verdict":"real","reasoning":"caller X reaches it"}')["verdict"] == "real"
+    assert a.parse('noise {"verdict":"artifact","reasoning":"unreachable"} tail')["verdict"] == "artifact"
+    assert a.parse('{"verdict":"maybe"}') is None
+    assert a.parse("not json") is None
+    # keeps_real_bug True only when verdict == real
+    a.llm = MagicMock()
+    from bmc_agent.llm import ToolUseResult
+    a.llm.complete_with_tools.return_value = ToolUseResult(
+        text='{"verdict":"real","reasoning":"r"}', iterations=1, tool_calls_made=0, messages=[])
+    assert a.keeps_real_bug(fn="f", prop="p", reasoning="r") is True

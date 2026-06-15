@@ -2268,6 +2268,33 @@ class CExValidator:
                 getattr(validation_result.counterexample, "failing_property", "") or ""
             )
         ):
+            _cfg = getattr(self, "config", None) or getattr(getattr(self, "llm", None), "config", None)
+            if _cfg is not None and getattr(_cfg, "enable_classifier_tools", False):
+                try:
+                    from bmc_agent.agents.classifier_tools import ClassifierAdjudicatorAgent
+                    _cex = validation_result.counterexample
+                    _wit = "\n".join(
+                        f"{k}={v}" for k, v in
+                        (getattr(_cex, "variable_assignments", {}) or {}).items()
+                    )[:1500]
+                    if ClassifierAdjudicatorAgent(_cfg, self.llm).keeps_real_bug(
+                        fn=func.name,
+                        prop=getattr(_cex, "failing_property", "") or "",
+                        reasoning=getattr(validation_result, "reasoning", "") or "",
+                        witness=_wit,
+                    ):
+                        logger.info(
+                            "Classifier adjudicator OVERRIDE: '%s' kept REAL_BUG "
+                            "(agentic code review found a reachable caller path; "
+                            "deterministic dyn-val downgrade skipped)",
+                            func.name,
+                        )
+                        return
+                except Exception as _exc:  # noqa: BLE001
+                    logger.warning(
+                        "classifier adjudicator failed (%r); deferring to "
+                        "deterministic downgrade", _exc,
+                    )
             logger.info(
                 "Classifier downgrade: '%s' outcome REAL_BUG → UNRESOLVED "
                 "(dyn-val NOT_TRIGGERED on crash-class property '%s' "
