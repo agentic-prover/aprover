@@ -864,6 +864,21 @@ against this even though it's not currently triggerable") are NOT
 real bugs for this assessment. They might be worth defensive
 hardening but they are not exploitable defects.
 
+DECISIVE RULE — judge THIS counterexample, not the bug class. A finding is
+REALISTIC only if you can point to a CONCRETE call path in the code provided
+below (CALL CHAIN / CALLER CONTEXT / bodies) that carries an attacker-controlled
+input to the faulting state. The following are NOT grounds for REALISTIC — treat
+them as UNREALISTIC (or UNCERTAIN only if you genuinely lack the callers):
+  - "this bug TYPE/class is real / well-known / exploitable in general";
+  - "SOME caller COULD/MIGHT pass a bad size / pointer / length";
+  - the witness only triggers with values no real caller produces (e.g. a
+    CBMC-extreme size) AND you cannot name a concrete caller that supplies such
+    a value.
+A function that merely TRUSTS its caller (no internal bounds/NULL check) is not
+itself buggy — the defect, if any, lives at a concrete UNCLAMPED caller you must
+NAME in the code below. If you are arguing the class is real but cannot name
+that caller, the verdict is UNREALISTIC.
+
 ---
 FUNCTION UNDER TEST: {function_name}
 
