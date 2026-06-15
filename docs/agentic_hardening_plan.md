@@ -103,3 +103,129 @@ Run the empirical gate once more, decide branch/merge strategy, land on main.
 - Soundness: `tests/test_soundness_corpus.py` (deterministic), `tools/check_soundness_gate.py`
   (empirical, over a real findings dir). See `docs/agent_telemetry_and_soundness.md`.
 - Overnight runner: `tools/overnight_agentic_hardening.sh` (mode B above).
+
+---
+
+## SESSION 2026-06-14 (budget-free track + tuning kickoff)
+
+### Committed this session (branch reproducer-agent-merge)
+- `b86b655` registry: wire AGENT_ROLES into config+cli + pin test (step 1 DONE)
+- `2a9efb7` telemetry: plumb token usage LLMClient -> agent_telemetry (step 2 DONE)
+- `88c84af` llm: omit temperature for claude-opus-4-8 (it 400s on temperature);
+  unblocks per-role Opus routing. Tests: test_llm_temperature_guard.py.
+All validated: full suite 54 (== baseline), test_phase3.py isolated 3 (== baseline).
+
+### PIVOTAL FINDING — "agentic vs flat" is a BACKEND question, not per-agent
+The box env (~/.config/bmc-agent/env) is **anthropic-only**, default model
+`claude-sonnet-4-6`, no per-role overrides. Under plain `--agentic`:
+- `LLMClient.complete_with_tools` RAISES NotImplementedError for provider=anthropic
+  ("requires the openai-compatible provider"). So the tool-using agents
+  (spec_gen-tools, bmc_config, reproducer, harness_gen) ERROR on the tool path
+  and silently fall back (e.g. "bmc config for X produced no output"). 28x in the
+  baseline log. => Tool agents are NOT actually agentic on this deployment today.
+- `--agentic` also FORCE-DISABLES realism tools (log: "AI layers OFF: ... realism
+  tools"), despite enable_realism_tools defaulting True. So RealismToolsAgent is
+  OFF under --agentic (corrects the earlier inventory).
+- The only genuinely-working agents under plain --agentic are the FLAT ones:
+  realism (Pass-1), refinement, feedback_distill.
+
+### The unblock (no code change): claude-code backend
+`claude` CLI is installed (/usr/local/bin/claude v1.0.110). Codebase has a
+`claude-code` provider (shells to `claude -p` with read-only Read/Grep/Glob).
+`_agent_runs_on_claude_code()` = True when claude_code_agentic AND provider==claude-code.
+`--agentic-claude-code` forces EVERY role onto claude-code => genuinely agentic.
+THIS is how "make all agents agentic" is done here — a flag.
+
+### Tonight experiment matrix (all flag/env, NO hot-path code)
+- Arm A baseline: `--agentic` (anthropic sonnet; tool agents degraded). RUNNING.
+- Arm B all-agentic: `--agentic-claude-code` (every agent investigates via CLI).
+- Arm C opus-judgment: `--agentic` + BMC_AGENT_LLM_{REALISM,REFINEMENT}_MODEL=claude-opus-4-8.
+- (Arm D haiku-mechanical: feedback_distill -> claude-haiku-4-5, if time.)
+Each: capture <root>/agent_telemetry.json (now incl. tokens) + check_soundness_gate.py
+(reals vfs_readdir,vfs_write; fps vfs_append,vfs_delete_recursive). Keep GREEN wins.
+Runner: tools/tune_agentic.sh LABEL (env: AGENTIC_FLAG, PER_FUNC_BUDGET, EXTRA_FLAGS,
+per-role BMC_AGENT_LLM_*). Fixture: examples/vibeos/repo/kernel/vfs.c driver vibeos_vfs.
+
+### UPDATE — original ccall (all-agentic) result was INVALID; claude-code was broken
+User intuition ("something wrong when all agents used?") was right. The
+--agentic-claude-code arm dropped 2 reals — but NOT because agentic is worse:
+every `claude -p` call exited 1 on flags the installed claude CLI v1.0.110
+rejects, so agents fell back to seed-only (66 fallbacks). Fixed in `d47f50c`:
+  - --permission-mode dontAsk -> bypassPermissions
+  - dropped --no-session-persistence (unknown)
+  - --system-prompt -> --append-system-prompt
+  - text-only --tools "" -> --disallowed-tools <list>
+claude-code now completes (returns content; cost_usd ~0.06/call, ~16k cache-
+creation overhead per call => all-agentic sweeps are $$$). Re-running as
+arm ccall2 via tools/tune_rerun.sh. DISCARD findings/tune_ccall_2026* (broken).
+
+### Arm results so far (gate: reals vfs_readdir+vfs_write must stay; FPs vfs_append+vfs_delete_recursive must demote)
+- baseline (all sonnet, flat; tool agents degraded): RED — keeps readdir, DROPS write.
+- opusjudge (realism+refinement -> opus): RED — same as baseline (model strength not the lever).
+- ccall (all-agentic): INVALID (claude-code broken) — re-running as ccall2.
+- haikumech (feedback_distill -> haiku): running.
+Open thread: vfs_write demoted by every valid config so far => likely a
+refinement/demotion-logic issue, NOT a model/agentic-routing one.
+
+### UPDATE 2 — anthropic-native tool use implemented (commit 4fedd69); ccall2 result
+Per user direction, implemented _anthropic_tool_use_loop so complete_with_tools
+works on anthropic (was openai-only). Unlocks MODE 2 (in-process *_tools.py
+agentic variants) on the anthropic-only box without an external endpoint.
+
+THREE agentic modes per agent now distinguishable:
+  mode 1 flat (complete) | mode 2 in-process tool loop (*_tools via complete_with_tools)
+  | mode 3 claude-code CLI (--agentic-claude-code).
+
+Arm results (gate: keep reals vfs_readdir+vfs_write; demote FPs vfs_append+vfs_delete_recursive):
+| arm        | config                          | readdir | write | FPs  | gate | cost   |
+| baseline   | sonnet flat, tools DEGRADED     | KEEP    | DROP  | both | RED  | ~$0    |
+| opusjudge  | realism+refine -> opus (flat)   | KEEP    | DROP  | both | RED  | ~$0    |
+| haikumech  | feedback_distill -> haiku       | KEEP    | DROP  | both | RED  | ~$0    |
+| ccall2     | all-agentic claude-code (mode3) | DROP    | KEEP  | both | RED  | ~$12   |
+NB ccall2 killed after oracle funcs settled (saved budget); oracle verdicts genuine
+(vfs_readdir processed @ log:624, demoted; vfs_write upheld confirmed_dynamic).
+Striking: flat arms keep readdir/drop write; all-agentic keeps write/drops readdir.
+No arm GREEN yet. mode2 (in-process tools on anthropic, post-fix) = running now.
+
+---
+
+## FINAL RESULTS — agentic-vs-flat / model tuning (5 arms, VibeOS vfs fixture)
+
+Gate = keep reals {vfs_readdir, vfs_write}; demote FPs {vfs_append, vfs_delete_recursive}.
+
+| arm       | agentic mode            | model(s)              | readdir | write | append(FP) | del_rec(FP) | gate | cost   |
+|-----------|-------------------------|-----------------------|---------|-------|------------|-------------|------|--------|
+| baseline  | flat (mode1)            | sonnet-4-6 (all)      | KEEP ✓  | DROP ✗| demoted ✓  | demoted ✓   | RED  | ~$0    |
+| opusjudge | flat (mode1)            | opus realism+refine   | KEEP ✓  | DROP ✗| demoted ✓  | demoted ✓   | RED  | ~$0    |
+| haikumech | flat (mode1)            | haiku feedback_distill| KEEP ✓  | DROP ✗| demoted ✓  | demoted ✓   | RED  | ~$0    |
+| ccall2    | claude-code (mode3)     | claude CLI (all)      | DROP ✗  | KEEP ✓| demoted ✓  | demoted ✓   | RED  | ~$12   |
+| mode2     | in-process tools (mode2)| sonnet-4-6 (all)      | DROP ✗  | DROP ✗| KEPT ✗(FP) | demoted ✓   | RED  | ~$0    |
+
+### Conclusion (answers: which agent agentic vs flat? which model?)
+1. **No arm passed the gate.** Every configuration drops at least one real bug.
+2. **More-agentic did NOT help — it hurt.** Flat keeps readdir/drops write (1 real lost);
+   claude-code keeps write/drops readdir (1 real lost, ~$12/sweep); in-process tools is
+   WORST — drops BOTH reals and surfaces a false positive (vfs_append confirmed). Turning the
+   in-process *_tools agents on reshaped specs/harness/repro such that realism downgraded both
+   reals and "confirmed" a FP.
+3. **Model choice was gate-neutral.** opus on realism+refinement and haiku on feedback_distill
+   changed nothing vs the sonnet baseline. No evidence to justify routing any role to opus;
+   haiku on feedback_distill is a safe (gate-neutral) cost save if desired.
+4. **The real blocker is a pipeline issue, not routing.** vfs_write is demoted by a
+   classifier/realism stage downgrade in EVERY flat arm (model- and agentic-invariant). The
+   agentic-vs-flat and model knobs cannot fix it.
+
+### Recommendation
+- KEEP AGENTS FLAT (mode 1). Do not adopt all-agentic: no recall benefit, higher cost
+  (claude-code ~$12/sweep), higher variance, and in-process tools regress soundness.
+- KEEP default model (sonnet-4-6) for all roles; optionally haiku for feedback_distill (cost,
+  gate-neutral). Revisit per-role opus only AFTER the gate is GREEN.
+- FIX THE CLASSIFIER/REALISM DEMOTION of vfs_write FIRST (root cause), then RE-RUN this
+  experiment — only then will agentic-vs-flat / model signal be readable above the noise.
+- CAVEAT: single fixture (vfs), single gate. ccall2 + mode2 truncated after oracle functions
+  settled (oracle verdicts authoritative; gate run on finalized findings).
+
+### Hardening commits landed this session (branch reproducer-agent-merge)
+b86b655 registry wiring + pin | 2a9efb7 token telemetry | 88c84af opus temperature fix
+d47f50c claude-code CLI v1.0.110 flag fix | 4fedd69 anthropic-native complete_with_tools
+All validated: full suite 54 (== baseline), test_phase3.py isolated 3.
