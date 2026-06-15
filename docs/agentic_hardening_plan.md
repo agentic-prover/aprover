@@ -310,3 +310,67 @@ Per-module results (every confirmed finding adjudicated by reading the code; NO 
 3. CONSIDER the design fixes: classifier-adjudicator default-ON as a downgrade guard; tighten
    realism precision on primitives (don't uphold contract-violations w/o a concrete unclamped
    attacker call site); deterministic cross-module stubbing to cut harness compile-fail churn.
+
+---
+
+## >>> RESUME POINT (2026-06-15, end of session) <<<
+Branch reproducer-agent-merge. Everything below is recoverable from server files
+(findings/JUDGMENT_NOTES.md = all adjudications + design review; git log = commits).
+
+STATE:
+- 11 commits landed (registry, token telemetry, opus-temp fix, claude-code CLI fix,
+  anthropic-native complete_with_tools, 3 agentic variants, validator always-on +
+  classifier->validation rename, per-component default plan, full-kernel readiness verdict).
+- OPEN DECISION: make agentic realism (--enable-realism-tools / RealismToolsAgent) the
+  DEFAULT under --agentic? Evidence: rt_dtb VALID -> kept read_be64 (real OOB), correctly
+  demoted align4 (low-impact) via grounding audit = GOOD. rt_string was budget-contaminated
+  (invalid). RE-RUNNING clean: findings/judge_rt2_string_* (string, --enable-realism-tools).
+
+NEXT ACTION (when rt2_string DONE + not 400-contaminated):
+  1. List confirmed findings (cf /tmp/rtadj.py, glob judge_rt2_string). Flat string baseline
+     had 9 primitive FPs (memcpy/memset/memchr/memcmp/memset32/strncpy).
+  2. If agentic realism DEMOTED those FPs (and rt_dtb reals held) -> agentic realism is
+     BETTER -> edit bmc_agent/cli.py:181 so enable_realism_tools defaults True under
+     --agentic (keep --no-realism-tools; preserve cost note). Validate full suite 54 +
+     test_phase3.py isolated 3. Commit. Update per-component plan: realism=AGENT default.
+  3. If FPs NOT demoted -> do NOT default; tools alone insufficient (need reasoning discipline).
+
+ALSO PENDING (LLM-budget permitting):
+- net/fat32 readiness modules (tools/judge_sweep.sh net fat32) — confirm parser-high-value.
+- Design-fix candidates (LLM-free, 54/3-validatable): realism-call-failure should fail-safe
+  to UNCERTAIN not "confirmed" (silent-fallback bug); deterministic cross-module stub defs
+  to cut dynamic-harness compile-fail churn.
+- API workspace budget hit its limit earlier today (regain 2026-07-01); was restored ~19:41.
+  Watch for re-exhaustion; runs that 400 mid-way are INVALID (silent-fallback to confirmed).
+
+---
+
+## DECISION LANDED: realism = AGENT (tool-use) by DEFAULT (commit 28184d8)
+Per-component plan UPDATE: realism flips from "flat" to AGENT default under --agentic.
+Evidence (judgment-based, validated clean — no budget contamination):
+- rt_dtb: agentic realism KEPT read_be64 (real OOB), correctly DEMOTED align4 (low-impact,
+  caller-contract) via grounding audit (flagged flat verdict as narrative-only/confabulated).
+- rt2_string: primitive FALSE POSITIVES 9 -> 2 (memcpy/memchr/memcmp/memset32/memmove/most-
+  strncpy demoted via correct contract-vs-defect localization). Flat had confabulated them.
+Mechanism: enable_realism_tools defaults True under --agentic; --no-realism-tools opts out.
+Cost: more LLM round-trips per finding — partly OFFSET by adjacent-bug now default-off (4a85edf).
+Caveat (recorded): agentic realism is coupled with refinement, which can add caller-unsatisfied
+preconditions (the align4 over-tighten risk) — low practical harm here, but watch it.
+
+### Updated per-component default table (the answer to "agentic vs flat per component")
+- realism            -> AGENT (tool-use) default  [NEW: 28184d8]
+- CEx validation     -> always-on (CBMC reachability+feasibility)  [cfbe562]
+- adjacent-bug       -> OFF default (130 leads/0 bugs)  [4a85edf]
+- reproducer         -> AGENT (highest-value: adds real-bug recall)
+- spec_gen, bmc_config, harness_gen -> AGENT (precision / mechanical)
+- refinement, feedback_distill, classifier-adjudicator (new tool variants) -> OFF until a recall win shown
+- triage -> OFF
+
+## >>> RESUME POINT (updated) <<<
+Open follow-ups (LLM-budget permitting; budget hit limit earlier, regain 2026-07-01, was restored):
+1. net/fat32 readiness modules (tools/judge_sweep.sh net fat32) — confirm parser-high-value.
+2. LLM-FREE soundness/efficiency fixes (54/3-validatable): (a) realism-call-failure should
+   fail-safe to UNCERTAIN not "confirmed" (silent-fallback bug, contaminated the first rt_string);
+   (b) deterministic cross-module stub defs to cut dynamic-harness compile-fail churn.
+3. Re-confirm agentic-realism precision on a 2nd FP-prone module (printf/font) when budget allows.
+All decisions + adjudications in findings/JUDGMENT_NOTES.md; commits in git log.
