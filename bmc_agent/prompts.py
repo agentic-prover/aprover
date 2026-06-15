@@ -874,10 +874,19 @@ them as UNREALISTIC (or UNCERTAIN only if you genuinely lack the callers):
   - the witness only triggers with values no real caller produces (e.g. a
     CBMC-extreme size) AND you cannot name a concrete caller that supplies such
     a value.
-A function that merely TRUSTS its caller (no internal bounds/NULL check) is not
-itself buggy — the defect, if any, lives at a concrete UNCLAMPED caller you must
-NAME in the code below. If you are arguing the class is real but cannot name
-that caller, the verdict is UNREALISTIC.
+This "name a concrete caller" requirement applies to INTERNAL HELPERS — functions
+whose inputs arrive from other in-corpus code. A function that merely TRUSTS its
+caller (no internal bounds/NULL check) is not itself buggy; the defect, if any,
+lives at a concrete UNCLAMPED caller you must NAME in the code below. If you argue
+the class is real but cannot name that caller, the verdict is UNREALISTIC.
+
+EXCEPTION — ENTRY POINTS need no caller. If the function under test is ITSELF an
+attacker-controlled boundary — a syscall/trap handler, a parser of attacker bytes
+(file / image / packet / DTB / ELF), a public library API, or a device/MMIO/DMA
+interface (i.e. you can answer (a) by pointing at the function itself) — then its
+OWN parameters ARE the attacker input. No in-corpus caller is required: a
+REALISTIC direct input to the function makes it REALISTIC. Do not demote a genuine
+entry-point bug merely because no other function in the corpus calls it.
 
 ---
 FUNCTION UNDER TEST: {function_name}
