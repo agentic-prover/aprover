@@ -1948,6 +1948,7 @@ class AMCPipeline:
             )
         elif (
             self.config.enable_realism_check
+            and not getattr(self.config, "realism_authoritative", True)
             and dyn is not None
             and dyn.outcome == DynamicOutcome.NOT_TRIGGERED
             and _is_crash_class_property(failing_prop)

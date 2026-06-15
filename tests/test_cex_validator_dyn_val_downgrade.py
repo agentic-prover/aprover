@@ -26,13 +26,33 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
-def _make_validator(dynamic_validator):
+def _make_validator(dynamic_validator, realism_authoritative=False):
     from bmc_agent.cex_validator import CExValidator
     v = object.__new__(CExValidator)
     v._dynamic_validator = dynamic_validator
     v._reach_errored = False
     v._feas_errored = False
+    # The dyn-val downgrade is gated by realism_authoritative: when True (the
+    # production default) realism is the sole authority and the downgrade is
+    # skipped. These downgrade tests therefore set it False to exercise the
+    # (preserved) downgrade path; one test below sets it True to verify the gate.
+    v.config = SimpleNamespace(realism_authoritative=realism_authoritative)
     return v
+
+
+def test_no_downgrade_when_realism_authoritative():
+    """With realism_authoritative=True (production default), a dyn-val
+    NOT_TRIGGERED must NOT downgrade the finding -- realism decides. The
+    reproducer failing to trigger is not evidence of a false positive."""
+    from bmc_agent.cex_validator import CExOutcome
+    dyn = MagicMock()
+    dyn.validate.return_value = _make_dyn_result("not_triggered")
+    entry = _make_func("entry_fn")
+    v = _make_validator(dyn, realism_authoritative=True)
+    vr = _make_validation_result(outcome=CExOutcome.REAL_BUG,
+                                 failing_property="fn.pointer_dereference.1")
+    v._try_dynamic_validation(vr, _make_func("fn"), {"entry_fn": entry}, {}, _make_parsed(entry))
+    assert vr.outcome == CExOutcome.REAL_BUG  # NOT downgraded -- realism authoritative
 
 
 def _make_validation_result(*, outcome, failing_property, reproducer="real source"):

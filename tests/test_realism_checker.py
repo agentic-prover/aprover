@@ -176,13 +176,19 @@ def test_parse_uncertain_verdict():
 
 
 def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
-    """Pipeline._make_report takes the shortcut and returns UNREALISTIC
+    """LEGACY (now opt-in) skip path: with ``realism_authoritative=False``
+    Pipeline._make_report takes the shortcut and returns UNREALISTIC
     directly when (a) dynamic validation reported NOT_TRIGGERED AND
     (b) the failing property is a crash-class (NULL deref, OOB, etc.).
 
     A real bug here would crash at runtime, so NOT_TRIGGERED proves the
     witness is a model artifact (stub returns, aliasing, …).  Kills the
     bsearch / calloc-stub FP class without an LLM call.
+
+    NOTE: this dyn-val veto is DISABLED in the production default
+    (``realism_authoritative=True``) because it was killing real bugs
+    the reproducer merely couldn't synthesize a test for (read_be64 OOB,
+    2026-06). The test below pins the now-default authoritative behavior.
     """
     from unittest.mock import MagicMock
     from bmc_agent.pipeline import AMCPipeline
@@ -193,6 +199,7 @@ def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
     config = Config()
     config.enable_realism_check = True
     config.enable_dynamic_validation = True
+    config.realism_authoritative = False  # exercise the legacy (opt-in) veto path
 
     pipeline = AMCPipeline.__new__(AMCPipeline)
     pipeline.config = config
@@ -223,6 +230,59 @@ def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
     assert realism is not None
     assert realism.verdict == RealismVerdict.UNREALISTIC
     pipeline.realism_checker.check_with_tools_if_enabled.assert_not_called()
+
+
+def test_pipeline_calls_realism_when_authoritative_even_if_not_triggered():
+    """Production default (``realism_authoritative=True``): a crash-class
+    NOT_TRIGGERED must NOT short-circuit to UNREALISTIC. Realism is the
+    sole authority on real-vs-FP; the reproducer failing to synthesize a
+    triggering test is not evidence of a false positive (read_be64 OOB,
+    2026-06). The pipeline MUST call the realism LLM, and its verdict
+    (here REALISTIC) stands."""
+    from unittest.mock import MagicMock
+    from bmc_agent.pipeline import AMCPipeline
+    from bmc_agent.dynamic_validator import DynamicValidationResult, DynamicOutcome
+    from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+    from bmc_agent.config import Config
+
+    config = Config()
+    config.enable_realism_check = True
+    config.enable_dynamic_validation = True
+    config.enable_feedback_loop = False
+    assert config.realism_authoritative is True  # production default
+
+    pipeline = AMCPipeline.__new__(AMCPipeline)
+    pipeline.config = config
+    pipeline.llm = MagicMock()
+    pipeline.realism_checker = MagicMock()
+    pipeline.realism_checker.check_with_tools_if_enabled = MagicMock(return_value=RealismCheckResult(
+        verdict=RealismVerdict.REALISTIC,
+        reasoning="attacker-controlled OOB read; reproducer just couldn't synthesize a trigger",
+        key_concern="out-of-bounds read",
+        llm_confidence="high",
+    ))
+    pipeline.reporter = MagicMock()
+    pipeline.reporter.create_report = MagicMock(side_effect=lambda v, f, realism_check: realism_check)
+
+    validation = MagicMock()
+    validation.counterexample = MagicMock()
+    validation.counterexample.failing_property = "read_be64.pointer_dereference.1"  # crash-class
+    validation.dynamic_result = DynamicValidationResult(
+        outcome=DynamicOutcome.NOT_TRIGGERED,
+        signal_name=None,
+        reasoning="reproducer compiled+ran but did not synthesize a triggering input",
+    )
+
+    func = MagicMock()
+    func.name = "read_be64"
+
+    realism = pipeline._make_report(
+        validation=validation, func=func, spec=MagicMock(),
+        parsed=MagicMock(), all_funcs={}, driver_name="d",
+    )
+    assert realism is not None
+    assert realism.verdict == RealismVerdict.REALISTIC  # realism decides, not the dyn-val veto
+    pipeline.realism_checker.check_with_tools_if_enabled.assert_called_once()
 
 
 def test_pipeline_does_not_skip_realism_on_silent_ub_property():

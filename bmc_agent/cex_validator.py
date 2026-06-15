@@ -2244,6 +2244,9 @@ class CExValidator:
         # for ValidationResult without an ``outcome`` field. Only fire
         # the downgrade when the field is present and equals REAL_BUG.
         current_outcome = getattr(validation_result, "outcome", None)
+        _ra_cfg = getattr(self, "config", None) or getattr(getattr(self, "llm", None), "config", None)
+        if _ra_cfg is not None and getattr(_ra_cfg, "realism_authoritative", True):
+            return  # realism authoritative: dyn-val NOT_TRIGGERED must NOT downgrade a finding
         if (
             current_outcome == CExOutcome.REAL_BUG
             and dynamic_result is not None

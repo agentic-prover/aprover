@@ -590,6 +590,13 @@ class Config:
     # (the harvester that verifies leads is a separate opt-in step), while adding an LLM
     # call per rejection + FP noise on primitives. Enable only alongside the harvester.
     enable_adjacent_bug_discovery: bool = False
+    # Realism is AUTHORITATIVE on real-vs-FP. When True (default), a dynamic
+    # reproducer that does NOT trigger (NOT_TRIGGERED) must NOT skip or
+    # downgrade the realism verdict -- the reproducer failing to synthesize a
+    # triggering test has many benign causes (uncraftable input, OOB read that
+    # does not SIGSEGV, unit-level harness) and is NOT evidence of a FP. Dynamic
+    # validation only PROMOTES (confirmed_dynamic); it never vetoes realism.
+    realism_authoritative: bool = True
     # Enforce the realism verdict on DYNAMIC findings too (realism-enforcement plan,
     # Phase 4b). When True (default, user-authorized 2026-06-14), the
     # confirmed_dynamic immunity is removed: a UNREALISTIC realism verdict RE-TIERS a
