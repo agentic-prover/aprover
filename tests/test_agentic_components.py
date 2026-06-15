@@ -18,15 +18,16 @@ def _cfg(argv):
 _BASE = ["verify-dir", "--source-dir", "x", "--driver", "d"]
 
 
-def test_agentic_keeps_classifier_on_lightweight_realism_on_triage_off_dynval_on():
-    # The classifier drives the spurious->refinement->soundness-gate loop, so it
-    # MUST stay on under --agentic. A LIGHTWEIGHT (single-call, non-tool) realism
-    # check is also on by default; the expensive realism TOOLS are opt-in. Triage
-    # stays off. Dynamic reproducer on.
+def test_agentic_keeps_classifier_on_realism_tools_on_triage_off_dynval_on():
+    # The classifier (CEx validation) drives the spurious->refinement->soundness-gate
+    # loop, so it MUST stay on under --agentic. Realism is on, and the TOOL-USE
+    # augmentation is now DEFAULT-ON (the agent reads the code to verify callers/
+    # contracts; cuts false positives) -- --no-realism-tools to disable. Triage off.
+    # Dynamic reproducer on.
     _, c = _cfg(_BASE + ["--agentic"])
     assert c.enable_classifier is True           # refinement + soundness gate stay live
-    assert c.enable_realism_check is True         # lightweight realism on by default
-    assert c.enable_realism_tools is False        # expensive tool-use realism is opt-in
+    assert c.enable_realism_check is True         # realism on
+    assert c.enable_realism_tools is True         # tool-use realism DEFAULT-ON (reads code; cuts FPs)
     assert c.enable_phase_3e_triage is False
     assert c.enable_dynamic_validation is True   # reproducer on
 

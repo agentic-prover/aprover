@@ -171,14 +171,16 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # wins via these arg guards, regardless of flag order.
         if not getattr(args, "no_dynamic_validation", False):
             config.enable_dynamic_validation = True  # type: ignore[attr-defined]
-        # Realism: keep a LIGHTWEIGHT (single-LLM-call, non-tool) realism check ON
-        # by default — it cheaply filters obvious modelling artifacts and is the
-        # one judgment layer worth its cost. The expensive multi-turn TOOL-USE
-        # augmentation is OPT-IN via --enable-realism-tools. Disable realism
-        # entirely with --no-realism-check. Set authoritatively here (not via
-        # `if not`) so the resolution is independent of arg-handling order.
+        # Realism: the multi-turn TOOL-USE augmentation (the agent READS the code to
+        # verify callers/contracts before voting) is DEFAULT-ON under --agentic. It
+        # materially cuts false positives vs the flat single-call check, which
+        # confabulates "realistic" verdicts (validated: string primitive FPs 9 -> 2;
+        # dtb real OOB held, low-impact overflow correctly pruned). It costs extra LLM
+        # round-trips; disable with --no-realism-tools, or disable realism entirely
+        # with --no-realism-check. Set authoritatively here so resolution is
+        # independent of arg-handling order.
         config.enable_realism_check = not getattr(args, "no_realism_check", False)  # type: ignore[attr-defined]
-        config.enable_realism_tools = bool(getattr(args, "enable_realism_tools", False))  # type: ignore[attr-defined]
+        config.enable_realism_tools = not getattr(args, "no_realism_tools", False)  # type: ignore[attr-defined]
         # Triage (severity tiering) stays OFF by default; opt in with --enable-triage.
         if not getattr(args, "enable_triage", False):
             config.enable_phase_3e_triage = False  # type: ignore[attr-defined]
@@ -2460,7 +2462,7 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--no-realism-tools", action="store_true", default=False,
                      help="Disable realism check's bounded tool-use augmentation.")
     ver.add_argument("--enable-realism-tools", action="store_true", default=False,
-                     help="Opt in to the multi-turn tool-use realism augmentation "
+                     help="(DEFAULT-ON under --agentic: tool-use realism reads the code to verify "
                           "(under --agentic the realism check is lightweight/non-tool "
                           "by default; this re-enables the tool loop).")
     ver.add_argument("--minimal", action="store_true", default=False,
@@ -2731,7 +2733,7 @@ def build_parser() -> argparse.ArgumentParser:
     vd.add_argument("--no-realism-tools", action="store_true", default=False,
                     help="Disable realism check's bounded tool-use augmentation.")
     vd.add_argument("--enable-realism-tools", action="store_true", default=False,
-                    help="Opt in to the multi-turn tool-use realism augmentation "
+                    help="(DEFAULT-ON under --agentic: tool-use realism reads the code to verify "
                          "(under --agentic the realism check is lightweight/non-tool "
                          "by default; this re-enables the tool loop).")
     vd.add_argument("--no-phase-3e-triage", action="store_true", default=False,
