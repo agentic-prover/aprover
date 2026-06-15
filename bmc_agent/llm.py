@@ -604,14 +604,14 @@ class LLMClient:
                     cmd += ["--add-dir", str(d)]
             cmd += [
                 "--permission-mode",
-                (getattr(self.config, "claude_code_permission_mode", "") or "dontAsk").strip(),
+                (getattr(self.config, "claude_code_permission_mode", "") or "bypassPermissions").strip(),
             ]
         else:
             # Text-only mode: zero tools — a one-shot completion identical in
             # shape to the API path.
-            cmd += ["--tools", ""]
+            cmd += ["--disallowed-tools", "Read Grep Glob Bash Edit Write WebFetch WebSearch"]
 
-        cmd += ["--output-format", "json", "--no-session-persistence"]
+        cmd += ["--output-format", "json"]
         # --model is optional; when ``llm_model`` is empty or looks like a
         # non-claude name (e.g. left over from a K2 Think config), we let the
         # CLI pick the default for the user's session. Also skip provider-prefixed
@@ -627,7 +627,7 @@ class LLMClient:
         ):
             cmd += ["--model", model]
         if system_prompt:
-            cmd += ["--system-prompt", system_prompt]
+            cmd += ["--append-system-prompt", system_prompt]
 
         # Use the claude-code-specific timeout (default 600s). The API-mode
         # default (~180s from BMC_AGENT_LLM_TIMEOUT_S) is too tight here:

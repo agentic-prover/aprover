@@ -179,7 +179,7 @@ class Config:
     claude_code_add_dirs: "list[str]" = field(default_factory=list)
     # Permission mode for the agentic call. ``dontAsk`` auto-denies anything
     # outside the allowlist silently (no interactive prompt / hang).
-    claude_code_permission_mode: str = "dontAsk"
+    claude_code_permission_mode: str = "bypassPermissions"
 
     # Per-role LLM overrides for hybrid backends. Maps a role name (e.g.
     # "spec_gen", "feedback_distill") to a partial settings dict with
@@ -858,7 +858,7 @@ class Config:
             in ("1", "true", "yes"),
             claude_code_tools=os.environ.get("BMC_AGENT_CLAUDE_CODE_TOOLS", "Read,Grep,Glob"),
             claude_code_permission_mode=os.environ.get(
-                "BMC_AGENT_CLAUDE_CODE_PERMISSION_MODE", "dontAsk"
+                "BMC_AGENT_CLAUDE_CODE_PERMISSION_MODE", "bypassPermissions"
             ),
             lite_mode=os.environ.get("BMC_AGENT_LITE_MODE", "false").lower() == "true",
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
