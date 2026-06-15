@@ -269,3 +269,44 @@ The substantive corrections this session: (1) make CEx validation always-on
 (done), (2) keep the new in-process variants OFF by default until one shows a
 recall win, (3) the reproducer is the highest-value agentic component (protect it).
 CAVEAT: 2 modules, borderline findings; confirm on elf/net before hard-coding.
+
+---
+
+## FULL-KERNEL READINESS VERDICT (judgment-based; 5 modules adjudicated)
+
+Per-module results (every confirmed finding adjudicated by reading the code; NO oracle):
+
+| module | KB | type            | ran clean | confirmed | my verdict                          | runtime |
+|--------|----|-----------------|-----------|-----------|-------------------------------------|---------|
+| vfs    | 24 | syscall surface | yes       | ~1+demotes| REAL (vfs_readdir OOB); unreal overflows correctly demoted | ~92m |
+| dtb    | 6.5| parser          | yes       | 2         | BOTH REAL (read_be64 OOB, align4 ovf); NULL-deref correctly suppressed | ~24m |
+| elf    | 8  | parser          | yes       | 11        | core REAL (header-bounds OOB + overflow; classic ELF vulns) | ~35m |
+| klog   | 1.8| utility         | yes       | 0         | correctly CLEAN                     | ~1m  |
+| string | 7  | primitives      | yes       | 9         | BORDERLINE-FP (primitive contract-violations upheld on hypothetical callers; harness used n=2^63) | ~50m |
+(printf/memory running/queued; net/fat32 = the high-value big parsers, pending.)
+
+### VERDICT
+- **Per-module lead-generation on the ~9 driver-ready modules: GO.** Ran clean on all 5
+  (no crashes, no all-fallback, no NotImplementedError post-fixes). Found GENUINE bugs on
+  attacker-facing parsers (dtb/elf/vfs) and was correctly clean on klog.
+- **Entire 27-module kernel, turn-key: NO-GO.** Blockers:
+  (a) ~18 modules lack self-contained drivers (console/font/irq/keyboard/process/tls/ttf/
+      virtio_*/...) -> CBMC can't compile them as-is; need driver scaffolding or --standalone
+      validation. THE hard blocker.
+  (b) Runtime is size-driven and large (1m..92m/module); whole kernel = a MULTI-NIGHT batched
+      sweep with per-module timeouts, not one command.
+  (c) Output needs TRIAGE: high-signal on parsers, NOISY on primitives (string FP cluster).
+  (d) Design caveats (recorded): downgrade trusts reproducer input quality (soundness risk;
+      classifier-adjudicator is the guard); realism PRECISION GAP on low-level primitives
+      (over-upholds contract-violations); cross-module dynamic-harness compile-fail churn.
+
+### RECOMMENDATION
+1. NOW: run --agentic on driver-ready PARSER/attacker-surface modules (dtb, elf, net, fat32,
+   vfs) as a lead-generator -> highest value. DISCOUNT/skip primitive libs (string, printf,
+   font) -> FP-prone, low yield.
+2. BEFORE full-kernel: scaffold drivers for the ~18 missing modules (or validate --standalone);
+   build the batched all-modules sweep (per-module timeout, sequential, resumable); add a
+   triage step (my judgment / human).
+3. CONSIDER the design fixes: classifier-adjudicator default-ON as a downgrade guard; tighten
+   realism precision on primitives (don't uphold contract-violations w/o a concrete unclamped
+   attacker call site); deterministic cross-module stubbing to cut harness compile-fail churn.

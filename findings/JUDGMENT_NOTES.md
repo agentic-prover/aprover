@@ -71,3 +71,78 @@ ATTRIBUTION PENDING: reproonly arm (only reproducer agentic) isolates whether th
    is the driver vs spec_gen/bmc_config tools.
 NOTE: latency myth busted — deftools ~24min ~= flat ~23min on dtb. Earlier "tools 2-3x slower"
    was module-size confounded (vfs 24KB/92min vs dtb 6.5KB). CBMC+realism dominate, not tools.
+
+## DESIGN REVIEW (during readiness run, 2026-06-15)
+1. SOUNDNESS RISK — dyn-val downgrade trusts reproducer INPUT quality.
+   downgrade fires on DynamicOutcome.NOT_TRIGGERED ("harness ran clean"). Compile
+   failure -> INCONCLUSIVE (NOT downgraded) = SOUND. BUT a harness that COMPILES
+   but runs a NON-triggering input -> NOT_TRIGGERED -> REAL_BUG demoted. So a weak
+   reproducer can demote a real bug. MITIGATION = the classifier-adjudicator
+   (agents/classifier_tools.py, gated OFF) reads code to override the downgrade.
+   => RECONSIDER enabling classifier-adjudicator as a downgrade GUARD (reverses the
+   earlier "keep OFF" lean for that component).
+2. EFFICIENCY — ~48 dynamic-harness COMPILE failures per vfs run (ld/collect2),
+   each triggers an LLM repair-loop + recompile. Major latency driver. The
+   deterministic harness generator has a high build-failure rate -> worth hardening
+   (better link flags / type stubs) to cut repair churn.
+3. CORRECTION — LLM reachability (_check_reachability_with_llm, role=realism) is
+   NOT dead code: it fires when the CBMC reachability check ERRORS (observed:
+   vfs_get_root, vfs_get_cwd). Earlier "dead code" claim was wrong.
+4. WATCH — "falling back to unit-level harness" when system-entry harness can't
+   build: realism then judges on a LESS-FAITHFUL unit harness (precision risk;
+   unit harness has unconstrained inputs -> more FP-prone).
+
+### compile-failure breakdown (root causes, prioritized)
+- undefined reference to <fn>_stub : harness gen emits a stub CALL without a stub
+  DEFINITION. Deterministic bug, fixable -> cuts repair churn. [HIGH value, contained]
+- relocation against '<global>' in read-only .text : missing -fPIC / const-global
+  handling. Fixable via build flag. [MED]
+- '<var>' undeclared in _amc_setup_state : LLM-generated harness bug -> repair loop
+  is the right mechanism (not deterministic). [leave to repair loop]
+- undefined reference to _amc_reproducer_main : link order/visibility. [investigate]
+None are soundness-critical (compile fail -> INCONCLUSIVE, no demotion); all are
+EFFICIENCY/quality (high compile-fail rate -> many repair loops -> slow runs).
+
+## readiness adjudication (cont.)
+- elf: 11 confirmed (realism=realistic, several confirmed_dynamic). Adjudicated core:
+  elf_validate only checks size>=sizeof(Ehdr)+magic; does NOT validate e_phoff/e_phnum/
+  e_phentsize vs size. elf_calc_size loops phdr = base+e_phoff+i*e_phentsize (attacker
+  offsets, no bounds) -> OOB read [REAL]; end=p_vaddr+p_memsz attacker u64 -> overflow [REAL].
+  Textbook ELF-parser bugs. --agentic FOUND THEM. Strong positive readiness signal.
+- klog: 0 confirmed, ran ~1min. Clean = appropriate for a trivial logging module.
+- Per-module time is size-driven: klog ~1min, string ~16min+, elf ~35min (refinement loops).
+READINESS so far (vfs/dtb/elf/klog): --agentic finds genuine bugs + handles clean modules right.
+
+### harness compile-fail fix — DIAGNOSED, deferred (not safely contained)
+Root cause of "undefined reference to <fn>_stub": the DYNAMIC GCC harness (not the
+CBMC harness_generator) links the real source, which calls cross-module externals
+(e.g. vfs.c -> fat32_file_size). Stub DEFINITIONS are emitted for direct callees but
+transitive cross-module externals can be missed -> linker undefined-reference ->
+compile fail -> INCONCLUSIVE -> agentic harness-repair LLM loop fixes it (observed
+11x in vfs). So: SELF-HEALING via repair loop = correctness OK; cost = wasted repair
+LLM calls (efficiency). Proper fix = deterministic pre-emptive stubbing of ALL
+referenced externals (incl transitive/cross-module) in the GCC build, in
+dynamic_validator.py build path. Non-trivial, hot-path, NOT rushed here. FOLLOW-UP.
+
+### corroboration: compile-fail is cross-module-specific
+string (self-contained utility module, no cross-module calls): 0 compile errors, 0
+repairs across 19 functions. vfs (calls fat32_*): ~48 compile errors. CONFIRMS the
+harness-compile problem is specifically transitive CROSS-MODULE externals. Self-
+contained modules (string, klog) run clean + fast on the dynamic harness. The
+follow-up fix scope is precisely: cross-module external stubbing in the GCC build.
+
+## string adjudication — PRECISION GAP on primitives (key readiness caveat)
+string: 9 confirmed (all confirmed_dynamic, realism=realistic) on memcpy/memset/
+memchr/memcmp/memset32/strncpy. By MY judgment these are BORDERLINE-FP, not real:
+- strncpy: realism ADMITS harness used n=2^63 ("no real caller produces") but upholds
+  on GENERAL "strncpy trusts its caller". = confirming the primitive CONTRACT, not a bug.
+  Dynamic "confirmation" = reproducer fed an out-of-contract n -> crash. FP pattern.
+- memcpy: cited elf_load(p_vaddr=0) NULL-deref but VERIFIED chain was memmove->memcpy
+  (speculative caller). Borderline low-sev at best.
+=> REALISM PRECISION GAP on low-level primitives: it over-upholds contract-violations
+   as "realistic" via hypothetical-caller reasoning + the reproducer confirms them by
+   feeding out-of-contract inputs. This is the FLIP of the downgrade risk (here the
+   reproducer CONFIRMS FPs).
+READINESS PATTERN: --agentic = HIGH-VALUE on attacker-facing PARSERS (dtb/elf: real
+   bugs), NOISY on utility/PRIMITIVE modules (string; likely printf/font). Full-kernel
+   run should PRIORITIZE parser/attacker-surface modules; discount/skip primitive libs.
