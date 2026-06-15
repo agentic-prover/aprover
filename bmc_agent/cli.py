@@ -2448,7 +2448,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Force the CEx classifier ON (REAL/SPURIOUS/UNRESOLVED + the "
                           "spurious->refinement->soundness-gate loop). On by default, "
                           "including under --agentic; this overrides "
-                          "BMC_AGENT_ENABLE_CLASSIFIER=false.")
+                          "(DEPRECATED no-op: CEx validation always runs and cannot be disabled).")
     ver.add_argument("--enable-triage", action="store_true", default=False,
                      dest="enable_triage",
                      help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "
@@ -2719,7 +2719,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Force the CEx classifier ON (REAL/SPURIOUS/UNRESOLVED + the "
                          "spurious->refinement->soundness-gate loop). On by default, "
                          "including under --agentic; this overrides "
-                         "BMC_AGENT_ENABLE_CLASSIFIER=false.")
+                         "(DEPRECATED no-op: CEx validation always runs and cannot be disabled).")
     vd.add_argument("--enable-triage", action="store_true", default=False,
                     dest="enable_triage",
                     help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "

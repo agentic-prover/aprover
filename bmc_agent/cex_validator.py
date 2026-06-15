@@ -262,27 +262,11 @@ class CExValidator:
         """
         func_name = func.name
 
-        # Classifier gate. When the classifier is disabled (e.g. --agentic
-        # default), do NOT spend LLM judgment on REAL/SPURIOUS — surface the cex
-        # as a raw UNRESOLVED lead. This also skips the SPURIOUS→refinement loop
-        # (it is triggered by a SPURIOUS verdict), so the dynamic reproducer
-        # becomes the gate downstream. Independent of realism/triage.
-        if not getattr(self.config, "enable_classifier", True):
-            logger.info(
-                "classifier disabled — '%s' counterexample surfaced as UNRESOLVED lead",
-                func_name,
-            )
-            return ValidationResult(
-                function_name=func_name,
-                counterexample=counterexample,
-                caller_path=[],
-                system_entry_input=None,
-                refinement_history=[],
-                final_precondition=spec.precondition,
-                reasoning="classifier disabled; counterexample surfaced as a raw lead",
-                outcome=CExOutcome.UNRESOLVED,
-            )
-
+        # CEx VALIDATION always runs: reachability + feasibility via CBMC,
+        # then REAL/SPURIOUS classification + the spurious->refinement loop.
+        # (Formerly gated by enable_classifier; that disable path was removed
+        # -- there is no sound reason to skip validation. The flag/env are
+        # kept as deprecated no-ops for backward compatibility.)
         logger.info("Validating counterexample for '%s'", func_name)
 
         # Per-CEx error flags for the gate in _try_dynamic_validation.
@@ -2296,7 +2280,7 @@ class CExValidator:
                         "deterministic downgrade", _exc,
                     )
             logger.info(
-                "Classifier downgrade: '%s' outcome REAL_BUG → UNRESOLVED "
+                "Validation downgrade: '%s' outcome REAL_BUG → UNRESOLVED "
                 "(dyn-val NOT_TRIGGERED on crash-class property '%s' "
                 "contradicts the static caller-chain trace; classifying as "
                 "model artifact)",

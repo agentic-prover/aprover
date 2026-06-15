@@ -910,7 +910,7 @@ class Config:
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
             enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
             enforce_realism_on_dynamic=(os.environ.get("BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC") or "true").lower() == "true",
-            enable_classifier=(os.environ.get("BMC_AGENT_ENABLE_CLASSIFIER") or "true").lower() == "true",
+            enable_classifier=True,  # DEPRECATED/always-on: CEx validation cannot be disabled; BMC_AGENT_ENABLE_CLASSIFIER is ignored (kept as a no-op).
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
             enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",

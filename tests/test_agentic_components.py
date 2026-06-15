@@ -69,27 +69,14 @@ def test_components_independent_no_agentic_defaults_on():
     assert c.enable_dynamic_validation is True
 
 
-def test_classifier_env_gate():
+def test_validation_always_on_env_ignored():
+    # Validation (formerly the "classifier" gate) is always on; the legacy
+    # BMC_AGENT_ENABLE_CLASSIFIER=false no longer disables it (deprecated no-op).
     os.environ["BMC_AGENT_ENABLE_CLASSIFIER"] = "false"
     try:
-        assert Config.from_env().enable_classifier is False
+        assert Config.from_env().enable_classifier is True
     finally:
         os.environ.pop("BMC_AGENT_ENABLE_CLASSIFIER", None)
-
-
-def test_classifier_off_short_circuits_validate_to_unresolved():
-    from bmc_agent.cex_validator import CExValidator, CExOutcome
-    from bmc_agent.cbmc import Counterexample
-    v = CExValidator.__new__(CExValidator)
-    class _Cfg: enable_classifier = False
-    v.config = _Cfg()
-    class _Sig: name = "f"; return_type = "int"; parameters = []
-    class _Func: name = "f"; signature = _Sig(); body = ""; source_file = "x.c"
-    class _Spec: precondition = "true"
-    cex = Counterexample(failing_property="f.pointer.1", description="d")
-    res = v.validate(_Func(), _Spec(), cex, {}, {}, None, "drv")
-    assert res.outcome == CExOutcome.UNRESOLVED
-    assert res.counterexample is cex
 
 
 def test_agentic_enables_cbmc_driver_agents():
