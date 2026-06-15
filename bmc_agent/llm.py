@@ -791,6 +791,14 @@ def _tools_to_openai_schema(tools: list[ToolDef]) -> list[dict]:
     ]
 
 
+def _tools_to_anthropic_schema(tools: "list[ToolDef]") -> "list[dict]":
+    """Render ToolDef -> Anthropic Messages API tools list (input_schema form)."""
+    return [
+        {"name": t.name, "description": t.description, "input_schema": t.parameters}
+        for t in tools
+    ]
+
+
 def _add_complete_with_tools_to_llm():
     """Bind ``complete_with_tools`` onto :class:`LLMClient`. Done as a
     separate function rather than inlining inside the class body because
@@ -852,10 +860,16 @@ def _add_complete_with_tools_to_llm():
         try:
             provider = self.config.resolved_provider()
             if provider != "openai":
-                raise NotImplementedError(
-                    f"complete_with_tools requires the openai-compatible provider "
-                    f"(got {provider!r}). Configure a per-role override or set "
-                    f"BMC_AGENT_LLM_BASE_URL to an OpenAI-compatible endpoint."
+                return self._anthropic_tool_use_loop(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    tools=tools,
+                    tool_handlers=tool_handlers,
+                    max_iterations=max_iterations,
+                    max_tool_calls=max_tool_calls,
+                    max_tokens_per_turn=max_tokens_per_turn,
+                    temperature=temperature,
+                    result_truncate=result_truncate,
                 )
 
             return self._openai_tool_use_loop(
@@ -1053,8 +1067,146 @@ def _add_complete_with_tools_to_llm():
             error=f"max_iterations ({max_iterations}) exceeded",
         )
 
+    def _anthropic_tool_use_loop(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        tools,
+        tool_handlers,
+        max_iterations: int,
+        max_tool_calls: int,
+        max_tokens_per_turn: int,
+        temperature: float,
+        result_truncate: int,
+    ) -> ToolUseResult:
+        """Anthropic-native Messages API tool-use loop (mirrors the openai one).
+
+        Tools carry an ``input_schema``; the model returns ``tool_use`` content
+        blocks; we run each handler and feed ``tool_result`` blocks back as a
+        user turn. Token usage is accumulated into the client telemetry.
+        """
+        client = self._get_client()
+        timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
+        tool_schemas = _tools_to_anthropic_schema(tools)
+        messages: list = [{"role": "user", "content": user_prompt}]
+        tool_calls_made = 0
+
+        for iteration in range(max_iterations):
+            create_kwargs: dict = dict(
+                model=self.config.llm_model,
+                max_tokens=max_tokens_per_turn,
+                system=system_prompt,
+                messages=messages,
+                tools=tool_schemas,
+            )
+            if not _model_rejects_temperature(self.config.llm_model):
+                create_kwargs["temperature"] = temperature
+            try:
+                response = client.with_options(timeout=timeout_s).messages.create(**create_kwargs)
+            except Exception as exc:
+                raise LLMError(f"anthropic tool-use request failed: {exc!r}") from exc
+
+            usage = getattr(response, "usage", None)
+            if usage:
+                self._add_usage(
+                    getattr(usage, "input_tokens", 0),
+                    getattr(usage, "output_tokens", 0),
+                )
+
+            assistant_blocks: list = []
+            tool_use_blocks: list = []
+            text_out = ""
+            for block in (getattr(response, "content", None) or []):
+                btype = getattr(block, "type", None)
+                if btype == "text":
+                    t = getattr(block, "text", "")
+                    text_out += t
+                    assistant_blocks.append({"type": "text", "text": t})
+                elif btype == "tool_use":
+                    tu = {
+                        "type": "tool_use",
+                        "id": getattr(block, "id", ""),
+                        "name": getattr(block, "name", ""),
+                        "input": getattr(block, "input", {}) or {},
+                    }
+                    assistant_blocks.append(tu)
+                    tool_use_blocks.append(tu)
+
+            if not tool_use_blocks:
+                return ToolUseResult(
+                    text=_strip_reasoning_blocks(text_out),
+                    iterations=iteration + 1,
+                    tool_calls_made=tool_calls_made,
+                    messages=messages,
+                )
+
+            messages.append({"role": "assistant", "content": assistant_blocks})
+
+            results_content: list = []
+            for tu in tool_use_blocks:
+                tc_id = tu["id"]
+                name = tu["name"]
+                args = tu["input"] if isinstance(tu["input"], dict) else {}
+
+                if tool_calls_made >= max_tool_calls:
+                    results_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": (
+                            "ERROR: max_tool_calls cap reached. Emit a final "
+                            "answer now using the evidence you have gathered."
+                        ),
+                    })
+                    continue
+
+                handler = tool_handlers.get(name)
+                if handler is None:
+                    results_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": f"ERROR: tool {name!r} is not registered",
+                    })
+                    continue
+
+                try:
+                    result = handler(args)
+                except Exception as exc:  # noqa: BLE001
+                    results_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": f"ERROR: tool {name!r} raised {type(exc).__name__}: {exc}",
+                    })
+                    tool_calls_made += 1
+                    continue
+
+                if isinstance(result, str):
+                    content = result
+                else:
+                    try:
+                        content = json.dumps(result, default=str)
+                    except TypeError:
+                        content = str(result)
+                if len(content) > result_truncate:
+                    content = content[:result_truncate] + "\n...[truncated]"
+                results_content.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc_id,
+                    "content": content,
+                })
+                tool_calls_made += 1
+
+            messages.append({"role": "user", "content": results_content})
+
+        return ToolUseResult(
+            text="", iterations=max_iterations,
+            tool_calls_made=tool_calls_made, messages=messages,
+            error=f"max_iterations ({max_iterations}) exceeded",
+        )
+
     LLMClient.complete_with_tools = complete_with_tools  # type: ignore[attr-defined]
     LLMClient._openai_tool_use_loop = _openai_tool_use_loop  # type: ignore[attr-defined]
+    LLMClient._anthropic_tool_use_loop = _anthropic_tool_use_loop  # type: ignore[attr-defined]
 
 
 _add_complete_with_tools_to_llm()

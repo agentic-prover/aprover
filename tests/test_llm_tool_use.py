@@ -295,19 +295,23 @@ def test_complete_with_tools_truncates_large_results():
     assert "[truncated]" in tool_results[0]["content"]
 
 
-def test_complete_with_tools_non_openai_provider_raises():
-    """Anthropic native path isn't implemented yet."""
+def test_complete_with_tools_anthropic_uses_native_loop():
+    """Anthropic provider now routes to the native tool-use loop (previously
+    raised NotImplementedError; see _anthropic_tool_use_loop)."""
+    from unittest.mock import patch
     from bmc_agent.config import Config
     cfg = Config(artifact_dir="/tmp/_x")
     cfg.llm_provider = "anthropic"
     cfg.llm_api_key = "x"
     client = LLMClient(cfg)
-    with pytest.raises(NotImplementedError, match="openai-compatible"):
-        client.complete_with_tools(
+    with patch.object(LLMClient, "_anthropic_tool_use_loop", return_value="SENTINEL") as m:
+        out = client.complete_with_tools(
             "s", "u",
             tools=[ToolDef(name="t", description="d", parameters={})],
             tool_handlers={},
         )
+    assert out == "SENTINEL"
+    assert m.called
 
 
 def test_complete_with_tools_serializes_non_string_result():
