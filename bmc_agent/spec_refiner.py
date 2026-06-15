@@ -201,9 +201,12 @@ class SpecRefiner:
 
         # Lazy import to avoid the agents package importing
         # spec_refiner back at module load time.
-        from bmc_agent.agents.refinement import RefinementAgent
-
-        agent = RefinementAgent(config=self.config, llm=self.llm)
+        if getattr(self.config, "enable_refinement_tools", False):
+            from bmc_agent.agents.refinement_tools import RefinementWithToolsAgent
+            agent = RefinementWithToolsAgent(config=self.config, llm=self.llm)
+        else:
+            from bmc_agent.agents.refinement import RefinementAgent
+            agent = RefinementAgent(config=self.config, llm=self.llm)
         result = agent.run(
             func_info=func_info,
             current_spec=current_spec,

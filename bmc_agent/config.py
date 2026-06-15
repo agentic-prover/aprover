@@ -365,6 +365,12 @@ class Config:
     # (never weakened by augmentation). Bounded: max 3 tool calls, 6
     # LLM turns. Default-on; --no-realism-tools to disable.
     enable_realism_tools: bool = True
+    # Agentic (in-process tool-using) variants of normally-flat agents:
+    # they may grep/read the real source to ground judgment. Default OFF
+    # (evaluated for the per-component agentic-vs-flat default plan).
+    enable_refinement_tools: bool = False
+    enable_feedback_distill_tools: bool = False
+    enable_classifier_tools: bool = False
 
     # Raw-bytes mode: treat single ``char *`` / ``const char *`` parameters as
     # raw byte buffers instead of bounded NUL-terminated strings in the harness.

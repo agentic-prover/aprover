@@ -274,7 +274,11 @@ def learn_from_rejection(
     # back at module load time.
     from bmc_agent.agents.feedback_distill import FeedbackDistillAgent
 
-    agent = FeedbackDistillAgent(config=config, llm=llm)
+    if getattr(config, "enable_feedback_distill_tools", False):
+        from bmc_agent.agents.feedback_distill_tools import FeedbackDistillWithToolsAgent
+        agent = FeedbackDistillWithToolsAgent(config=config, llm=llm)
+    else:
+        agent = FeedbackDistillAgent(config=config, llm=llm)
     result = agent.run(
         func=func,
         counterexample=counterexample,
