@@ -229,3 +229,43 @@ Gate = keep reals {vfs_readdir, vfs_write}; demote FPs {vfs_append, vfs_delete_r
 b86b655 registry wiring + pin | 2a9efb7 token telemetry | 88c84af opus temperature fix
 d47f50c claude-code CLI v1.0.110 flag fix | 4fedd69 anthropic-native complete_with_tools
 All validated: full suite 54 (== baseline), test_phase3.py isolated 3.
+
+---
+
+## PER-COMPONENT --agentic DEFAULT PLAN (judgment-based; vfs + dtb evidence)
+
+Method: ran ablations, adjudicated every confirmed finding by READING the code
+(my judgment = oracle). dtb ablation (deftools/flat/reproonly) was decisive.
+Excludes the claude-code "all" mode (separate orthogonal switch).
+
+### Evidence summary (dtb, all findings adjudicated by me)
+- read_be64 OOB read (REAL): caught by flat, deftools, AND reproonly -> the
+  always-on validator+realism backbone catches the clear real bug; tools not needed.
+- align4 unsigned overflow (REAL): caught ONLY when the reproducer is on -> the
+  reproducer adds recall.
+- dtb_parse NULL-deref (BORDERLINE / not attacker-reachable under security TM):
+  suppressed by spec_gen/bmc_config tools (reasonable dtb_addr!=NULL precondition)
+  -> tools add PRECISION, did not lose a real bug.
+- Latency: deftools ~= flat (~24min on dtb). The "tools 2-3x slower" was module-size
+  confounded (vfs). CBMC+realism dominate runtime, not the tool agents.
+
+### Decision per component (flat vs in-process agent)
+| component        | default        | confidence | rationale (by my judgment)                                   |
+| validation(CBMC) | ALWAYS-ON      | high       | reachability+feasibility backbone; catches read_be64 regardless. (done: cfbe562) |
+| realism          | FLAT, always-on| high       | sound, code-grounded FP filter; its dtb reasoning matched my own reading. |
+| reproducer       | AGENT          | med-high   | adds real-bug recall (align4) + dynamic confirmation; investigation->triggering input. |
+| spec_gen         | AGENT          | medium     | improved precision on dtb (suppressed borderline NULL-deref via sound precondition); no real-bug loss. |
+| bmc_config       | AGENT          | low-med    | mechanical flags/inline; bundled w/ spec_gen; neutral-to-positive, keep. |
+| harness_gen      | AGENT          | low        | native anthropic tool loop; fires only on build error; low blast radius. |
+| refinement       | FLAT (variant OFF) | medium | new tool variant built but no recall benefit shown; adds latency/variance -> keep OFF. |
+| feedback_distill | FLAT (variant OFF) | medium | transformation task; no demonstrated benefit -> keep OFF. |
+| classifier-adjud | OFF            | medium     | adjudicator at downgrade point; only enable if a real bug is being lost to dyn-val downgrade. |
+| triage           | OFF (current)  | low        | not exercised; leave default. |
+
+### Bottom line
+The CURRENT --agentic default (reproducer + spec_gen + bmc_config tools on;
+refinement/feedback/classifier-tools off) is broadly REASONABLE on this evidence.
+The substantive corrections this session: (1) make CEx validation always-on
+(done), (2) keep the new in-process variants OFF by default until one shows a
+recall win, (3) the reproducer is the highest-value agentic component (protect it).
+CAVEAT: 2 modules, borderline findings; confirm on elf/net before hard-coding.
