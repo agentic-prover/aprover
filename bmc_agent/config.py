@@ -585,6 +585,11 @@ class Config:
 
     # Realism checker settings (Phase 3 post-validation LLM audit)
     enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
+    # Adjacent-bug discovery: a 2nd LLM call on each realism REJECTION hunting for
+    # nearby defects. DEFAULT OFF — empirically it yielded 130 leads / 0 confirmed bugs
+    # (the harvester that verifies leads is a separate opt-in step), while adding an LLM
+    # call per rejection + FP noise on primitives. Enable only alongside the harvester.
+    enable_adjacent_bug_discovery: bool = False
     # Enforce the realism verdict on DYNAMIC findings too (realism-enforcement plan,
     # Phase 4b). When True (default, user-authorized 2026-06-14), the
     # confirmed_dynamic immunity is removed: a UNREALISTIC realism verdict RE-TIERS a
