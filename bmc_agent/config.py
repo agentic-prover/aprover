@@ -323,6 +323,16 @@ class Config:
     # refinement routing role). Toggle: ``--enable-soundness-gate`` /
     # ``BMC_AGENT_ENABLE_SOUNDNESS_GATE``.
     enable_soundness_gate: bool = False
+    # Fail-closed soundness gate. When True (and enable_soundness_gate is on
+    # AND the soundness agent actually produced a verdict), a refiner clause
+    # may delete a counterexample ONLY on a confident SOUND verdict; UNKNOWN
+    # (the common case) and unverifiable verdicts KEEP the counterexample as a
+    # lead (surfaced as unresolved) instead of refining it away. Default False
+    # = legacy fail-open. Agent error / non-agentic backend always degrades to
+    # permissive (escape hatch), so this never blocks a non-agentic run. The
+    # sound direction for a bug-finder: keep-unless-proven-innocent (2026-06).
+    # Auto-on under --agentic (cli); --no-soundness-gate-fail-closed reverts.
+    soundness_gate_fail_closed: bool = False
 
     # Soundness-policy compliance for the spec-refiner accept path
     # (realism-enforcement plan, Phase 2). When the refiner's clause excludes the
@@ -938,6 +948,8 @@ class Config:
             enable_bmc_config_agent=(os.environ.get("BMC_AGENT_ENABLE_BMC_CONFIG_AGENT") or "true").lower() == "true",
             enable_reproducer_agent=(os.environ.get("BMC_AGENT_ENABLE_REPRODUCER_AGENT") or "true").lower() == "true",
             enable_soundness_gate=os.environ.get("BMC_AGENT_ENABLE_SOUNDNESS_GATE", "false").lower()
+            in ("1", "true", "yes"),
+            soundness_gate_fail_closed=os.environ.get("BMC_AGENT_SOUNDNESS_GATE_FAIL_CLOSED", "false").lower()
             in ("1", "true", "yes"),
             enforce_spec_refiner_retier=os.environ.get("BMC_AGENT_ENFORCE_SPEC_REFINER_RETIER", "false").lower()
             in ("1", "true", "yes"),

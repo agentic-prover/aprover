@@ -2765,6 +2765,47 @@ class AMCPipeline:
         )
         return remediation
 
+    def _refinement_soundness_blocks(self, func, clause, counterexample) -> bool:
+        """Soundness policy for whether a refiner clause may DELETE a CEx.
+
+        Returns True to BLOCK the deletion (keep the counterexample as a
+        real-bug lead); False to ALLOW the refinement to proceed.
+
+        - enable_soundness_gate off                  -> allow (False)
+        - agent could not run / errored              -> allow (False) [escape
+          hatch: a non-agentic backend degrades to permissive]
+        - SOUND (caller-guaranteed)                  -> allow (False)
+        - UNSOUND + real cited caller                -> block (True)  [both modes]
+        - UNSOUND + fabricated caller, or UNKNOWN    -> fail_closed: block (True);
+          legacy fail-open: allow (False)
+        """
+        if not getattr(self.config, "enable_soundness_gate", False):
+            return False
+        try:
+            from bmc_agent.agents.soundness import SoundnessAgent
+            sres = SoundnessAgent(self.config, self.llm).run(
+                func_info=func, proposed_clause=clause,
+                rejected_cex=counterexample,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "soundness gate raised (%r) — not blocking (escape hatch)", exc,
+            )
+            return False
+        if not sres.ok:
+            return False  # no verdict -> escape hatch (graceful for non-agentic)
+        v = sres.output
+        fail_closed = getattr(self.config, "soundness_gate_fail_closed", False)
+        if v.is_unsound:
+            cited = v.implicated_caller or ""
+            if _cited_caller_is_fabricated(cited, getattr(func, "source_file", "")):
+                return bool(fail_closed)  # untrustworthy unsound: block only if fail-closed
+            return True  # a real caller can violate the clause -> always block
+        if v.is_sound:
+            return False  # proven caller-guaranteed -> safe to refine away
+        # UNKNOWN (the common verdict): the gate could not confirm soundness.
+        return bool(fail_closed)
+
     def _feedback_iterate(
         self,
         validation: "ValidationResult",
@@ -2854,6 +2895,20 @@ class AMCPipeline:
                     " && ".join(applied_clauses) or "(spec precondition only)",
                     _flag_summary(iter_flags),
                 )
+                if self._refinement_soundness_blocks(
+                    func, " && ".join(applied_clauses),
+                    validation.counterexample,
+                ):
+                    logger.warning(
+                        "Feedback iter %d (%s): CBMC verified clean under {%s}, "
+                        "but the soundness gate (fail-closed) could not confirm "
+                        "that precondition is caller-guaranteed — KEEPING the "
+                        "counterexample as a lead instead of demoting (in-sweep "
+                        "convergence suppressed).",
+                        iteration, func.name,
+                        " && ".join(applied_clauses) or "(spec precondition only)",
+                    )
+                    return validation, realism
                 return _verified_clean_validation(validation), _realism_verified()
 
             # (3) New CE — classify + realism.
@@ -3089,6 +3144,18 @@ class AMCPipeline:
                     )
                     return validation, realism
             if sres.ok:
+                if (
+                    getattr(self.config, "soundness_gate_fail_closed", False)
+                    and not sres.output.is_sound
+                ):
+                    logger.warning(
+                        "spec_refiner (%s): soundness gate verdict=%s (not a "
+                        "confident SOUND) and fail-closed is on — NOT refining "
+                        "away CEx %s; keeping it as a real-bug lead.",
+                        func.name, sres.output.verdict,
+                        getattr(validation.counterexample, "failing_property", "?"),
+                    )
+                    return validation, realism
                 logger.info(
                     "spec_refiner (%s): soundness gate verdict=%s for clause "
                     "'%s' — allowing refinement",

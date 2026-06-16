@@ -159,3 +159,105 @@ def test_guard_unknown_defers(monkeypatch):
     _patch_agent(monkeypatch, "UNKNOWN")
     v = _validator(enable_gate=True)
     assert v._agentic_soundness_guard(func=_Func("/x/a.c"), new_precondition="p", counterexample=None) is None
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed refinement policy: AMCPipeline._refinement_soundness_blocks
+# (2026-06). Returns True to BLOCK a refiner clause from deleting a CEx.
+# ---------------------------------------------------------------------------
+
+def _pipeline(enable_gate=True, fail_closed=False):
+    import types
+    from bmc_agent.pipeline import AMCPipeline
+    cfg = types.SimpleNamespace(
+        enable_soundness_gate=enable_gate,
+        soundness_gate_fail_closed=fail_closed,
+    )
+    selff = types.SimpleNamespace(config=cfg, llm=None)
+    return AMCPipeline._refinement_soundness_blocks.__get__(selff, AMCPipeline)
+
+
+def _patch_agent_none(monkeypatch):
+    """Agent that produces no verdict (ok == False) -> escape hatch."""
+    class _R:
+        output = None
+        error = "no agentic backend"
+        ok = False
+    class _FakeAgent:
+        def __init__(self, *a, **k): pass
+        def run(self, **k): return _R()
+    monkeypatch.setattr("bmc_agent.agents.soundness.SoundnessAgent", _FakeAgent)
+
+
+def test_refine_block_gate_off_allows(monkeypatch):
+    _patch_agent(monkeypatch, "UNSOUND", caller="caller.c:3")  # would block, but...
+    blocks = _pipeline(enable_gate=False, fail_closed=True)
+    assert blocks(_Func("/x/a.c"), "p", None) is False  # gate off -> never blocks here
+
+
+def test_refine_block_agent_error_is_escape_hatch(monkeypatch):
+    _patch_agent_none(monkeypatch)
+    blocks = _pipeline(enable_gate=True, fail_closed=True)
+    assert blocks(_Func("/x/a.c"), "p", None) is False  # no verdict -> permissive
+
+
+def test_refine_block_sound_allows(monkeypatch):
+    _patch_agent(monkeypatch, "SOUND")
+    for fc in (False, True):
+        blocks = _pipeline(enable_gate=True, fail_closed=fc)
+        assert blocks(_Func("/x/a.c"), "p", None) is False  # proven sound -> allow
+
+
+def test_refine_block_unsound_real_caller_blocks_both_modes(monkeypatch, tmp_path):
+    src = tmp_path / "a.c"; src.write_text("int f(void){return 0;}\n")
+    (tmp_path / "caller.c").write_text("void g(void){}\n")
+    _patch_agent(monkeypatch, "UNSOUND", caller="caller.c:3")
+    for fc in (False, True):
+        blocks = _pipeline(enable_gate=True, fail_closed=fc)
+        assert blocks(_Func(str(src)), "p", None) is True  # real caller -> block
+
+
+def test_refine_block_unknown_failopen_allows(monkeypatch):
+    _patch_agent(monkeypatch, "UNKNOWN")
+    blocks = _pipeline(enable_gate=True, fail_closed=False)
+    assert blocks(_Func("/x/a.c"), "p", None) is False  # legacy fail-open
+
+
+def test_refine_block_unknown_failclosed_blocks(monkeypatch):
+    _patch_agent(monkeypatch, "UNKNOWN")
+    blocks = _pipeline(enable_gate=True, fail_closed=True)
+    assert blocks(_Func("/x/a.c"), "p", None) is True  # fail-closed keeps the lead
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed default-on under --agentic (2026-06), with --no- override.
+# ---------------------------------------------------------------------------
+
+def _apply(agentic=False, no_failclosed=False):
+    import argparse
+    from bmc_agent.cli import _apply_provider_args
+    from bmc_agent.config import Config
+    cfg = Config()
+    args = argparse.Namespace(
+        agentic=agentic, agentic_claude_code=False, agentic_refine=False,
+        no_soundness_gate_fail_closed=no_failclosed,
+    )
+    _apply_provider_args(cfg, args)
+    return cfg
+
+
+def test_agentic_enables_fail_closed_by_default():
+    cfg = _apply(agentic=True)
+    assert cfg.enable_soundness_gate is True
+    assert cfg.soundness_gate_fail_closed is True
+
+
+def test_agentic_fail_closed_overridable_with_no_flag():
+    cfg = _apply(agentic=True, no_failclosed=True)
+    assert cfg.enable_soundness_gate is True       # gate still on
+    assert cfg.soundness_gate_fail_closed is False  # but fail-closed opted out
+
+
+def test_non_agentic_leaves_fail_closed_off():
+    cfg = _apply(agentic=False)
+    assert cfg.soundness_gate_fail_closed is False

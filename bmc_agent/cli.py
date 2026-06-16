@@ -157,6 +157,12 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # The verify/verify-dir-only guards. Harmless on commands that don't use
         # them (generate, etc.) — the fields just go unread.
         config.enable_soundness_gate = True  # type: ignore[attr-defined]
+        # Fail-closed soundness gate is DEFAULT-ON under the agentic presets: a
+        # refiner clause may delete a counterexample only on a confident SOUND
+        # verdict; UNKNOWN/unverifiable keep it surfaced (the 2026-06 dtb_parse/
+        # read_be64 recovery). Overridable with --no-soundness-gate-fail-closed.
+        if not getattr(args, "no_soundness_gate_fail_closed", False):
+            config.soundness_gate_fail_closed = True  # type: ignore[attr-defined]
         config.enable_agentic_harness_repair = True  # type: ignore[attr-defined]
         # Split spec gen: contract-only precondition (pass 2 runs on whatever
         # provider spec_gen is on — agentic under --agentic, flat under
@@ -1044,6 +1050,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_soundness_gate", False):
         config.enable_soundness_gate = True
+    if getattr(args, "soundness_gate_fail_closed", False):
+        config.soundness_gate_fail_closed = True
     if getattr(args, "enforce_spec_refiner_retier", False):
         config.enforce_spec_refiner_retier = True
     if getattr(args, "enable_agentic_harness_repair", False):
@@ -1395,6 +1403,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_spec_refiner = True
     if getattr(args, "enable_soundness_gate", False):
         config.enable_soundness_gate = True
+    if getattr(args, "soundness_gate_fail_closed", False):
+        config.soundness_gate_fail_closed = True
     if getattr(args, "enforce_spec_refiner_retier", False):
         config.enforce_spec_refiner_retier = True
     if getattr(args, "enable_agentic_harness_repair", False):
@@ -2430,6 +2440,16 @@ def build_parser() -> argparse.ArgumentParser:
                           "refiner clause that isn't caller-guaranteed (keeps the CEx "
                           "as a real-bug lead instead of assuming it away). Best with "
                           "--specs-via-claude-code --claude-code-agentic.")
+    ver.add_argument("--soundness-gate-fail-closed", action="store_true", default=False,
+                     dest="soundness_gate_fail_closed",
+                     help="Fail-closed soundness gate: a refiner clause may delete a "
+                          "counterexample ONLY on a confident SOUND verdict; UNKNOWN / "
+                          "unverifiable keep it as a lead (surfaced). Requires "
+                          "--enable-soundness-gate (auto-on under --agentic).")
+    ver.add_argument("--no-soundness-gate-fail-closed", action="store_true", default=False,
+                     dest="no_soundness_gate_fail_closed",
+                     help="Disable the fail-closed soundness gate (default-on under "
+                          "--agentic): revert to legacy fail-open refinement.")
     ver.add_argument("--enforce-spec-refiner-retier", action="store_true", default=False,
                      dest="enforce_spec_refiner_retier",
                      help="Soundness-policy compliance (realism-enforcement Phase 2): when the "
@@ -2697,6 +2717,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "checks short-circuit to unresolved (timeout).")
     vd.add_argument("--no-spec-refiner", action="store_true", default=False,
                     help="Disable in-sweep realism-feedback-driven spec refiner.")
+    vd.add_argument("--soundness-gate-fail-closed", action="store_true", default=False,
+                    dest="soundness_gate_fail_closed",
+                    help="Fail-closed soundness gate (see verify).")
+    vd.add_argument("--no-soundness-gate-fail-closed", action="store_true", default=False,
+                    dest="no_soundness_gate_fail_closed",
+                    help="Disable the fail-closed soundness gate (default-on under --agentic).")
     vd.add_argument("--enable-soundness-gate", action="store_true", default=False,
                     dest="enable_soundness_gate",
                     help="Caller-grounded soundness gate on refinement: block a "
