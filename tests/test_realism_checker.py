@@ -1404,6 +1404,31 @@ def test_extract_tool_names_empty_and_none_inputs():
     assert _extract_tool_names(None) == []
 
 
+def test_extract_tool_names_parses_anthropic_tool_use_blocks():
+    """REGRESSION (2026-06): the Anthropic native tool loop stores assistant
+    turns as content blocks [{"type":"tool_use","name",...,"input":{...}}],
+    NOT OpenAI-style msg["tool_calls"]. The extractor was blind to this, so
+    looked_up_target was hardwired False on the Anthropic backend and EVERY
+    tool-using REALISTIC verdict got demoted. It must now see these calls."""
+    from bmc_agent.realism_checker import _extract_tool_names
+    msgs = [
+        {"role": "user", "content": "judge this"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "let me look"},
+            {"type": "tool_use", "name": "lookup_function",
+             "input": {"name": "read_be64"}},
+            {"type": "tool_use", "name": "lookup_callee_postcondition",
+             "input": {"callee": "memcpy"}},
+        ]},
+    ]
+    out = _extract_tool_names(msgs)
+    assert ("lookup_function", {"name": "read_be64"}) in out
+    assert any(n == "lookup_callee_postcondition" for n, _ in out)
+    # And the looked_up_target predicate the caller uses now resolves True.
+    assert any(n == "lookup_function" and a.get("name") == "read_be64"
+               for n, a in out)
+
+
 def test_extract_grounding_field_from_bare_json():
     """Pure JSON output with a grounding sub-object returns the sub-object."""
     from bmc_agent.realism_checker import _extract_grounding_field
@@ -1497,6 +1522,42 @@ def test_apply_grounding_consistency_demotes_when_target_not_looked_up():
     assert "strcmp(p, name) is unguarded" in out.reasoning
     assert out.key_concern == "null deref via strcmp"  # preserved
     assert out.llm_confidence == "low"  # downgraded
+
+
+def test_apply_grounding_consistency_keeps_realistic_when_demote_off():
+    """Default production wiring (realism_grounding_demote=off → caller passes
+    demote_ungrounded=False): a REALISTIC verdict with no observed
+    lookup_function(target) call is KEPT, not demoted. Demoting on tool-call
+    presence net-killed real OOB bugs (read_be64, elf_calc_size, dtb_parse)."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(
+        RealismVerdict.REALISTIC,
+        reasoning="attacker-controlled offset OOB read, no bounds check",
+        key_concern="out-of-bounds read",
+    )
+    out = _apply_grounding_consistency(
+        r, {"looked_up_target_body": False}, "read_be64",
+        looked_up_target=False, demote_ungrounded=False,
+    )
+    assert out is r  # unchanged
+    assert out.verdict == RealismVerdict.REALISTIC
+
+
+def test_apply_grounding_consistency_guard_flip_still_fires_when_demote_off():
+    """Turning off the ungrounded demotion must NOT disable the evidence-based
+    Case 2 flip: a REALISTIC verdict whose own grounding says 'guard present'
+    still flips to UNREALISTIC (that catch is sound, not a proxy)."""
+    from bmc_agent.realism_checker import (
+        _apply_grounding_consistency, RealismVerdict,
+    )
+    r = _make_realism_result(RealismVerdict.REALISTIC, reasoning="unguarded deref")
+    out = _apply_grounding_consistency(
+        r, {"guard_search_result": "guard present: if (p)"}, "f",
+        looked_up_target=True, demote_ungrounded=False,
+    )
+    assert out.verdict == RealismVerdict.UNREALISTIC
 
 
 def test_apply_grounding_consistency_flips_when_guard_present():

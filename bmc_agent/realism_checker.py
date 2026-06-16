@@ -729,6 +729,7 @@ class RealismChecker:
         grounding = _extract_grounding_field(agent_result.raw_response)
         parsed_result = _apply_grounding_consistency(
             parsed_result, grounding, func.name, looked_up_target,
+            demote_ungrounded=getattr(self.config, "realism_grounding_demote", False),
         )
 
         # If augmentation flipped to REALISTIC, log the divergence —
@@ -2362,6 +2363,7 @@ def _extract_tool_names(messages: list) -> list[tuple[str, dict]]:
             continue
         if msg.get("role") != "assistant":
             continue
+        # OpenAI wire format: msg["tool_calls"] = [{"function": {name, arguments}}]
         tcs = msg.get("tool_calls") or []
         for tc in tcs:
             if not isinstance(tc, dict):
@@ -2375,6 +2377,25 @@ def _extract_tool_names(messages: list) -> list[tuple[str, dict]]:
                 args = {}
             if name:
                 out.append((name, args))
+        # Anthropic wire format: msg["content"] = [{"type": "tool_use",
+        # "name": ..., "input": {...}}, ...]. The native anthropic tool loop
+        # (llm._anthropic_tool_use_loop) stores assistant turns this way, so
+        # WITHOUT this branch the detector was blind to every tool call on the
+        # Anthropic backend (reported "(none)" while tool_calls_made was >0),
+        # hardwiring looked_up_target=False and demoting 100%% of verdicts.
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "tool_use":
+                    continue
+                name = block.get("name") or ""
+                args = block.get("input")
+                if not isinstance(args, dict):
+                    args = {}
+                if name:
+                    out.append((name, args))
     return out
 
 
@@ -2420,6 +2441,7 @@ def _apply_grounding_consistency(
     grounding: dict,
     func_name: str,
     looked_up_target: bool,
+    demote_ungrounded: bool = True,
 ) -> "RealismCheckResult":
     """Audit a realism augmentation verdict against its grounding evidence.
 
@@ -2439,8 +2461,24 @@ def _apply_grounding_consistency(
     if parsed_result.verdict != RealismVerdict.REALISTIC:
         return parsed_result
 
-    # Case 1: REALISTIC but target body never looked up.
+    # Case 1: REALISTIC but the tool-grounding detector saw no
+    # lookup_function(target) call. Default (realism_grounding_demote=off):
+    # do NOT demote — keep the verdict and emit a tripwire. The legacy
+    # demotion (a) ran on a detector blind to Anthropic tool_use blocks, so
+    # it fired on 100%% of tool-using verdicts, and (b) demoted on tool-call
+    # *presence* (a proxy for diligence, not correctness), net-killing real
+    # OOB bugs (read_be64, elf_calc_size, dtb_parse — 2026-06 audit).
     if not looked_up_target:
+        if not demote_ungrounded:
+            logger.warning(
+                "Realism augmentation for '%s': verdict=REALISTIC and the "
+                "tool-grounding detector saw no lookup_function(target) call. "
+                "NOT demoting (realism_grounding_demote=off) — keeping "
+                "REALISTIC. [tripwire: confirm genuinely ungrounded, not a "
+                "detector miss]",
+                func_name,
+            )
+            return parsed_result
         logger.warning(
             "Realism augmentation for '%s': verdict=REALISTIC but the LLM "
             "did NOT call lookup_function on the target — verdict is "

@@ -597,6 +597,15 @@ class Config:
     # does not SIGSEGV, unit-level harness) and is NOT evidence of a FP. Dynamic
     # validation only PROMOTES (confirmed_dynamic); it never vetoes realism.
     realism_authoritative: bool = True
+    # Tool-grounding demotion of REALISTIC verdicts. When the realism
+    # augmentation pass returns REALISTIC but the tool-grounding detector
+    # saw no lookup_function(target) call, the old behavior demoted to
+    # UNCERTAIN ('narrative-only'). Default False (2026-06 audit): the
+    # detector was blind to Anthropic tool_use blocks (fired on 100%% of
+    # tool-using verdicts) AND demoting on tool-call presence net-killed
+    # real OOB bugs (read_be64, elf_calc_size, dtb_parse). Off = keep the
+    # verdict + log a tripwire. Set True to restore the legacy demotion.
+    realism_grounding_demote: bool = False
     # Enforce the realism verdict on DYNAMIC findings too (realism-enforcement plan,
     # Phase 4b). When True (default, user-authorized 2026-06-14), the
     # confirmed_dynamic immunity is removed: a UNREALISTIC realism verdict RE-TIERS a
