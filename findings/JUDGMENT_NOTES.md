@@ -146,3 +146,48 @@ memchr/memcmp/memset32/strncpy. By MY judgment these are BORDERLINE-FP, not real
 READINESS PATTERN: --agentic = HIGH-VALUE on attacker-facing PARSERS (dtb/elf: real
    bugs), NOISY on utility/PRIMITIVE modules (string; likely printf/font). Full-kernel
    run should PRIORITIZE parser/attacker-surface modules; discount/skip primitive libs.
+
+## AGENTIC-REALISM DECISION: DEFERRED (API budget exhausted) — NOT defaulted
+- rt_dtb (VALID, ran before limit): agentic realism KEPT read_be64 (real OOB), correctly
+  DEMOTED align4 (low-impact overflow, caller-contract) via a GROUNDING AUDIT
+  ("verdict narrative-only, not source-grounded -> demote"). Promising: it reads code
+  and prunes confabulated verdicts.
+- rt_string (INVALID): Anthropic workspace API usage limit hit mid-run -> ALL realism
+  calls (base + tool-use + spec_refiner) failed with HTTP 400 "reached workspace API
+  usage limits, regain access 2026-07-01" -> SILENT FALLBACK to "upheld/confirmed_dynamic".
+  The 10 "confirmed" are FAILURE ARTIFACTS, not judgments. The FP-demotion test DID NOT RUN.
+- DECISION: do NOT make agentic realism default — FP-demotion claim UNVALIDATED and cannot
+  be validated now (LLM budget gone until 2026-07-01). dtb signal alone is insufficient for
+  a soundness-critical default flip. Re-run rt_string + cross-module validation when budget
+  returns, THEN decide.
+- DESIGN FINDING (confirmed materialized): realism LLM-call failure -> silent fallback to
+  CONFIRMED. That means API errors/exhaustion produce FALSE CONFIRMATIONS (unsound under
+  failure). Should fail-safe to UNCERTAIN/INCONCLUSIVE on realism call failure, not "upheld".
+- OPERATIONAL: all --agentic LLM work (realism/spec_gen/reproducer/refiner) is BLOCKED until
+  the workspace budget resets/raises (stated 2026-07-01). net/fat32 readiness also blocked.
+
+## DESIGN FINDING: adjacent-bug pass is noise+cost on primitives
+AdjacentBugAgent fires when realism REJECTS a CEx -> hunts for OTHER nearby bugs
+(leads -> realism_check.adjacent_bugs[]; harvested by adjacent_follower.py). Intent:
+leverage the investigation to find real bugs CBMC missed. BUT in rt2_string it produced
+5-9 candidates PER trivial primitive (memcmp 9, memchr 9, strdup 8, strchr 6) -- implausible
+for such tiny functions -> manufactured NOISE. Also a major latency driver (extra LLM call
+per rejection + harvesting rounds). => Same parser-vs-primitive split: plausibly valuable on
+complex parsers, net-NEGATIVE on primitives/utility (FP amplification + cost). RECOMMEND:
+gate adjacent-bug off on primitive/utility modules, or require its candidates to clear the
+agentic-realism bar before counting (else they inflate FP noise on exactly the FP-prone modules).
+
+## EMPIRICAL: adjacent-bug pass = 130 leads, 0 confirmed bugs (net-negative as wired)
+Across all judge_* --agentic runs: 130 adjacent_bugs LEADS recorded (vfs_init 36,
+find_mem_child 19, print_num 12, strcat 11, ...), but 0 became confirmed bugs and 0 carry
+their own verified status. Reason: leads are only HYPOTHESES in realism_check.adjacent_bugs[];
+they become bugs ONLY if the separate harvesting loop (adjacent_follower.py, own CLI flag)
+re-investigates them — which is NOT part of default single-pass --agentic and never ran.
+=> In default --agentic the adjacent-bug pass is PURE COST (extra LLM call per rejected
+finding + big latency, esp. on primitives) with ZERO realized bugs. RECOMMEND: default the
+adjacent-bug pass OFF (or only enable WITH the harvester so the leads are actually verified).
+
+## OVERNIGHT DECISION (discipline rule, realism-verdict based): PASS
+realism: strncpy=unrealistic read_be64=realistic elf={'elf_validate': 'unrealistic', 'elf_calc_size': 'unrealistic', 'elf_process_relocations': 'realistic'}
+reasons: strncpy=unrealistic (FP closed); read_be64=realistic (kept); elf reals realistic=['elf_process_relocations']
+NOTE: read_be64 dyn-val-downgraded (reproducer not triggered) = SEPARATE soundness issue (classifier-adjudicator guard), NOT the discipline rule.
