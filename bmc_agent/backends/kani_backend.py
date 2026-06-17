@@ -1505,6 +1505,14 @@ class KaniBackend(BMCBackend):
         # Emitted ahead of the cleaned source so the aliases are in scope for
         # every subsequent reference. Only injected when the function actually
         # references one of these types — otherwise it's dead boilerplate.
+        # Cargo-mode (kani_real_crate): the harness is appended to the
+        # function's own source file, so the real fn, its siblings, and all
+        # crate-local/external types are ALREADY in scope. Inlining a stripped
+        # source copy (the standalone strategy) duplicates items and breaks
+        # sibling references (E0425), and re-aliasing crate types collides.
+        # So in cargo-mode we emit ONLY the proof fn that calls the real fn.
+        cargo_mode = bool(getattr(self._config, "kani_real_crate", False)
+                          and getattr(func, "source_file", ""))
         referenced_for_preamble: set[str] = set()
         for ty, _ in (func.signature.parameters or []):
             referenced_for_preamble |= _extract_type_names(ty)
@@ -1516,12 +1524,14 @@ class KaniBackend(BMCBackend):
                 if tok in _EXTERNAL_TYPE_ALIASES:
                     referenced_for_preamble.add(tok)
         external_aliases = _harness_preamble_for_external_types(referenced_for_preamble)
-        if external_aliases:
+        if external_aliases and not cargo_mode:
             parts.append("// External-crate type aliases (injected by harness generator):")
             parts.extend(external_aliases)
             parts.append("")
 
-        if file_source is not None:
+        if cargo_mode:
+            pass  # in-crate: real fn + siblings + crate types already resolve
+        elif file_source is not None:
             cleaned = _strip_crate_local_use_statements(file_source)
             cleaned = _strip_pub_in_path_visibility(cleaned)
             # Compute the transitive closure of callees from
