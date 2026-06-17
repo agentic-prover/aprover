@@ -68,6 +68,11 @@ class RustFunctionSignature:
     # harness generator to emit `FOO::name(args)` call-site syntax so the
     # function resolves in the parent module's namespace.
     impl_type: str = ""
+    # Self-receiver methods (&self/&mut self): recorded (not skipped) so the
+    # cargo-mode harness gen can construct the impl-type instance field-by-field
+    # (from the parsed struct def) and call recv.method(args).
+    has_self_receiver: bool = False
+    receiver_is_mut: bool = False
 
 
 @dataclass
@@ -94,6 +99,10 @@ class ParsedRustFile:
     call_graph: dict[str, set[str]]
     function_bodies: dict[str, str]
     preprocessed_source: Optional[str] = None
+    # struct_name -> list of (field_name, field_type_text). Populated for
+    # top-level struct definitions; used by the self-method harness generator
+    # to construct a receiver (build the impl type field-by-field).
+    structs: dict = field(default_factory=dict)
 
     def get_function_info(self, name: str) -> Optional[RustFunctionInfo]:
         if name not in self.functions:
@@ -165,6 +174,25 @@ def parse_rust_file(
     functions: dict[str, RustFunctionSignature] = {}
     call_graph: dict[str, set[str]] = {}
     function_bodies: dict[str, str] = {}
+    structs: dict[str, list] = {}
+
+    def _ingest_struct(struct_node) -> None:
+        name_node = struct_node.child_by_field_name("name")
+        if name_node is None:
+            return
+        sname = _slice(src_bytes, name_node)
+        body = struct_node.child_by_field_name("body")
+        fields: list[tuple[str, str]] = []
+        if body is not None:
+            for fld in body.named_children:
+                if fld.type != "field_declaration":
+                    continue
+                fn = fld.child_by_field_name("name")
+                ft = fld.child_by_field_name("type")
+                if fn is not None and ft is not None:
+                    fields.append((_slice(src_bytes, fn), _slice(src_bytes, ft)))
+        if sname and sname not in structs:
+            structs[sname] = fields
 
     def _ingest_function(fn_node, impl_type: str = "") -> None:
         sig = _extract_signature(fn_node, src_bytes)
@@ -187,7 +215,15 @@ def parse_rust_file(
         # in impl blocks (`impl Foo { fn bar(x: i32) {...} }`) work fine
         # and are the high-value unlock.
         if _function_has_self_param(fn_node):
-            return
+            # Record (don't skip) so the cargo-mode harness gen can synthesize
+            # the receiver. Detect &mut self vs &self for the let-binding.
+            sig.has_self_receiver = True
+            _pn = fn_node.child_by_field_name("parameters")
+            if _pn is not None:
+                for _c in _pn.named_children:
+                    if _c.type == "self_parameter":
+                        sig.receiver_is_mut = "mut" in _slice(src_bytes, _c)
+                        break
         body_text = _slice(src_bytes, body_node)
         callees: set[str] = set()
         _collect_callees(body_node, callees, src_bytes)
@@ -245,6 +281,8 @@ def parse_rust_file(
         return False
 
     for top in tree.root_node.children:
+        if top.type == "struct_item":
+            _ingest_struct(top)
         if top.type == "function_item":
             _ingest_function(top)
         elif top.type == "impl_item":
@@ -312,6 +350,7 @@ def parse_rust_file(
         call_graph=call_graph,
         function_bodies=function_bodies,
         preprocessed_source=source_text if source_text is not None else None,
+        structs=structs,
     )
 
 

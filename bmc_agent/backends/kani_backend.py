@@ -1447,6 +1447,34 @@ class KaniBackend(BMCBackend):
         # `unsafe fn` requires the call site to be in an `unsafe` block.
         # Examples we observed: llm.rs declares `pub unsafe fn
         # attention_forward(...)`; without wrapping, rustc emits E0133.
+        # --- Self-method receiver synthesis (build A1) ---
+        # &self/&mut self methods: construct the impl-type instance
+        # field-by-field from the parsed struct def, then call recv.method(args).
+        # Needs cargo-mode (private fields resolve in-crate) + the struct def;
+        # otherwise skip via HarnessUnresolvableTypes (engine treats as expected skip).
+        if getattr(func.signature, "has_self_receiver", False):
+            _cargo = bool(getattr(self._config, "kani_real_crate", False)
+                          and getattr(func, "source_file", ""))
+            if not _cargo:
+                raise HarnessUnresolvableTypes(
+                    f"self-method {func.name}: receiver construction needs cargo-mode")
+            _base = (impl_type or "").split("<")[0].strip()
+            _fields = (getattr(parsed_file, "structs", {}) or {}).get(_base) if parsed_file is not None else None
+            if not _fields:
+                raise HarnessUnresolvableTypes(
+                    f"self-method {func.name}: no struct def for receiver {_base!r}")
+            _recv_lines = []
+            _assigns = []
+            for _fn2, _ft2 in _fields:
+                _fv = "recv_" + _fn2
+                _recv_lines.extend(_param_init_block(
+                    _ft2, _fv, slice_bound=slice_bound, pointer_newtypes=_ptr_newtypes))
+                _assigns.append(f"{_fn2}: {_fv}")
+            _mut = "mut " if getattr(func.signature, "receiver_is_mut", False) else ""
+            _recv_lines.append(
+                f"    let {_mut}recv: {impl_type} = {impl_type} {{ {', '.join(_assigns)} }};")
+            init_lines = _recv_lines + init_lines
+            call_target = f"recv.{func.name}"
         is_unsafe_fn = "unsafe" in (getattr(func.signature, "modifiers", []) or [])
         if return_type in ("", "()"):
             if is_unsafe_fn:
@@ -1476,11 +1504,17 @@ class KaniBackend(BMCBackend):
         import re as _re_self
         if impl_type and "Self" in raw_post:
             raw_post = _re_self.sub(r"\bSelf\b", impl_type, raw_post)
+        # Self-method specs reference the receiver as `self.field`; in the harness
+        # the receiver is the local `recv`, so rewrite self -> recv (build A1).
+        if getattr(func.signature, "has_self_receiver", False):
+            raw_post = _re_self.sub(r"\bself\b", "recv", raw_post)
         rewritten_post, old_snapshots = _extract_old_snapshots(raw_post)
         # Same substitution for the precondition.
         raw_pre = spec.precondition or ""
         if impl_type and raw_pre and "Self" in raw_pre:
             raw_pre = _re_self.sub(r"\bSelf\b", impl_type, raw_pre)
+        if getattr(func.signature, "has_self_receiver", False) and raw_pre:
+            raw_pre = _re_self.sub(r"\bself\b", "recv", raw_pre)
         post_expr = _translate_dsl(rewritten_post, result_var=result_binding or "result")
         post_line = (
             f"    kani::assert({post_expr}, \"postcondition violated\");"

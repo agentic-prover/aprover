@@ -166,8 +166,9 @@ def test_multiple_top_level_fns():
     assert set(p.functions) == {"a", "b", "c"}
 
 
-def test_impl_methods_with_self_are_skipped():
-    """Methods that take self/&self/&mut self cannot be harnessed as free fns."""
+def test_impl_methods_with_self_are_recorded():
+    """Self-methods (&self/&mut self/self) are now RECORDED (not skipped) so the
+    cargo-mode harness gen can construct the receiver field-by-field (build A1)."""
     src = (
         "struct S;\n"
         "impl S {\n"
@@ -178,10 +179,13 @@ def test_impl_methods_with_self_are_skipped():
         "fn outer() -> i32 { 0 }\n"
     )
     p = _parse(src)
-    assert "outer" in p.functions
-    assert "inner" not in p.functions
-    assert "inner_mut" not in p.functions
-    assert "inner_owned" not in p.functions
+    assert "outer" in p.functions and p.functions["outer"].has_self_receiver is False
+    for m in ("inner", "inner_mut", "inner_owned"):
+        assert m in p.functions, m
+        assert p.functions[m].has_self_receiver is True, m
+    assert p.functions["inner"].receiver_is_mut is False
+    assert p.functions["inner_mut"].receiver_is_mut is True
+    assert p.functions["inner_owned"].receiver_is_mut is False
 
 
 def test_impl_static_methods_are_collected():
@@ -197,7 +201,9 @@ def test_impl_static_methods_are_collected():
     p = _parse(src)
     assert "helper" in p.functions
     assert "other" in p.functions
-    assert "with_self" not in p.functions
+    assert "with_self" in p.functions
+    assert p.functions["with_self"].has_self_receiver is True
+    assert p.functions["helper"].has_self_receiver is False
     assert p.functions["helper"].is_pub is True
     assert p.functions["other"].parameters == [("u32", "y"), ("u32", "z")]
 
