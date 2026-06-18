@@ -17,11 +17,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Union
 
+from bmc_agent.java_parser import ParsedJavaFile, parse_java_file
 from bmc_agent.parser import ParsedCFile, parse_c_file
 from bmc_agent.rust_parser import ParsedRustFile, parse_rust_file
 
 
-ParsedSourceFile = Union[ParsedCFile, ParsedRustFile]
+ParsedSourceFile = Union[ParsedCFile, ParsedRustFile, ParsedJavaFile]
 
 
 class UnsupportedSourceLanguage(ValueError):
@@ -35,10 +36,11 @@ class UnsupportedSourceLanguage(ValueError):
 # preprocessed C translation unit — so it routes to the C parser too.
 _C_EXTS = frozenset({".c", ".h", ".i"})
 _RUST_EXTS = frozenset({".rs"})
+_JAVA_EXTS = frozenset({".java"})
 
 
 def detect_language(path: str | Path) -> str:
-    """Return ``"c"`` or ``"rust"`` based on *path*'s extension.
+    """Return ``"c"``, ``"rust"``, or ``"java"`` based on *path*'s extension.
 
     Raises ``UnsupportedSourceLanguage`` for any other extension.
     """
@@ -47,9 +49,11 @@ def detect_language(path: str | Path) -> str:
         return "c"
     if ext in _RUST_EXTS:
         return "rust"
+    if ext in _JAVA_EXTS:
+        return "java"
     raise UnsupportedSourceLanguage(
         f"No parser registered for extension {ext!r} (path={path!r}). "
-        "Supported: .c, .h, .i, .rs"
+        "Supported: .c, .h, .i, .rs, .java"
     )
 
 
@@ -92,5 +96,7 @@ def parse_source_file(
         if getattr(parsed, "primary_source", None) and hasattr(parsed, "restrict_to_primary_source"):
             parsed.restrict_to_primary_source()
         return parsed
-    # lang == "rust" — detect_language only returns "c" or "rust"
-    return parse_rust_file(path, source_text=source_text)
+    if lang == "rust":
+        return parse_rust_file(path, source_text=source_text)
+    # lang == "java"
+    return parse_java_file(path, source_text=source_text)

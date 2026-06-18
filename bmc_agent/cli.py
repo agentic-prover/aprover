@@ -544,6 +544,68 @@ def _run_standalone(args: argparse.Namespace, config: "object") -> int:
     return 1
 
 
+def _run_java_jbmc(args: argparse.Namespace, config: "object") -> int:
+    """Whole-Java verification through JBMC."""
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.jbmc import normalize_java_entry, run_jbmc
+    from bmc_agent.java_parser import parse_java_file
+
+    entry = getattr(args, "entry", None) or "main"
+    if getattr(args, "java_classpath", None):
+        config.java_classpath = list(getattr(config, "java_classpath", []) or []) + list(args.java_classpath)  # type: ignore[attr-defined]
+    if getattr(args, "jbmc_path", None):
+        config.jbmc_path = args.jbmc_path  # type: ignore[attr-defined]
+    if getattr(args, "javac_path", None):
+        config.javac_path = args.javac_path  # type: ignore[attr-defined]
+    if getattr(args, "java_compile_timeout", None) is not None:
+        config.java_compile_timeout = int(args.java_compile_timeout)  # type: ignore[attr-defined]
+
+    parsed = parse_java_file(args.source)
+    target = normalize_java_entry(entry, parsed.primary_class)
+    store = ArtifactStore(config.artifact_dir)
+    build_dir = Path(config.artifact_dir) / args.driver / "_java_classes"
+
+    print(f"Java/JBMC verification: {args.source}")
+    print(f"Driver: {args.driver}")
+    print(f"Entry: {target}")
+    unwind = int(
+        getattr(args, "standalone_unwind", 0)
+        or getattr(config, "jbmc_unwind", getattr(config, "cbmc_unwind", 4))
+    )
+    print(f"Unwind: {unwind}")
+    print(f"Artifact dir: {config.artifact_dir}")
+    print(f"Class output: {build_dir}")
+    if getattr(config, "java_classpath", None):
+        print(f"Classpath: {getattr(config, 'java_classpath')}")
+
+    result = run_jbmc(
+        source_path=args.source,
+        entry=target,
+        unwind=unwind,
+        timeout=int(getattr(config, "jbmc_timeout", getattr(config, "cbmc_timeout", 120))),
+        jbmc_path=getattr(config, "jbmc_path", "jbmc"),
+        javac_path=getattr(config, "javac_path", "javac"),
+        classpath=list(getattr(config, "java_classpath", []) or []),
+        build_dir=build_dir,
+        compile_timeout=int(getattr(config, "java_compile_timeout", 60)),
+    )
+    store.save_cbmc_result(args.driver, target.replace(".", "__"), result)
+
+    print("\n=== JBMC result ===")
+    if result.error and not result.counterexamples:
+        print(f"INVALID / JBMC ERROR: {result.error}")
+        return 2
+    if result.verified:
+        print("VERIFICATION SUCCESSFUL — JBMC proved the selected Java entry.")
+        return 0
+    print(f"VERIFICATION FAILED — {len(result.counterexamples)} property violation(s):")
+    for ce in result.counterexamples[:25]:
+        loc = ce.failure_location or {}
+        where = f"{loc.get('file','?')}:{loc.get('line','?')}" if loc else ""
+        print(f"  - {ce.failing_property or '?'}  {where}  {ce.description}".rstrip())
+    return 1
+
+
 def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     """Assertion-driven spec synthesis (see bmc_agent.assert_driven_specs)."""
     from bmc_agent.assert_driven_specs import synthesize
@@ -1111,6 +1173,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_realism_tools = False
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
+
+    from bmc_agent.source_parser import detect_language
+    if detect_language(args.source) == "java":
+        return _run_java_jbmc(args, config)
 
     # Standalone (whole-program) mode short-circuits the compositional pipeline:
     # verify the program AS WRITTEN from its real entry point, no harness
@@ -2163,7 +2229,7 @@ def build_parser() -> argparse.ArgumentParser:
         "verify",
         help="Run full pipeline: generate + check + validate (Phase 3)",
     )
-    ver.add_argument("--source", required=True, help="Path to a C (.c/.h) or Rust (.rs) source file")
+    ver.add_argument("--source", required=True, help="Path to a C (.c/.h), Rust (.rs), or Java (.java) source file")
     ver.add_argument("--driver", required=True, help="Driver name")
     ver.add_argument("--output", default="artifacts", help="Artifact directory")
     ver.add_argument(
@@ -2259,7 +2325,30 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument(
         "--entry",
         default="main",
-        help="Entry function for --standalone / --specs-from-asserts mode (default: main).",
+        help="Entry function for --standalone / --specs-from-asserts mode; for Java/JBMC, 'main' maps to the primary class main, and non-main methods may be given as method or Class.method (default: main).",
+    )
+    ver.add_argument(
+        "--jbmc-path",
+        default=None,
+        help="Path/name of the JBMC binary for Java sources (default: BMC_AGENT_JBMC_PATH or jbmc).",
+    )
+    ver.add_argument(
+        "--javac-path",
+        default=None,
+        help="Path/name of the javac binary for Java sources (default: BMC_AGENT_JAVAC_PATH or javac).",
+    )
+    ver.add_argument(
+        "--java-classpath",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Additional Java classpath entry for javac/JBMC; repeatable.",
+    )
+    ver.add_argument(
+        "--java-compile-timeout",
+        type=int,
+        default=None,
+        help="Timeout in seconds for javac when verifying Java sources.",
     )
     ver.add_argument(
         "--specs-from-asserts",

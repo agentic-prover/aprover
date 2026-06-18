@@ -198,6 +198,39 @@ class Config:
     cbmc_path: str = "cbmc"
     cbmc_unwind: int = 4
     cbmc_timeout: int = 120  # seconds
+    # Java/JBMC settings.  JBMC is the Java bytecode front-end in the CProver
+    # suite.  We keep separate names from cbmc_path because distributions often
+    # package/install the binaries independently.
+    jbmc_path: str = field(
+        default_factory=lambda: os.environ.get("BMC_AGENT_JBMC_PATH", "jbmc")
+    )
+    javac_path: str = field(
+        default_factory=lambda: os.environ.get("BMC_AGENT_JAVAC_PATH", "javac")
+    )
+    jbmc_unwind: int = field(
+        default_factory=lambda: int(
+            os.environ.get(
+                "BMC_AGENT_JBMC_UNWIND",
+                os.environ.get("BMC_AGENT_CBMC_UNWIND", "4"),
+            )
+        )
+    )
+    jbmc_timeout: int = field(
+        default_factory=lambda: int(
+            os.environ.get(
+                "BMC_AGENT_JBMC_TIMEOUT",
+                os.environ.get("BMC_AGENT_CBMC_TIMEOUT", "120"),
+            )
+        )
+    )
+    java_compile_timeout: int = field(
+        default_factory=lambda: int(os.environ.get("BMC_AGENT_JAVA_COMPILE_TIMEOUT", "60"))
+    )
+    java_classpath: list[str] = field(
+        default_factory=lambda: [
+            p for p in os.environ.get("BMC_AGENT_JAVA_CLASSPATH", "").split(os.pathsep) if p
+        ]
+    )
     # Per-function TOTAL CBMC wall-clock budget (seconds, 0 = unlimited). The
     # per-CALL timeout (cbmc_timeout, raised up to 600s by the flag-selector)
     # does NOT bound a function's total time: auto-retry doubling + Phase-3c
