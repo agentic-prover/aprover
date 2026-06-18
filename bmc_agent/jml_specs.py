@@ -22,9 +22,24 @@ from typing import Any
 from bmc_agent.llm import LLMClient
 
 
-_JML_BLOCK_RE = re.compile(r"/\*@.*?@\*/", re.DOTALL)
+_JML_BLOCK_RE = re.compile(r"/\*@.*?(?:@\*/|\*/)", re.DOTALL)
 _JML_LINE_RE = re.compile(r"^[ \t]*//@.*(?:\n|$)", re.MULTILINE)
 _CODE_FENCE_RE = re.compile(r"```(?:java)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_JAVA_TOKEN_RE = re.compile(
+    r"""
+    /\*.*?\*/|//[^\n]*|
+    "(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|
+    [A-Za-z_$][A-Za-z0-9_$]*|
+    0[xX][0-9A-Fa-f_]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[fFdDlL]?|
+    >>>=|>>=|<<=|>>>|>>|<<|==|!=|<=|>=|\+\+|--|&&|\|\||\+=|-=|\*=|/=|%=|&=|\|=|\^=|->|::|
+    [\[\]{}().,;:?~!%^&*+\-/=<>|]
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+_JML_RANGE_QUANTIFIER_RE = re.compile(
+    r"(\\(?:sum|forall|exists)\s+(?:int|integer|long)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;\s*)"
+    r"\2\s+in\s+([^;\n]+?)\s*\.\.\s*([^;\n]+?)\s*;",
+)
 
 
 @dataclass
@@ -107,15 +122,43 @@ def strip_jml_comments(source: str) -> str:
 def java_without_jml_fingerprint(source: str) -> str:
     """Normalize Java source after deleting JML comments."""
 
-    return re.sub(r"\s+", " ", strip_jml_comments(source)).strip()
+    return " ".join(java_executable_tokens(source))
+
+
+def java_executable_tokens(source: str) -> list[str]:
+    """Tokenize executable Java while ignoring whitespace and comments.
+
+    Source preservation should reject executable changes, but not harmless
+    pretty-printing such as ``n-1`` becoming ``n - 1``.  A lightweight lexical
+    token stream is enough for the benchmark adapter: it preserves identifiers,
+    literals, operators, and punctuation while ignoring formatting and comments.
+    """
+
+    stripped = strip_jml_comments(source)
+    tokens: list[str] = []
+    for match in _JAVA_TOKEN_RE.finditer(stripped):
+        tok = match.group(0)
+        if not tok or tok.isspace() or tok.startswith("//") or tok.startswith("/*"):
+            continue
+        tokens.append(tok)
+    return tokens
 
 
 def source_code_preserved(original: str, annotated: str) -> tuple[bool, str]:
     """Return whether annotations changed only JML comments."""
 
-    if java_without_jml_fingerprint(original) == java_without_jml_fingerprint(annotated):
+    original_tokens = java_executable_tokens(original)
+    annotated_tokens = java_executable_tokens(annotated)
+    if original_tokens == annotated_tokens:
         return True, ""
-    return False, "generated source changes executable Java code after removing JML comments"
+    detail = ""
+    for idx, (a, b) in enumerate(zip(original_tokens, annotated_tokens)):
+        if a != b:
+            detail = f" first token difference at {idx}: original={a!r}, generated={b!r}"
+            break
+    if not detail and len(original_tokens) != len(annotated_tokens):
+        detail = f" token-count differs: original={len(original_tokens)}, generated={len(annotated_tokens)}"
+    return False, "generated source changes executable Java code after removing JML comments;" + detail
 
 
 def count_jml_clauses(source: str) -> dict[str, int]:
@@ -143,12 +186,216 @@ def _is_jml_line(line: str) -> bool:
 def _is_loop_annotation(line: str) -> bool:
     stripped = line.lstrip()
     return stripped.startswith("//@") and any(
-        f" {kw}" in f" {stripped}" for kw in ("maintaining", "decreases", "decreasing", "loop_invariant")
+        f" {kw}" in f" {stripped}"
+        for kw in ("maintaining", "decreases", "decreasing", "loop_invariant", "loop_variant", "assignable")
     )
 
 
 def _line_indent(line: str) -> str:
     return re.match(r"\s*", line).group(0)  # type: ignore[union-attr]
+
+
+_LOOP_START_RE = re.compile(r"\b(?:for|while|do)\b")
+_FOR_DECL_VAR_RE = re.compile(
+    r"\bfor\s*\(\s*(?:final\s+)?(?:int|long|short|byte|char|boolean)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b"
+)
+
+
+def _normalise_jml_clause_keyword(line: str) -> str:
+    line = re.sub(r"(^[ \t]*(?://@|/?\*?)\s*)decreasing\b", r"\1decreases", line)
+    line = re.sub(r"(^[ \t]*(?://@|/?\*?)\s*)loop_variant\b", r"\1decreases", line)
+    line = re.sub(r"(^[ \t]*(?://@|/?\*?)\s*)loop_invariant\b", r"\1maintaining", line)
+    return line
+
+
+def _normalise_jml_range_quantifiers(source: str) -> str:
+    """Rewrite common non-OpenJML range syntax in quantifiers.
+
+    Some LLMs emit mathematical shorthand such as ``\\sum int k; k in 0..i;``.
+    OpenJML expects the range as a boolean predicate after the first semicolon.
+    This is syntax normalization only; it does not invent new specifications.
+    """
+
+    def repl(match: re.Match[str]) -> str:
+        prefix, var, low, high = match.groups()
+        return f"{prefix}{low.strip()} <= {var} && {var} <= {high.strip()};"
+
+    return _JML_RANGE_QUANTIFIER_RE.sub(repl, source)
+
+
+def _strip_simple_old_in_loop_clause(line: str) -> str:
+    """Remove simple ``\\old(x)`` wrappers from loop annotations.
+
+    OpenJML's ``\\old`` is meaningful in method postconditions, but LLMs often
+    use it inside loop invariants where local variables are not method-entry
+    values.  Restrict this repair to simple variable/field names in loop specs
+    so method-level postconditions retain their intended two-state meaning.
+    """
+
+    return re.sub(
+        r"\\old\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)*)\s*\)",
+        lambda m: re.sub(r"\s+", "", m.group(1)),
+        line,
+    )
+
+
+def _jml_content_keyword(line: str) -> str:
+    stripped = line.strip()
+    stripped = stripped.removeprefix("//@").strip()
+    stripped = stripped.removeprefix("*").strip()
+    return stripped.split(None, 1)[0].rstrip(";") if stripped else ""
+
+
+def _next_nonempty_is_loop(lines: list[str], index: int) -> bool:
+    j = index
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    return j < len(lines) and bool(_LOOP_START_RE.search(lines[j]))
+
+
+def _next_nonempty_index(lines: list[str], index: int) -> int | None:
+    j = index
+    while j < len(lines) and not lines[j].strip():
+        j += 1
+    return j if j < len(lines) else None
+
+
+def _first_nested_for_decl(lines: list[str], loop_index: int) -> tuple[int, str] | None:
+    """Return the first nested ``for (int v ...)`` inside a loop body."""
+
+    depth = 0
+    seen_body = False
+    for idx in range(loop_index, len(lines)):
+        line = lines[idx]
+        if idx > loop_index and depth <= 0 and seen_body:
+            return None
+        if idx > loop_index:
+            match = _FOR_DECL_VAR_RE.search(line)
+            if match and depth > 0:
+                return idx, match.group(1)
+        depth += line.count("{") - line.count("}")
+        if "{" in line:
+            seen_body = True
+    return None
+
+
+def _relocate_inner_loop_annotations(lines: list[str]) -> list[str]:
+    """Move misplaced inner-loop line annotations to the inner loop.
+
+    A common LLM mistake for nested loops is:
+
+    ``//@ maintaining ... i ...``
+    ``//@ maintaining ... j ...``
+    ``for (int i ...) {``
+    ``    for (int j ...) {``
+
+    The ``j`` clauses are not in scope before the outer loop.  If the next loop
+    body immediately contains a nested ``for`` declaration, move only the lines
+    referencing that nested loop variable to the nested loop.  This is purely a
+    placement repair; executable Java remains untouched.
+    """
+
+    removals: set[int] = set()
+    insertions: dict[int, list[str]] = {}
+    i = 0
+    while i < len(lines):
+        if not _is_jml_line(lines[i]):
+            i += 1
+            continue
+        j = i
+        group_indices: list[int] = []
+        while j < len(lines) and _is_jml_line(lines[j]):
+            group_indices.append(j)
+            j += 1
+        loop_idx = _next_nonempty_index(lines, j)
+        if loop_idx is not None and _LOOP_START_RE.search(lines[loop_idx]):
+            nested = _first_nested_for_decl(lines, loop_idx)
+            if nested:
+                nested_idx, nested_var = nested
+                nested_indent = _line_indent(lines[nested_idx])
+                moved: list[str] = []
+                var_re = re.compile(rf"\b{re.escape(nested_var)}\b")
+                for line_idx in group_indices:
+                    line = lines[line_idx]
+                    if var_re.search(line):
+                        moved.append(nested_indent + line.strip())
+                        removals.add(line_idx)
+                if moved:
+                    insertions.setdefault(nested_idx, []).extend(moved)
+        i = j
+
+    out: list[str] = []
+    for idx, line in enumerate(lines):
+        if idx in insertions:
+            out.extend(insertions[idx])
+        if idx not in removals:
+            out.append(line)
+    return out
+
+
+def _normalise_loop_jml_groups(lines: list[str]) -> list[str]:
+    """Normalize line-style JML groups that directly annotate loops.
+
+    OpenJML accepts ``maintaining`` and ``decreases`` before a loop in this
+    setup.  It rejects method-frame clauses such as ``assignable`` in a loop
+    spec group, so those are dropped only when the following statement is a loop.
+    """
+
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if not _is_jml_line(lines[i]):
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i
+        group: list[str] = []
+        while j < len(lines) and _is_jml_line(lines[j]):
+            group.append(_normalise_jml_clause_keyword(lines[j]))
+            j += 1
+        if _next_nonempty_is_loop(lines, j):
+            filtered = []
+            for line in group:
+                if _jml_content_keyword(line) in {"assignable", "assigns"}:
+                    continue
+                line = _strip_simple_old_in_loop_clause(line)
+                filtered.append(line)
+            group = filtered
+        out.extend(group)
+        i = j
+    return out
+
+
+def _normalise_loop_jml_blocks(source: str) -> str:
+    """Normalize block-style JML comments that directly annotate loops."""
+
+    lines = source.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if "/*@" not in lines[i]:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        block: list[str] = []
+        while i < len(lines):
+            block.append(lines[i])
+            if "*/" in lines[i]:
+                i += 1
+                break
+            i += 1
+        is_loop_block = _next_nonempty_is_loop(lines, i)
+        new_block: list[str] = []
+        for raw in block:
+            line = _normalise_jml_clause_keyword(raw)
+            if is_loop_block and _jml_content_keyword(line) in {"assignable", "assigns"}:
+                continue
+            if is_loop_block:
+                line = _strip_simple_old_in_loop_clause(line)
+            new_block.append(line)
+        out.extend(new_block)
+    return "\n".join(out)
 
 
 def normalize_jml_annotation_placement(source: str) -> str:
@@ -160,7 +407,9 @@ def normalize_jml_annotation_placement(source: str) -> str:
     location preserves executable Java code and is generic across benchmarks.
     """
 
-    src = re.sub(r"(^[ \t]*//@\s*)decreasing\b", r"\1decreases", source, flags=re.MULTILINE)
+    src = _normalise_jml_range_quantifiers(source)
+    src = "\n".join(_normalise_jml_clause_keyword(line) for line in src.splitlines())
+    src = _normalise_loop_jml_blocks(src)
     lines = src.splitlines()
 
     # Move loop annotations from the start of a loop body to immediately before
@@ -211,6 +460,8 @@ def normalize_jml_annotation_placement(source: str) -> str:
         out.append(line)
         i += 1
 
+    out = _normalise_loop_jml_groups(out)
+    out = _relocate_inner_loop_annotations(out)
     return "\n".join(out).rstrip() + ("\n" if source.endswith("\n") else "")
 
 
@@ -317,7 +568,12 @@ def _initial_system_prompt() -> str:
         "and loop annotations (`maintaining`, `decreases`). Use `spec_public` "
         "for private fields when needed. Loop annotations must appear immediately "
         "before the corresponding `for`, `while`, or `do` statement; never place "
-        "loop annotations inside the loop body. Do not add runtime Java assertions."
+        "loop annotations inside the loop body, and never put inner-loop annotations "
+        "before an outer loop. Use only OpenJML loop keywords `maintaining` and "
+        "`decreases`; do not use `loop_invariant`, `loop_variant`, `decreasing`, "
+        "or loop-level `assignable`. Loop invariants may mention only variables "
+        "that are in scope immediately before the loop; do not use `\\old` in loop "
+        "invariants. Do not add runtime Java assertions."
     )
 
 
@@ -330,6 +586,11 @@ def _initial_user_prompt(source: str) -> str:
         "- Generate `ensures` clauses for methods when possible.\n"
         "- Generate `maintaining` and `decreases` clauses for loops.\n"
         "- Place all loop annotations immediately before the loop statement, not inside the loop body.\n"
+        "- For nested loops, place inner-loop annotations immediately before the inner loop, not before the outer loop.\n"
+        "- Do not use loop-level `assignable`; OpenJML rejects it in loop specs.\n"
+        "- Use `maintaining` and `decreases`, not `loop_invariant`, `loop_variant`, or `decreasing`.\n"
+        "- Loop invariants may mention only variables in scope immediately before the annotated loop; do not use `\\old` in loop invariants.\n"
+        "- If using JML quantifiers or sums, use semicolon-separated predicates such as `\\sum int k; 0 <= k && k < i; expr`; do not use `k in 0..i` shorthand.\n"
         "- Add overflow/domain preconditions when OpenJML needs them.\n\n"
         "Java source:\n"
         "```java\n"
@@ -338,13 +599,22 @@ def _initial_user_prompt(source: str) -> str:
     )
 
 
-def _refine_user_prompt(annotated: str, verifier_output: str, source_error: str = "") -> str:
+def _refine_user_prompt(
+    annotated: str,
+    verifier_output: str,
+    source_error: str = "",
+    original_source: str = "",
+) -> str:
     extra = ""
     if source_error:
         extra = (
             "\nThe previous output also changed executable Java code. You must "
-            "preserve the original Java code exactly and only insert JML comments.\n"
+            "preserve the original Java token stream exactly and only insert JML comments.\n"
             f"Source-preservation error: {source_error}\n"
+            "Start from this original Java source and add comments only:\n"
+            "```java\n"
+            f"{original_source}\n"
+            "```\n"
         )
     return (
         "The current JML-annotated Java source did not pass validation."
@@ -359,7 +629,14 @@ def _refine_user_prompt(annotated: str, verifier_output: str, source_error: str 
         "```\n\n"
         "Please refine the JML annotations so OpenJML can verify the program. "
         "Return the complete Java source only, preserving all executable Java code. "
-        "Every loop annotation must be immediately before its loop statement."
+        "Every loop annotation must be immediately before its loop statement. "
+        "If OpenJML reports an annotation syntax error, fix the JML syntax without "
+        "changing Java code. If it reports an out-of-scope variable, move or remove "
+        "that annotation so every referenced variable is in scope. If it reports a "
+        "LoopInvariant failure, replace the failing invariant with "
+        "one that is true before the loop and preserved by the loop body. "
+        "Do not add loop-level `assignable`, `loop_invariant`, `loop_variant`, "
+        "`decreasing`, or `k in a..b` range shorthand."
     )
 
 
@@ -395,13 +672,15 @@ def run_jml_specs_bench(
     current_annotated = ""
     verifier_output = ""
     source_error = ""
+    last_preserved_annotated = ""
+    repeated_timeout_count = 0
     start = time.monotonic()
 
     for i in range(1, max_iter + 1):
         if i == 1:
             user_prompt = _initial_user_prompt(original)
         else:
-            user_prompt = _refine_user_prompt(current_annotated, verifier_output, source_error)
+            user_prompt = _refine_user_prompt(current_annotated, verifier_output, source_error, original)
         reply = llm.complete(
             _initial_system_prompt(),
             user_prompt,
@@ -419,6 +698,7 @@ def run_jml_specs_bench(
         annotated_path.write_text(current_annotated, encoding="utf-8")
 
         if preserved:
+            last_preserved_annotated = current_annotated
             openjml = run_openjml(
                 annotated_path,
                 openjml_path=oj_path,
@@ -456,16 +736,30 @@ def run_jml_specs_bench(
         )
         if preserved and openjml.passed:
             break
+        if preserved and openjml.status == "timeout":
+            repeated_timeout_count += 1
+            if repeated_timeout_count >= 2:
+                break
+        elif preserved:
+            repeated_timeout_count = 0
+        if not preserved and last_preserved_annotated:
+            current_annotated = last_preserved_annotated
 
     runtime = time.monotonic() - start
     final = iterations[-1] if iterations else None
-    passed = bool(final and final.source_preserved and final.openjml.passed)
+    effective_final = final
+    if final and not final.source_preserved:
+        for candidate in reversed(iterations):
+            if candidate.source_preserved:
+                effective_final = candidate
+                break
+    passed = bool(effective_final and effective_final.source_preserved and effective_final.openjml.passed)
     if passed:
         status = "passed"
-    elif final and not final.source_preserved:
+    elif effective_final and not effective_final.source_preserved:
         status = "source_changed"
-    elif final:
-        status = final.openjml.status
+    elif effective_final:
+        status = effective_final.openjml.status
     else:
         status = "error"
 
@@ -478,12 +772,12 @@ def run_jml_specs_bench(
         status=status,
         passed=passed,
         iterations=iterations,
-        final_annotated_path=final.annotated_path if final else "",
+        final_annotated_path=effective_final.annotated_path if effective_final else "",
         report_path=str(artifact_dir / "jml_result.json"),
         prompt_hash=prompt_hash,
-        jml_clause_counts=count_jml_clauses(final.annotated_source if final else ""),
+        jml_clause_counts=count_jml_clauses(effective_final.annotated_source if effective_final else ""),
         runtime_s=runtime,
-        error="" if passed else (final.openjml.error if final else "no iterations completed"),
+        error="" if passed else (effective_final.openjml.error if effective_final else "no iterations completed"),
     )
 
     def encode(obj: Any) -> Any:

@@ -66,6 +66,35 @@ public class X {
     assert "executable Java code" in err
 
 
+def test_source_code_preserved_allows_java_formatting_only():
+    original = """
+public class X {
+  int f(int n) { return n-1; }
+}
+"""
+    reformatted = """
+public class X {
+  //@ ensures \\result == n - 1;
+  int f(int n) {
+    return n - 1;
+  }
+}
+"""
+    changed = """
+public class X {
+  int f(int n) {
+    int tmp = n - 1;
+    return tmp;
+  }
+}
+"""
+    ok, err = source_code_preserved(original, reformatted)
+    assert ok, err
+    ok, err = source_code_preserved(original, changed)
+    assert not ok
+    assert "token" in err
+
+
 def test_count_jml_clauses():
     src = """
 //@ requires x >= 0;
@@ -104,6 +133,95 @@ public class Return100 {
     assert "        //@ maintaining res == i;\n        //@ decreases 100 - i;\n        for(int i = 0; i < 100; i++) {" in normalized
     ok, err = source_code_preserved(strip_jml_comments(original), normalized)
     assert ok, err
+
+
+def test_normalize_loop_specs_uses_openjml_loop_keywords():
+    original = """
+public class X {
+    //@ assignable \\nothing;
+    public int f(int n) {
+        int s = 0;
+        /*@
+          loop_invariant 0 <= i && i <= n;
+          loop_variant n - i;
+          assignable s;
+        @*/
+        for (int i = 0; i < n; i++) {
+            s += i;
+        }
+        return s;
+    }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    assert "    //@ assignable \\nothing;" in normalized
+    assert "maintaining 0 <= i && i <= n;" in normalized
+    assert "decreases n - i;" in normalized
+    assert "assignable s;" not in normalized
+
+
+def test_normalize_jml_range_quantifier_shorthand():
+    original = """
+public class X {
+    //@ maintaining s == (\\sum int k; k in 0..i; k);
+    //@ decreases n - i;
+    public int f(int n) { return n; }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    assert "\\sum int k; 0 <= k && k <= i; k" in normalized
+    assert "k in 0..i" not in normalized
+
+
+def test_normalize_moves_inner_loop_annotations_to_inner_loop():
+    original = """
+public class X {
+    void sort(int[] a) {
+        //@ maintaining 0 <= i && i <= a.length;
+        //@ decreases a.length - i;
+        //@ maintaining 0 <= j && j < a.length - i;
+        //@ decreases a.length - j;
+        for (int i = 0; i < a.length; i++) {
+            for (int j = 0; j < a.length - i; j++) {
+                a[j] = a[j];
+            }
+        }
+    }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    outer = (
+        "        //@ maintaining 0 <= i && i <= a.length;\n"
+        "        //@ decreases a.length - i;\n"
+        "        for (int i = 0; i < a.length; i++) {"
+    )
+    inner = (
+        "            //@ maintaining 0 <= j && j < a.length - i;\n"
+        "            //@ decreases a.length - j;\n"
+        "            for (int j = 0; j < a.length - i; j++) {"
+    )
+    assert outer in normalized
+    assert inner in normalized
+
+
+def test_normalize_strips_old_only_in_loop_annotations():
+    original = """
+public class X {
+    //@ ensures \\result == \\old(x) + 1;
+    int f(int x) {
+        int s = x;
+        //@ maintaining s >= \\old(x);
+        //@ decreases x - s;
+        while (s < x) {
+            s++;
+        }
+        return s;
+    }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    assert "//@ ensures \\result == \\old(x) + 1;" in normalized
+    assert "//@ maintaining s >= x;" in normalized
 
 
 def test_build_openjml_command_shape():
