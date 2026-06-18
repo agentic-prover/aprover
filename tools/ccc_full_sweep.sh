@@ -20,11 +20,22 @@ CONTAM="call failed|Error code: 429|rate_limit|overloaded|Error code: 5[0-9][0-9
 BACKOFF=300; RETRIES=5
 # Priority order: untrusted-input frontend + common first, then the rest of src.
 ORDER=""
-for d in common ir passes frontend/preprocessor frontend/lexer frontend/parser frontend/sema backend driver bin; do
+# CORE -- highest BMC yield: arithmetic / encoding / numeric parsing / IR analysis,
+# i.e. functions with synthesizable bounded inputs AND a crisp local spec.
+# Untrusted-input frontend (lexer/parser of raw source bytes) included in full.
+for d in common ir passes frontend; do
   for f in $(cd "$CCC" && find "src/$d" -name "*.rs" 2>/dev/null | sort); do ORDER="$ORDER $f"; done
 done
-# any src/*.rs not under the above (lib.rs, main.rs, etc.)
-for f in $(cd "$CCC" && find src -maxdepth 1 -name "*.rs" | sort); do ORDER="$ORDER $f"; done
+# CURATED BACKEND -- only byte/offset/size/relocation arithmetic + soft-float.
+# DELIBERATELY EXCLUDES the ~176-file per-arch (x86/riscv/arm/i686) instruction
+# selection + emission plumbing: stateful, operates over IR/target-machine state,
+# no crisp LOCAL spec, so kani returns vacuous "clean" rather than real coverage.
+for d in backend/elf backend/linker_common backend/stack_layout; do
+  for f in $(cd "$CCC" && find "src/$d" -name "*.rs" 2>/dev/null | sort); do ORDER="$ORDER $f"; done
+done
+for f in backend/f128_softfloat.rs backend/cast.rs backend/asm_expr.rs backend/call_abi.rs backend/elf_writer_common.rs; do
+  [ -e "$CCC/src/$f" ] && ORDER="$ORDER src/$f"
+done
 NFILES=$(echo $ORDER | wc -w)
 say "ccc FULL sweep START pid=$$ cargo-mode anthropic files=$NFILES kani=$(cargo kani --version 2>&1|head -1)"
 for rel in $ORDER; do
