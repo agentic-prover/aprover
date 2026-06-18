@@ -606,6 +606,55 @@ def _run_java_jbmc(args: argparse.Namespace, config: "object") -> int:
     return 1
 
 
+def _run_java_jml_specs_bench(args: argparse.Namespace, config: "object") -> int:
+    """Java/JML specification-synthesis benchmark runner using OpenJML."""
+    from bmc_agent.jml_specs import default_openjml_path, run_jml_specs_bench
+    from bmc_agent.llm import LLMClient
+
+    if getattr(args, "openjml_path", None):
+        config.openjml_path = args.openjml_path  # type: ignore[attr-defined]
+    elif not getattr(config, "openjml_path", ""):
+        config.openjml_path = default_openjml_path()  # type: ignore[attr-defined]
+    if getattr(args, "openjml_timeout", None) is not None:
+        config.openjml_timeout = int(args.openjml_timeout)  # type: ignore[attr-defined]
+    if getattr(args, "jml_max_iterations", None) is not None:
+        config.jml_max_iterations = int(args.jml_max_iterations)  # type: ignore[attr-defined]
+
+    print(f"Java/JML specs-bench: {args.source}")
+    print(f"Driver: {args.driver}")
+    print(f"Model: {getattr(config, 'llm_model', '')}")
+    print(f"OpenJML: {getattr(config, 'openjml_path', 'openjml')}")
+    print(f"Max iterations: {getattr(config, 'jml_max_iterations', 3)}")
+    print(f"Artifact dir: {config.artifact_dir}")
+
+    result = run_jml_specs_bench(
+        args.source,
+        driver=args.driver,
+        config=config,
+        llm=LLMClient(config),
+        output_dir=config.artifact_dir,
+        openjml_path=getattr(config, "openjml_path", "openjml"),
+        openjml_timeout=int(getattr(config, "openjml_timeout", 200)),
+        max_iterations=int(getattr(config, "jml_max_iterations", 3)),
+    )
+
+    print("\n=== JML/OpenJML result ===")
+    print(f"status: {result.status}")
+    print(f"passed: {result.passed}")
+    print(f"iterations: {len(result.iterations)}")
+    print(f"final annotated source: {result.final_annotated_path}")
+    print(f"report: {result.report_path}")
+    if result.iterations:
+        last = result.iterations[-1]
+        if not last.source_preserved:
+            print(f"source preservation: failed — {last.source_preservation_error}")
+        if not last.openjml.passed:
+            print(f"openjml output: {last.openjml_output_path}")
+            if last.openjml.error:
+                print(f"error: {last.openjml.error}")
+    return 0 if result.passed else 1
+
+
 def _run_assert_synth(args: argparse.Namespace, config: "object") -> int:
     """Assertion-driven spec synthesis (see bmc_agent.assert_driven_specs)."""
     from bmc_agent.assert_driven_specs import synthesize
@@ -1176,6 +1225,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     from bmc_agent.source_parser import detect_language
     if detect_language(args.source) == "java":
+        if getattr(args, "specs_bench", False) or getattr(args, "oracle", None) == "openjml":
+            return _run_java_jml_specs_bench(args, config)
         return _run_java_jbmc(args, config)
 
     # Standalone (whole-program) mode short-circuits the compositional pipeline:
@@ -2351,6 +2402,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout in seconds for javac when verifying Java sources.",
     )
     ver.add_argument(
+        "--openjml-path",
+        default=None,
+        help="Path/name of the OpenJML binary for Java --specs-bench (default: BMC_AGENT_OPENJML_PATH or openjml).",
+    )
+    ver.add_argument(
+        "--openjml-timeout",
+        type=int,
+        default=None,
+        help="OpenJML timeout in seconds for Java --specs-bench (default: BMC_AGENT_OPENJML_TIMEOUT or 200).",
+    )
+    ver.add_argument(
+        "--jml-max-iterations",
+        type=int,
+        default=None,
+        help="Maximum LLM generate/refine iterations for Java/JML --specs-bench (default: BMC_AGENT_JML_MAX_ITERATIONS or 3).",
+    )
+    ver.add_argument(
         "--specs-from-asserts",
         action="store_true",
         default=False,
@@ -2383,9 +2451,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ver.add_argument(
         "--oracle",
-        choices=["cbmc", "frama-c"],
+        choices=["cbmc", "frama-c", "openjml"],
         default=None,
-        help="Verification oracle for spec synthesis. Unset: 'cbmc' everywhere EXCEPT --specs-bench, which auto-prefers 'frama-c' when frama-c is on PATH (the correct oracle for specification benchmarks: native ACSL + mathematical integers + unbounded/aggregate goals) and falls back to 'cbmc' otherwise. 'cbmc': bounded model checking — unwinds bounded loops, machine integers. 'frama-c': Frama-C/WP deductive verification — consumes the synthesized ACSL loop invariants/contracts natively, mathematical integers, discharges base+preservation+goal for UNBOUNDED loops and aggregate (\\sum) invariants CBMC can't. Requires frama-c + an SMT prover (e.g. alt-ergo) on PATH. An explicit value always wins.",
+        help="Verification oracle for spec synthesis. Unset: 'cbmc' everywhere EXCEPT --specs-bench, which auto-prefers 'frama-c' for C when available and uses OpenJML for Java. 'cbmc': bounded model checking. 'frama-c': Frama-C/WP for generated ACSL. 'openjml': OpenJML ESC for generated Java/JML annotations.",
     )
     ver.add_argument(
         "--standalone-unwind",

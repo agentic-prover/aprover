@@ -231,6 +231,17 @@ class Config:
             p for p in os.environ.get("BMC_AGENT_JAVA_CLASSPATH", "").split(os.pathsep) if p
         ]
     )
+    # Java/JML specification-benchmark settings.  These are separate from JBMC:
+    # JBMC checks bytecode safety; OpenJML consumes generated JML annotations.
+    openjml_path: str = field(
+        default_factory=lambda: os.environ.get("BMC_AGENT_OPENJML_PATH", "openjml")
+    )
+    openjml_timeout: int = field(
+        default_factory=lambda: int(os.environ.get("BMC_AGENT_OPENJML_TIMEOUT", "200"))
+    )
+    jml_max_iterations: int = field(
+        default_factory=lambda: int(os.environ.get("BMC_AGENT_JML_MAX_ITERATIONS", "3"))
+    )
     # Per-function TOTAL CBMC wall-clock budget (seconds, 0 = unlimited). The
     # per-CALL timeout (cbmc_timeout, raised up to 600s by the flag-selector)
     # does NOT bound a function's total time: auto-retry doubling + Phase-3c
@@ -995,4 +1006,7 @@ class Config:
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
             threat_model_context=(os.environ.get("BMC_AGENT_THREAT_MODEL_CONTEXT") or "").strip(),
             llm_role_overrides=_parse_role_overrides_env(),
+            openjml_path=os.environ.get("BMC_AGENT_OPENJML_PATH", "openjml"),
+            openjml_timeout=int(os.environ.get("BMC_AGENT_OPENJML_TIMEOUT", "200")),
+            jml_max_iterations=int(os.environ.get("BMC_AGENT_JML_MAX_ITERATIONS", "3")),
         )
