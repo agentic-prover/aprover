@@ -140,18 +140,21 @@ def test_run_kani_passes_arguments_through():
 
     captured: dict = {}
 
-    class _Done:
-        def __init__(self):
-            self.stdout = "VERIFICATION:- SUCCESSFUL\n"
-            self.stderr = ""
+    class _FakePopen:
+        def __init__(self, cmd, stdout=None, stderr=None, text=None,
+                     start_new_session=None):
+            captured["cmd"] = list(cmd)
+            self.args = list(cmd)
             self.returncode = 0
+            self.pid = 12345
 
-    def _fake_run(cmd, capture_output, text, timeout):
-        captured["cmd"] = list(cmd)
-        return _Done()
+        def communicate(self, timeout=None):
+            captured["timeout"] = timeout
+            self.returncode = 0
+            return ("VERIFICATION:- SUCCESSFUL\n", "")
 
     with patch("bmc_agent.kani.shutil.which", return_value="/usr/local/bin/kani"), \
-         patch("bmc_agent.kani.subprocess.run", side_effect=_fake_run):
+         patch("bmc_agent.kani.subprocess.Popen", _FakePopen):
         result = run_kani(
             harness_path="harness.rs",
             harness_name="check_add",

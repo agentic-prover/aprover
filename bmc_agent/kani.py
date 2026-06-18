@@ -84,19 +84,29 @@ def run_kani(
     if harness_name:
         cmd += ["--harness", harness_name]
 
+    import os as _os0, signal as _sig0
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        _pp = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return CBMCResult(verified=False, error=f"kani timed out after {timeout}s")
     except FileNotFoundError:
         return CBMCResult(verified=False, error="kani not found")
     except OSError as exc:
         return CBMCResult(verified=False, error=f"kani OS error: {exc}")
+    try:
+        _o, _e = _pp.communicate(timeout=timeout)
+        proc = subprocess.CompletedProcess(_pp.args, _pp.returncode, _o, _e)
+    except subprocess.TimeoutExpired:
+        try:
+            _os0.killpg(_os0.getpgid(_pp.pid), _sig0.SIGKILL)
+        except Exception:
+            pass
+        try:
+            _pp.wait(timeout=10)
+        except Exception:
+            pass
+        return CBMCResult(verified=False, error=f"kani timed out after {timeout}s")
 
     raw = proc.stdout or ""
     stderr = proc.stderr or ""
@@ -283,25 +293,38 @@ def run_kani_cargo(
     try:
         source_path.write_bytes(appended)
         try:
-            proc = _sub.run(
+            import os as _os, signal as _signal
+            _popen = _sub.Popen(
                 ["cargo", "kani", "--harness", harness_name,
                  "--default-unwind", str(unwind)],
                 cwd=str(crate_root),
-                capture_output=True,
+                stdout=_sub.PIPE,
+                stderr=_sub.PIPE,
                 text=True,
-                timeout=timeout,
+                start_new_session=True,  # own process group so we can reap cbmc grandchildren
             )
-        except _sub.TimeoutExpired:
-            # Capture debug snapshot to disk so we can inspect the harness
-            # file state in case of timeout.
-            import os as _os
-            if _os.environ.get("BMC_AGENT_DEBUG_CARGO"):
+            try:
+                _out, _err = _popen.communicate(timeout=timeout)
+                proc = _sub.CompletedProcess(_popen.args, _popen.returncode, _out, _err)
+            except _sub.TimeoutExpired:
+                # cargo kani spawns cbmc grandchildren. subprocess timeout kills only
+                # the direct child, orphaning cbmc (which then pegs a core for hours).
+                # Kill the whole process group instead.
                 try:
-                    snap = Path(f"/tmp/bmc_debug_{harness_name}_timeout.rs")
-                    snap.write_bytes(appended)
+                    _os.killpg(_os.getpgid(_popen.pid), _signal.SIGKILL)
                 except Exception:
                     pass
-            return CBMCResult(verified=False, error=f"cargo kani timed out after {timeout}s")
+                try:
+                    _popen.wait(timeout=10)
+                except Exception:
+                    pass
+                if _os.environ.get("BMC_AGENT_DEBUG_CARGO"):
+                    try:
+                        snap = Path(f"/tmp/bmc_debug_{harness_name}_timeout.rs")
+                        snap.write_bytes(appended)
+                    except Exception:
+                        pass
+                return CBMCResult(verified=False, error=f"cargo kani timed out after {timeout}s")
         except FileNotFoundError:
             return CBMCResult(verified=False, error="cargo or kani not found")
         except OSError as exc:
