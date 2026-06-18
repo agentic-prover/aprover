@@ -30,10 +30,17 @@ done
 # DELIBERATELY EXCLUDES the ~176-file per-arch (x86/riscv/arm/i686) instruction
 # selection + emission plumbing: stateful, operates over IR/target-machine state,
 # no crisp LOCAL spec, so kani returns vacuous "clean" rather than real coverage.
-for d in backend/elf backend/linker_common backend/stack_layout; do
+# We DO include ONE representative arch (x86) instruction encoding + relocation +
+# soft 128-bit arithmetic (assembler/, linker reloc/layout, codegen f128/i128): these
+# ARE BMC-amenable (local ISA-encoding/reloc spec over bounded operands). The other
+# three near-duplicate arches (riscv/arm/i686) are omitted to avoid redundant findings.
+for d in backend/elf backend/linker_common backend/stack_layout backend/x86/assembler; do
   for f in $(cd "$CCC" && find "src/$d" -name "*.rs" 2>/dev/null | sort); do ORDER="$ORDER $f"; done
 done
-for f in backend/f128_softfloat.rs backend/cast.rs backend/asm_expr.rs backend/call_abi.rs backend/elf_writer_common.rs; do
+for f in backend/f128_softfloat.rs backend/cast.rs backend/asm_expr.rs backend/call_abi.rs backend/elf_writer_common.rs \
+         backend/x86/linker/plt_got.rs backend/x86/linker/elf.rs backend/x86/linker/emit_exec.rs \
+         backend/x86/linker/emit_shared.rs backend/x86/linker/input.rs \
+         backend/x86/codegen/f128.rs backend/x86/codegen/i128_ops.rs; do
   [ -e "$CCC/src/$f" ] && ORDER="$ORDER src/$f"
 done
 NFILES=$(echo $ORDER | wc -w)
