@@ -1,11 +1,10 @@
 """
 Re-run the realism check on bug_report.json files whose original realism
 LLM call failed (typically due to the Anthropic workspace API cap).
-Uses whatever LLM routing is configured in the environment (we set
-BMC_AGENT_LLM_REALISM_* via /tmp/.bmc_key to route through OpenRouter).
+Uses whatever LLM routing is configured in the environment.
 
 Usage:
-    . /tmp/.bmc_key && python scripts/rerun_realism.py \
+    python scripts/rerun_realism.py \
         --sweep /tmp/libarchive_n3_full_out/seedhunt_n3 \
         --corpus /tmp/libarchive_seedhunt_full \
         --log /tmp/rerun_realism.log

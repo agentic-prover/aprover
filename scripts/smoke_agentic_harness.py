@@ -13,7 +13,7 @@
 Run:
     .venv/bin/python scripts/smoke_agentic_harness.py
 Env:
-    source /tmp/.bmc_key_anthropic
+    configure the required BMC_AGENT_LLM_* environment variables first
 """
 
 from __future__ import annotations

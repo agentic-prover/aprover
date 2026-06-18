@@ -14,7 +14,8 @@
 # Add a target: append a line to TARGETS and a case in target_config().
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
-LOGDIR="${LEAF_ORACLE_LOG:-/home/syc/AProver/findings/cbmc_leaf_oracle}"
+REPO_ROOT="$(cd "$DIR/../.." && pwd)"
+LOGDIR="${LEAF_ORACLE_LOG:-$REPO_ROOT/findings/cbmc_leaf_oracle}"
 mkdir -p "$LOGDIR"
 BOUNDS="${LEAF_BOUNDS:-4 6 8 10 12}"
 CBMC_TIMEOUT="${LEAF_CBMC_TIMEOUT:-300}"

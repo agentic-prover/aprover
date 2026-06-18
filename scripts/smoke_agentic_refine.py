@@ -11,7 +11,7 @@ the prior, (c) sizes the buffer realistically, (d) CBMC produces
 substantially fewer CExes.
 
 Run:
-    source /tmp/.bmc_key_anthropic
+    # Configure the required BMC_AGENT_LLM_* environment variables first.
     .venv/bin/python scripts/smoke_agentic_refine.py
 """
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -64,14 +65,14 @@ def _build_subset_corpus() -> Path:
 
 def _run_sweep(corpus_dir: Path, output_dir: Path) -> int:
     """Run verify-dir lite-mode on the subset. Returns exit code."""
-    key_path = Path("/tmp/.bmc_key")
+    env_file = os.environ.get("BMC_AGENT_REALISM_ENV_FILE", "")
     env = os.environ.copy()
     env["BMC_AGENT_DEDUP_MAX_PER_TYPE"] = "3"
     env["BMC_AGENT_CBMC_TIMEOUT"] = "60"
-    if key_path.exists():
-        # source the key file via subprocess shell
+    if env_file and Path(env_file).exists():
+        # Source the operator-provided env file via subprocess shell.
         cmd = (
-            f". {key_path} && {REPO_ROOT}/.venv/bin/python -m bmc_agent.cli verify-dir "
+            f". {shlex.quote(env_file)} && {REPO_ROOT}/.venv/bin/python -m bmc_agent.cli verify-dir "
             f"--source-dir {corpus_dir} --driver precision_check --output {output_dir} "
             f"--include-dir /tmp/libarchive_bench/libarchive/build "
             f"--include-dir /tmp/libarchive_bench/libarchive/libarchive "
@@ -80,7 +81,7 @@ def _run_sweep(corpus_dir: Path, output_dir: Path) -> int:
         )
         return subprocess.call(["bash", "-c", cmd], env=env)
     else:
-        print("ERROR: /tmp/.bmc_key missing — needed for realism check")
+        print("ERROR: set BMC_AGENT_REALISM_ENV_FILE to an env file for realism check")
         return 2
 
 

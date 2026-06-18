@@ -17,7 +17,7 @@
 #   setsid nohup bash tools/validate_phase3_enforce.sh irq >/dev/null 2>&1 &
 #   setsid nohup bash tools/validate_phase3_enforce.sh net >/dev/null 2>&1 &
 set -u
-ROOT=/home/syc/AProver
+ROOT="${APROVER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 1
 
 # Native-Anthropic LLM config (claude-sonnet-4-6). Required for realism to run.

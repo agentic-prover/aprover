@@ -42,6 +42,8 @@ PROJECT_YAML_URL = (
 DEFAULT_CORPUS_ROOT = Path("/tmp/oss_fuzz_corpora")
 DEFAULT_EMBARGOED_ROOT = Path("/tmp/aprover-findings-embargoed")
 DEFAULT_ARTIFACT_ROOT = Path("/tmp/oss_fuzz_artifacts")
+DEFAULT_ENV_FILE = Path.home() / ".config" / "bmc-agent" / "env"
+DEFAULT_LOG_ROOT = Path(__file__).resolve().parents[1] / "findings" / "oss_fuzz"
 
 CONFIRMED_TIERS = {"confirmed_dynamic", "confirmed_system_entry", "confirmed_bmc"}
 
@@ -736,7 +738,7 @@ def sweep_one_project(args: argparse.Namespace) -> int:
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     artifact_dir = args.artifact_root / meta.name / run_id
-    log_path = Path("/home/syc/AProver/findings") / "oss_fuzz" / f"{meta.name}_{run_id}.log"
+    log_path = args.log_root / f"{meta.name}_{run_id}.log"
 
     # Bound /tmp growth under 24/7 operation: keep only the 2 newest prior
     # run dirs for this project before starting a new one. Findings are
@@ -752,7 +754,7 @@ def sweep_one_project(args: argparse.Namespace) -> int:
             shutil.rmtree(stale, ignore_errors=True)
             print(f"[oss_fuzz_sweep] pruned old artifacts: {stale}")
 
-    extra_env = load_env_file(Path("/home/syc/.config/bmc-agent/env"))
+    extra_env = load_env_file(args.env_file)
     extra_env.setdefault("BMC_AGENT_K2_NOTE", f"run_id={run_id}")
     # Smuggle per-project exclude globs through extra_env so the
     # run_verify_dir() helper can stitch them into --exclude flags.
@@ -799,6 +801,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--corpus-root", type=Path, default=DEFAULT_CORPUS_ROOT)
     p.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
     p.add_argument("--embargoed-root", type=Path, default=DEFAULT_EMBARGOED_ROOT)
+    p.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE,
+                   help="Optional environment file with LLM routing settings")
+    p.add_argument("--log-root", type=Path, default=DEFAULT_LOG_ROOT,
+                   help="Directory for per-project sweep logs")
     p.add_argument("--dry-run", action="store_true",
                    help="Render reports but don't commit/push to embargoed repo")
     p.add_argument("--corpus-only", action="store_true",

@@ -4,15 +4,15 @@
 # Stops cleanly when STATUS.md reports BLOCKED / PHASE4-REACHED / DONE, on no-progress, or at the cap.
 #
 # Launch (detached, survives logout):
-#   setsid nohup bash /home/syc/AProver/tools/autonomous_realism_run.sh >/dev/null 2>&1 &
+#   setsid nohup bash tools/autonomous_realism_run.sh >/dev/null 2>&1 &
 # Watch:
-#   tail -f /home/syc/AProver/findings/autonomous_realism/run.log
-#   cat     /home/syc/AProver/findings/autonomous_realism/STATUS.md
+#   tail -f findings/autonomous_realism/run.log
+#   cat     findings/autonomous_realism/STATUS.md
 # Stop early:
-#   touch   /home/syc/AProver/findings/autonomous_realism/STOP
+#   touch   findings/autonomous_realism/STOP
 set -u
 
-ROOT=/home/syc/AProver
+ROOT="${APROVER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OUTDIR="$ROOT/findings/autonomous_realism"
 PROMPT_FILE="$ROOT/tools/autonomous_realism_prompt.md"
 STATUS="$OUTDIR/STATUS.md"

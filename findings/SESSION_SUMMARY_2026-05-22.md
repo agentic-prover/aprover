@@ -13,8 +13,8 @@ fixes in the first place.
 1. **Config: recognise `BMC_AGENT_LLM_API_KEY` env var** (`3a03126`).
    The hybrid env-file convention sets `BMC_AGENT_LLM_API_KEY` alongside
    `_BASE_URL` / `_MODEL` / `_PROVIDER`. Config only honoured
-   `K2THINK_API_KEY` / `ANTHROPIC_API_KEY`, so any sweep that sourced
-   `/tmp/aprover_hybrid_keys.env` got an empty key for non-spec_gen
+   `K2THINK_API_KEY` / `ANTHROPIC_API_KEY`, so any sweep using the
+   local key environment got an empty key for non-spec_gen
    roles. The realism check (the feature that downgrades
    defensive-programming gaps from `real_bug` → `unrealistic`) was
    failing silently on every CEx with "No API key for OpenAI-compatible
@@ -153,15 +153,13 @@ propagated to the children.
 
 User explicitly asked mid-session that API keys never be pushed.
 Verified:
-- `git log -G "sk-or-v1-7f73b577|IFM-iXqtRmi5M4B1thw4"` returns nothing
+- `git log -G "<redacted-key-patterns>"` returns nothing
   — neither key value has ever appeared in repo history.
 - `git ls-files | grep -E "tmp/|aprover_keys|hybrid_keys"` → empty.
-- Both key files (`/tmp/aprover_hybrid_keys.env`,
-  `/tmp/aprover_or_keys.env`) live outside the repo.
+- Local key files live outside the repo.
 - `.gitignore` hardened (commit `6c6d5ec`) — verified with
   `git check-ignore` against synthetic key-file paths.
-- Sweep logs in `/tmp/aprover_neuron_or_sweep/*/run.log` grep'd for
-  key material — none present.
+- Sweep logs were grep'd for key material — none present.
 
 ## Methodology insight
 

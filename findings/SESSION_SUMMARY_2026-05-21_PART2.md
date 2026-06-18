@@ -80,9 +80,8 @@ is what makes most FAILs vacuous.
 
 - 50+ commits to `origin/main`
 - Tests: 678 passing, 2 skipped
-- API keys: stored only in `/tmp/aprover_hybrid_keys.env`
-  (outside repo). Verified `grep -r "sk-or-v1\|IFM-iXqtRmi"
-  /home/syc/AProver/` returns nothing — no key material in repo.
+- API keys: stored only outside the repo. Verified a grep for redacted
+  key patterns returns nothing — no key material in repo.
 
 ## Next moves (for user to choose)
 

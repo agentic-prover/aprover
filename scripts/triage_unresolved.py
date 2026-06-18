@@ -11,7 +11,6 @@ TriageAgent for an independent verdict. Writes:
     fp_class breakdown.
 
 Usage:
-    source /tmp/aprover_or_keys.env
     .venv/bin/python scripts/triage_unresolved.py \\
         --sweep-dir /tmp/libarchive_postfix8 \\
         --driver libarchive_postfix8 \\

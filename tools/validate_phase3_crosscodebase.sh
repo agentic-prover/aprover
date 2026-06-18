@@ -7,7 +7,7 @@
 # (attacker-entry-reachable), which the confirmed_dynamic immunity removal does
 # NOT touch -> 0 demotions. This run provides the empirical data point.
 set -u
-ROOT=/home/syc/AProver
+ROOT="${APROVER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 1
 ENVF="$HOME/.config/bmc-agent/env"
 [ -f "$ENVF" ] && . "$ENVF"
