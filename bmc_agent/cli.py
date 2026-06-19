@@ -941,6 +941,27 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
                 print("post-min: recovered a verifying subset via clean-WP minimization")
         except Exception as _e:
             print(f"post-min: skipped ({_e})")
+    # If still failing, try AUXILIARY STRENGTHENING: synthesize the missing companion
+    # invariant(s) that make the non-inductive clauses inductive (the dual of pruning),
+    # then re-verify with clean WP. Emulates autospec's complete mutually-supporting sets.
+    if (not getattr(r, "ok", False) and getattr(config, "oracle", "") == "frama-c"
+            and getattr(r, "annotations", None) and not getattr(r, "no_goals", False)):
+        try:
+            from bmc_agent.loop_invariants import wp_strengthen
+            _res = wp_strengthen(open(args.source).read(), r.annotations, config,
+                                 LLMClient(config), entry=entry)
+            if _res:
+                _inst2, _ann2 = _res
+                r.ok = True
+                r.instrumented = _inst2
+                r.annotations = _ann2
+                r.acsl = "\n".join(l.strip() for l in _inst2.splitlines()
+                                    if "loop invariant" in l or "loop assigns" in l)
+                r.note = (getattr(r, "note", "") + " | recovered by auxiliary "
+                          "strengthening (synthesized companion invariant)").strip(" |")
+                print("strengthen: recovered via auxiliary-invariant synthesis")
+        except Exception as _e:
+            print(f"strengthen: skipped ({_e})")
 
     import json as _json, os as _os
     out_dir = getattr(config, "artifact_dir", None) or "."

@@ -2011,7 +2011,8 @@ def _wp_failing_invariant_indices(unproved: list, annotations: dict, loops: list
 
 def check_loop_invariants_wp(source: str, annotations: dict, config,
                              entry: str = "main", timeout: int = 120,
-                             force_rte: bool | None = None) -> "LoopCheck":
+                             force_rte: bool | None = None,
+                             wp_timeout: int = 10) -> "LoopCheck":
     """Frama-C/WP oracle: render the invariants to ACSL, splice them before each
     loop, express goals as ACSL asserts, and run ``frama-c -wp``. Handles unbounded
     loops + mathematical-integer / aggregate invariants that CBMC cannot. Returns a
@@ -2089,7 +2090,7 @@ def check_loop_invariants_wp(source: str, annotations: dict, config,
     if prelude:
         annotated = prelude + annotated
     wp = frama_c.run_wp(annotated, getattr(config, "frama_c_path", "frama-c"), timeout,
-                        inline=inline, exclude_terminates=True, rte=rte)
+                        inline=inline, exclude_terminates=True, rte=rte, wp_timeout=wp_timeout)
     # WP goal names: "..._loop_invariant_<N>_(established|preserved)" (validity)
     # vs "...assert..." (adequacy). N is Frama-C's 1-based, function-global,
     # source-order index of loop invariants.
@@ -2314,6 +2315,69 @@ def _is_tautology(clause: str) -> bool:
 
 _re_taut = __import__("re").compile(r"==|!=|<=|>=|<|>")
 _re_ident = __import__("re").compile(r"[A-Za-z_]\w*")
+
+
+_AUX_SYNTH_PROMPT = """\
+The following candidate loop invariants are NOT inductive on their own -- the verifier
+cannot preserve them across one iteration:
+{invs}
+
+FUNCTION:
+```c
+{fn_src}
+```
+
+They are missing AUXILIARY invariant(s): additional EXACT relations among the loop
+variables -- most often LINEAR EQUALITIES that the loop body's ASSIGNMENTS establish
+(e.g. an assignment `a = b + c;` gives the invariant `a == b + c`), or equalities that
+LINK the candidates so they become mutually inductive. Examine the assignments in each
+loop body and propose the missing auxiliary invariant(s) that make the candidate set
+inductive. Propose BOTH (a) LINKING equalities the assignments establish (e.g. a == b + c),
+AND (b) any SUPPORTING BOUNDS the failing clauses need to be discharged -- typically
+nonnegativity (0 <= v) or simple ranges on the variables involved. A modular or
+relational clause often cannot be proved without the relevant variables being bounded.
+Output ONLY the auxiliary invariant line(s), one per line, plain C-style."""
+
+
+def wp_strengthen(source: str, annotations: dict, config, llm, entry: str = "main",
+                  rounds: int = 2):
+    """STRENGTHENING post-processor (the dual of minimization): when the synthesized set
+    is not inductive because clauses fail PRESERVATION, ask the LLM -- with a FOCUSED,
+    clean prompt (the whole function + the failing candidates) -- for the AUXILIARY
+    companion invariant(s) (the linking relations the body's assignments establish, e.g.
+    `w == z + 1`) that make the set inductive. ADD them and re-verify with a clean,
+    stable-budget WP run. Emulates autospec's complete mutually-supporting sets. Returns
+    (instrumented_source, augmented_annotations) if it then verifies, else None. Sound:
+    a fresh WP run must prove all goals on the augmented set."""
+    from bmc_agent.llm import agentic_system_prompt
+    fn_src = brace_braceless_loops(source)
+    ann = {o: list(v) for o, v in (annotations or {}).items()}
+    logger.info("wp_strengthen: invoked with %d loops, clauses=%s", len(ann), ann)
+    if not ann:
+        logger.info("wp_strengthen: no annotations to strengthen"); return None
+    for _ in range(rounds):
+        cur = sorted({c for invs in ann.values() for c in invs})
+        prompt = _AUX_SYNTH_PROMPT.format(
+            invs="\n".join(f"  {c}" for c in cur) or "  (none)", fn_src=fn_src)
+        try:
+            txt = llm.complete(agentic_system_prompt(config, "spec_gen", _PROPOSE_SYS),
+                               prompt, max_tokens=400, role="spec_gen")
+        except Exception:
+            return None
+        aux = _filter_in_scope(_parse_inv_lines(txt), fn_src)
+        added = False
+        for o in ann:
+            for a in aux:
+                if a not in ann[o]:
+                    ann[o].append(a); added = True
+        if not added:
+            return None
+        logger.info("wp_strengthen: aux proposed=%s", aux)
+        chk = check_loop_invariants_wp(source, ann, config, entry, wp_timeout=30)
+        logger.info("wp_strengthen: augmented verified=%s failing=%s goal_failed=%s", chk.verified, chk.failing_invariants, chk.goal_failed)
+        if chk.verified:
+            return getattr(chk, "instrumented", ""), ann
+    return None
 
 
 def _filter_in_scope(clauses: list, source: str) -> list:
