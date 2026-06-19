@@ -918,6 +918,29 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     print(f"Entry: {entry}   (propose → CBMC validity+adequacy → refine)")
     r = synthesize_loop_invariants(args.source, config, LLMClient(config),
                                    entry=entry, unwind=unwind)
+    # POST-SYNTHESIS clean-WP minimization: when the synthesized set does not verify,
+    # try to recover a verifying SUBSET by dropping non-load-bearing failing clauses,
+    # using FRESH stable-budget WP runs (immune to the in-loop check's timeout flakiness).
+    # Sound: only marks success if a fresh WP run proves all goals on the reduced set.
+    if (not getattr(r, "ok", False) and getattr(config, "oracle", "") == "frama-c"
+            and getattr(r, "instrumented", "") and not getattr(r, "no_goals", False)):
+        try:
+            from bmc_agent.frama_c import wp_minimize_source
+            _mins = wp_minimize_source(
+                r.instrumented, frama_c_path=getattr(config, "frama_c_path", "frama-c"),
+                rte=not bool(getattr(config, "math_ints", False)))
+            if _mins:
+                import re as _re_pm
+                r.ok = True
+                r.instrumented = _mins
+                r.annotations = {}
+                r.acsl = "\n".join(l.strip() for l in _mins.splitlines()
+                                    if "loop invariant" in l or "loop assigns" in l)
+                r.note = (getattr(r, "note", "") + " | recovered by post-synthesis "
+                          "clean-WP minimization (dropped non-load-bearing clauses)").strip(" |")
+                print("post-min: recovered a verifying subset via clean-WP minimization")
+        except Exception as _e:
+            print(f"post-min: skipped ({_e})")
 
     import json as _json, os as _os
     out_dir = getattr(config, "artifact_dir", None) or "."

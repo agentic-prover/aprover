@@ -369,6 +369,46 @@ def parse_wp_output(raw: str) -> tuple:
     return n_proved, n_total, unproved
 
 
+def wp_minimize_source(src: str, frama_c_path: str = "frama-c", rte: bool = False,
+                       wp_timeout: int = 30, max_rounds: int = 12):
+    """Post-synthesis minimization OUTSIDE the synthesis loop. Given an instrumented
+    source whose invariant set does not fully verify -- typically because the LLM added
+    NON-LOAD-BEARING clauses that time out at the short in-loop budget and flakily
+    survive -- greedily drop the WP-FAILING loop invariants and re-verify with FRESH,
+    stable-budget WP runs. Returns the minimized source once all (non-terminates) goals
+    prove, else None. Because each check is a fresh clean WP run (not the flaky in-loop
+    check), dead clauses are reliably flagged and removed; if dropping ever makes an
+    ASSERT fail (the clause was load-bearing) or nothing is left to drop, it bails out
+    (sound: never claims a pass it cannot re-verify)."""
+    import re as _re
+    inv_re = _re.compile(r"\bloop invariant\b")
+    lines = src.splitlines()
+    for _ in range(max_rounds):
+        cur = "\n".join(lines)
+        wp = run_wp(cur, frama_c_path, timeout=180, rte=rte, wp_timeout=wp_timeout,
+                    exclude_terminates=True)
+        if not getattr(wp, "available", False):
+            return None
+        if wp.n_total > 0 and wp.n_proved == wp.n_total:
+            return cur
+        fail_idx, assert_failed = set(), False
+        for g in (wp.unproved or []):
+            m = _re.search(r"loop_invariant(?:_named)?_(\d+)", g or "")
+            if m:
+                fail_idx.add(int(m.group(1)))
+            elif "assert" in (g or "").lower():
+                assert_failed = True
+        if assert_failed or not fail_idx:
+            return None
+        inv_lines = [i for i, ln in enumerate(lines) if inv_re.search(ln)]
+        drops = sorted((n for n in fail_idx if 1 <= n <= len(inv_lines)), reverse=True)
+        if not drops or len(inv_lines) - len(drops) <= 0:
+            return None
+        for n in drops:
+            del lines[inv_lines[n - 1]]
+    return None
+
+
 def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
            timeout: int = 120, rte: bool = True, prover: str = None,
            wp_timeout: int = 10, inline: "list[str]" = None,
