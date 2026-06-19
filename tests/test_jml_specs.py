@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bmc_agent.jml_specs import (
+    _prune_reported_postcondition,
     build_openjml_command,
     count_jml_clauses,
     extract_java_source,
@@ -222,6 +223,75 @@ public class X {
     normalized = normalize_jml_annotation_placement(original)
     assert "//@ ensures \\result == \\old(x) + 1;" in normalized
     assert "//@ maintaining s >= x;" in normalized
+
+
+def test_normalize_rewrites_simple_conditional_ensures():
+    original = """
+public class X {
+    //@ ensures \\result == a + b && op == '+';
+    int f(int a, int b, char op) {
+        return a + b;
+    }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    assert "//@ ensures op == '+' ==> \\result == a + b;" in normalized
+
+
+def test_normalize_drops_method_contract_referencing_locals():
+    original = """
+class Area {
+    //@ requires ax1 <= ax2;
+    //@ ensures \\result == area1 + overlapArea;
+    int area(int ax1, int ax2) {
+        int area1 = ax2 - ax1;
+        int overlapArea = 0;
+        return area1 + overlapArea;
+    }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    assert "requires ax1 <= ax2" in normalized
+    assert "//@ ensures \\result == area1 + overlapArea;" not in normalized
+    assert "return area1 + overlapArea;" in normalized
+
+
+def test_normalize_adds_nonzero_requires_for_param_division():
+    original = """
+class Div {
+    //@ ensures \\result == a / b;
+    int div(int a, int b) {
+        return a / b;
+    }
+}
+"""
+    normalized = normalize_jml_annotation_placement(original)
+    assert "//@ requires b != 0;" in normalized
+
+
+def test_prune_reported_postcondition_uses_contract_location():
+    source = """class X {
+  //@ ensures \\result > 0;
+  int f() {
+    return -1;
+  }
+}
+"""
+    output = (
+        "/tmp/X.java:4: verify: The prover cannot establish an assertion "
+        "(Postcondition: /tmp/X.java:2:) in method f\n"
+        "    return -1;\n"
+        "    ^\n"
+        "/tmp/X.java:2: verify: Associated declaration: /tmp/X.java:4:\n"
+        "  //@ ensures \\result > 0;\n"
+        "      ^\n"
+    )
+
+    pruned, changed = _prune_reported_postcondition(source, output)
+
+    assert changed
+    assert "ensures" not in pruned
+    assert "return -1;" in pruned
 
 
 def test_build_openjml_command_shape():

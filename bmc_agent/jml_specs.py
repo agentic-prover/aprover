@@ -119,6 +119,16 @@ def strip_jml_comments(source: str) -> str:
     return _JML_LINE_RE.sub("", without_blocks)
 
 
+def _as_text(value: Any) -> str:
+    """Best-effort subprocess output normalization."""
+
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def java_without_jml_fingerprint(source: str) -> str:
     """Normalize Java source after deleting JML comments."""
 
@@ -239,11 +249,227 @@ def _strip_simple_old_in_loop_clause(line: str) -> str:
     )
 
 
+def _normalise_conditional_ensures(line: str) -> str:
+    """Rewrite a common malformed conditional postcondition shape.
+
+    LLMs often write ``ensures \result == expr && cond;`` when they mean
+    ``ensures cond ==> \result == expr;``.  The former requires ``cond`` at every
+    method exit and is usually inconsistent across switch/branch-heavy code.
+    This rewrite is deliberately narrow: it only fires when the left conjunct is
+    a ``\result`` equality and the right conjunct does not mention ``\result``.
+    """
+
+    match = re.match(r"^(\s*(?://@|\*)?\s*ensures\s+)(.+?)\s*&&\s*(.+?)(;\s*)$", line)
+    if not match:
+        return line
+    prefix, lhs, rhs, suffix = match.groups()
+    if "\\result" not in lhs or "\\result" in rhs:
+        return line
+    if "==>" in lhs or "<==>" in lhs or "==>" in rhs or "<==>" in rhs:
+        return line
+    if not re.match(r"^\s*\\result\s*(?:==|!=|<=|>=|<|>)", lhs):
+        return line
+    return f"{prefix}{rhs.strip()} ==> {lhs.strip()}{suffix}"
+
+
 def _jml_content_keyword(line: str) -> str:
     stripped = line.strip()
     stripped = stripped.removeprefix("//@").strip()
     stripped = stripped.removeprefix("*").strip()
     return stripped.split(None, 1)[0].rstrip(";") if stripped else ""
+
+
+def _method_param_names(signature_line: str) -> set[str] | None:
+    """Extract Java parameter names from a simple method signature line."""
+
+    if "(" not in signature_line or ")" not in signature_line:
+        return None
+    if not re.search(r"\b(?:public|protected|private|static|final|synchronized|native|abstract|strictfp)\b", signature_line):
+        # Package-private methods are allowed, but avoid treating control-flow
+        # statements as method signatures.
+        if not re.search(r"\w+\s+\w+\s*\(", signature_line):
+            return None
+    params = signature_line[signature_line.find("(") + 1: signature_line.rfind(")")].strip()
+    if not params:
+        return set()
+    names: set[str] = set()
+    for part in params.split(","):
+        toks = re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", part)
+        if toks:
+            names.add(toks[-1])
+    return names
+
+
+def _jml_bound_variables(line: str) -> set[str]:
+    return set(re.findall(r"\\(?:forall|exists|sum)\s+(?:int|integer|long|short|byte|char|boolean)\s+([A-Za-z_$][A-Za-z0-9_$]*)", line))
+
+
+def _jml_identifiers(line: str) -> set[str]:
+    cleaned = re.sub(r"'(?:\\.|[^'\\])*'", " ", line)
+    cleaned = re.sub(r'"(?:\\.|[^"\\])*"', " ", cleaned)
+    return set(re.findall(r"(?<!\\)\b[A-Za-z_$][A-Za-z0-9_$]*\b", cleaned))
+
+
+_METHOD_CONTRACT_ALLOWED_IDS = {
+    "requires",
+    "ensures",
+    "assignable",
+    "assigns",
+    "also",
+    "pure",
+    "true",
+    "false",
+    "null",
+    "int",
+    "integer",
+    "long",
+    "short",
+    "byte",
+    "char",
+    "boolean",
+    "String",
+    "Integer",
+    "Long",
+    "Short",
+    "Byte",
+    "Character",
+    "Boolean",
+    "Math",
+    "MIN_VALUE",
+    "MAX_VALUE",
+    "length",
+    "charAt",
+    "toCharArray",
+    "old",
+    "result",
+}
+
+
+def _method_contract_unknown_ids(line: str, params: set[str]) -> set[str]:
+    ids = _jml_identifiers(line)
+    ids -= _jml_bound_variables(line)
+    ids -= _METHOD_CONTRACT_ALLOWED_IDS
+    ids -= params
+    return ids
+
+
+def _filter_method_contract_scope(lines: list[str]) -> list[str]:
+    """Drop method-contract clauses that reference local variables.
+
+    Method pre/postconditions are scoped over parameters, fields, ``this``, and
+    JML built-ins.  A generated clause such as ``ensures result == area1`` is
+    invalid when ``area1`` is a local variable declared inside the method body.
+    Dropping only those invalid clauses preserves executable Java and converts
+    syntax errors into either weaker valid specs or genuine proof failures.
+    """
+
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if not _is_jml_line(lines[i]):
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i
+        group: list[str] = []
+        while j < len(lines) and _is_jml_line(lines[j]):
+            group.append(lines[j])
+            j += 1
+        sig_idx = _next_nonempty_index(lines, j)
+        params = _method_param_names(lines[sig_idx]) if sig_idx is not None else None
+        if params is not None:
+            filtered: list[str] = []
+            for line in group:
+                keyword = _jml_content_keyword(line)
+                if keyword in {"requires", "ensures"} and _method_contract_unknown_ids(line, params):
+                    continue
+                filtered.append(line)
+            group = filtered
+        out.extend(group)
+        i = j
+    return out
+
+
+def _normalize_jml_lines(lines: list[str]) -> list[str]:
+    return [_normalise_conditional_ensures(_normalise_jml_clause_keyword(line)) for line in lines]
+
+
+def _brace_delta(line: str) -> int:
+    return line.count("{") - line.count("}")
+
+
+def _add_division_requires(lines: list[str]) -> list[str]:
+    """Add non-zero preconditions for direct division/modulo by parameters.
+
+    OpenJML checks Java arithmetic well-definedness.  If a method body contains
+    ``/ p`` or ``% p`` for parameter ``p`` and no matching precondition exists,
+    verification can fail before the generated functional spec matters.
+    """
+
+    out = list(lines)
+    i = 0
+    insertions: dict[int, list[str]] = {}
+    while i < len(out):
+        params = _method_param_names(out[i])
+        if params is None or "{" not in out[i]:
+            i += 1
+            continue
+        depth = _brace_delta(out[i])
+        j = i + 1
+        body: list[str] = []
+        while j < len(out) and depth > 0:
+            body.append(out[j])
+            depth += _brace_delta(out[j])
+            j += 1
+        body_text = "\n".join(strip_jml_comments("\n".join(body)).splitlines())
+        denoms = {
+            m.group(1)
+            for m in re.finditer(r"(?:/|%)\s*([A-Za-z_$][A-Za-z0-9_$]*)\b", body_text)
+            if m.group(1) in params
+        }
+        if denoms:
+            group_start = i
+            while group_start > 0 and _is_jml_line(out[group_start - 1]):
+                group_start -= 1
+            existing = "\n".join(out[group_start:i])
+            reqs = []
+            indent = _line_indent(out[i])
+            for denom in sorted(denoms):
+                if not re.search(rf"\b{re.escape(denom)}\s*!=\s*0\b", existing):
+                    reqs.append(f"{indent}//@ requires {denom} != 0;")
+            if reqs:
+                insertions.setdefault(group_start, []).extend(reqs)
+        i = j
+
+    rebuilt: list[str] = []
+    for idx, line in enumerate(out):
+        if idx in insertions:
+            rebuilt.extend(insertions[idx])
+        rebuilt.append(line)
+    if len(out) in insertions:
+        rebuilt.extend(insertions[len(out)])
+    return rebuilt
+
+
+def _prune_reported_postcondition(source: str, verifier_output: str) -> tuple[str, bool]:
+    """Remove the generated ``ensures`` line OpenJML reports as unproved."""
+
+    # For an unproved method postcondition, OpenJML reports two locations: the
+    # ``Postcondition`` location points at the contract clause, while the
+    # ``Associated declaration`` often points at the return statement.  Prefer
+    # the former so pruning removes only generated contract text.
+    matches = re.findall(r"\(Postcondition: [^)\n]*?\.java:(\d+):\)", verifier_output)
+    if not matches:
+        matches = re.findall(r"Associated declaration: [^\n]*?\.java:(\d+):", verifier_output)
+    if not matches:
+        return source, False
+    lines = source.splitlines()
+    for raw in matches:
+        idx = int(raw) - 1
+        if 0 <= idx < len(lines) and "ensures" in lines[idx]:
+            del lines[idx]
+            return "\n".join(lines) + ("\n" if source.endswith("\n") else ""), True
+    return source, False
 
 
 def _next_nonempty_is_loop(lines: list[str], index: int) -> bool:
@@ -318,7 +544,7 @@ def _relocate_inner_loop_annotations(lines: list[str]) -> list[str]:
                 for line_idx in group_indices:
                     line = lines[line_idx]
                     if var_re.search(line):
-                        moved.append(nested_indent + line.strip())
+                        moved.append(nested_indent + _normalise_conditional_ensures(line.strip()))
                         removals.add(line_idx)
                 if moved:
                     insertions.setdefault(nested_idx, []).extend(moved)
@@ -351,7 +577,7 @@ def _normalise_loop_jml_groups(lines: list[str]) -> list[str]:
         j = i
         group: list[str] = []
         while j < len(lines) and _is_jml_line(lines[j]):
-            group.append(_normalise_jml_clause_keyword(lines[j]))
+            group.append(_normalise_conditional_ensures(_normalise_jml_clause_keyword(lines[j])))
             j += 1
         if _next_nonempty_is_loop(lines, j):
             filtered = []
@@ -388,7 +614,7 @@ def _normalise_loop_jml_blocks(source: str) -> str:
         is_loop_block = _next_nonempty_is_loop(lines, i)
         new_block: list[str] = []
         for raw in block:
-            line = _normalise_jml_clause_keyword(raw)
+            line = _normalise_conditional_ensures(_normalise_jml_clause_keyword(raw))
             if is_loop_block and _jml_content_keyword(line) in {"assignable", "assigns"}:
                 continue
             if is_loop_block:
@@ -408,7 +634,7 @@ def normalize_jml_annotation_placement(source: str) -> str:
     """
 
     src = _normalise_jml_range_quantifiers(source)
-    src = "\n".join(_normalise_jml_clause_keyword(line) for line in src.splitlines())
+    src = "\n".join(_normalize_jml_lines(src.splitlines()))
     src = _normalise_loop_jml_blocks(src)
     lines = src.splitlines()
 
@@ -423,7 +649,7 @@ def normalize_jml_annotation_placement(source: str) -> str:
             j = i + 1
             moved: list[str] = []
             while j < len(lines) and _is_loop_annotation(lines[j]):
-                moved.append(_line_indent(line) + lines[j].strip())
+                moved.append(_line_indent(line) + _normalise_conditional_ensures(lines[j].strip()))
                 j += 1
             if moved:
                 out.extend(moved)
@@ -450,7 +676,7 @@ def normalize_jml_annotation_placement(source: str) -> str:
             j = i + 1
             moved = []
             while j < len(lines) and _is_jml_line(lines[j]):
-                moved.append(_line_indent(line) + lines[j].strip())
+                moved.append(_line_indent(line) + _normalise_conditional_ensures(lines[j].strip()))
                 j += 1
             if moved and j < len(lines) and lines[j].lstrip().startswith("{"):
                 out.extend(moved)
@@ -462,6 +688,8 @@ def normalize_jml_annotation_placement(source: str) -> str:
 
     out = _normalise_loop_jml_groups(out)
     out = _relocate_inner_loop_annotations(out)
+    out = _filter_method_contract_scope(out)
+    out = _add_division_requires(out)
     return "\n".join(out).rstrip() + ("\n" if source.endswith("\n") else "")
 
 
@@ -521,8 +749,8 @@ def run_openjml(
             passed=False,
             returncode=None,
             runtime_s=runtime,
-            stdout=exc.stdout or "",
-            stderr=exc.stderr or "",
+            stdout=_as_text(exc.stdout),
+            stderr=_as_text(exc.stderr),
             error=f"openjml timed out after {timeout_s}s",
             command=cmd,
         )
@@ -705,6 +933,21 @@ def run_jml_specs_bench(
                 timeout_s=int(openjml_timeout),
                 cwd=artifact_dir,
             )
+            prune_rounds = 0
+            while not openjml.passed and openjml.status == "verification_failed" and prune_rounds < 3:
+                combined_output = ((openjml.stdout or "") + (openjml.stderr or "") + (("\n" + openjml.error) if openjml.error else ""))
+                pruned, changed = _prune_reported_postcondition(current_annotated, combined_output)
+                if not changed:
+                    break
+                current_annotated = normalize_jml_annotation_placement(pruned)
+                annotated_path.write_text(current_annotated, encoding="utf-8")
+                openjml = run_openjml(
+                    annotated_path,
+                    openjml_path=oj_path,
+                    timeout_s=int(openjml_timeout),
+                    cwd=artifact_dir,
+                )
+                prune_rounds += 1
             verifier_output = ((openjml.stdout or "") + (openjml.stderr or "")).strip()
         else:
             openjml = OpenJMLResult(

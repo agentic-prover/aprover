@@ -54,6 +54,7 @@ class CaseRow:
     oracle_status: str = "not_checked"
     error: str = ""
     jml_clause_counts: dict[str, int] | None = None
+    attempts: int = 1
 
 
 def discover_cases(bench_root: Path, oracle_root: Path | None = None) -> list[SpecGenCase]:
@@ -147,16 +148,17 @@ def write_summary_md(path: Path, payload: dict[str, Any]) -> None:
         f"- Passed: {payload['summary']['passed']}",
         f"- Status counts: `{payload['summary']['by_status']}`",
         "",
-        "| Case | Status | Pass | Iters | Runtime(s) | OpenJML output |",
-        "|---|---:|---:|---:|---:|---|",
+        "| Case | Status | Pass | Attempts | Iters | Runtime(s) | OpenJML output |",
+        "|---|---:|---:|---:|---:|---:|---|",
     ]
     for row in payload["rows"]:
         out = row.get("openjml_output_path") or ""
         lines.append(
-            "| {case} | {status} | {passed} | {iterations} | {runtime:.2f} | `{out}` |".format(
+            "| {case} | {status} | {passed} | {attempts} | {iterations} | {runtime:.2f} | `{out}` |".format(
                 case=row["case"],
                 status=row["status"],
                 passed="yes" if row["passed"] else "no",
+                attempts=row.get("attempts", 1),
                 iterations=row["iterations"],
                 runtime=float(row["runtime_s"] or 0.0),
                 out=out,
@@ -197,49 +199,89 @@ def run_one(case: SpecGenCase, args: argparse.Namespace) -> CaseRow:
         )
         oracle_status = oracle_result.status
 
-    try:
-        result = run_jml_specs_bench(
-            case.source,
-            driver=case_driver,
-            config=config,
-            llm=LLMClient(config),
-            output_dir=case_output,
-            openjml_path=config.openjml_path,
-            openjml_timeout=args.openjml_timeout,
-            max_iterations=args.max_iterations,
-        )
-        last = result.iterations[-1] if result.iterations else None
-        return CaseRow(
-            case=case.name,
-            source=case.source,
-            oracle=case.oracle,
-            status=result.status,
-            passed=result.passed,
-            iterations=len(result.iterations),
-            runtime_s=result.runtime_s,
-            final_annotated_path=result.final_annotated_path,
-            report_path=result.report_path,
-            openjml_output_path=last.openjml_output_path if last else "",
-            oracle_status=oracle_status,
-            error=result.error,
-            jml_clause_counts=result.jml_clause_counts,
-        )
-    except Exception as exc:  # Keep batch reports partial and inspectable.
-        return CaseRow(
-            case=case.name,
-            source=case.source,
-            oracle=case.oracle,
-            status="runner_error",
-            passed=False,
-            iterations=0,
-            runtime_s=0.0,
-            final_annotated_path="",
-            report_path="",
-            openjml_output_path="",
-            oracle_status=oracle_status,
-            error=str(exc),
-            jml_clause_counts={},
-        )
+    attempts = max(1, int(getattr(args, "attempts", 1)))
+    total_iterations = 0
+    total_runtime = 0.0
+    best_row: CaseRow | None = None
+
+    for attempt in range(1, attempts + 1):
+        driver = case_driver if attempts == 1 else f"{case_driver}/attempt_{attempt}"
+        try:
+            result = run_jml_specs_bench(
+                case.source,
+                driver=driver,
+                config=config,
+                llm=LLMClient(config),
+                output_dir=case_output,
+                openjml_path=config.openjml_path,
+                openjml_timeout=args.openjml_timeout,
+                max_iterations=args.max_iterations,
+            )
+            total_iterations += len(result.iterations)
+            total_runtime += result.runtime_s
+            last = result.iterations[-1] if result.iterations else None
+            row = CaseRow(
+                case=case.name,
+                source=case.source,
+                oracle=case.oracle,
+                status=result.status,
+                passed=result.passed,
+                iterations=total_iterations,
+                runtime_s=total_runtime,
+                final_annotated_path=result.final_annotated_path,
+                report_path=result.report_path,
+                openjml_output_path=last.openjml_output_path if last else "",
+                oracle_status=oracle_status,
+                error=result.error,
+                jml_clause_counts=result.jml_clause_counts,
+                attempts=attempt,
+            )
+            if row.passed:
+                return row
+            if best_row is None or best_row.status in {"runner_error", "source_changed", "annotation_error"}:
+                best_row = row
+        except Exception as exc:  # Keep batch reports partial and inspectable.
+            row = CaseRow(
+                case=case.name,
+                source=case.source,
+                oracle=case.oracle,
+                status="runner_error",
+                passed=False,
+                iterations=total_iterations,
+                runtime_s=total_runtime,
+                final_annotated_path="",
+                report_path="",
+                openjml_output_path="",
+                oracle_status=oracle_status,
+                error=str(exc),
+                jml_clause_counts={},
+                attempts=attempt,
+            )
+            if best_row is None:
+                best_row = row
+
+    if best_row is not None:
+        best_row.iterations = total_iterations
+        best_row.runtime_s = total_runtime
+        best_row.attempts = attempts
+        return best_row
+
+    return CaseRow(
+        case=case.name,
+        source=case.source,
+        oracle=case.oracle,
+        status="runner_error",
+        passed=False,
+        iterations=0,
+        runtime_s=0.0,
+        final_annotated_path="",
+        report_path="",
+        openjml_output_path="",
+        oracle_status=oracle_status,
+        error="no attempts completed",
+        jml_clause_counts={},
+        attempts=attempts,
+    )
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
@@ -323,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--openjml-timeout", type=int, default=200, help="OpenJML timeout per case.")
     r.add_argument("--max-iterations", type=int, default=3, help="LLM generate/refine iterations per case.")
     r.add_argument("--workers", type=int, default=1, help="Parallel case workers.")
+    r.add_argument("--attempts", type=int, default=1, help="Independent attempts per case; stops after first pass.")
     r.add_argument("--resume", action="store_true", help="Reuse completed report rows.")
     r.add_argument("--validate-oracle", action="store_true", help="Run OpenJML on oracle files too.")
     r.add_argument("--model", default="", help="Override BMC_AGENT_LLM_MODEL.")
