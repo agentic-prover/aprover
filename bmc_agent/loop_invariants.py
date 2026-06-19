@@ -557,6 +557,15 @@ The current loop invariants for this loop are:
 Propose a CORRECTED / STRONGER set of loop invariant(s) (one per line) that are
 INDUCTIVE (true at entry, preserved each iteration) AND sufficient to prove the
 goals. Keep them behavioral/generalizable; keep the index-bound invariant.
+If a clause keeps being refuted at the loop ENTRY (false initially), or assumes a
+bound that need not hold (e.g. a free variable could be small), it is likely a
+NEAR-MISS for a DISJUNCTIVE fact, not a missing auxiliary. A variable updated only
+CONDITIONALLY inside the loop (set only under an enclosing `if (C)` or while the
+loop guard holds) is typically
+    v == <its initial value>  ||  <what that guard guarantees about v>
+i.e. on any iteration v is either still its initial value or a value set while the
+guard held. Prefer this disjunctive form over a bare relation between current
+variables when the bare relation is not inductive.
 
 GOALS:
 {goals}
