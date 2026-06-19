@@ -521,6 +521,20 @@ to be inductive (e.g. relating a symbolic `a[p]` to its value), include it.
 Redundant clauses are pruned automatically afterward, so never drop a fact the
 proof needs just to look minimal.
 
+INVARIANT CLASSES TO CONSIDER (use whichever FIT this loop; the verifier checks each,
+so propose the ones that plausibly hold -- these are general patterns, not a recipe):
+  1. BOUNDS: both the lower AND upper bound of each counter (e.g. 0 <= i AND i <= N).
+  2. PRESERVED RELATIONSHIP: a quantity the loop keeps constant -- a difference or
+     linear combination of variables that advance together -- equals its INITIAL
+     value. Write it with old(...): e.g. `a - b == old(a - b)`. Do NOT write
+     `expr == expr` or any identity that simplifies to true (it is vacuous and will
+     be dropped); anchor the preserved quantity to old(...).
+  3. DISJUNCTION for a CONDITIONALLY-updated variable: a variable assigned only under
+     a guard is either its initial value or what that guard guarantees:
+     `v == old(v) || <fact the guard ensures>`. Use this when a bare relation between
+     current variables is false at entry / not inductive.
+  4. CLOSED-FORM ladder for an accumulator (running sum/count), as described above.
+
 OUTPUT FORMAT (one invariant per line):
   - a boolean expression over the loop variables/arrays, e.g.  i <= 1024
   - or a quantified fact:  forall <var> : <range/guard> ==> <fact>
@@ -2268,6 +2282,40 @@ def _misused_pointer_vars(clause: str, source: str) -> set:
     return bad
 
 
+import random as _rand_mod
+
+_TAUT_SKIP = ("\\", "forall", "exists", "old(", "==>", "<==>", "\\sum", "\\product", "?")
+
+
+def _is_tautology(clause: str) -> bool:
+    """True iff `clause` is true on ALL of many random integer assignments -- a vacuous
+    clause that carries no information (e.g. `y - x == y - x`, `y == x + (y - x)`). The
+    LLM emits these as botched attempts at a preserved-quantity invariant; nothing else
+    removes them. Conservative: returns False for clauses with implication / quantifiers
+    / old() it cannot safely evaluate, so a genuine invariant is never dropped."""
+    c = clause.strip()
+    if any(t in c for t in _TAUT_SKIP):
+        return False
+    if not _re_taut.search(c):
+        return False
+    names = sorted(set(_re_ident.findall(c)) - {"int", "unsigned", "long", "true", "false"})
+    if not names:
+        return False
+    pyexpr = c.replace("&&", " and ").replace("||", " or ")
+    try:
+        for _ in range(64):
+            env = {n: _rand_mod.randint(-16, 16) for n in names}
+            if not eval(pyexpr, {"__builtins__": {}}, env):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+_re_taut = __import__("re").compile(r"==|!=|<=|>=|<|>")
+_re_ident = __import__("re").compile(r"[A-Za-z_]\w*")
+
+
 def _filter_in_scope(clauses: list, source: str) -> list:
     """Drop invariant clauses that reference identifiers not present in the program
     (LLM hallucinations like an invented loop counter `i`). An out-of-scope name
@@ -2291,6 +2339,9 @@ def _filter_in_scope(clauses: list, source: str) -> list:
                _C_KEYWORDS - _ALLOWED_ACSL_CALLS - known)
         if ids:
             logger.info("loop-inv: dropping clause with out-of-scope %s: %r", sorted(ids), c)
+            continue
+        if _is_tautology(c):
+            logger.info("loop-inv: dropping tautology (vacuous clause) %r", c)
             continue
         out.append(c)
     return out
