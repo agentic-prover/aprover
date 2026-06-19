@@ -35,14 +35,14 @@ from bmc_agent.logger import get_logger
 
 logger = get_logger("assert_specs")
 
-_ACSL_ASSERT = re.compile(r"//@\s*assert\s+(.+?)\s*;", re.IGNORECASE)
+_ACSL_ASSERT = re.compile(r"/{2,}\s*@\s*assert\s+(.+?)\s*;", re.IGNORECASE)
 _CALL_RE_TMPL = r"\b{name}\s*\("
 
 # Verification goals are INPUTS (per the Specification Synthesis Problem): the
 # executable goal forms the program already contains, plus the ACSL comment form.
 #   assert(E);  static_assert(E[, "msg"]);  __VERIFIER_assert(E);  //@ assert E;
 _GOAL_CALL = re.compile(
-    r"\b(?:__VERIFIER_assert|static_assert|_Static_assert|assert)\s*\(", re.IGNORECASE)
+    r"\b(?:__VERIFIER_assert|europa_assert|static_assert|_Static_assert|assert)\s*\(", re.IGNORECASE)
 
 
 def _function_has_goal(body: str) -> bool:
