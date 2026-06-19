@@ -854,6 +854,9 @@ def _run_specs_bench(args: argparse.Namespace, config: "object") -> int:
     program content: loops → loop-invariant synthesis; otherwise → function-
     contract synthesis. Both emit ACSL."""
     config.math_ints = True                                   # type: ignore[attr-defined]
+    # Default single-shot for a FAIR head-to-head (others run one attempt). Random-
+    # restart is opt-in via --synth-attempts and must be budget-matched if compared.
+    config.synth_attempts = int(getattr(args, "synth_attempts", 0) or 0) or 1  # type: ignore[attr-defined]
     # Oracle for bench mode: an explicit --oracle always wins; otherwise prefer
     # Frama-C/WP (the correct oracle for specification benchmarks — native ACSL,
     # mathematical integers, unbounded + aggregate goals) when it is installed,
@@ -2278,6 +2281,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Specification-synthesis BENCHMARK preset (one flag). Reads the goals (assert/static_assert/__VERIFIER_assert///@ assert), dispatches by program content — loops → loop-invariant synthesis, otherwise → function-contract synthesis — turns on --math-ints (mathematical-integer semantics these benchmarks assume), and emits ACSL. Equivalent to picking the right synthesis mode + --math-ints automatically.",
+    )
+    ver.add_argument(
+        "--synth-attempts", type=int, default=0,
+        help="Loop-invariant synthesis: number of random-restart attempts (portfolio search); the first WP-verified result wins. 0 = tool default (1; 5 under --specs-bench).",
     )
     ver.add_argument(
         "--math-ints",

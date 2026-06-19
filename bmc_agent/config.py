@@ -164,6 +164,10 @@ class Config:
     # native ACSL loop invariants, for unbounded / aggregate-invariant goals).
     oracle: str = "cbmc"
     frama_c_path: str = "frama-c"
+    # Random-restart (portfolio) search for loop-invariant synthesis: number of
+    # independent synthesis attempts; first WP-verified result wins. >1 trades cost
+    # for recall against LLM proposal nondeterminism. General (no benchmark knowledge).
+    synth_attempts: int = 1
     # After the goal is provable, push a loose-but-adequate synthesized
     # postcondition toward the function's exact behavioral relation (result
     # pinned as a function of the parameters in every branch) — adopting a

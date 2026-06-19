@@ -2647,7 +2647,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
         pruned_non_inductive: dict = {lp.ordinal: [] for lp in loops}
         reinjected: dict = {lp.ordinal: set() for lp in loops}   # pruned clauses re-paired with an aux
 
-        for it in range(1, max_iters + 1):
+        for it in range(1, max_iters + 2):
             chk = _check(annotations)
             logger.info("loop-inv iter %d: verified=%s failing_inv=%s goal_failed=%s",
                         it, chk.verified, chk.failing_invariants, chk.goal_failed)
@@ -2780,6 +2780,11 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                             "needs a quantifier-capable oracle, e.g. Frama-C/WP)",
                                        unwinding_failed=True,
                                        instrumented=chk.instrumented, cbmc_log=_log)
+            if it > max_iters:
+                # Final pass is RE-CHECK ONLY: the last refine/prune may have produced a
+                # provable set, but the loop would otherwise exit before re-verifying it
+                # (a stale 'max iterations' false-negative). No extra refine round.
+                break
             changed = False
             if chk.failing_invariants:
                 # Deterministically prune non-inductive clauses (often spurious; the
@@ -2853,7 +2858,21 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     # Frama-C/WP oracle: a single attempt (WP consumes the ACSL loop invariants
     # directly — no bounded/unbounded mode dispatch or CBMC fallback).
     if oracle == "frama-c":
-        return _attempt(False, uw)
+        # Random-restart (portfolio) search: LLM proposal is nondeterministic, so
+        # independent attempts explore different invariant candidates. Keep the first
+        # the WP oracle fully verifies. General search strategy -- no program-specific
+        # knowledge; the oracle decides success. attempts=1 preserves prior behavior.
+        attempts = max(1, int(getattr(config, "synth_attempts", 1) or 1))
+        last = None
+        for _k in range(attempts):
+            r = _attempt(False, uw)
+            if r.ok or getattr(r, "no_goals", False) or r.unwinding_failed:
+                return r          # success, or a retry-won't-help terminal state
+            last = r
+            if attempts > 1:
+                logger.info("loop-inv: restart %d/%d did not verify (%s)",
+                            _k + 1, attempts, r.note)
+        return last
 
     # Primary mode: array-writing loops -> loop-head+unwind (quantified invariant
     # validated per concrete iteration); scalar loops -> havoc abstraction (bound-
