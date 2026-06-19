@@ -85,8 +85,18 @@ def brace_braceless_loops(source: str) -> str:
     for m in _LOOP_HEADER.finditer(source):
         _guard, after = _balanced_arg(source, m.end() - 1)
         j = after
-        while j < len(source) and source[j] in " \t\r\n":
-            j += 1
+        # Skip whitespace AND comments to find the real body start; a // or /*
+        # comment between a loop header and its (possibly nested-loop) body must
+        # not be mistaken for the body, or the wrap lands inside the next statement.
+        while j < len(source):
+            if source[j] in " \t\r\n":
+                j += 1
+            elif source[j:j+2] == "//":
+                nl = source.find("\n", j); j = len(source) if nl < 0 else nl + 1
+            elif source[j:j+2] == "/*":
+                e = source.find("*/", j); j = len(source) if e < 0 else e + 2
+            else:
+                break
         if j >= len(source) or source[j] in "{;":
             continue                          # already braced, or empty / do-while cond
         if _CTRL_KW.match(source, j):
