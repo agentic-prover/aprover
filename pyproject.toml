@@ -20,6 +20,12 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+# Web chat front-end (web/server.py). Kept as an extra so the core CLI install
+# stays lean; the NixOS microVM service and the Docker image install this.
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -48,6 +48,11 @@ REPORT_AMC_with_figure.md
 # Claude Code harness state
 .claude/
 
+# Nix devshell / direnv
+.direnv/
+result
+result-*
+
 # Logs
 *.log
 amc.log
