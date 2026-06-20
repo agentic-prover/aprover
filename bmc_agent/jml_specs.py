@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -712,6 +713,40 @@ def build_openjml_command(openjml_path: str, source_path: str | Path, timeout_s:
     ]
 
 
+def _run_process_group(
+    cmd: list[str],
+    *,
+    cwd: str | Path | None,
+    timeout_s: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run a verifier command and kill its whole process group on timeout.
+
+    OpenJML launches solver children.  Killing only the Java parent can leave
+    CVC4 orphaned, which then contaminates later benchmark runs.
+    """
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = proc.communicate()
+        exc.stdout = stdout
+        exc.stderr = stderr
+        raise exc
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def run_openjml(
     source_path: str | Path,
     *,
@@ -734,13 +769,12 @@ def run_openjml(
 
     cmd = build_openjml_command(resolved, source_path, timeout_s)
     start = time.monotonic()
+    wall_timeout_s = timeout_s + 5
     try:
-        proc = subprocess.run(
+        proc = _run_process_group(
             cmd,
             cwd=str(cwd) if cwd else None,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s + 5,
+            timeout_s=wall_timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
         runtime = time.monotonic() - start
@@ -751,7 +785,7 @@ def run_openjml(
             runtime_s=runtime,
             stdout=_as_text(exc.stdout),
             stderr=_as_text(exc.stderr),
-            error=f"openjml timed out after {timeout_s}s",
+            error=f"openjml wall-clock timeout after {wall_timeout_s}s",
             command=cmd,
         )
     except OSError as exc:
@@ -805,9 +839,20 @@ def _initial_system_prompt() -> str:
     )
 
 
-def _initial_user_prompt(source: str) -> str:
+def _format_prompt_examples(prompt_examples: str) -> str:
+    if not prompt_examples.strip():
+        return ""
+    return (
+        "Here are example Java-to-JML transformations. Follow their style, "
+        "but do not copy irrelevant clauses.\n\n"
+        f"{prompt_examples.strip()}\n\n"
+    )
+
+
+def _initial_user_prompt(source: str, prompt_examples: str = "") -> str:
     return (
         "Please generate JML specifications for this Java program.\n\n"
+        f"{_format_prompt_examples(prompt_examples)}"
         "Requirements:\n"
         "- Output the full Java source, not a patch and not an explanation.\n"
         "- Preserve all executable Java code exactly; insert only JML comments.\n"
@@ -878,6 +923,7 @@ def run_jml_specs_bench(
     openjml_path: str | None = None,
     openjml_timeout: int = 200,
     max_iterations: int = 3,
+    prompt_examples: str = "",
 ) -> JMLSpecBenchResult:
     """Generate JML for one Java source and validate with OpenJML."""
 
@@ -893,7 +939,7 @@ def run_jml_specs_bench(
     max_iter = max(1, int(max_iterations))
     provider = getattr(config, "resolved_provider", lambda: getattr(config, "llm_provider", ""))()
     model = getattr(config, "llm_model", "")
-    prompt_seed = _initial_system_prompt() + "\n" + _initial_user_prompt(original)
+    prompt_seed = _initial_system_prompt() + "\n" + _initial_user_prompt(original, prompt_examples)
     prompt_hash = hashlib.sha256(prompt_seed.encode("utf-8")).hexdigest()[:16]
 
     iterations: list[JMLIteration] = []
@@ -906,7 +952,7 @@ def run_jml_specs_bench(
 
     for i in range(1, max_iter + 1):
         if i == 1:
-            user_prompt = _initial_user_prompt(original)
+            user_prompt = _initial_user_prompt(original, prompt_examples)
         else:
             user_prompt = _refine_user_prompt(current_annotated, verifier_output, source_error, original)
         reply = llm.complete(

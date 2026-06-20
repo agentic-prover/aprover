@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 from bmc_agent.jml_specs import (
     _prune_reported_postcondition,
+    _initial_user_prompt,
     build_openjml_command,
     count_jml_clauses,
     extract_java_source,
@@ -21,6 +23,16 @@ def test_extract_java_source_prefers_fenced_code():
     reply = "Here is the code:\n```java\npublic class X {}\n```\n"
     assert extract_java_source(reply) == "public class X {}"
     assert extract_java_source("public class Y {}") == "public class Y {}"
+
+
+def test_initial_user_prompt_can_include_examples():
+    prompt = _initial_user_prompt(
+        "public class T {}",
+        "Example input:\n```java\nclass A {}\n```\n\nExample output:\n```java\nclass A {}\n```",
+    )
+    assert "Here are example Java-to-JML transformations" in prompt
+    assert "class A" in prompt
+    assert "public class T" in prompt
 
 
 def test_strip_jml_comments_removes_line_and_block_annotations():
@@ -307,13 +319,11 @@ def test_run_openjml_pass_requires_empty_output(tmp_path: Path):
     src = tmp_path / "X.java"
     src.write_text("public class X {}\n")
 
-    class Done:
-        stdout = ""
-        stderr = ""
-        returncode = 0
-
     with patch("bmc_agent.jml_specs.shutil.which", return_value="/usr/bin/openjml"), \
-         patch("bmc_agent.jml_specs.subprocess.run", return_value=Done()):
+         patch(
+             "bmc_agent.jml_specs._run_process_group",
+             return_value=subprocess.CompletedProcess(["openjml"], 0, "", ""),
+         ):
         result = run_openjml(src, openjml_path="openjml", timeout_s=9)
     assert result.passed is True
     assert result.status == "passed"
@@ -323,13 +333,29 @@ def test_run_openjml_nonempty_output_is_verification_failure(tmp_path: Path):
     src = tmp_path / "X.java"
     src.write_text("public class X {}\n")
 
-    class Done:
-        stdout = "X.java:2: verify: The prover cannot establish an assertion"
-        stderr = ""
-        returncode = 0
-
     with patch("bmc_agent.jml_specs.shutil.which", return_value="/usr/bin/openjml"), \
-         patch("bmc_agent.jml_specs.subprocess.run", return_value=Done()):
+         patch(
+             "bmc_agent.jml_specs._run_process_group",
+             return_value=subprocess.CompletedProcess(
+                 ["openjml"],
+                 0,
+                 "X.java:2: verify: The prover cannot establish an assertion",
+                 "",
+             ),
+         ):
         result = run_openjml(src, openjml_path="openjml", timeout_s=9)
     assert result.passed is False
     assert result.status == "verification_failed"
+
+
+def test_run_openjml_timeout_reports_wall_clock_timeout(tmp_path: Path):
+    src = tmp_path / "X.java"
+    src.write_text("public class X {}\n")
+    timeout = subprocess.TimeoutExpired(["openjml"], 14, output="out", stderr="err")
+
+    with patch("bmc_agent.jml_specs.shutil.which", return_value="/usr/bin/openjml"), \
+         patch("bmc_agent.jml_specs._run_process_group", side_effect=timeout):
+        result = run_openjml(src, openjml_path="openjml", timeout_s=9)
+    assert result.passed is False
+    assert result.status == "timeout"
+    assert "wall-clock timeout" in result.error

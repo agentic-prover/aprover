@@ -55,6 +55,14 @@ class CaseRow:
     error: str = ""
     jml_clause_counts: dict[str, int] | None = None
     attempts: int = 1
+    trials: int = 1
+    trial_passes: int | None = None
+    trial_status_counts: dict[str, int] | None = None
+    trial_rows: list[dict[str, Any]] | None = None
+    model: str = ""
+    provider: str = ""
+    base_url: str = ""
+    prompt_examples: str = "none"
 
 
 def discover_cases(bench_root: Path, oracle_root: Path | None = None) -> list[SpecGenCase]:
@@ -104,6 +112,71 @@ def write_manifest(path: Path, cases: list[SpecGenCase]) -> None:
     write_json(path, [asdict(c) for c in cases])
 
 
+def _read_example(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"prompt example file not found: {path}")
+    return path.read_text(encoding="utf-8").strip()
+
+
+def _format_example_pair(index: int, source: str, annotated: str) -> str:
+    return (
+        f"Example {index} input:\n"
+        "```java\n"
+        f"{source}\n"
+        "```\n\n"
+        f"Example {index} output:\n"
+        "```java\n"
+        f"{annotated}\n"
+        "```"
+    )
+
+
+def load_prompt_examples(name: str, bench_root: Path) -> str:
+    """Load optional few-shot prompt examples for experiment-only runs."""
+
+    if not name or name == "none":
+        return ""
+    if name != "specgen-4shot":
+        path = Path(name)
+        if not path.exists():
+            raise SystemExit(f"unknown prompt example set or file: {name}")
+        return path.read_text(encoding="utf-8")
+
+    # ``bench_root`` may point to either
+    # SpecGen-Artifact/benchmark/SpecGenBench/common or
+    # SpecGen-Artifact/benchmark/SVCOMP.  Infer the artifact root instead of
+    # hard-coding a local workstation path.
+    artifact_root = None
+    for candidate in [bench_root.resolve(), *bench_root.resolve().parents]:
+        if (candidate / "prompts").is_dir():
+            artifact_root = candidate
+            break
+    if artifact_root is None:
+        raise SystemExit(f"could not infer SpecGen artifact root from bench root: {bench_root}")
+    pairs = [
+        (
+            artifact_root / "prompts" / "1" / "1",
+            artifact_root / "prompts" / "1" / "1_reply",
+        ),
+        (
+            artifact_root / "prompts" / "2" / "1",
+            artifact_root / "prompts" / "2" / "2_reply",
+        ),
+        (
+            artifact_root / "prompts" / "oracle_clean" / "AddLoop" / "AddLoop.java",
+            artifact_root / "prompts" / "oracle" / "AddLoop" / "AddLoop.java",
+        ),
+        (
+            artifact_root / "prompts" / "oracle_clean" / "LinearSearch" / "LinearSearch.java",
+            artifact_root / "prompts" / "oracle" / "LinearSearch" / "LinearSearch.java",
+        ),
+    ]
+    return "\n\n".join(
+        _format_example_pair(i, _read_example(src), _read_example(annotated))
+        for i, (src, annotated) in enumerate(pairs, start=1)
+    )
+
+
 def load_completed(report_path: Path) -> dict[str, CaseRow]:
     if not report_path.exists():
         return {}
@@ -122,9 +195,14 @@ def summarize(rows: list[CaseRow]) -> dict[str, Any]:
     by_status: dict[str, int] = {}
     for row in rows:
         by_status[row.status] = by_status.get(row.status, 0) + 1
+    trial_total = sum(int(r.trials or 1) for r in rows)
+    trial_passes = sum(int(r.trial_passes if r.trial_passes is not None else int(r.passed)) for r in rows)
     return {
         "total": len(rows),
         "passed": sum(1 for r in rows if r.passed),
+        "trial_total": trial_total,
+        "trial_passes": trial_passes,
+        "mean_success_probability": (trial_passes / trial_total) if trial_total else 0.0,
         "by_status": dict(sorted(by_status.items())),
     }
 
@@ -146,18 +224,24 @@ def write_summary_md(path: Path, payload: dict[str, Any]) -> None:
         "",
         f"- Total cases: {payload['summary']['total']}",
         f"- Passed: {payload['summary']['passed']}",
+        f"- Trial passes: {payload['summary'].get('trial_passes', payload['summary']['passed'])}/{payload['summary'].get('trial_total', payload['summary']['total'])}",
+        f"- Mean success probability: {float(payload['summary'].get('mean_success_probability', 0.0)):.4f}",
         f"- Status counts: `{payload['summary']['by_status']}`",
         "",
-        "| Case | Status | Pass | Attempts | Iters | Runtime(s) | OpenJML output |",
-        "|---|---:|---:|---:|---:|---:|---|",
+        "| Case | Status | Pass | Trial passes | Attempts | Iters | Runtime(s) | OpenJML output |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in payload["rows"]:
         out = row.get("openjml_output_path") or ""
+        trial_passes = row.get("trial_passes")
+        trials = row.get("trials", 1)
+        trial_cell = "" if trial_passes is None else f"{trial_passes}/{trials}"
         lines.append(
-            "| {case} | {status} | {passed} | {attempts} | {iterations} | {runtime:.2f} | `{out}` |".format(
+            "| {case} | {status} | {passed} | {trial_cell} | {attempts} | {iterations} | {runtime:.2f} | `{out}` |".format(
                 case=row["case"],
                 status=row["status"],
                 passed="yes" if row["passed"] else "no",
+                trial_cell=trial_cell,
                 attempts=row.get("attempts", 1),
                 iterations=row["iterations"],
                 runtime=float(row["runtime_s"] or 0.0),
@@ -186,8 +270,20 @@ def configure(args: argparse.Namespace) -> Config:
     return config
 
 
+def run_metadata(args: argparse.Namespace, config: Config) -> dict[str, str]:
+    provider = getattr(config, "resolved_provider", lambda: getattr(config, "llm_provider", ""))()
+    return {
+        "model": str(getattr(config, "llm_model", "")),
+        "provider": str(provider),
+        "base_url": str(getattr(config, "llm_base_url", "")),
+        "prompt_examples": str(getattr(args, "prompt_examples", "none") or "none"),
+    }
+
+
 def run_one(case: SpecGenCase, args: argparse.Namespace) -> CaseRow:
     config = configure(args)
+    metadata = run_metadata(args, config)
+    prompt_examples = load_prompt_examples(getattr(args, "prompt_examples", ""), Path(args.bench_root))
     case_driver = case.name
     case_output = Path(args.output) / "cases"
     oracle_status = "not_checked"
@@ -216,6 +312,7 @@ def run_one(case: SpecGenCase, args: argparse.Namespace) -> CaseRow:
                 openjml_path=config.openjml_path,
                 openjml_timeout=args.openjml_timeout,
                 max_iterations=args.max_iterations,
+                prompt_examples=prompt_examples,
             )
             total_iterations += len(result.iterations)
             total_runtime += result.runtime_s
@@ -235,6 +332,7 @@ def run_one(case: SpecGenCase, args: argparse.Namespace) -> CaseRow:
                 error=result.error,
                 jml_clause_counts=result.jml_clause_counts,
                 attempts=attempt,
+                **metadata,
             )
             if row.passed:
                 return row
@@ -256,6 +354,7 @@ def run_one(case: SpecGenCase, args: argparse.Namespace) -> CaseRow:
                 error=str(exc),
                 jml_clause_counts={},
                 attempts=attempt,
+                **metadata,
             )
             if best_row is None:
                 best_row = row
@@ -281,6 +380,117 @@ def run_one(case: SpecGenCase, args: argparse.Namespace) -> CaseRow:
         error="no attempts completed",
         jml_clause_counts={},
         attempts=attempts,
+        **metadata,
+    )
+
+
+def run_one_trial(case: SpecGenCase, args: argparse.Namespace, trial: int) -> CaseRow:
+    config = configure(args)
+    metadata = run_metadata(args, config)
+    prompt_examples = load_prompt_examples(getattr(args, "prompt_examples", ""), Path(args.bench_root))
+    driver = f"{case.name}/trial_{trial}"
+    case_output = Path(args.output) / "cases"
+    try:
+        result = run_jml_specs_bench(
+            case.source,
+            driver=driver,
+            config=config,
+            llm=LLMClient(config),
+            output_dir=case_output,
+            openjml_path=config.openjml_path,
+            openjml_timeout=args.openjml_timeout,
+            max_iterations=args.max_iterations,
+            prompt_examples=prompt_examples,
+        )
+        last = result.iterations[-1] if result.iterations else None
+        return CaseRow(
+            case=case.name,
+            source=case.source,
+            oracle=case.oracle,
+            status=result.status,
+            passed=result.passed,
+            iterations=len(result.iterations),
+            runtime_s=result.runtime_s,
+            final_annotated_path=result.final_annotated_path,
+            report_path=result.report_path,
+            openjml_output_path=last.openjml_output_path if last else "",
+            error=result.error,
+            jml_clause_counts=result.jml_clause_counts,
+            attempts=1,
+            trials=1,
+            **metadata,
+        )
+    except Exception as exc:
+        return CaseRow(
+            case=case.name,
+            source=case.source,
+            oracle=case.oracle,
+            status="runner_error",
+            passed=False,
+            iterations=0,
+            runtime_s=0.0,
+            final_annotated_path="",
+            report_path="",
+            openjml_output_path="",
+            error=str(exc),
+            jml_clause_counts={},
+            attempts=1,
+            trials=1,
+            **metadata,
+        )
+
+
+def aggregate_trial_rows(case: SpecGenCase, trials: list[CaseRow]) -> CaseRow:
+    status_counts: dict[str, int] = {}
+    for row in trials:
+        status_counts[row.status] = status_counts.get(row.status, 0) + 1
+    passed_trials = [r for r in trials if r.passed]
+    # Prefer a passing artifact as the representative row; otherwise keep the
+    # first completed trial for a concrete failure artifact.
+    representative = passed_trials[0] if passed_trials else (trials[0] if trials else None)
+    if representative is None:
+        return CaseRow(
+            case=case.name,
+            source=case.source,
+            oracle=case.oracle,
+            status="runner_error",
+            passed=False,
+            iterations=0,
+            runtime_s=0.0,
+            final_annotated_path="",
+            report_path="",
+            openjml_output_path="",
+            error="no trials completed",
+            jml_clause_counts={},
+            attempts=1,
+            trials=0,
+            trial_passes=0,
+            trial_status_counts={},
+            trial_rows=[],
+        )
+    return CaseRow(
+        case=case.name,
+        source=case.source,
+        oracle=case.oracle,
+        status="passed" if passed_trials else representative.status,
+        passed=bool(passed_trials),
+        iterations=sum(r.iterations for r in trials),
+        runtime_s=sum(r.runtime_s for r in trials),
+        final_annotated_path=representative.final_annotated_path,
+        report_path=representative.report_path,
+        openjml_output_path=representative.openjml_output_path,
+        oracle_status=representative.oracle_status,
+        error="" if passed_trials else representative.error,
+        jml_clause_counts=representative.jml_clause_counts,
+        attempts=1,
+        trials=len(trials),
+        trial_passes=len(passed_trials),
+        trial_status_counts=dict(sorted(status_counts.items())),
+        trial_rows=[asdict(r) for r in sorted(trials, key=lambda x: x.report_path)],
+        model=representative.model,
+        provider=representative.provider,
+        base_url=representative.base_url,
+        prompt_examples=representative.prompt_examples,
     )
 
 
@@ -304,16 +514,56 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     cases = select_cases(discover_cases(bench_root, oracle_root), args.cases, args.limit)
     write_manifest(output / "manifest.json", cases)
+    trial_count = max(1, int(getattr(args, "trials", 1)))
     completed = load_completed(output / "report.json") if args.resume else {}
     rows: dict[str, CaseRow] = dict(completed)
 
-    to_run = [c for c in cases if c.name not in rows]
+    if trial_count > 1:
+        to_run = [
+            c
+            for c in cases
+            if c.name not in rows or int(rows[c.name].trials or 1) < trial_count
+        ]
+    else:
+        to_run = [c for c in cases if c.name not in rows]
     print(f"selected {len(cases)} case(s); running {len(to_run)}; output={output}")
     if not to_run:
         write_report(output, list(rows.values()))
         return 0
 
     max_workers = max(1, int(args.workers))
+    if trial_count > 1:
+        trial_rows: dict[str, list[CaseRow]] = {case.name: [] for case in to_run}
+        jobs = [(case, trial) for case in to_run for trial in range(1, trial_count + 1)]
+        print(f"trial mode: {trial_count} trial(s) per case; running {len(jobs)} trial job(s)")
+        if max_workers == 1:
+            for case, trial in jobs:
+                row = run_one_trial(case, args, trial)
+                trial_rows[case.name].append(row)
+                print(f"{case.name} trial {trial}/{trial_count}: {row.status} pass={row.passed} iters={row.iterations}")
+                if len(trial_rows[case.name]) == trial_count:
+                    rows[case.name] = aggregate_trial_rows(case, trial_rows[case.name])
+                    write_report(output, list(rows.values()))
+        else:
+            with futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_map = {
+                    pool.submit(run_one_trial, case, args, trial): (case, trial)
+                    for case, trial in jobs
+                }
+                for fut in futures.as_completed(future_map):
+                    case, trial = future_map[fut]
+                    row = fut.result()
+                    trial_rows[case.name].append(row)
+                    print(f"{case.name} trial {trial}/{trial_count}: {row.status} pass={row.passed} iters={row.iterations}")
+                    if len(trial_rows[case.name]) == trial_count:
+                        rows[case.name] = aggregate_trial_rows(case, trial_rows[case.name])
+                        write_report(output, list(rows.values()))
+        summary = summarize(list(rows.values()))
+        print(f"summary: {summary}")
+        print(f"report: {output / 'report.json'}")
+        print(f"summary_md: {output / 'summary.md'}")
+        return 0 if summary["passed"] > 0 else 1
+
     if max_workers == 1:
         for case in to_run:
             row = run_one(case, args)
@@ -366,8 +616,19 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--max-iterations", type=int, default=3, help="LLM generate/refine iterations per case.")
     r.add_argument("--workers", type=int, default=1, help="Parallel case workers.")
     r.add_argument("--attempts", type=int, default=1, help="Independent attempts per case; stops after first pass.")
+    r.add_argument(
+        "--trials",
+        type=int,
+        default=1,
+        help="Independent trials per case; unlike --attempts, this never stops after first pass.",
+    )
     r.add_argument("--resume", action="store_true", help="Reuse completed report rows.")
     r.add_argument("--validate-oracle", action="store_true", help="Run OpenJML on oracle files too.")
+    r.add_argument(
+        "--prompt-examples",
+        default="none",
+        help="Optional few-shot examples: 'none', 'specgen-4shot', or a text file to prepend.",
+    )
     r.add_argument("--model", default="", help="Override BMC_AGENT_LLM_MODEL.")
     r.add_argument("--provider", default="", help="Override BMC_AGENT_LLM_PROVIDER.")
     r.add_argument("--base-url", default="", help="Override BMC_AGENT_LLM_BASE_URL.")

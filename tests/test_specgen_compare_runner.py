@@ -62,3 +62,53 @@ def test_summarize_counts_statuses():
     assert summary["total"] == 2
     assert summary["passed"] == 1
     assert summary["by_status"] == {"passed": 1, "verification_failed": 1}
+    assert summary["trial_passes"] == 1
+    assert summary["trial_total"] == 2
+
+
+def test_load_specgen_4shot_examples_from_artifact_layout(tmp_path: Path):
+    mod = load_runner()
+    root = tmp_path / "SpecGen-Artifact"
+    specgen_bench = root / "benchmark" / "SpecGenBench" / "common"
+    svcomp_bench = root / "benchmark" / "SVCOMP"
+    specgen_bench.mkdir(parents=True)
+    svcomp_bench.mkdir(parents=True)
+    for rel in [
+        ("prompts/1/1", "class Neg {}\n"),
+        ("prompts/1/1_reply", "class Neg { //@ ensures true; }\n"),
+        ("prompts/2/1", "class Add {}\n"),
+        ("prompts/2/2_reply", "class Add { //@ ensures true; }\n"),
+        ("prompts/oracle_clean/AddLoop/AddLoop.java", "class AddLoop {}\n"),
+        ("prompts/oracle/AddLoop/AddLoop.java", "class AddLoop { //@ ensures true; }\n"),
+        ("prompts/oracle_clean/LinearSearch/LinearSearch.java", "class LinearSearch {}\n"),
+        ("prompts/oracle/LinearSearch/LinearSearch.java", "class LinearSearch { //@ ensures true; }\n"),
+    ]:
+        path = root / rel[0]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rel[1])
+
+    examples = mod.load_prompt_examples("specgen-4shot", specgen_bench)
+    svcomp_examples = mod.load_prompt_examples("specgen-4shot", svcomp_bench)
+
+    assert examples.count("Example ") == 8
+    assert "class Neg" in examples
+    assert "class LinearSearch" in examples
+    assert svcomp_examples == examples
+
+
+def test_aggregate_trial_rows_records_success_probability():
+    mod = load_runner()
+    case = mod.SpecGenCase("A", "/tmp/A.java", "")
+    trials = [
+        mod.CaseRow("A", "/tmp/A.java", "", "verification_failed", False, 2, 1.0, "a", "r1", "o1"),
+        mod.CaseRow("A", "/tmp/A.java", "", "passed", True, 1, 2.0, "b", "r2", "o2"),
+    ]
+
+    row = mod.aggregate_trial_rows(case, trials)
+
+    assert row.passed is True
+    assert row.status == "passed"
+    assert row.trials == 2
+    assert row.trial_passes == 1
+    assert row.trial_status_counts == {"passed": 1, "verification_failed": 1}
+    assert len(row.trial_rows) == 2
