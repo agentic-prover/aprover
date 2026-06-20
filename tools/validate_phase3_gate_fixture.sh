@@ -13,7 +13,7 @@
 # REALISTIC (not high/med UNREALISTIC), so enforcement KEEPS them. If realism
 # wrongly demotes either to 'unlikely' -> gate FAILS -> revert the default.
 set -u
-ROOT=/home/syc/AProver
+ROOT="${APROVER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 1
 ENVF="$HOME/.config/bmc-agent/env"
 [ -f "$ENVF" ] && . "$ENVF"

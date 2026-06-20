@@ -12,7 +12,7 @@ Output: <fn_dir>/rescue_realism.json with the realism verdict + reasoning.
 Original classification.json and bug_report.json are NEVER modified.
 
 Usage:
-    . /tmp/.bmc_key && .venv/bin/python scripts/rescue_spurious.py \
+    .venv/bin/python scripts/rescue_spurious.py \
         --sweep /tmp/libarchive_n3_full_out/seedhunt_n3 \
         --corpus /tmp/libarchive_seedhunt_full \
         --log /tmp/rescue_spurious.log

@@ -43,6 +43,18 @@ def _model_rejects_temperature(model: str) -> bool:
     m = (model or "").lower()
     return any(s in m for s in _TEMP_UNSUPPORTED)
 
+
+def _default_openai_max_tokens_cap(model: str) -> int:
+    """Return a conservative completion-token cap for OpenAI-compatible models."""
+
+    m = (model or "").lower()
+    # gpt-3.5-turbo-1106 is the original SpecGen model and rejects completion
+    # requests above 4096 tokens.  Keep the higher default for newer reasoning
+    # models unless the operator overrides it with BMC_AGENT_LLM_MAX_TOKENS_CAP.
+    if "gpt-3.5-turbo" in m:
+        return 4096
+    return 16384
+
 # Sentinel so we can detect a missing key at call time, not import time.
 _UNSET = object()
 
@@ -483,10 +495,15 @@ class LLMClient:
         # full algebraic spec. Cheaper non-reasoning models on the same
         # endpoint simply stop earlier on finish_reason=stop.
         # Ceiling: the 24576 floor above is for reasoning models, but it must
-        # never exceed the active model's completion-token limit. gpt-4o-mini
-        # caps at 16384 and 400s ("max_tokens is too large: 24576") otherwise.
-        # Configurable via BMC_AGENT_LLM_MAX_TOKENS_CAP for models that allow more.
-        _cap = int(os.environ.get("BMC_AGENT_LLM_MAX_TOKENS_CAP", "16384"))
+        # never exceed the active model's completion-token limit. gpt-3.5-turbo
+        # caps at 4096, and gpt-4o-mini caps at 16384. Configurable via
+        # BMC_AGENT_LLM_MAX_TOKENS_CAP for models that allow more.
+        _cap = int(
+            os.environ.get(
+                "BMC_AGENT_LLM_MAX_TOKENS_CAP",
+                str(_default_openai_max_tokens_cap(self.config.llm_model)),
+            )
+        )
         effective_max_tokens = min(max(max_tokens, 24576), _cap)
         payload = {
             "model": self.config.llm_model,

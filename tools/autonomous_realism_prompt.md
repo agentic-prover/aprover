@@ -3,7 +3,7 @@ end to end without waiting for input. Default to ACTION, iterate through blocker
 early. Be honest in all status: if a gate fails or a test fails, say so.
 
 ## What to do
-Execute the plan in `/home/syc/AProver/docs/realism_enforcement_plan.md`, Phases 0 -> 1 -> 2 -> 3,
+Execute the plan in `docs/realism_enforcement_plan.md`, Phases 0 -> 1 -> 2 -> 3,
 IN ORDER. All work is SHADOW-ONLY. Read the plan doc each session for the authoritative phase list
 (it now includes the reproducer-agent in Phase 2 and a flag-selector tools-agent in Phase 2b).
 
@@ -57,7 +57,7 @@ later iteration, POLL their logs (do not block inside one iteration on a long wa
 finishes, adjudicate it. This way each iteration does a small unit of work and returns quickly.
 
 ## Status file (REQUIRED — this is how the loop and the user track you)
-Maintain `/home/syc/AProver/findings/autonomous_realism/STATUS.md`. Overwrite it EVERY iteration,
+Maintain `findings/autonomous_realism/STATUS.md`. Overwrite it EVERY iteration,
 INCLUDING a fresh `Heartbeat: <UTC time> iter-note: <what you are waiting on / just did>` line —
 update it even when only waiting on a background run (this is real progress and keeps the loop alive).
 First line MUST be exactly one of:
