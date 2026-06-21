@@ -434,9 +434,18 @@ def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
     # comma list) always wins.
     if not prover:
         prover = ",".join(available_wp_provers(frama_c_path))
-    with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as tf:
+    cwd = os.getcwd()
+    # Docker wrappers commonly mount only the current working directory. Keep
+    # the transient source there so native Frama-C and wrapper-based Frama-C see
+    # the same file.
+    with tempfile.NamedTemporaryFile("w", suffix=".c", dir=cwd, delete=False) as tf:
         tf.write(source_with_acsl)
         path = tf.name
+    path_arg = path
+    try:
+        path_arg = os.path.relpath(path, cwd)
+    except ValueError:
+        path_arg = path
     # Dockerized Frama-C may run as the image's configured user, while the temp
     # file is owned by the host user with 0600 permissions by default.
     try:
@@ -453,7 +462,7 @@ def run_wp(source_with_acsl: str, frama_c_path: str = "frama-c",
     cmd += [f"-wp-prover", prover, f"-wp-timeout", str(wp_timeout)]
     if exclude_terminates:
         cmd += ["-wp-prop=-@terminates"]
-    cmd += [path]
+    cmd += [path_arg]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

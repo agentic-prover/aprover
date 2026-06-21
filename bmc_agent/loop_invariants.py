@@ -2293,34 +2293,65 @@ def _misused_pointer_vars(clause: str, source: str) -> set:
     return bad
 
 
-import random as _rand_mod
-
 _TAUT_SKIP = ("\\", "forall", "exists", "old(", "==>", "<==>", "\\sum", "\\product", "?")
 
 
+def _norm_taut_side(expr: str) -> str:
+    expr = (expr or "").strip()
+    while expr.startswith("(") and expr.endswith(")"):
+        depth = 0
+        balanced = True
+        for i, ch in enumerate(expr):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(expr) - 1:
+                    balanced = False
+                    break
+        if not balanced:
+            break
+        expr = expr[1:-1].strip()
+    return re.sub(r"\s+", "", expr)
+
+
+def _split_top_relation(expr: str):
+    depth = 0
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0:
+            for op in ("==", "!=", "<=", ">=", "<", ">"):
+                if expr.startswith(op, i):
+                    return expr[:i], op, expr[i + len(op):]
+        i += 1
+    return None
+
+
 def _is_tautology(clause: str) -> bool:
-    """True iff `clause` is true on ALL of many random integer assignments -- a vacuous
-    clause that carries no information (e.g. `y - x == y - x`, `y == x + (y - x)`). The
-    LLM emits these as botched attempts at a preserved-quantity invariant; nothing else
-    removes them. Conservative: returns False for clauses with implication / quantifiers
-    / old() it cannot safely evaluate, so a genuine invariant is never dropped."""
+    """True for syntactically vacuous comparisons such as ``x == x``.
+
+    This must be deliberately conservative: bounds such as ``i <= 30`` may look
+    true under small random samples, but they are load-bearing loop invariants.
+    Do not use testing over sampled environments here; only remove identities
+    whose two sides are textually the same after harmless normalization.
+    """
     c = clause.strip()
     if any(t in c for t in _TAUT_SKIP):
         return False
     if not _re_taut.search(c):
         return False
-    names = sorted(set(_re_ident.findall(c)) - {"int", "unsigned", "long", "true", "false"})
-    if not names:
+    split = _split_top_relation(c)
+    if not split:
         return False
-    pyexpr = c.replace("&&", " and ").replace("||", " or ")
-    try:
-        for _ in range(64):
-            env = {n: _rand_mod.randint(-16, 16) for n in names}
-            if not eval(pyexpr, {"__builtins__": {}}, env):
-                return False
-        return True
-    except Exception:
+    lhs, op, rhs = split
+    if _norm_taut_side(lhs) != _norm_taut_side(rhs):
         return False
+    return op in ("==", "<=", ">=")
 
 
 _re_taut = __import__("re").compile(r"==|!=|<=|>=|<|>")
