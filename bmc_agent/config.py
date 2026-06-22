@@ -159,6 +159,10 @@ class Config:
     # overflow (mathematical-integer semantics), so textbook invariants like
     # x>=1 under x=x+y are inductive. Set by `--math-ints`. Off => machine ints.
     math_ints: bool = False
+    # Goal-free MINING mode (--specs-bench): synthesize inductive loop invariants
+    # that characterise the loop even when the program has no //@ assert goal
+    # (validity-only; require a non-empty inductive set).
+    goal_free: bool = False
     # Verification oracle for spec-synthesis: "cbmc" (bounded model checking;
     # default) or "frama-c" (WP deductive verification — mathematical integers +
     # native ACSL loop invariants, for unbounded / aggregate-invariant goals).

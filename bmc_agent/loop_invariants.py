@@ -722,11 +722,20 @@ def _prep_goals_acsl(source: str) -> str:
         r"\b(?:__VERIFIER_assert|europa_assert|static_assert|_Static_assert|assert)\s*\(",
         re.IGNORECASE,
     )
+    # ACSL asserts already written as //@ assert(...) or /*@ assert ... */ are
+    # native WP goals -- leave them intact. Re-wrapping them produced the
+    # malformed `//@ /*@ assert ...; */` (Frama-C parse error -> 0/0 goals).
+    _acsl_spans = [(mm.start(), mm.end()) for mm in re.finditer(r"/\*@.*?\*/", source, re.S)]
+    _acsl_spans += [(mm.start(), mm.end()) for mm in re.finditer(r"//@[^\n]*", source)]
+    def _in_acsl(pos):
+        return any(a <= pos < b for a, b in _acsl_spans)
     out, i = [], 0
     while True:
         m = rx.search(source, i)
         if not m:
             out.append(source[i:]); break
+        if _in_acsl(m.start()):
+            out.append(source[i:m.end()]); i = m.end(); continue
         out.append(source[i:m.start()])
         arg, after = _balanced_arg(source, m.end() - 1)
         out.append(f"/*@ assert {_strip_assert_message(arg)}; */")
@@ -2746,13 +2755,17 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     src = brace_braceless_loops(src)
     goals = extract_goals(src)
     loops = find_loops(src)
-    if not goals:
+    gf = bool(getattr(config, "goal_free", False))
+    if not goals and not gf:
         # No proof target → N/A, NOT a pass. Without a goal the invariants would
         # "verify" vacuously (nothing to fail adequacy), which would be a misleading
         # pass; report N/A so an assertion-free program is never counted as proved.
         return LoopSynthResult(ok=False, iterations=0, goals=goals, no_goals=True,
                                note="no verification goal (no //@ assert / assert / "
                                     "__VERIFIER_assert) — nothing to prove")
+    # Goal-free MINING: with goals empty the oracle's `verified` reduces to "every
+    # invariant is inductive" (no goal to discharge). Skip the goal-anchored
+    # minimization (generality gate / dedup) and require a NON-EMPTY inductive set.
     if not loops:
         return LoopSynthResult(ok=False, iterations=0, goals=goals,
                                note="no loops to annotate")
@@ -2866,7 +2879,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     # proof genuinely depends on it. Size-minimization is RETIRED — it
                     # could neither remove load-bearing over-fit (dropping breaks the
                     # proof) nor justify dropping sound, independent behavioral facts.
-                    gated, gate_flagged = _generality_gate(annotations, _check, loops, logger)
+                    gated, gate_flagged = ((annotations, []) if gf else _generality_gate(annotations, _check, loops, logger))
                     if gated != annotations:
                         gchk = _check(gated)
                         if gchk.verified:
@@ -2884,7 +2897,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     # ENTAILMENT-DEDUP: remove ONLY logically-redundant restatements
                     # (entailed by the rest); KEEP independent sound facts the goal
                     # doesn't need (e.g. a loop bound) — a spec, not a minimal cert.
-                    deduped = _dedup_invariants(annotations, _check, loops, config, logger)
+                    deduped = (annotations if gf else _dedup_invariants(annotations, _check, loops, config, logger))
                     if deduped != annotations:
                         dchk = _check(deduped)
                         if dchk.verified:
@@ -2960,10 +2973,18 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 if countdown_contract_blocks and oracle == "frama-c":
                     for fn, block in countdown_contract_blocks.items():
                         prelude += f"// contract for {fn}\n{block}"
-                note = "invariants are inductive and prove all goals"
-                if gate_flagged:
-                    note += (" — NOTE goal-specific (non-behavioral): proof depends on "
-                             "caller-specific clause(s) " + "; ".join(gate_flagged))
+                if gf:
+                    _nclause = sum(len(v) for v in annotations.values())
+                    if _nclause == 0:
+                        return LoopSynthResult(
+                            False, it, annotations, "", goals,
+                            note="goal-free: no inductive invariants could be mined")
+                    note = f"goal-free: mined {_nclause} inductive loop-invariant clause(s)"
+                else:
+                    note = "invariants are inductive and prove all goals"
+                    if gate_flagged:
+                        note += (" — NOTE goal-specific (non-behavioral): proof depends on "
+                                 "caller-specific clause(s) " + "; ".join(gate_flagged))
                 return LoopSynthResult(
                     ok=True, iterations=it, annotations=annotations,
                     acsl=(prelude + "\n" + rendered if prelude else rendered), goals=goals,
@@ -3044,7 +3065,8 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
             if not changed:
                 return LoopSynthResult(False, it, annotations,
                                        render_loop_invariants_acsl(annotations, loops), goals,
-                                       note="refinement reached a fixpoint without proving the goals",
+                                       note=("refinement reached a fixpoint without a fully-inductive invariant set"
+                                             if gf else "refinement reached a fixpoint without proving the goals"),
                                        instrumented=chk.instrumented, cbmc_log=_log)
         return LoopSynthResult(False, max_iters, annotations,
                                render_loop_invariants_acsl(annotations, loops), goals,

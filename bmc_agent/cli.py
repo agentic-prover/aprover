@@ -1006,6 +1006,7 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     from bmc_agent.llm import LLMClient
 
     entry = getattr(args, "entry", None) or "main"
+    config.goal_free = bool(getattr(args, "goal_free", False))   # type: ignore[attr-defined]
     if getattr(args, "include_dir", None):
         config.include_dirs = args.include_dir          # type: ignore[attr-defined]
         config.preprocess = True                        # type: ignore[attr-defined]
@@ -1152,7 +1153,10 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
                               "mathematical-integer semantics (--math-ints).")
             except Exception as exc:   # never let the rigor recheck mask the result
                 print(f"overflow-rigor: recheck skipped ({exc}); math-int result stands.")
-        print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
+        if getattr(config, "goal_free", False):
+            print(f"RESULT: SATISFIED — {r.note}")
+        else:
+            print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
         return 0
     print(f"RESULT: NOT SATISFIED — {r.note}")
     return 1
@@ -2482,6 +2486,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Specification-synthesis BENCHMARK preset (one flag). Reads the goals (assert/static_assert/__VERIFIER_assert///@ assert), dispatches by program content — loops → loop-invariant synthesis, otherwise → function-contract synthesis — turns on --math-ints (mathematical-integer semantics these benchmarks assume), and emits ACSL. Equivalent to picking the right synthesis mode + --math-ints automatically.",
+    )
+    ver.add_argument(
+        "--goal-free",
+        action="store_true",
+        default=False,
+        help="Loop-invariant synthesis (--specs-bench): GOAL-FREE mining mode. Synthesize inductive loop invariants that characterise the loop even when the program has NO verification goal (//@ assert / assert / __VERIFIER_assert). Validity-only (no goal to discharge); succeeds when a non-empty inductive invariant set is found. Skips the goal-anchored generality/dedup minimization.",
     )
     ver.add_argument(
         "--synth-attempts", type=int, default=0,
