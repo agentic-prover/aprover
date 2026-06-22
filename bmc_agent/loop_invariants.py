@@ -3050,7 +3050,15 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                         if not _added:
                             break
                 if gf:
-                    # re-render so the returned ACSL reflects the strengthened set
+                    # entailment-dedup the strengthened set: drop redundant restatements
+                    # (e.g. equivalent closed-form rewrites), keep independent facts, stay
+                    # inductive -> a clean strong spec.
+                    _ded = _dedup_invariants(annotations, _check, loops, config, logger)
+                    if any(_ded.values()):
+                        _dchk = _check(_ded)
+                        if _dchk.verified:
+                            annotations, final_chk = _ded, _dchk
+                    # re-render so the returned ACSL reflects the strengthened+deduped set
                     rendered = render_loop_invariants_acsl(annotations, loops, variants, disp_assigns)
                     _nclause = sum(len(v) for v in annotations.values())
                     if _nclause == 0:
