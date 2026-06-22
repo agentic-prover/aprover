@@ -3021,6 +3021,32 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                                     _added = True
                                     logger.info("goal-free: strengthened loop %d with %r",
                                                 lp.ordinal, cand)
+                                else:
+                                    # CEGAR (same as the main loop): the candidate is not
+                                    # inductive -> refine on the counterexample (propose the
+                                    # auxiliary that makes it stick) instead of dropping it.
+                                    _ref = _refine(
+                                        llm, config, by_ord[lp.ordinal],
+                                        annotations.get(lp.ordinal, []) + [cand],
+                                        _refine_problem(
+                                            "The candidate invariant %r holds on entry but is "
+                                            "NOT preserved by one iteration. Propose the "
+                                            "auxiliary invariant(s) that make it inductive "
+                                            "(keep it and add what it needs), or a corrected "
+                                            "form." % cand, None),
+                                        [], fn_src_by_ord[lp.ordinal])
+                                    if _ref:
+                                        trial2 = {o: list(v) for o, v in annotations.items()}
+                                        base = annotations.get(lp.ordinal, [])
+                                        trial2[lp.ordinal] = base + [c for c in _ref if c not in base]
+                                        if len(trial2[lp.ordinal]) > len(base):
+                                            _ck2 = _check(trial2)
+                                            if _ck2.verified:
+                                                annotations, final_chk = trial2, _ck2
+                                                _added = True
+                                                logger.info("goal-free: CEGAR-refined "
+                                                            "strengthening on loop %d (from %r)",
+                                                            lp.ordinal, cand)
                         if not _added:
                             break
                 if gf:
