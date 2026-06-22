@@ -713,10 +713,15 @@ def relational_equality_candidates(lp, max_scalars: int = 6) -> list:
 def _prep_goals_acsl(source: str) -> str:
     """For the Frama-C oracle: express every goal as an ACSL ``//@ assert`` (WP
     proves those natively). ``//@ assert`` stays; the executable forms
-    (assert / static_assert / __VERIFIER_assert) are rewritten to ``/*@ assert E; */``
-    and their call (incl. trailing ``;``) consumed."""
+    (assert / static_assert / __VERIFIER_assert / europa_assert) are rewritten to
+    ``/*@ assert E; */`` and their call (incl. trailing ``;``) consumed.  SV-COMP /
+    Europa-style benchmark helper calls that have no Frama-C semantics are removed:
+    they are input-generation or candidate-invariant hints, not proof obligations."""
     from bmc_agent.assert_driven_specs import _balanced_arg, _strip_assert_message
-    rx = re.compile(r"\b(?:__VERIFIER_assert|static_assert|_Static_assert|assert)\s*\(")
+    rx = re.compile(
+        r"\b(?:__VERIFIER_assert|europa_assert|static_assert|_Static_assert|assert)\s*\(",
+        re.IGNORECASE,
+    )
     out, i = [], 0
     while True:
         m = rx.search(source, i)
@@ -725,6 +730,33 @@ def _prep_goals_acsl(source: str) -> str:
         out.append(source[i:m.start()])
         arg, after = _balanced_arg(source, m.end() - 1)
         out.append(f"/*@ assert {_strip_assert_message(arg)}; */")
+        j = after
+        while j < len(source) and source[j] in " \t":
+            j += 1
+        if j < len(source) and source[j] == ";":
+            j += 1
+        i = j
+    source = "".join(out)
+
+    source = re.sub(
+        r"^[ \t]*[A-Za-z_]\w*\s*=\s*__VERIFIER_nondet_[A-Za-z0-9_]*\s*\([^;]*\)\s*;\s*\n?",
+        "",
+        source,
+        flags=re.MULTILINE,
+    )
+
+    helper_rx = re.compile(
+        r"\b(?:europa_make_symbolic|europa_invariant|europa_assume|"
+        r"__VERIFIER_assume|assume)\s*\(",
+        re.IGNORECASE,
+    )
+    out, i = [], 0
+    while True:
+        m = helper_rx.search(source, i)
+        if not m:
+            out.append(source[i:]); break
+        out.append(source[i:m.start()])
+        _arg, after = _balanced_arg(source, m.end() - 1)
         j = after
         while j < len(source) and source[j] in " \t":
             j += 1

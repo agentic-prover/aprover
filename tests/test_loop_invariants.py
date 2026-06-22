@@ -610,6 +610,43 @@ def test_brace_braceless_loops_normalizes_and_preserves():
     assert brace_braceless_loops(dw) == dw
 
 
+def test_prep_goals_acsl_strips_europa_benchmark_helpers():
+    from bmc_agent.loop_invariants import _prep_goals_acsl
+
+    src = (
+        "int foo(int n){\n"
+        "  int i = 0;\n"
+        "  europa_make_symbolic(&n, sizeof(n), \"n\");\n"
+        "  europa_assume(0 <= n);\n"
+        "  europa_invariant(i <= n);\n"
+        "  europa_assert(i == n);\n"
+        "  return 0;\n"
+        "}\n"
+    )
+    out = _prep_goals_acsl(src)
+    assert "/*@ assert i == n; */" in out
+    assert "europa_make_symbolic" not in out
+    assert "europa_assume" not in out
+    assert "europa_invariant" not in out
+    assert "europa_assert" not in out
+
+
+def test_prep_goals_acsl_strips_verifier_nondet_assignments_only():
+    from bmc_agent.loop_invariants import _prep_goals_acsl
+
+    src = (
+        "int foo(int n){\n"
+        "  n = __VERIFIER_nondet_int();\n"
+        "  while (n > 0 && __VERIFIER_nondet_int()) { n--; }\n"
+        "  __VERIFIER_assert(n >= 0);\n"
+        "}\n"
+    )
+    out = _prep_goals_acsl(src)
+    assert "n = __VERIFIER_nondet_int();" not in out
+    assert "while (n > 0 && __VERIFIER_nondet_int())" in out
+    assert "/*@ assert n >= 0; */" in out
+
+
 def test_detect_accumulator_sum_and_product():
     from bmc_agent.loop_invariants import (
         find_loops, brace_braceless_loops, detect_accumulator, accumulator_invariants,
