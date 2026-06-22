@@ -2502,6 +2502,33 @@ def _propose(llm, config, loop, goals, fn_src) -> list:
     return _filter_in_scope(_parse_inv_lines(txt), fn_src)
 
 
+_STRENGTHEN_GF_PROMPT = '''This loop has invariants ALREADY PROVEN inductive:
+{current}
+
+Loop ({kind}, guard `{guard}`) in context:
+{fn_src}
+
+GOAL-FREE STRENGTHENING. There is no goal to prove; capture what the loop ACTUALLY
+computes as PRECISELY as possible. Propose ADDITIONAL, STRONGER invariants beyond
+those above: exact linear relations among the loop variables (e.g. `a + b == c`,
+`x == n - y`), closed-form values of accumulators (e.g. `s == i * (i - 1) / 2`), or
+exact equalities — NOT loose bounds you already have. Each must hold on loop entry
+and be preserved by one iteration. Output one ACSL predicate per line; no
+`loop invariant` keyword, no comments, no prose.'''
+
+
+def _propose_stronger(llm, config, loop, current, fn_src) -> list:
+    """Goal-free: ask the LLM for STRONGER inductive invariants than `current`
+    (exact relations / closed forms), to be validity-filtered by the caller."""
+    from bmc_agent.llm import agentic_system_prompt
+    prompt = _STRENGTHEN_GF_PROMPT.format(
+        current="\n".join(f"  {c}" for c in current) or "  (none)",
+        fn_src=fn_src, kind=loop.kind, guard=loop.guard)
+    txt = llm.complete(agentic_system_prompt(config, "spec_gen", _PROPOSE_SYS),
+                       prompt, max_tokens=512, role="spec_gen")
+    return _filter_in_scope(_parse_inv_lines(txt), fn_src)
+
+
 def _refine(llm, config, loop, current, problem, goals, fn_src) -> list:
     from bmc_agent.llm import agentic_system_prompt
     prompt = _REFINE_PROMPT.format(
@@ -2973,7 +3000,32 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 if countdown_contract_blocks and oracle == "frama-c":
                     for fn, block in countdown_contract_blocks.items():
                         prelude += f"// contract for {fn}\n{block}"
+                if gf and getattr(config, "enable_spec_strengthen", True):
+                    # Maximal inductive strengthening: with no goal to drive precision,
+                    # iteratively mine stronger invariants and keep each that stays
+                    # inductive, until a fixpoint (no new sound clause).
+                    for _sr in range(3):
+                        _added = False
+                        for lp in loops:
+                            cur_cl = annotations.get(lp.ordinal, [])
+                            for cand in _propose_stronger(
+                                    llm, config, by_ord[lp.ordinal], cur_cl,
+                                    fn_src_by_ord[lp.ordinal]):
+                                if cand in annotations.get(lp.ordinal, []):
+                                    continue
+                                trial = {o: list(v) for o, v in annotations.items()}
+                                trial[lp.ordinal] = annotations.get(lp.ordinal, []) + [cand]
+                                _ck = _check(trial)
+                                if _ck.verified:
+                                    annotations, final_chk = trial, _ck
+                                    _added = True
+                                    logger.info("goal-free: strengthened loop %d with %r",
+                                                lp.ordinal, cand)
+                        if not _added:
+                            break
                 if gf:
+                    # re-render so the returned ACSL reflects the strengthened set
+                    rendered = render_loop_invariants_acsl(annotations, loops, variants, disp_assigns)
                     _nclause = sum(len(v) for v in annotations.values())
                     if _nclause == 0:
                         return LoopSynthResult(
