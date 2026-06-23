@@ -374,3 +374,38 @@ Open follow-ups (LLM-budget permitting; budget hit limit earlier, regain 2026-07
    (b) deterministic cross-module stub defs to cut dynamic-harness compile-fail churn.
 3. Re-confirm agentic-realism precision on a 2nd FP-prone module (printf/font) when budget allows.
 All decisions + adjudications in findings/JUDGMENT_NOTES.md; commits in git log.
+
+
+---
+
+## SESSION 2026-06-23 (budget-free soundness fix)
+
+Resume followed: API budget regains 2026-07-01, so LLM sweeps would risk
+400-contaminated/invalid runs -> stayed on the LLM-FREE track.
+
+### DONE: open follow-up #2(a) — realism-gate-failure must not pass as confirmed
+Commit `2022a0c6` (branch reproducer-agent-merge).
+Root cause (refined): `check()` ALREADY fail-safes a failed realism LLM call to
+UNCERTAIN (since 2026-05-05), but UNCERTAIN *keeps* the finding (only UNREALISTIC
+demotes) AND is indistinguishable from a reasoned UNCERTAIN. So a wholesale LLM
+outage (budget 400s) silently turns every finding into a kept "confirmed" one —
+this is what contaminated the first rt_string sweep.
+Fix (LLM-free, surgical, recall-preserving):
+- `RealismCheckResult.gate_failed: bool` (+ to_dict) — set True ONLY in the
+  `except LLMError` handler; intentional `_SKIPPED` stays False.
+- Persisted end-to-end: bug_reporter `to_dict()` -> bug_report.json -> cli summary
+  counts `gate_failed_count` and prints a LOUD "!! REALISM GATE FAILED on N ...
+  UNSCREENED, NOT confirmed ... run may be contaminated" line.
+- Tests: extended the skip + llm-error check() tests (gate_failed False/True);
+  new `test_round_summary_flags_realism_gate_failure`.
+Validated: full suite 52 failed (== baseline; pre-existing unrelated), test_phase3.py
+isolated 1 failed (== baseline). NOTE: env baselines drifted from the doc's 54/3 to
+52/1 on this HEAD — discipline unchanged (zero NEW failures).
+
+### Still open (LLM-free, next autonomous candidates)
+- #2(b) deterministic cross-module stub defs to cut dynamic-harness compile-fail churn.
+- Budget-free track step 3: centralize output-contract validation in BaseAgent
+  (prevents the non-str-leak class, fixed reactively in 3cfb465 — make it structural).
+- Budget-free track step 4: pytest-randomly test ordering + faithful agent doubles.
+### Still blocked on budget (regain 2026-07-01)
+- net/fat32 readiness modules; re-confirm agentic-realism precision on printf/font.
