@@ -2049,6 +2049,7 @@ def _summarize_autonomous_round(
     # Phase 3 outcomes.
     outcome_counts: dict[str, int] = {}
     realism_counts: dict[str, int] = {}
+    gate_failed_count = 0  # realism findings whose LLM gate ERRORED (unscreened)
     for cls in driver_root.rglob("classification.json"):
         try:
             with cls.open() as f:
@@ -2064,6 +2065,8 @@ def _summarize_autonomous_round(
             rc = bd.get("realism_check") or {}
             v = (rc.get("verdict") if isinstance(rc, dict) else None) or "n/a"
             realism_counts[v] = realism_counts.get(v, 0) + 1
+            if isinstance(rc, dict) and rc.get("gate_failed"):
+                gate_failed_count += 1
         except Exception:
             pass
 
@@ -2084,6 +2087,7 @@ def _summarize_autonomous_round(
         "uncertain_count": int(realism_counts.get("UNCERTAIN", 0)),
         "unrealistic_count": int(realism_counts.get("UNREALISTIC", 0)),
         "realistic_count": int(realism_counts.get("REALISTIC", 0)),
+        "gate_failed_count": int(gate_failed_count),
         "confirmed_bugs": confirmed_bugs,
         "session_strip_typedefs_added": [
             t for t in config.session_strip_typedefs
@@ -2109,6 +2113,12 @@ def _format_round_summary(s: dict) -> str:
     lines.append(f"  CBMC verdicts: {s['cbmc_verdicts']}, errors: {s['cbmc_errors']}, coverage: {s['coverage']:.1%}")
     lines.append(f"  Phase 3 outcomes: {s['outcome_counts']}")
     lines.append(f"  Realism: REALISTIC={s['realistic_count']}, UNCERTAIN={s['uncertain_count']}, UNREALISTIC={s['unrealistic_count']}")
+    if s.get("gate_failed_count"):
+        lines.append(
+            f"  !! REALISM GATE FAILED on {s['gate_failed_count']} finding(s) "
+            f"(LLM error) -- these are UNSCREENED, NOT confirmed. Run may be "
+            f"contaminated (budget/API outage); re-run before trusting results."
+        )
     lines.append(f"  Confirmed bugs (post-realism): {s['confirmed_bugs']}")
     if s.get("session_strip_typedefs_added"):
         lines.append(f"  Auto-retry added typedefs: {s['session_strip_typedefs_added']}")

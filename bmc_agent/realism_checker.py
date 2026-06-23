@@ -62,6 +62,10 @@ class RealismCheckResult:
     key_concern: str = ""      # populated when verdict is UNREALISTIC or UNCERTAIN
     llm_confidence: str = ""   # "high" | "medium" | "low" from the LLM
     adjacent_bugs: list = field(default_factory=list)  # other bugs spotted nearby
+    gate_failed: bool = False  # True iff the realism LLM call ERRORED (not a
+                               # reasoned UNCERTAIN). Lets a budget-exhausted /
+                               # 400-contaminated sweep be told apart from a clean
+                               # one so its findings are not silently "confirmed".
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +74,7 @@ class RealismCheckResult:
             "key_concern": self.key_concern,
             "llm_confidence": self.llm_confidence,
             "adjacent_bugs": list(self.adjacent_bugs or []),
+            "gate_failed": bool(self.gate_failed),
         }
 
 
@@ -572,9 +577,14 @@ class RealismChecker:
             return pass1
         except LLMError as exc:
             logger.warning("Realism check LLM call failed for '%s': %s", func.name, exc)
+            # Fail-safe to UNCERTAIN (recall: do NOT silently drop a possibly-real
+            # bug) but mark gate_failed so the run summary can flag that the realism
+            # gate did not actually run on this finding. A wholesale LLM outage
+            # (e.g. budget 400s) must not masquerade as clean "confirmed" findings.
             return RealismCheckResult(
                 verdict=RealismVerdict.UNCERTAIN,
                 reasoning=f"LLM call failed: {exc}",
+                gate_failed=True,
             )
 
     # ------------------------------------------------------------------

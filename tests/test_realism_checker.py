@@ -148,6 +148,8 @@ def test_realism_checker_skipped_when_disabled():
 
     assert result.verdict == RealismVerdict.UNCERTAIN
     assert "skipped" in result.reasoning.lower()
+    # An intentional skip is NOT a gate failure (must not be flagged contaminated).
+    assert result.gate_failed is False
     mock_llm.complete.assert_not_called()
 
 
@@ -919,6 +921,10 @@ def test_realism_checker_llm_error_returns_uncertain():
 
     assert result.verdict == RealismVerdict.UNCERTAIN
     assert "rate limit" in result.reasoning.lower()
+    # A failed LLM gate must be distinguishable from a reasoned UNCERTAIN so a
+    # budget/API outage cannot masquerade as clean confirmed findings.
+    assert result.gate_failed is True
+    assert result.to_dict()["gate_failed"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1633,3 +1639,27 @@ def test_apply_grounding_consistency_missing_guard_field_keeps_realistic():
     )
     assert out.verdict == RealismVerdict.REALISTIC
     assert out is r
+
+
+def _min_summary(**over):
+    """Minimal summary dict for _format_round_summary, overridable per-test."""
+    base = dict(
+        elapsed_s=1.0, total_files=1, files_with_verdicts=1, files_all_errored=0,
+        total_functions=1, cbmc_verdicts=1, cbmc_errors=0, coverage=1.0,
+        outcome_counts={}, realistic_count=1, uncertain_count=0,
+        unrealistic_count=0, gate_failed_count=0, confirmed_bugs=1,
+    )
+    base.update(over)
+    return base
+
+
+def test_round_summary_flags_realism_gate_failure():
+    """gate_failed_count>0 -> a loud UNSCREENED/contaminated warning; 0 -> silent."""
+    from bmc_agent.cli import _format_round_summary
+
+    clean = _format_round_summary(_min_summary(gate_failed_count=0))
+    assert "REALISM GATE FAILED" not in clean
+
+    dirty = _format_round_summary(_min_summary(gate_failed_count=3))
+    assert "REALISM GATE FAILED on 3" in dirty
+    assert "UNSCREENED" in dirty
