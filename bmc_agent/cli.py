@@ -1306,10 +1306,16 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     _print_ai_layers(config)
 
     pipeline = AMCPipeline(config)
+    _scope_only = None
+    if getattr(args, "scope_from_entry", False):
+        _entry = getattr(args, "entry", None) or "main"
+        _scope_only = {_entry}
+        print(f"Scope-from-entry: spec-gen + verification restricted to '{_entry}' + transitive callees")
     bug_reports = pipeline.run(
         source_file=args.source,
         driver_name=args.driver,
         domain_knowledge=domain_knowledge,
+        only_functions=_scope_only,
     )
 
     # Filter out bug_reports whose realism check returned UNREALISTIC
@@ -2434,6 +2440,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--entry",
         default="main",
         help="Entry function for --standalone / --specs-from-asserts mode; for Java/JBMC, 'main' maps to the primary class main, and non-main methods may be given as method or Class.method (default: main).",
+    )
+    ver.add_argument(
+        "--scope-from-entry",
+        action="store_true",
+        default=False,
+        help="Agentic mode: restrict spec-gen and verification to the call-graph slice reachable from --entry (harness/main) instead of every function in the translation unit. Prunes LLM spec-gen to {entry} + transitive callees; Phase 2 verifies the entry only. Makes large real-world harnesses (AWS-C-Common, ldv) tractable.",
     )
     ver.add_argument(
         "--jbmc-path",

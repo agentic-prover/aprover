@@ -211,6 +211,26 @@ class FlagSelection:
         ``timeout=Ns`` is included as a pseudo-flag for log/audit clarity;
         it isn't an actual CBMC flag, just shown in the enabled list.
         """
+        # --- SV-COMP deterministic override (env SVCOMP_PROP / SVCOMP_UNWIND) ---
+        # On whole-program SV-COMP harnesses the per-function config agent's
+        # flag + unwind guesses misfire (e.g. --pointer-overflow-check on an
+        # unreach-call task, --unwind 12 that stalls on a strlen.unwind
+        # artifact before reaching reach_error). Emit a deterministic,
+        # property-appropriate flag set with a competition-grade unwind floor.
+        import os as _os
+        _svp = _os.environ.get("SVCOMP_PROP", "")
+        if _svp:
+            _f = []
+            if _svp == "no-overflow":
+                _f.append("--signed-overflow-check")
+            # memsafety -> memory checks come from --threat-model in run_cbmc;
+            # unreach   -> no optional arithmetic checks. Neither emits extras.
+            _floor = int(_os.environ.get("SVCOMP_UNWIND", "64"))
+            _uw = max(self.unwind_override or 0, _floor)
+            _f.append(f"--unwind {_uw}")
+            if self.timeout_override is not None:
+                _f.append(f"timeout={self.timeout_override}s")
+            return _f
         flags = []
         if self.unsigned_overflow_check:
             flags.append("--unsigned-overflow-check")
@@ -316,8 +336,12 @@ class FlagSelector:
         tm = getattr(self.config, "threat_model", "security")
         global_unwind = int(getattr(self.config, "cbmc_unwind", 4))
         global_timeout = int(getattr(self.config, "cbmc_timeout", 120))
+        _scope = (getattr(self.config, "threat_model_context", "") or "").strip()
+        _tmc = THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"])
+        if _scope:
+            _tmc = _tmc + "\n\nTASK-SPECIFIC SCOPE (AUTHORITATIVE - overrides the above):\n" + _scope
         prompt = _FLAG_SELECTION_PROMPT.format(
-            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
+            threat_model_context=_tmc,
             name=func.name,
             signature=signature_str,
             body=body,

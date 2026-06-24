@@ -96,6 +96,17 @@ def run_cbmc(
     """
     harness_path = Path(harness_path)
 
+    # SV-COMP unwind floor (env SVCOMP_UNWIND, default 64 when SVCOMP_PROP set):
+    # whole-program harnesses call builtin loops (strlen/memcmp/...) that the
+    # per-function bmc-config agent under-sizes (e.g. unwind=12), stalling on a
+    # strlen.unwind artifact before reaching reach_error. Clamp up here so EVERY
+    # CBMC call path (config agent, flag-selection, harness-repair) is covered.
+    import os as _os0
+    if _os0.environ.get("SVCOMP_PROP"):
+        _svc_floor = int(_os0.environ.get("SVCOMP_UNWIND", "64"))
+        if (unwind or 0) < _svc_floor:
+            unwind = _svc_floor
+
     # 1. Locate CBMC
     if not shutil.which(cbmc_path):
         return CBMCResult(
@@ -112,6 +123,9 @@ def run_cbmc(
         str(unwind),
         "--unwinding-assertions",
     ]
+    import os as _os
+    if _os.environ.get("SVCOMP_ARCH", "ILP32").upper() == "ILP32":
+        cmd.append("--32")
     # If the harness function isn't `main`, tell CBMC which one to verify.
     # Used by real-libc mode when the included source already defines its
     # own `main()` (e.g. llm.c's train_gpt2.c is a training program, not

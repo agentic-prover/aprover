@@ -264,8 +264,31 @@ class BMCEngine:
             conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
             pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
             undefined_shift_check   = bool(getattr(flag_selection, "undefined_shift_check", False))
+            # --- SV-COMP deterministic per-property check override (env SVCOMP_PROP) ---
+            import os as _os
+            _svp = _os.environ.get("SVCOMP_PROP", "")
+            if _svp == "no-overflow":
+                signed_overflow_check = True
+                unsigned_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
+                pointer_check = bounds_check = div_by_zero_check = False
+            elif _svp == "memsafety":
+                pointer_check = bounds_check = True
+                div_by_zero_check = False
+                unsigned_overflow_check = signed_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
+            elif _svp == "unreach":
+                pointer_check = bounds_check = div_by_zero_check = False
+                unsigned_overflow_check = signed_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
             # Per-function unwind override (None = use global default).
             unwind_for_this_run     = getattr(flag_selection, "unwind_override", None) or self.config.cbmc_unwind
+            # SV-COMP: whole-program harnesses bound their own inputs but call
+            # builtin loops (strlen/memcmp/...) the per-function config agent
+            # cannot size, so its low unwind guess (e.g. 12) stalls on a
+            # strlen.unwind artifact before reaching reach_error. Force a
+            # competition-grade unwind floor so CBMC reaches the real property.
+            if _svp:
+                _svc_unwind = int(_os.environ.get("SVCOMP_UNWIND", "64"))
+                if _svc_unwind > (unwind_for_this_run or 0):
+                    unwind_for_this_run = _svc_unwind
             # Couple the unwind floor to widened string-copy SOURCES: if the
             # harness modeled an input as a long string feeding a strcpy/strcat
             # SINK, the copy loop must unroll past it (max_len + 2) for the

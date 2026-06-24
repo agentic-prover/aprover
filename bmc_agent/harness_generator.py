@@ -4930,6 +4930,25 @@ class HarnessGenerator:
         fn_name = func.name
         sig = func.signature
 
+        # Complete-harness mode: when the function under test IS the program's
+        # `main` (e.g. an SV-COMP harness that already sets up bounded inputs,
+        # calls the SUT, and asserts via reach_error), the program is ALREADY a
+        # faithful verification harness. The default expand-strip-stub reassembly
+        # corrupts it: it stubs the (public, non-static) SUT -> masks the bug, and
+        # loses the harness's input bounds -> builtin loops (strlen/memcmp) don't
+        # terminate -> CBMC stalls on an unwinding artifact before reaching
+        # reach_error. Emit the preprocessed program verbatim so CBMC verifies the
+        # real code (exactly as --standalone does); the agentic cex / realism /
+        # dynamic-validation layer still runs on the result.
+        if fn_name == "main":
+            _full_src = (
+                parsed_file.preprocessed_source
+                if parsed_file.preprocessed_source is not None
+                else _read_source(func.source_file)
+            )
+            if _full_src and _full_src.strip():
+                return _full_src
+
         # --- 1. Collect type declarations from the source ---
         # Prefer preprocessed_source (all includes already expanded) over
         # reading the original file (which may have unresolved #include "...").
@@ -5562,15 +5581,23 @@ class HarnessGenerator:
             for sub_line in stmt.splitlines():
                 harness_body_lines.append(f"    {sub_line}")
 
-        harness_main = (
-            "void main(void) {\n"
-            + "\n".join(harness_body_lines)
-            + "\n}"
-        )
-        sections.append(
-            f"/* --- Harness entry point --- */\n"
-            + harness_main
-        )
+        # When the function under test IS the program entry `main` (e.g. an
+        # SV-COMP harness `int main(void){ X_harness(); return 0; }`), the
+        # program is ALREADY a complete verification harness. Synthesizing a
+        # second `void main(void)` wrapper that calls main() collides with the
+        # real main -> CBMC "function symbol 'main' redefined" CONVERSION ERROR
+        # -> the task silently returns "no bug". Verify the existing main
+        # directly instead (no synthesized wrapper).
+        if fn_name != "main":
+            harness_main = (
+                "void main(void) {\n"
+                + "\n".join(harness_body_lines)
+                + "\n}"
+            )
+            sections.append(
+                f"/* --- Harness entry point --- */\n"
+                + harness_main
+            )
 
         harness = "\n\n".join(sections) + "\n"
         # D-ii: inject signature-matched stubs for any assigned callback fields.
@@ -7274,6 +7301,16 @@ def _strip_glibc_internal_typedefs(
             outer_fp = re.match(r'\s*typedef\s+[\w\s\*]+?\(\s*\*\s*(\w+)\s*\)\s*\(', typedef_text)
             if outer_fp is not None:
                 target = outer_fp.group(1)
+        # Form 2b: function-TYPE typedef with a PARENTHESIZED name:
+        #   ``typedef <ret> (NAME)(<params>);`` -- like Form 2 but no ``*``.
+        # e.g. ``typedef uint64_t(aws_hash_fn)(const void *key);``. Without
+        # this, Form 3's non-greedy regex grabs the return type (``uint64_t``)
+        # as the typedef name; the system-typedef strip rule then deletes the
+        # whole line, leaving ``aws_hash_fn`` undefined (CBMC parse error).
+        if target is None:
+            paren_ft = re.match(r'\s*typedef\s+[\w\s\*]+?\(\s*(\w+)\s*\)\s*\(', typedef_text)
+            if paren_ft is not None:
+                target = paren_ft.group(1)
         # Form 3: function-type typedef ``typedef <ret> NAME(<params>);``.
         # Name is the identifier immediately preceding the parameter
         # list. Detected by the LAST ``\w+`` token that precedes a ``(``
