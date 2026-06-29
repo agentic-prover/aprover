@@ -1309,6 +1309,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"Include dirs: {config.include_dirs}")
     _print_ai_layers(config)
 
+    if getattr(args, "eta", False):
+        from bmc_agent.eta import make_cli_callback
+        config.progress = make_cli_callback()  # type: ignore[attr-defined]
+
     pipeline = AMCPipeline(config)
     bug_reports = pipeline.run(
         source_file=args.source,
@@ -1658,6 +1662,10 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     if exclude:
         print(f"Excluded patterns:   {exclude}")
 
+    if getattr(args, "eta", False):
+        from bmc_agent.eta import make_cli_callback
+        config.progress = make_cli_callback()  # type: ignore[attr-defined]
+
     pipeline = AMCPipeline(config)
     only_functions = None
     _fns = getattr(args, "functions", "") or ""
@@ -1880,6 +1888,12 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
         config.allow_self_patch = args.allow_self_patch
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
+
+    if getattr(args, "eta", False):
+        # One reporter for the whole run; each round's run_directory emits a
+        # "run" event that resets the estimate, so the ETA is per round.
+        from bmc_agent.eta import make_cli_callback
+        config.progress = make_cli_callback()  # type: ignore[attr-defined]
 
     include_dirs = args.include_dir or []
     if include_dirs:
@@ -2181,6 +2195,20 @@ def build_parser() -> argparse.ArgumentParser:
             help=(
                 "Override the LLM model (e.g. claude-opus-4-7, claude-sonnet-4-6). "
                 "Defaults to BMC_AGENT_LLM_MODEL env var or claude-sonnet-4-6."
+            ),
+        )
+
+    # Shared --eta argument: print an estimated-time-remaining line to stderr,
+    # extrapolated from elapsed time + pipeline progress. Off by default.
+    def _add_eta_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--eta",
+            action="store_true",
+            default=False,
+            help=(
+                "Print an estimated time remaining to stderr as the run "
+                "progresses (extrapolated from elapsed time + phase/function "
+                "progress)."
             ),
         )
 
@@ -2711,6 +2739,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "zero-LLM-cost smoke runs."))
     _add_model_arg(ver)
     _add_provider_args(ver)
+    _add_eta_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
     # --- baseline ---
@@ -2999,6 +3028,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_model_arg(vd)
     _add_provider_args(vd)
+    _add_eta_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)
 
     # --- autonomous ---
@@ -3102,6 +3132,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_model_arg(au)
     _add_provider_args(au)
+    _add_eta_arg(au)
     au.set_defaults(func=_cmd_autonomous)
 
     # --- self-patch-review ---

@@ -34,11 +34,23 @@ in
 
     hostAddress = lib.mkOption {
       type = lib.types.str;
-      default = "";
-      example = "127.0.0.1";
+      default = "127.0.0.1";
+      example = "0.0.0.0";
       description = ''
-        Host address to bind the forwarded port to. Empty means all interfaces;
-        set to "127.0.0.1" to keep the demo local to the machine.
+        Host address to bind the forwarded port to. Defaults to "127.0.0.1"
+        (local only) — the UI runs untrusted pasted C and clones arbitrary URLs
+        server-side, so it shouldn't face the network by default. Set to ""
+        (all interfaces) or a specific address to expose it deliberately.
+      '';
+    };
+
+    debug = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable passwordless root auto-login on the guest serial console. A
+        debugging convenience only — the guest mounts the host /nix/store and
+        has outbound network, so leave this off for any exposed deployment.
       '';
     };
 
@@ -50,7 +62,10 @@ in
 
     mem = lib.mkOption {
       type = lib.types.ints.positive;
-      default = 2048;
+      # Avoid exactly 2048: QEMU hangs at exactly 2 GB of guest RAM
+      # (microvm-nix/microvm.nix#171). 4096 also suits the memory-hungry
+      # CBMC/JBMC/Kani backends.
+      default = 4096;
       description = "Guest RAM in MiB. CBMC is memory-hungry; raise for large inputs.";
     };
 
@@ -69,6 +84,7 @@ in
           hostPort = cfg.port;
           inherit (cfg)
             hostAddress
+            debug
             vcpu
             mem
             model

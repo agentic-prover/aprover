@@ -43,6 +43,13 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Pinned Rust toolchains — supplies the exact nightly (with rustc-dev /
+    # rust-src) that Kani is built against; see nix/tools.nix.
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # microVM host/guest modules — boots the web server inside a QEMU microVM.
     microvm = {
       url = "github:microvm-nix/microvm.nix";

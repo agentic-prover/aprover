@@ -24,8 +24,9 @@ import json
 import os
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from bmc_agent.config import Config
 from bmc_agent.logger import get_logger
@@ -44,16 +45,71 @@ def _model_rejects_temperature(model: str) -> bool:
     return any(s in m for s in _TEMP_UNSUPPORTED)
 
 
+# K2 Think (IFM) inference-backend selection. The IFM endpoint routes a single
+# request to Cerebras (default, fast) or NVIDIA via a request-body ``metadata``
+# flag; both share one base URL / key / model id. ``auto`` adapts per-call by
+# measured latency with fallback. Anything else is treated as ``cerebras`` (the
+# doc-specified default = omit metadata), preserving current behavior.
+K2_BACKEND_CEREBRAS = "cerebras"
+K2_BACKEND_NVIDIA = "nvidia"
+K2_BACKEND_AUTO = "auto"
+_K2_BACKENDS = (K2_BACKEND_CEREBRAS, K2_BACKEND_NVIDIA)
+
+
+def _is_k2_endpoint(base_url: "str | None") -> bool:
+    """True when ``base_url`` is the K2 Think / IFM endpoint, which is the only
+    place the ``metadata.use_nvidia`` routing flag is honoured. Gates the flag so
+    it never leaks to OpenAI / OpenRouter (which share the ``openai`` provider)."""
+    b = (base_url or "").lower()
+    return "k2think.ai" in b or "ifm.ai" in b
+
+
+def openrouter_attribution_headers() -> dict:
+    """HTTP headers attributing AProver's traffic on OpenRouter's public
+    rankings and analytics (https://openrouter.ai/docs/app-attribution).
+
+    ``HTTP-Referer`` is required for an app page to be created; ``X-OpenRouter-
+    Title`` is the current spec header for the display name and ``X-Title`` is
+    kept for backwards compatibility. Other providers silently ignore these, so
+    they are attached unconditionally to every OpenAI-compatible request."""
+    return {
+        "HTTP-Referer": "https://aprover.ai",
+        "X-OpenRouter-Title": "AProver",
+        "X-Title": "AProver",
+    }
+
+
 def _default_openai_max_tokens_cap(model: str) -> int:
-    """Return a conservative completion-token cap for OpenAI-compatible models."""
+    """Return a conservative completion-token cap for OpenAI-compatible models.
+
+    The cap must sit at or above the K2 reasoning floor (24576) for reasoning
+    models, otherwise ``min(max(max_tokens, 24576), cap)`` silently clamps the
+    floor back down and the model truncates mid-``<think>``. Older OpenAI chat
+    models have hard per-request ceilings and must stay capped below the floor.
+    """
 
     m = (model or "").lower()
     # gpt-3.5-turbo-1106 is the original SpecGen model and rejects completion
-    # requests above 4096 tokens.  Keep the higher default for newer reasoning
-    # models unless the operator overrides it with BMC_AGENT_LLM_MAX_TOKENS_CAP.
+    # requests above 4096 tokens.
     if "gpt-3.5-turbo" in m:
         return 4096
-    return 16384
+    # gpt-4o-mini hard-caps completions at 16384.
+    if "gpt-4o-mini" in m:
+        return 16384
+    # K2 Think / reasoning models and other modern OpenAI-compatible endpoints:
+    # a generous cap so the 24576 reasoning floor actually applies and large
+    # explicit requests aren't clipped. Override via BMC_AGENT_LLM_MAX_TOKENS_CAP.
+    return 32768
+
+
+def _resolved_openai_cap(model: str) -> int:
+    """Effective completion cap: env override else the per-model default."""
+    return int(
+        os.environ.get(
+            "BMC_AGENT_LLM_MAX_TOKENS_CAP",
+            str(_default_openai_max_tokens_cap(model)),
+        )
+    )
 
 # Sentinel so we can detect a missing key at call time, not import time.
 _UNSET = object()
@@ -77,8 +133,29 @@ def _strip_reasoning_blocks(text: str) -> str:
         return text
     closing = text.rfind("</think>")
     if closing != -1:
-        return text[closing + len("</think>"):].lstrip("\n")
-    return text
+        text = text[closing + len("</think>"):].lstrip("\n")
+    return _unwrap_code_fence(text)
+
+
+def _unwrap_code_fence(text: str) -> str:
+    """Remove a single wrapping ```lang ... ``` fence, if the whole text is one.
+
+    Reasoning models sometimes wrap the requested answer in a Markdown fence
+    despite being told not to. Only unwraps when the trimmed text starts with a
+    fence so plain answers (and answers that merely contain a fence inline) are
+    returned untouched.
+    """
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    first_nl = s.find("\n")
+    if first_nl == -1:
+        return text
+    s = s[first_nl + 1:]
+    s = s.rstrip()
+    if s.endswith("```"):
+        s = s[:-3]
+    return s.strip()
 
 
 _AGENTIC_INVESTIGATION = (
@@ -164,6 +241,13 @@ def agentic_system_prompt(config, role, system_prompt: str) -> str:
     return system_prompt + _AGENTIC_INVESTIGATION.format(dirs=dirs)
 
 
+def _is_openrouter(base_url: "str | None") -> bool:
+    """True when the OpenAI-compatible endpoint is OpenRouter, which exposes
+    extra body params (e.g. ``usage: {include: true}`` for cost accounting) that
+    plain OpenAI / K2 endpoints would reject."""
+    return "openrouter" in (base_url or "").lower()
+
+
 def _supports_explicit_prompt_cache(base_url: "str | None") -> bool:
     """Anthropic / OpenRouter honour an explicit ``cache_control: ephemeral``
     breakpoint on a content block. OpenAI auto-caches long prefixes with no
@@ -194,6 +278,25 @@ class LLMError(Exception):
     """Raised when the LLM client cannot fulfil a request."""
 
 
+class LLMRetryableError(LLMError):
+    """A response the caller can't use, but a fresh re-query may fix.
+
+    Raised for non-conforming output (e.g. the response failed a caller-supplied
+    ``validate`` predicate). The ``complete()`` retry loop re-samples the model
+    rather than giving up — reasoning models like K2 Think vary across samples,
+    so re-running often yields conforming output.
+    """
+
+
+class LLMTruncatedError(LLMRetryableError):
+    """The model ran out of completion budget before emitting its answer.
+
+    Observed on K2 Think when the ``<think>`` reasoning trace consumes the whole
+    ``max_tokens`` budget (``finish_reason=length`` with no closing ``</think>``).
+    Retryable, and the retry loop additionally escalates ``max_tokens``.
+    """
+
+
 class LLMClient:
     """
     Thin wrapper around the Anthropic ``Messages`` API.
@@ -215,6 +318,27 @@ class LLMClient:
         self.usage_total_prompt_tokens = 0
         self.usage_total_completion_tokens = 0
         self.usage_total_tokens = 0
+        # Exact spend reported by providers that price the call for us (the
+        # claude-code CLI returns ``total_cost_usd``). 0.0 => no exact figure,
+        # so the web layer falls back to its token-based estimate.
+        self.usage_total_cost_usd = 0.0
+        # Per-attempt reliability + latency telemetry (one record per underlying
+        # provider request, retries included). Surfaced to the web workbench via
+        # pipeline._cost_snapshot for the reliability badge. Best-effort, no lock
+        # — same contract as the usage counters above.
+        self.reliability_total = 0
+        self.reliability_success = 0
+        self.reliability_timeout = 0
+        self.reliability_decode = 0     # invalid / truncated / non-conforming response
+        self.reliability_other = 0
+        self._reliability_recent: "deque[int]" = deque(maxlen=5)  # 1=failed, 0=ok
+        self._latency_total_s = 0.0
+        self._latency_recent: "deque[float]" = deque(maxlen=5)    # recent durations (s)
+        # K2 ``auto`` backend selection: EWMA latency (seconds) per backend and a
+        # short cooldown (attempts to skip) applied after a retryable failure so
+        # the next attempt flips to the other backend. Empty EWMA => unprobed.
+        self._k2_latency: "dict[str, float]" = {}
+        self._k2_cooldown: "dict[str, int]" = {b: 0 for b in _K2_BACKENDS}
 
     def _add_usage(self, prompt_tokens, completion_tokens) -> None:
         """Accumulate one completion token usage. Best-effort: non-numeric
@@ -227,6 +351,123 @@ class LLMClient:
         self.usage_total_prompt_tokens += p
         self.usage_total_completion_tokens += c
         self.usage_total_tokens += p + c
+
+    def _add_cost(self, usd) -> None:
+        """Accumulate one completion's exact USD cost. Best-effort: non-numeric
+        or None values count as 0 and never raise."""
+        try:
+            self.usage_total_cost_usd += float(usd or 0)
+        except (TypeError, ValueError):
+            return
+
+    def _record_call(self, ok: bool, category: "str | None" = None,
+                     duration_s: float = 0.0) -> None:
+        """Record one provider attempt's outcome + latency for the reliability
+        badge. ``category`` is "timeout" / "decode" / "other" when ``ok`` is
+        False. Best-effort: never raises."""
+        self.reliability_total += 1
+        if ok:
+            self.reliability_success += 1
+        elif category == "timeout":
+            self.reliability_timeout += 1
+        elif category == "decode":
+            self.reliability_decode += 1
+        else:
+            self.reliability_other += 1
+        self._reliability_recent.append(0 if ok else 1)
+        try:
+            d = float(duration_s)
+        except (TypeError, ValueError):
+            return
+        self._latency_total_s += d
+        self._latency_recent.append(d)
+
+    def reliability_snapshot(self) -> dict:
+        """Cumulative reliability + latency for this client's LLM calls.
+
+        ``recent_fail``/``recent_total`` are the rolling last-5-attempts window
+        the web badge colours its forecast dot from."""
+        total = self.reliability_total
+        recent_lat = list(self._latency_recent)
+        return {
+            "total": total,
+            "success": self.reliability_success,
+            "timeout": self.reliability_timeout,
+            "decode": self.reliability_decode,
+            "other": self.reliability_other,
+            "recent_fail": sum(self._reliability_recent),
+            "recent_total": len(self._reliability_recent),
+            "latency_ms_avg": round(1000 * self._latency_total_s / total) if total else None,
+            "latency_ms_recent": round(1000 * sum(recent_lat) / len(recent_lat)) if recent_lat else None,
+        }
+
+    @staticmethod
+    def _classify_failure(exc: Exception, cls_name: str, msg: str) -> str:
+        """Bucket a failed attempt: timeout / decode / other."""
+        if "timeout" in cls_name.lower() or "timeout" in msg:
+            return "timeout"
+        if isinstance(exc, (LLMTruncatedError, LLMRetryableError)):
+            return "decode"  # truncated / non-conforming response
+        return "other"
+
+    # ------------------------------------------------------------------
+    # K2 Think backend routing (auto = adapt by measured latency)
+    # ------------------------------------------------------------------
+    def _k2_enabled(self) -> bool:
+        """Backend routing applies only to the K2/IFM OpenAI-compatible endpoint."""
+        return (
+            self.config.resolved_provider() == "openai"
+            and _is_k2_endpoint(self.config.llm_base_url)
+        )
+
+    def _select_k2_backend(self) -> str:
+        """Resolve which K2 backend to use for the next attempt.
+
+        Explicit ``cerebras``/``nvidia`` are honoured as-is. ``auto`` picks the
+        lowest measured-latency backend that isn't in cooldown, preferring
+        Cerebras (the documented-faster default) before any latency data exists.
+        Empty / unknown settings fall back to Cerebras (current behavior)."""
+        choice = (self.config.llm_k2_backend or "").strip().lower()
+        if choice in _K2_BACKENDS:
+            return choice
+        if choice != K2_BACKEND_AUTO:
+            return K2_BACKEND_CEREBRAS  # "" / unknown => doc-default backend
+
+        # auto: drop backends still cooling down from a recent failure.
+        available = [b for b in _K2_BACKENDS if self._k2_cooldown.get(b, 0) <= 0]
+        if not available:
+            available = list(_K2_BACKENDS)  # both cooling down: ignore cooldowns
+        # Prefer Cerebras until we have a latency sample for it; otherwise route
+        # to the lowest-EWMA available backend (Cerebras wins ties).
+        if K2_BACKEND_CEREBRAS in available and K2_BACKEND_CEREBRAS not in self._k2_latency:
+            return K2_BACKEND_CEREBRAS
+        return min(
+            available,
+            key=lambda b: (self._k2_latency.get(b, float("inf")),
+                           0 if b == K2_BACKEND_CEREBRAS else 1),
+        )
+
+    def _record_k2_latency(self, backend: str, duration_s: float) -> None:
+        """Fold one successful call's latency into the backend's EWMA and clear
+        its cooldown. Best-effort: never raises into the request path."""
+        try:
+            d = float(duration_s)
+        except (TypeError, ValueError):
+            return
+        prev = self._k2_latency.get(backend)
+        # Exponential moving average (alpha=0.5) — reacts fast, stays simple.
+        self._k2_latency[backend] = d if prev is None else (0.5 * prev + 0.5 * d)
+        self._k2_cooldown[backend] = 0
+
+    def _penalise_k2_backend(self, backend: str) -> None:
+        """After a retryable failure, skip this backend for the next 2 ``auto``
+        selections so the loop flips to the other backend (the fallback)."""
+        if backend in self._k2_cooldown:
+            self._k2_cooldown[backend] = 2
+        # Age the *other* backends' cooldowns so a single failure doesn't pin us.
+        for b in _K2_BACKENDS:
+            if b != backend and self._k2_cooldown.get(b, 0) > 0:
+                self._k2_cooldown[b] -= 1
 
     # ------------------------------------------------------------------
     # Public interface
@@ -242,12 +483,21 @@ class LLMClient:
         thinking_budget: int = 8000,
         role: str | None = None,
         cache_prefix: str = "",
+        validate: "Optional[Callable[[str], bool]]" = None,
     ) -> str:
         """
         Send a request to the LLM and return the response text.
 
         Retries up to ``config.max_spec_retries`` times on transient errors
         (rate limits, server errors) with exponential backoff.
+
+        validate:
+            Optional predicate run on the (reasoning-stripped) response text.
+            When it returns ``False`` the response is treated as non-conforming
+            and the request is re-sampled (up to ``config.max_spec_retries``).
+            Use it to retry on, e.g., output that doesn't parse as the expected
+            JSON — reasoning models vary across samples, so a re-run usually
+            yields conforming output. See also ``complete_json()``.
 
         Parameters
         ----------
@@ -315,6 +565,10 @@ class LLMClient:
 
         try:
             for attempt in range(self.config.max_spec_retries):
+                _t0 = time.monotonic()
+                # K2 Think backend for THIS attempt (auto adapts by latency /
+                # flips on a prior failure's cooldown). Empty for non-K2 paths.
+                k2_backend = self._select_k2_backend() if self._k2_enabled() else ""
                 try:
                     if provider == "openai":
                         # OpenAI-compatible endpoints (K2 Think etc.) ignore the
@@ -324,42 +578,93 @@ class LLMClient:
                         # No prompt-cache breakpoint API here, so fold the shared
                         # prefix into the system text to preserve its content.
                         sys_oa = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
-                        return self._complete_openai(sys_oa, user_prompt, max_tokens, temperature)
-                    if provider == "claude-code":
+                        result = self._complete_openai(sys_oa, user_prompt, max_tokens, temperature, k2_backend)
+                    elif provider == "claude-code":
                         sys_cc = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
-                        return self._complete_claude_code(sys_cc, user_prompt, max_tokens, temperature)
-                    return self._complete_anthropic(
-                        system_prompt,
-                        user_prompt,
-                        max_tokens,
-                        temperature,
-                        api_kwargs,
-                        cache_prefix=cache_prefix,
-                    )
+                        result = self._complete_claude_code(sys_cc, user_prompt, max_tokens, temperature)
+                    else:
+                        result = self._complete_anthropic(
+                            system_prompt,
+                            user_prompt,
+                            max_tokens,
+                            temperature,
+                            api_kwargs,
+                            cache_prefix=cache_prefix,
+                        )
+                    _dur = time.monotonic() - _t0
+                    if validate is not None and not validate(result):
+                        # Non-conforming output (e.g. unparseable JSON). Counts as
+                        # a "decode" failure for the reliability badge. Re-sample
+                        # while attempts remain; reasoning models vary per draw.
+                        # On exhaustion, return the best-effort last response so
+                        # the caller's own parse-failure handling still applies
+                        # (rather than turning a soft miss into a hard error).
+                        self._record_call(False, "decode", _dur)
+                        if attempt < self.config.max_spec_retries - 1:
+                            wait = 2 ** attempt
+                            logger.warning(
+                                "LLM response failed validation; re-querying in "
+                                "%ds (attempt %d/%d)",
+                                wait, attempt + 1, self.config.max_spec_retries,
+                            )
+                            time.sleep(wait)
+                            continue
+                        logger.warning(
+                            "LLM response still failed validation after %d "
+                            "attempts; returning last response",
+                            self.config.max_spec_retries,
+                        )
+                        return result
+                    self._record_call(True, None, _dur)
+                    if k2_backend:
+                        self._record_k2_latency(k2_backend, _dur)
+                    return result
                 except Exception as exc:
+                    self._record_call(
+                        False,
+                        self._classify_failure(exc, type(exc).__name__, str(exc).lower()),
+                        time.monotonic() - _t0,
+                    )
                     last_error = exc
                     cls_name = type(exc).__name__
                     msg = str(exc).lower()
-                    # HTTP 4xx is a permanent client error (bad request,
-                    # auth, request-too-large) — retrying just burns
-                    # another LLM round-trip and N×retry_backoff seconds.
-                    # Observed: OpenRouter rejects realism/reproducer
-                    # prompts >8MB with HTTP 400. The (now-fixed) cbmc.py
-                    # raw_output blow-up made every kernel-TU realism call
-                    # fire this. Burned ~90s/failure × 3 attempts before
-                    # we used to give up.
-                    is_4xx = bool(
-                        re.search(r"http\s*4\d\d\b", msg)
-                        or re.search(r'"code"\s*:\s*4\d\d', msg)
-                    )
-                    transient = (not is_4xx) and any(
-                        tag in cls_name.lower() or tag in msg
-                        for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
-                    )
-                    if transient:
+                    # Truncated reasoning trace: K2 ran out of completion budget
+                    # mid-<think>. Give it more room and re-sample.
+                    if isinstance(exc, LLMTruncatedError):
+                        if provider == "openai":
+                            max_tokens = min(
+                                max(max_tokens, 24576) * 2,
+                                _resolved_openai_cap(self.config.llm_model),
+                            )
+                        retryable = True
+                    # Non-conforming response (failed `validate`): re-sample as-is.
+                    elif isinstance(exc, LLMRetryableError):
+                        retryable = True
+                    else:
+                        # HTTP 4xx is a permanent client error (bad request,
+                        # auth, request-too-large) — retrying just burns
+                        # another LLM round-trip and N×retry_backoff seconds.
+                        # Observed: OpenRouter rejects realism/reproducer
+                        # prompts >8MB with HTTP 400. The (now-fixed) cbmc.py
+                        # raw_output blow-up made every kernel-TU realism call
+                        # fire this. Burned ~90s/failure × 3 attempts before
+                        # we used to give up.
+                        is_4xx = bool(
+                            re.search(r"http\s*4\d\d\b", msg)
+                            or re.search(r'"code"\s*:\s*4\d\d', msg)
+                        )
+                        retryable = (not is_4xx) and any(
+                            tag in cls_name.lower() or tag in msg
+                            for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
+                        )
+                    if retryable:
+                        # Under K2 auto, cool down the failed backend so the next
+                        # attempt flips to the other one (latency-aware fallback).
+                        if k2_backend:
+                            self._penalise_k2_backend(k2_backend)
                         wait = 2 ** attempt  # 1, 2, 4 seconds
                         logger.warning(
-                            "LLM transient error (%s); retrying in %ds (attempt %d/%d)",
+                            "LLM retryable error (%s); retrying in %ds (attempt %d/%d)",
                             cls_name,
                             wait,
                             attempt + 1,
@@ -378,6 +683,43 @@ class LLMClient:
                 self.config.llm_api_key = saved_settings["api_key"]
                 self.config.llm_provider = saved_settings["provider"]
                 self._client = saved_settings["client"]
+
+    def complete_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        **kwargs,
+    ) -> dict:
+        """Like :meth:`complete`, but return a parsed JSON object.
+
+        Validates each response with :func:`bmc_agent.json_utils.extract_json_object`
+        and re-queries (via ``complete``'s retry loop) when the output isn't
+        parseable JSON — the common failure mode for reasoning models that fold
+        prose or a truncated ``<think>`` trace into the answer. Raises
+        ``LLMError`` if no parseable object is produced within the retry budget.
+        ``**kwargs`` are forwarded to ``complete`` (``role``, ``max_tokens`` …);
+        passing ``validate`` is not allowed.
+        """
+        if "validate" in kwargs:
+            raise TypeError("complete_json() manages 'validate' itself")
+        from bmc_agent.json_utils import extract_json_object
+
+        holder: dict = {}
+
+        def _validate(text: str) -> bool:
+            obj = extract_json_object(text)
+            if obj is None:
+                return False
+            holder["obj"] = obj
+            return True
+
+        self.complete(system_prompt, user_prompt, validate=_validate, **kwargs)
+        if "obj" not in holder:
+            raise LLMError(
+                "complete_json: no parseable JSON object in the LLM response "
+                f"after {self.config.max_spec_retries} attempt(s)."
+            )
+        return holder["obj"]
 
     # ------------------------------------------------------------------
     # Provider paths
@@ -462,6 +804,7 @@ class LLMClient:
         user_prompt: str,
         max_tokens: int,
         temperature: float,
+        k2_backend: str = "",
     ) -> str:
         """OpenAI-compatible /v1/chat/completions request (used for K2 Think etc.).
 
@@ -498,12 +841,7 @@ class LLMClient:
         # never exceed the active model's completion-token limit. gpt-3.5-turbo
         # caps at 4096, and gpt-4o-mini caps at 16384. Configurable via
         # BMC_AGENT_LLM_MAX_TOKENS_CAP for models that allow more.
-        _cap = int(
-            os.environ.get(
-                "BMC_AGENT_LLM_MAX_TOKENS_CAP",
-                str(_default_openai_max_tokens_cap(self.config.llm_model)),
-            )
-        )
+        _cap = _resolved_openai_cap(self.config.llm_model)
         effective_max_tokens = min(max(max_tokens, 24576), _cap)
         payload = {
             "model": self.config.llm_model,
@@ -513,12 +851,39 @@ class LLMClient:
             ],
             "max_tokens": effective_max_tokens,
             "temperature": temperature,
-            "stream": False,
+            # Stream the response. Non-streaming requests make httpx's read
+            # timeout bound the WHOLE generation (the server sends nothing until
+            # it's done), so a long reasoning <think> trace trips ReadTimeout
+            # even when the model is working fine. With streaming the read
+            # timeout bounds only the gap BETWEEN chunks, which stays small
+            # while tokens are flowing.
+            "stream": True,
+            # Ask the server to emit a trailing usage chunk so we keep the
+            # per-call token telemetry (self._add_usage) that the agent layer
+            # uses for cost attribution. Endpoints that don't support it simply
+            # omit usage; extraction below treats it as best-effort.
+            "stream_options": {"include_usage": True},
         }
+        # OpenRouter reports the authoritative per-request USD spend in
+        # ``usage.cost``, but only when usage accounting is requested.
+        # ``stream_options.include_usage`` above is the OpenAI flag for *token*
+        # telemetry; it does NOT surface cost. Gated to OpenRouter — a stray
+        # ``usage`` body param can 400 plain OpenAI / K2 endpoints.
+        if _is_openrouter(base):
+            payload["usage"] = {"include": True}
+        # K2 Think backend routing: only the IFM endpoint honours the body flag,
+        # and only NVIDIA needs it (Cerebras is the default when metadata is
+        # omitted). Gated so the flag never reaches OpenAI / OpenRouter.
+        if k2_backend and _is_k2_endpoint(self.config.llm_base_url):
+            logger.debug("K2 Think backend for this call: %s", k2_backend)
+            if k2_backend == K2_BACKEND_NVIDIA:
+                payload["metadata"] = {"use_nvidia": True}
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "MBZUAI/AProver",
+            **openrouter_attribution_headers(),
         }
 
         try:
@@ -530,45 +895,79 @@ class LLMClient:
 
         timeout_s = float(getattr(self.config, "llm_request_timeout_s", 180.0))
         timeout = httpx.Timeout(timeout_s, connect=10.0)
+        # Server-Sent-Events stream: each frame is a "data: {json}" line, the
+        # content arrives as incremental ``choices[0].delta.content`` fragments,
+        # ``finish_reason`` lands on the final content chunk, and (when
+        # stream_options is honoured) a trailing chunk carries ``usage`` with an
+        # empty ``choices`` array. The stream ends with "data: [DONE]".
+        text_parts: list[str] = []
+        finish_reason = None
+        usage: dict = {}
+        stream_error: str | None = None
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(url, json=payload, headers=headers)
-        if resp.status_code >= 400:
-            raise LLMError(
-                f"OpenAI-compatible request failed: HTTP {resp.status_code} {resp.reason_phrase}: {resp.text[:500]}"
-            )
-        try:
-            data = resp.json()
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"OpenAI-compatible response was not JSON: {resp.text[:500]}") from exc
+            with client.stream("POST", url, json=payload, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    resp.read()  # body isn't loaded for a streamed response
+                    raise LLMError(
+                        f"OpenAI-compatible request failed: HTTP {resp.status_code} "
+                        f"{resp.reason_phrase}: {resp.text[:500]}"
+                    )
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        # Partial/keep-alive frame -- skip rather than abort.
+                        continue
+                    # Some providers (e.g. OpenRouter) signal a mid-stream failure
+                    # as an ``error`` object inside an HTTP-200 SSE body. Capture
+                    # it so an empty result fails loudly instead of being parsed
+                    # downstream as a benign/default response.
+                    if chunk.get("error"):
+                        err = chunk["error"]
+                        stream_error = err.get("message") if isinstance(err, dict) else str(err)
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    for ch in chunk.get("choices") or []:
+                        piece = (ch.get("delta") or {}).get("content")
+                        if piece:
+                            text_parts.append(piece)
+                        if ch.get("finish_reason"):
+                            finish_reason = ch["finish_reason"]
+        text = "".join(text_parts)
 
-        usage = data.get("usage") or {}
+        # An empty stream (dropped connection, no frames, or an error chunk over
+        # HTTP 200) must not silently return "" — the old non-streaming path
+        # raised here, and the retry loop relies on it firing. Treat as
+        # retryable: a fresh re-query commonly recovers a transient drop.
+        if not text:
+            detail = stream_error or "no content frames received"
+            raise LLMRetryableError(
+                f"OpenAI-compatible response carried no content ({detail}). "
+                f"finish_reason={finish_reason!r}"
+            )
+
         if usage:
             logger.debug(
-                "LLM usage (openai): prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                "LLM usage (openai): prompt_tokens=%s completion_tokens=%s "
+                "total_tokens=%s cost=%s",
                 usage.get("prompt_tokens"),
                 usage.get("completion_tokens"),
                 usage.get("total_tokens"),
+                usage.get("cost"),
             )
             self._add_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
+            # OpenRouter returns the authoritative per-request USD spend inline as
+            # ``usage.cost`` in the trailing chunk (token x price can't be
+            # reconstructed locally — OpenRouter routes one model id to different
+            # upstream providers/prices and applies cache discounts). Plain OpenAI
+            # / K2 endpoints omit it, so _add_cost(None) is a no-op there.
+            self._add_cost(usage.get("cost"))
 
-        choices = data.get("choices") or []
-        if not choices:
-            raise LLMError(f"OpenAI-compatible response contained no choices: {data}")
-        choice = choices[0]
-        msg = choice.get("message") or {}
-        content = msg.get("content")
-        if isinstance(content, list):
-            text = "".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict)
-            )
-        elif isinstance(content, str):
-            text = content
-        else:
-            raise LLMError(f"OpenAI-compatible response had no message content: {choices[0]}")
-
-        finish_reason = choice.get("finish_reason")
         stripped = _strip_reasoning_blocks(text)
         # When a reasoning model burns its whole budget on <think>... and is
         # cut off, finish_reason=='length' and we get no </think> closing
@@ -576,10 +975,10 @@ class LLMClient:
         # Surface this loudly: the caller would otherwise parse the reasoning
         # text as a spec, which silently corrupts the pipeline.
         if finish_reason == "length" and "</think>" not in text:
-            raise LLMError(
+            raise LLMTruncatedError(
                 "OpenAI-compatible response hit max_tokens before emitting the "
-                "final answer (no </think> closing tag). Bump max_tokens or "
-                "shorten the prompt. "
+                "final answer (no </think> closing tag). Retrying with more "
+                "budget. "
                 f"prompt_tokens={usage.get('prompt_tokens')} "
                 f"completion_tokens={usage.get('completion_tokens')}"
             )
@@ -704,6 +1103,16 @@ class LLMClient:
                 usage.get("cache_read_input_tokens"),
                 data.get("total_cost_usd"),
             )
+            # Feed the spend meter. Include cache tokens in the prompt count so
+            # the "N tok" pill reflects billed volume; USD comes from the CLI's
+            # authoritative ``total_cost_usd`` (on ``data``, not ``usage``).
+            prompt_tokens = (
+                int(usage.get("input_tokens") or 0)
+                + int(usage.get("cache_creation_input_tokens") or 0)
+                + int(usage.get("cache_read_input_tokens") or 0)
+            )
+            self._add_usage(prompt_tokens, usage.get("output_tokens"))
+            self._add_cost(data.get("total_cost_usd"))
 
         result = data.get("result")
         if not isinstance(result, str):
@@ -966,6 +1375,12 @@ def _add_complete_with_tools_to_llm():
                 "tool_choice": "auto",
                 "stream": False,
             }
+            # OpenRouter reports the authoritative per-request USD spend in
+            # ``usage.cost``, but only when usage accounting is requested (mirrors
+            # the non-tool _complete_openai path). Gated to OpenRouter — a stray
+            # ``usage`` body param can 400 plain OpenAI / K2 endpoints.
+            if _is_openrouter(base):
+                payload["usage"] = {"include": True}
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -992,6 +1407,10 @@ def _add_complete_with_tools_to_llm():
                     usage.get("total_tokens"),
                 )
                 self._add_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
+                # OpenRouter returns the authoritative per-request USD spend inline
+                # as ``usage.cost``; plain OpenAI / K2 omit it, so this is a no-op
+                # there (same contract as _complete_openai).
+                self._add_cost(usage.get("cost"))
 
             choices = data.get("choices") or []
             if not choices:

@@ -1,4 +1,4 @@
-{ inputs, ... }:
+{ inputs, self, ... }:
 {
   imports = [ inputs.devshell.flakeModule ];
 
@@ -9,6 +9,10 @@
       system,
       ...
     }:
+    let
+      # cbmc is in nixpkgs; jbmc + kani are built from source by nix/tools.nix.
+      toolsPkgs = pkgs.extend self.overlays.tools;
+    in
     {
       devshells.default = {
         name = "AProver devshell";
@@ -21,7 +25,7 @@
             uv
             ;
 
-          # Verification oracle + compiler toolchain the pipeline shells out to.
+          # Verification oracles + compiler toolchain the pipeline shells out to.
           #   cbmc        — REQUIRED: C bounded model checker (bmc_agent/cbmc.py)
           #   gcc         — dynamic validation, reproducer loop, and the `cc`
           #                 preprocessor (the gcc wrapper also provides `cc`)
@@ -30,6 +34,21 @@
             gcc
             binutils
             pkg-config
+            ;
+
+          #   jbmc        — Java bounded model checker (bmc_agent/jbmc.py)
+          #   kani        — Rust bounded model checker (bmc_agent/kani.py)
+          # Both are built from source by nix/tools.nix (nixpkgs ships neither in
+          # a usable form). See overlays.tools.
+          inherit (toolsPkgs)
+            jbmc
+            kani
+            ;
+
+          #   jdk         — `javac`/`java` for the JBMC backend's compile step
+          #                 (bmc_agent/config.py:javac_path / java_classpath).
+          inherit (pkgs)
+            jdk
             ;
 
           # General CLI tooling.

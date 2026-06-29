@@ -48,8 +48,8 @@ from bmc_agent.parser import FunctionInfo, ParsedCFile
 logger = get_logger("agentic_harness_gen")
 
 
-MAX_TURNS = 10
-MAX_RETRIES = 3
+MAX_TURNS = 24
+MAX_RETRIES = 8
 MAX_TOOL_RESULT_CHARS = 12000
 
 
@@ -134,8 +134,8 @@ Use the read/grep tools generously; the LLM tokens are cheap compared
 to a wrong harness that wastes a CBMC run and yields a false positive.
 
 When ready, call ``emit_harness`` with the complete harness text. If
-``compile_check`` returns errors, fix them and resubmit. After three
-failed compiles your last submission is used regardless.
+``compile_check`` returns errors, fix them and resubmit. After the retry
+budget is exhausted, your last submission is used regardless.
 """
 
 

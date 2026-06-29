@@ -15,7 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from bmc_agent.artifacts import ArtifactStore
 from bmc_agent.backends import BMCBackend, CBMCBackend
@@ -572,6 +572,7 @@ class BMCEngine:
         driver_name: str,
         all_funcs: "dict | None" = None,
         flag_selections: "dict | None" = None,
+        progress_cb: "Callable[..., None] | None" = None,
     ) -> dict[str, BMCVerdict]:
         """
         Check all functions in parallel (ThreadPoolExecutor).
@@ -586,6 +587,12 @@ class BMCEngine:
             The parsed C file object.
         driver_name:
             Driver name for artifact storage.
+        progress_cb:
+            Optional structured-progress sink (the pipeline passes
+            ``AMCPipeline._emit``). Called with one ``type="function"`` event as
+            each function settles, so the workbench's per-function counter and
+            the ETA estimate update live through this (often longest) phase
+            instead of only at its end.
 
         Returns
         -------
@@ -618,9 +625,16 @@ class BMCEngine:
             max_workers,
         )
 
+        import contextvars
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Run each task in a fresh copy of the current context so the web
+            # runner's per-run log sink (a ContextVar) reaches the worker threads;
+            # they'd otherwise start with an empty context and their logs would be
+            # dropped from the live run view. A per-task copy is required (one
+            # Context can't be entered concurrently).
             future_to_name = {
                 executor.submit(
+                    contextvars.copy_context().run,
                     self.check_function,
                     func,
                     specs[name],
@@ -645,12 +659,90 @@ class BMCEngine:
                         verified=False,
                         error=f"Unexpected error: {exc}",
                     )
+                if progress_cb is not None:
+                    v = verdicts[name]
+                    cex = getattr(v, "counterexamples", None)
+                    status = ("verified" if getattr(v, "verified", False)
+                              else ("counterexample" if cex else "unresolved"))
+                    progress_cb(
+                        type="function",
+                        name=name,
+                        phase="bmc",
+                        status=status,
+                        n_counterexamples=len(cex) if cex else 0,
+                        # Why an "unresolved" verdict couldn't be decided (timeout,
+                        # vacuous, harness failure, …) — shown as the workbench bmc
+                        # chip tooltip. Empty for verified/counterexample. The full
+                        # BMCVerdict.error stays in artifacts + logs.
+                        detail=(self._unresolved_reason(v) if status == "unresolved" else ""),
+                        # The CBMC harness is the proof artifact. Carry its source
+                        # in the event so the web workbench can show it after the
+                        # run's scratch dir (where harness_path lives) is removed;
+                        # see web.runner._stream_pipeline cleanup.
+                        harness=self._read_harness_src(getattr(v, "harness_path", "")),
+                        harness_lang=self.backend.language,
+                    )
 
         return verdicts
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _unresolved_reason(verdict) -> str:
+        """One-line, human reason for an unresolved verdict — shown as the bmc
+        chip tooltip in the workbench. The full BMCVerdict.error (which can be a
+        multi-line CBMC dump) stays on the verdict, in artifacts and logs."""
+        err = (getattr(verdict, "error", "") or "").strip()
+        if not err:
+            return "BMC could not prove or disprove this function"
+        low = err.lower()
+        if "timed out" in low or "timeout" in low or "time-budget" in low:
+            return "CBMC timed out before a proof or counterexample"
+        if "vacuous" in low:
+            return "function body not analysed (likely extern / not linked)"
+        if "unresolvable-types" in low or "unresolved_types" in low:
+            return "input types couldn't be modeled for checking"
+        # CBMC build errors all echo the `harness.c` filename, so a bare
+        # "harness" match is too broad — surface the SPECIFIC cause first.
+        # Undeclared types / missing headers are the common case for code with
+        # external deps (e.g. wlroots/wayland headers not in the upload), which
+        # the harness models as opaque; say so rather than "harness build failed".
+        if (
+            "no such file" in low
+            or "undeclared" in low
+            or "unknown type" in low
+            or "incomplete type" in low
+        ):
+            return "references external types/headers not in the project (modeled opaquely)"
+        if "harness generation failed" in low:
+            return "harness generation failed"
+        if "harness" in low:
+            return "harness build failed"
+        if "unexpected error" in low:
+            return "internal error during the check"
+        first = err.splitlines()[0]
+        return first if len(first) <= 160 else first[:157] + "…"
+
+    # Cap on harness source carried in a progress event, so a pathological
+    # generated harness can't bloat the web job's retained event log.
+    _MAX_HARNESS_BYTES = 200_000
+
+    def _read_harness_src(self, harness_path: str) -> str:
+        """Best-effort read of a saved harness for the progress event.
+
+        Returns "" when no harness was produced (generation skipped/failed),
+        the file is unreadable, or it exceeds ``_MAX_HARNESS_BYTES``."""
+        if not harness_path:
+            return ""
+        try:
+            p = Path(harness_path)
+            if p.stat().st_size > self._MAX_HARNESS_BYTES:
+                return ""
+            return p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
 
     def _save_harness(
         self,

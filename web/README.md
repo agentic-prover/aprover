@@ -24,7 +24,7 @@ The Space packages:
 
 The assistant is a Claude model with one tool, `run_aprover(source_code, function?, domain_knowledge?)`. When you paste C code, the model decides whether to call the tool, the server runs the pipeline in a worker thread, and every log line + final bug summary streams back into the chat as it happens.
 
-**Bring your own key.** Visitors paste their own Anthropic API key into the UI; it is kept in browser `localStorage` and sent only as the `X-Anthropic-Key` header on their own requests, never stored server-side. Both the chat agent and the AProver pipeline run on the caller's key, so the host carries no per-visitor LLM cost. A server-side `ANTHROPIC_API_KEY` is optional and used only as a local-dev fallback.
+**Bring your own key.** Visitors paste their own Anthropic API key into the UI; it is kept in browser `localStorage` and sent only as the `X-LLM-Key` header (the legacy `X-Anthropic-Key` is still honoured) on their own requests, never stored server-side. Both the chat agent and the AProver pipeline run on the caller's key, so the host carries no per-visitor LLM cost. A server-side `ANTHROPIC_API_KEY` is optional and used only as a local-dev fallback.
 
 Defaults are tuned for a public demo (no dynamic validation, short refinement loop, 60s CBMC timeout, 64KB source cap). Heavier configs are available via the CLI.
 

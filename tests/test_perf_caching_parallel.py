@@ -105,3 +105,49 @@ def test_generate_specs_prunes_to_target_and_callees(tmp_path, monkeypatch):
     # but only target + its transitive callee got an actual LLM round-trip
     assert seen == {"target", "leaf"}
     assert "caller" not in seen and "other" not in seen
+
+
+# --- (d) per-function spec progress (workbench chips) -----------------------
+
+def test_generate_specs_emits_per_function_progress(tmp_path, monkeypatch):
+    """The progress_note callback fires (done, total, fn, state) — an 'active'
+    before each function's spec-gen and a 'done' after — so the workbench can
+    light each row's spec chip independently. This is what replaces the old
+    all-rows-flip-together spec state."""
+    from bmc_agent.spec_generator_v2 import SpecGeneratorV2
+    from bmc_agent.spec import Spec
+    from bmc_agent.config import Config
+
+    src = tmp_path / "m.c"
+    src.write_text("int a(void){return 1;}\nint b(void){return 2;}\n")
+
+    g = SpecGeneratorV2.__new__(SpecGeneratorV2)
+    g.config = Config()
+    g.store = type("S", (), {
+        "save_spec": lambda self, *a, **k: None,
+        "init_driver": lambda self, *a, **k: None,
+    })()
+    g.boundary_detector = None
+    g.corpus_paths = [src]
+    g.k_callers = 5
+    g._spec_system_prompt = "x"
+
+    monkeypatch.setattr(
+        g, "_generate_one",
+        lambda func_info, parsed, all_specs_so_far, corpus_paths:
+            Spec(function_name=func_info.name, precondition="true", postcondition="true"),
+    )
+
+    events: list[tuple] = []
+    g.generate_specs(str(src), "drv",
+                     progress_note=lambda done, total, fn=None, state="done":
+                     events.append((done, total, fn, state)))
+
+    # every generated function reports active then done, and never done before active
+    for name in ("a", "b"):
+        states = [state for (_d, _t, fn, state) in events if fn == name]
+        assert states == ["active", "done"], (name, states)
+    # the legacy aggregate call (fn=None) is no longer emitted from v2 — only
+    # the pipeline lambda synthesises the aggregate caption from done events
+    done_total = max(d for (d, _t, _fn, st) in events if st == "done")
+    assert done_total == 2

@@ -15,9 +15,19 @@
 # exposed on the host.
 {
   hostPort ? 7860,
-  hostAddress ? "",
+  # Bind the forwarded port to loopback by default — the workbench runs
+  # untrusted pasted C and shallow-clones arbitrary URLs server-side, so it
+  # shouldn't be reachable from the whole network unless explicitly opted in.
+  hostAddress ? "127.0.0.1",
+  # Passwordless root on the serial console is a debugging convenience, not
+  # something the production service should ship (the guest mounts the host
+  # /nix/store and has outbound net). Off unless explicitly enabled.
+  debug ? false,
   vcpu ? 2,
-  mem ? 2048,
+  # NB: keep this off exactly 2048 — QEMU hangs at exactly 2 GB of guest RAM
+  # (microvm-nix/microvm.nix#171). 4096 also gives the memory-hungry CBMC/JBMC/
+  # Kani backends headroom.
+  mem ? 4096,
   model ? "claude-sonnet-4-6",
 }:
 { lib, pkgs, ... }:
@@ -61,6 +71,11 @@
     ];
   };
 
+  # Auto-login as root on the serial console / tty so the microVM drops
+  # straight into a shell without a password prompt (handy for debugging).
+  # Gated: the importable production service leaves this off.
+  services.getty.autologinUser = lib.mkIf debug "root";
+
   # DHCP + DNS over the SLIRP link so outbound TLS to api.anthropic.com works.
   systemd.network.enable = true;
   services.resolved.enable = true;
@@ -69,7 +84,7 @@
   networking.firewall.allowedTCPPorts = [ 7860 ];
 
   systemd.services.aprover-web = {
-    description = "AProver web chat server";
+    description = "AProver web server";
     wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];

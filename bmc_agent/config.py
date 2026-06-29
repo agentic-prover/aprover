@@ -135,6 +135,14 @@ class Config:
     # otherwise openai for K2-Think / /v1 base URLs and anthropic for the rest.
     llm_provider: str = ""
 
+    # K2 Think (IFM) inference backend: "auto" | "cerebras" | "nvidia". The IFM
+    # endpoint routes one request to either hardware backend via a body flag
+    # (omit => Cerebras, the fast default; metadata.use_nvidia => NVIDIA). "auto"
+    # adapts per-call by measured latency with fallback (see LLMClient). Empty is
+    # treated as "cerebras", preserving the current implicit default. Honoured
+    # only on the K2/IFM OpenAI-compatible endpoint; ignored elsewhere.
+    llm_k2_backend: str = ""
+
     # Path to the Claude Code CLI binary, used only when provider == "claude-code".
     # Override via BMC_AGENT_CLAUDE_CODE_BIN if `claude` isn't on $PATH.
     claude_code_bin: str = "claude"
@@ -941,6 +949,7 @@ class Config:
                 os.environ.get("BMC_AGENT_LLM_DEFAULT_PROVIDER", "")
                 or os.environ.get("BMC_AGENT_LLM_PROVIDER", "")
             ),
+            llm_k2_backend=os.environ.get("BMC_AGENT_LLM_K2_BACKEND", "").strip().lower(),
             claude_code_bin=os.environ.get("BMC_AGENT_CLAUDE_CODE_BIN", "claude"),
             claude_code_timeout_s=float(os.environ.get("BMC_AGENT_CLAUDE_CODE_TIMEOUT_S", "600.0")),
             claude_code_agentic=os.environ.get("BMC_AGENT_CLAUDE_CODE_AGENTIC", "false").lower()

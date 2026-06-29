@@ -12,6 +12,7 @@ Also strips GCC/ARM64 extensions that CBMC does not accept:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -64,6 +65,68 @@ def preprocess(
     return cleaned
 
 
+_HEADER_GLOBS = ("*.h", "*.hpp", "*.hh", "*.hxx")
+# Directories never worth scanning for project headers (VCS / build / vendor).
+_SKIP_DIRS = {".git", ".svn", ".hg", "build", "_build", "out", "node_modules"}
+# Bound on the number of -I paths discovered, so a pathological repo can't
+# explode the preprocessor command line. Shallower dirs are kept first.
+_MAX_INCLUDE_DIRS = 200
+
+
+def discover_include_dirs(
+    source_dir: str | Path,
+    exclude_patterns: "list[str] | tuple[str, ...]" = (),
+) -> list[str]:
+    """Best-effort discovery of a repo's ``-I`` include directories.
+
+    A cloned repo's headers (e.g. ``include/window-rules.h``) aren't found by
+    ``cc -E`` unless their directory is on the include path. The web path has no
+    UI to supply ``-I`` paths, so without this every harness fails to build with
+    ``fatal error: <header>: No such file or directory``. Heuristic:
+
+    - every directory containing a header file (resolves ``#include "foo.h"``),
+    - any ``include``/``inc`` ancestor of a header (resolves nested
+      ``#include "labwc/foo.h"`` style), and
+    - ``source_dir`` itself.
+
+    Skips VCS/build/vendor dirs and anything matching *exclude_patterns* (note:
+    these source-file patterns are matched against header names too, so a pattern
+    like ``*test*`` also drops matching headers — at worst this discovers fewer
+    include dirs, never an unsound result). Returns deduped absolute paths,
+    shallowest first, capped at ``_MAX_INCLUDE_DIRS``.
+    """
+    import fnmatch
+
+    source_dir = Path(source_dir).resolve()
+    found: set[Path] = {source_dir}
+
+    for pattern in _HEADER_GLOBS:
+        for header in source_dir.rglob(pattern):
+            parts = header.relative_to(source_dir).parts
+            if any(p in _SKIP_DIRS for p in parts[:-1]):
+                continue
+            if any(fnmatch.fnmatch(header.name, pat) for pat in exclude_patterns):
+                continue
+            parent = header.parent
+            found.add(parent)
+            # Add any include/inc ancestor so `#include "sub/foo.h"` resolves.
+            for anc in parent.parents:
+                if anc == source_dir.parent:
+                    break
+                if anc.name in ("include", "inc"):
+                    found.add(anc)
+
+    # Shallowest first: keeps the most generally-useful roots when capped.
+    ordered = sorted(found, key=lambda p: (len(p.parts), str(p)))
+    if len(ordered) > _MAX_INCLUDE_DIRS:
+        logger.info(
+            "discover_include_dirs: %d candidate dirs, capping to %d",
+            len(ordered), _MAX_INCLUDE_DIRS,
+        )
+        ordered = ordered[:_MAX_INCLUDE_DIRS]
+    return [str(p) for p in ordered]
+
+
 def preprocess_to_file(
     source_file: str | Path,
     output_file: str | Path,
@@ -84,35 +147,107 @@ def preprocess_to_file(
 # ---------------------------------------------------------------------------
 
 
+# Missing-header diagnostics from cc/clang, e.g.
+#   gcc:   fatal error: wlr/types/wlr_output.h: No such file or directory
+#   clang: fatal error: 'wlr/types/wlr_output.h' file not found
+_MISSING_HEADER_RES = (
+    re.compile(r"fatal error:\s*([^\n:'\"]+?):\s*No such file or directory"),
+    re.compile(r"fatal error:\s*['\"]([^'\"\n]+)['\"]\s*file not found"),
+)
+# Bound on empty header stubs created per file, so a pathological include graph
+# can't spin forever (each stub costs one cc -E re-run).
+_MAX_HEADER_STUBS = 100
+
+
+def _missing_header(stderr: str) -> "str | None":
+    """Header path from a cc/clang "No such file" fatal error, or None."""
+    for rx in _MISSING_HEADER_RES:
+        m = rx.search(stderr)
+        if m:
+            hdr = m.group(1).strip()
+            # Reject obvious non-paths (defensive against odd compiler output)
+            # and any path that would escape the stub dir: ``..`` traversal or an
+            # absolute path (``stub_dir / "/abs"`` resolves to ``/abs`` itself,
+            # writing the stub outside the temp dir).
+            if hdr and ".." not in hdr.split("/") and not os.path.isabs(hdr):
+                return hdr
+    return None
+
+
 def _run_preprocessor(
     source_file: Path,
     include_dirs: list[str],
     defines: list[str],
     cc: str,
 ) -> str:
-    cmd = [cc, "-E", "-P"]
-    for d in include_dirs:
-        cmd += ["-I", d]
-    for define in defines:
-        cmd += ["-D", define]
-    # Suppress warnings; treat as plain C
-    cmd += ["-w", "-x", "c", str(source_file)]
+    """Run ``cc -E -P``, stubbing unresolvable headers so it can complete.
 
+    Real projects #include third-party headers that aren't in the uploaded tree
+    (e.g. labwc -> <wlr/...>, <wayland-*>), often nested inside an otherwise
+    resolvable project header. ``cc -E`` hard-fails on the first missing one,
+    which previously dropped us to RAW source with the dangling #include intact
+    — and CBMC then can't build the harness ("harness build failed" for every
+    function). Instead, on each "No such file" error we create an EMPTY stub for
+    the named header on a private -I dir (lowest priority, so real headers still
+    win) and retry. Project + libc headers expand normally; only genuinely-absent
+    externals become empty stubs, leaving NO dangling #include in the output.
+    """
+    stub_dir = Path(tempfile.mkdtemp(prefix="amc_hdrstub_"))
+    stubbed: list[str] = []
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0 and not result.stdout.strip():
-            logger.warning("Preprocessor failed for %s: %s", source_file, result.stderr[:200])
-            # Fall back to reading the file as-is
-            return source_file.read_text(encoding="utf-8", errors="replace")
-        return result.stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        logger.warning("Cannot run preprocessor (%s): %s — reading file as-is", cc, exc)
-        return source_file.read_text(encoding="utf-8", errors="replace")
+        while True:
+            cmd = [cc, "-E", "-P"]
+            for d in include_dirs:
+                cmd += ["-I", d]
+            cmd += ["-I", str(stub_dir)]  # last: stubs only fill genuine gaps
+            for define in defines:
+                cmd += ["-D", define]
+            # Suppress warnings; treat as plain C
+            cmd += ["-w", "-x", "c", str(source_file)]
+
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=60,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                logger.warning("Cannot run preprocessor (%s): %s — reading file as-is", cc, exc)
+                return source_file.read_text(encoding="utf-8", errors="replace")
+
+            if result.returncode == 0 or result.stdout.strip():
+                if stubbed:
+                    # WARNING, not INFO: empty stubs drop the headers' macros /
+                    # consts / types, so the preprocessed TU fed to the backend
+                    # has altered semantics. A verdict on it should be auditable.
+                    logger.warning(
+                        "preprocess: stubbed %d unresolved header(s) for %s — "
+                        "verdict rests on source with those definitions removed: %s",
+                        len(stubbed), source_file.name,
+                        ", ".join(sorted(set(stubbed))[:20]),
+                    )
+                return result.stdout
+
+            hdr = _missing_header(result.stderr)
+            if hdr is None or hdr in stubbed or len(stubbed) >= _MAX_HEADER_STUBS:
+                logger.warning(
+                    "Preprocessor failed for %s: %s", source_file, result.stderr[:200]
+                )
+                # Fall back to reading the file as-is.
+                return source_file.read_text(encoding="utf-8", errors="replace")
+
+            stub_path = stub_dir / hdr
+            try:
+                stub_path.parent.mkdir(parents=True, exist_ok=True)
+                stub_path.write_text(
+                    f"/* AMC: empty stub for unresolved header {hdr} */\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                # Can't materialize the stub (odd path) — give up cleanly.
+                return source_file.read_text(encoding="utf-8", errors="replace")
+            stubbed.append(hdr)
+    finally:
+        import shutil
+        shutil.rmtree(stub_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

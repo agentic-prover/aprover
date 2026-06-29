@@ -14,6 +14,7 @@ mistyped path surfaces immediately rather than producing an empty parse.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
@@ -39,21 +40,70 @@ _RUST_EXTS = frozenset({".rs"})
 _JAVA_EXTS = frozenset({".java"})
 
 
+@dataclass(frozen=True)
+class LanguageInfo:
+    """Static metadata for one supported source language.
+
+    This is the single source of truth that the rest of AProver — including
+    the web layer's upload/clone/tree filters — derives from. Adding a new
+    language means appending one entry here, adding its parser branch to
+    :func:`parse_source_file`, and its backend to
+    :func:`bmc_agent.backends.backend_for`. No call site enumerates
+    extensions itself.
+    """
+
+    id: str                       # "c" | "rust" | "java"
+    display: str                  # human-facing name, e.g. "C", "Rust", "Java"
+    extensions: frozenset[str]    # file suffixes (lower-case, dot-prefixed)
+    verifier: str                 # backend display name, e.g. "CBMC"
+
+
+# Registry of supported languages, in dispatch order.
+LANGUAGES: tuple[LanguageInfo, ...] = (
+    LanguageInfo("c", "C", _C_EXTS, "CBMC"),
+    LanguageInfo("rust", "Rust", _RUST_EXTS, "Kani"),
+    LanguageInfo("java", "Java", _JAVA_EXTS, "JBMC"),
+)
+
+# Union of every verifiable source extension.
+CODE_EXTENSIONS: frozenset[str] = frozenset().union(
+    *(lang.extensions for lang in LANGUAGES)
+)
+
+# Comma-separated display list, e.g. "C, Rust, Java" — for user-facing copy.
+SUPPORTED_DISPLAY: str = ", ".join(lang.display for lang in LANGUAGES)
+
+_EXT_TO_LANG: dict[str, str] = {
+    ext: lang.id for lang in LANGUAGES for ext in lang.extensions
+}
+
+
+def language_for_ext(ext: str) -> Optional[str]:
+    """Return the language id for a file suffix (e.g. ``".rs"`` -> ``"rust"``).
+
+    Returns ``None`` for any unregistered extension. Case-insensitive.
+    """
+    return _EXT_TO_LANG.get(ext.lower())
+
+
+def is_code_file(path: str | Path) -> bool:
+    """True if *path*'s extension maps to a supported language."""
+    return Path(path).suffix.lower() in CODE_EXTENSIONS
+
+
 def detect_language(path: str | Path) -> str:
     """Return ``"c"``, ``"rust"``, or ``"java"`` based on *path*'s extension.
 
     Raises ``UnsupportedSourceLanguage`` for any other extension.
     """
     ext = Path(path).suffix.lower()
-    if ext in _C_EXTS:
-        return "c"
-    if ext in _RUST_EXTS:
-        return "rust"
-    if ext in _JAVA_EXTS:
-        return "java"
+    lang = _EXT_TO_LANG.get(ext)
+    if lang is not None:
+        return lang
+    supported = ", ".join(sorted(CODE_EXTENSIONS))
     raise UnsupportedSourceLanguage(
         f"No parser registered for extension {ext!r} (path={path!r}). "
-        "Supported: .c, .h, .i, .rs, .java"
+        f"Supported: {supported}"
     )
 
 

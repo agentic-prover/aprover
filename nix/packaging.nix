@@ -18,8 +18,12 @@ let
   # Build the `aprover-web` runnable for an arbitrary pkgs set (so it works both
   # in perSystem.packages and inside the guest via the overlay).
   mkAproverWeb =
-    pkgs:
+    pkgs0:
     let
+      # Ensure the from-source jbmc/kani are present even when called with a
+      # plain pkgs (perSystem); applying the overlay again in the guest, where
+      # it is already applied, is idempotent.
+      pkgs = pkgs0.extend self.overlays.tools;
       python = pkgs.python312;
 
       workspace = inputs.uv2nix.lib.workspace.loadWorkspace {
@@ -65,8 +69,12 @@ let
       runtimeInputs = [
         venv
         pkgs.cbmc
+        pkgs.jbmc
+        pkgs.kani
+        pkgs.jdk
         pkgs.gcc
         pkgs.binutils
+        pkgs.git # workbench "Connect source" shallow-clones public repos
       ];
       text = ''
         export PYTHONPATH="${srcRoot}''${PYTHONPATH:+:$PYTHONPATH}"
@@ -76,9 +84,15 @@ let
     };
 in
 {
-  flake.overlays.default = final: _prev: {
-    aprover-web = mkAproverWeb final;
-  };
+  # Compose the from-source verification tools (overlays.tools, defined in
+  # nix/tools.nix) with aprover-web, so the guest's `self.overlays.default`
+  # carries jbmc/kani too.
+  flake.overlays.default = lib.composeManyExtensions [
+    self.overlays.tools
+    (final: _prev: {
+      aprover-web = mkAproverWeb final;
+    })
+  ];
 
   # Importable host service: `services.aprover`.
   flake.nixosModules.default = import ./nixos-module.nix { inherit self inputs; };
@@ -91,7 +105,8 @@ in
     modules = [
       inputs.microvm.nixosModules.microvm
       { nixpkgs.overlays = [ self.overlays.default ]; }
-      (import ./guest.nix { })
+      # Local testing VM: enable the root console for convenience.
+      (import ./guest.nix { debug = true; })
     ];
   };
 

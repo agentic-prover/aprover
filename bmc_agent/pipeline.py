@@ -28,7 +28,11 @@ from bmc_agent.harness_generator import HarnessGenerator
 from bmc_agent.llm import LLMClient
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile, parse_c_file
-from bmc_agent.source_parser import detect_language, parse_source_file
+from bmc_agent.source_parser import (
+    detect_language,
+    is_code_file,
+    parse_source_file,
+)
 from bmc_agent.realism_checker import RealismChecker
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.spec_generator import SpecGenerator
@@ -377,6 +381,70 @@ class AMCPipeline:
         )
         self.realism_checker = RealismChecker(config, self.llm)
         self.propagation_events: list[PropagationEvent] = []
+        # Optional structured-progress hook. The web layer attaches
+        # ``config.progress`` (a callable taking one event dict) so the
+        # workbench can paint a live phase tracker, findings, and spend.
+        # Default None => no behaviour change for the CLI. The callback may
+        # block (to implement pause) or raise (to implement cancel); we let
+        # any raised exception propagate so the run aborts cooperatively.
+        self._progress = getattr(config, "progress", None)
+        self._current_file: str = ""
+
+    # ------------------------------------------------------------------
+    # Structured progress (web workbench). No-op unless config.progress set.
+    # ------------------------------------------------------------------
+
+    def _cost_snapshot(self) -> dict:
+        """Cumulative LLM token usage for this pipeline's client. The web
+        layer converts tokens -> dollars via its own price table (bmc_agent
+        stays provider/price agnostic)."""
+        llm = self.llm
+        # Reliability + latency telemetry for the workbench badge. Guarded: the
+        # llm may be a Mock (tests) or an older client without the snapshot.
+        rel: dict = {}
+        rel_fn = getattr(llm, "reliability_snapshot", None)
+        if callable(rel_fn):
+            try:
+                rel = rel_fn()
+            except Exception:
+                rel = {}
+        return {
+            "prompt_tokens": int(getattr(llm, "usage_total_prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(llm, "usage_total_completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(llm, "usage_total_tokens", 0) or 0),
+            "model": getattr(self.config, "llm_model", "") or "",
+            # Exact spend when the provider priced the call for us (claude-code);
+            # None lets the web layer fall back to its token-based estimate.
+            "usd_exact": float(getattr(llm, "usage_total_cost_usd", 0.0) or 0.0) or None,
+            "reliability": rel,
+        }
+
+    def _emit(self, **event) -> None:
+        """Send one progress event to ``config.progress`` if attached.
+
+        Always carries the current file + a cost snapshot. Exceptions raised
+        by the callback (cancel/halt requests from the web job) propagate so
+        the pipeline unwinds at the nearest phase/function boundary."""
+        cb = self._progress
+        if cb is None:
+            return
+        event.setdefault("file", self._current_file)
+        try:
+            event.setdefault("cost", self._cost_snapshot())
+        except Exception:
+            pass
+        cb(event)
+
+    def _phase_note(self, phase: str, detail: str, **extra) -> None:
+        """Emit an interim sub-status for the currently-running ``phase``.
+
+        Re-uses the ``phase``/``status="start"`` event with an extra ``detail``
+        string so the workbench can show a live, curated caption under the
+        active pipeline step. ``extra`` carries any structured sub-progress
+        fields (e.g. ``spec_done``/``spec_total``) the ETA estimator folds in so
+        a long phase advances the bar continuously rather than only on
+        completion."""
+        self._emit(type="phase", phase=phase, status="start", detail=detail, **extra)
 
     # ------------------------------------------------------------------
     # v2 spec-gen plumbing
@@ -403,9 +471,12 @@ class AMCPipeline:
                 self.spec_gen.boundary_detector = BoundaryDetector.autodiscover(
                     Path(source_dir), explicit_headers=explicit_headers,
                 )
+                n_pub = len(self.spec_gen.boundary_detector)
                 logger.info(
-                    "v2 boundary detector: %d public functions discovered from %s",
-                    len(self.spec_gen.boundary_detector), source_dir,
+                    "v2 boundary detector: %s — caller-grounding %s",
+                    (f"{n_pub} public functions discovered from {source_dir}"
+                     if n_pub else f"0 public headers found near {source_dir}"),
+                    "enabled" if n_pub else "disabled",
                 )
             except Exception as exc:
                 logger.warning(
@@ -444,6 +515,7 @@ class AMCPipeline:
         cross_file_caller_contexts: dict[str, list[tuple[FunctionInfo, ParsedCFile]]] | None = None,
         function_hints: dict[str, str] | None = None,
         only_functions: set[str] | None = None,
+        display_name: str | None = None,
     ) -> list[BugReport]:
         """
         Run the full AMC pipeline.
@@ -462,6 +534,10 @@ class AMCPipeline:
         List of confirmed BugReport objects.
         """
         logger.info("=== AMC Pipeline START: %s (driver=%s) ===", source_file, driver_name)
+        # Label emitted events with the original repo filename when given (multi-file
+        # C runs verify a temp copy, whose name must not leak into finding events).
+        self._current_file = display_name or Path(source_file).name
+        self._emit(type="phase", phase="spec", status="start")
 
         # ------------------------------------------------------------------
         # Phase 1: Parse + Generate specs
@@ -472,6 +548,7 @@ class AMCPipeline:
         preprocessed_source: Optional[str] = None
         if self.config.preprocess and self.config.include_dirs:
             from bmc_agent.preprocessor import preprocess
+            self._phase_note("spec", "preprocessing source")
             logger.info("Preprocessing %s with include dirs: %s",
                         source_file, self.config.include_dirs)
             try:
@@ -484,6 +561,7 @@ class AMCPipeline:
             except Exception as exc:
                 logger.warning("Preprocessing failed (%s) — parsing file as-is", exc)
 
+        self._phase_note("spec", "parsing source & call graph")
         parsed = parse_source_file(source_file, source_text=preprocessed_source)
 
         # Swap in the language-appropriate verification backend in place
@@ -503,14 +581,41 @@ class AMCPipeline:
         # it can caller-ground specs. For single-file run() we use the
         # source file's parent directory as the autodiscover root and
         # treat the file itself as the only corpus member.
+        self._phase_note("spec", "analyzing call boundaries")
         self._configure_v2_corpus(
             source_dir=Path(source_file).parent,
             corpus_files=[Path(source_file)],
         )
 
+        # Seed the workbench's per-function rows NOW (during spec) rather than
+        # waiting for BMC start — otherwise the pipeline column sits empty for
+        # the whole, slow spec-gen phase. function_locs is the same shape BMC
+        # emits later; the frontend de-dupes by name so the later seed is a
+        # no-op and row order stays consistent (source order).
+        seed = {
+            n: fi.body.count("\n") + 1
+            for n in parsed.functions
+            if (fi := parsed.get_function_info(n)) is not None
+        }
+        if only_functions:  # don't show rows BMC won't end up checking
+            seed = {n: loc for n, loc in seed.items() if n in only_functions}
+        self._emit(type="phase", phase="spec", status="start",
+                   detail="generating specifications…", function_locs=seed)
+
         # Publish the domain summary so every role can pass it as a prompt-cache
         # prefix (shared, byte-identical across the sweep). See LLMClient.complete.
         self.config.domain_summary = domain_knowledge or ""  # type: ignore[attr-defined]
+
+        def _spec_progress(done, total, fn=None, state="done"):
+            # Per-function chip state (type=spec_fn) plus the aggregate caption
+            # the ETA estimator folds in. Emit the aggregate on completions only
+            # (active fires per-function at layer start and would spam it).
+            if fn:
+                self._emit(type="spec_fn", name=fn, status=state,
+                           spec_done=done, spec_total=total)
+            if fn is None or state == "done":
+                self._phase_note("spec", f"generating specs · {done}/{total}",
+                                 spec_done=done, spec_total=total)
 
         specs = self.spec_gen.generate_specs(
             source_file=source_file,
@@ -519,8 +624,10 @@ class AMCPipeline:
             source_text=preprocessed_source,
             cross_file_caller_contexts=cross_file_caller_contexts,
             only_functions=only_functions,
+            progress_note=_spec_progress,
         )
         logger.info("Phase 1 complete: %d specs generated", len(specs))
+        self._emit(type="phase", phase="spec", status="complete", n_functions=len(specs))
 
         # Build all_funcs mapping
         all_funcs: dict[str, FunctionInfo] = {}
@@ -630,6 +737,13 @@ class AMCPipeline:
             flag_selections = selector.select_all(funcs_to_check)
 
         logger.info("--- Phase 2: Running BMC on %d functions ---", len(funcs_to_check))
+        # Per-function LOC lets the ETA weight BMC sub-progress by function size
+        # rather than count, so one large function advances the bar in proportion.
+        function_locs = {
+            n: f.body.count("\n") + 1 for n, f in funcs_to_check.items()
+        }
+        self._emit(type="phase", phase="bmc", status="start",
+                   n_functions=len(funcs_to_check), function_locs=function_locs)
         # Stash on self so the feedback-loop re-invocations of check_function
         # can pass the same per-function selection back through. Without this,
         # the iter-1 CBMC run drops --unsigned-overflow-check (and friends)
@@ -644,8 +758,12 @@ class AMCPipeline:
             driver_name=driver_name,
             all_funcs=all_funcs,
             flag_selections=flag_selections if flag_selections else None,
+            # Per-function verdicts stream out as each settles (so the workbench
+            # counter + ETA update live), with file/cost auto-attached by _emit.
+            progress_cb=self._emit,
         )
         logger.info("Phase 2 complete: %d verdicts", len(verdicts))
+        self._emit(type="phase", phase="bmc", status="complete", n_functions=len(verdicts))
 
         # Register functions proven sound this pass, so the subsequent re-checks
         # (Phase 2b auto-retry, feedback loop, CEGAR refinement) may ASSUME their
@@ -683,6 +801,7 @@ class AMCPipeline:
         # Phase 3: Validate counterexamples, refine, report bugs
         # ------------------------------------------------------------------
         logger.info("--- Phase 3: Validating counterexamples ---")
+        self._emit(type="phase", phase="classify", status="start")
         bug_reports: list[BugReport] = []
         # Latent reports: panics reachable on the pub API but no in-tree
         # caller produces the state. cargo-fuzz / future-caller risk; tracked
@@ -746,6 +865,7 @@ class AMCPipeline:
             and _n_cex > 1
         )
         if _parallel:
+            import contextvars as _ctxvars
             from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _ac
             _mw = max(1, min(getattr(self.config, "max_workers", 8), len(_deduped)))
             logger.info(
@@ -764,8 +884,13 @@ class AMCPipeline:
                     for _cex in _deduped[_fn]
                 ]
 
+            # Run each task in a FRESH copy of the current context so context-local
+            # state (e.g. the web runner's per-run log sink) reaches pool threads,
+            # which would otherwise start with an empty context. The copy must be
+            # per-task: a single Context can't be entered concurrently, so sharing
+            # one across submits would raise under real parallelism.
             with _TPE(max_workers=_mw) as _ex:
-                _futs = {_ex.submit(_validate_fn, fn): fn for fn in _deduped}
+                _futs = {_ex.submit(_ctxvars.copy_context().run, _validate_fn, fn): fn for fn in _deduped}
                 for _fut in _ac(_futs):
                     _fn = _futs[_fut]
                     try:
@@ -776,6 +901,10 @@ class AMCPipeline:
                             "Phase 3 parallel validate failed for '%s': %s — "
                             "recomputing serially", _fn, _exc,
                         )
+
+        # Live progress: functions carrying counterexamples to validate.
+        _classify_total = len(_deduped)
+        _classify_done = 0
 
         for fn_name, verdict in verdicts.items():
             if verdict.verified:
@@ -794,6 +923,19 @@ class AMCPipeline:
             spec = current_specs.get(fn_name)
             if spec is None:
                 continue
+
+            if _deduped.get(fn_name):
+                _classify_done += 1
+                self._phase_note(
+                    "classify",
+                    f"validating counterexamples · {_classify_done}/{_classify_total}",
+                )
+                # Structured progress so the ETA sub-divides the classify weight
+                # by counterexamples validated (its real workload) rather than
+                # jumping only at phase boundaries. Mirrors the BMC function event.
+                self._emit(type="function", phase="classify", name=fn_name,
+                           n_counterexamples=len(_deduped[fn_name]),
+                           detail="feasibility → dynamic → realism")
 
             for _cex_i, cex in enumerate(_deduped.get(fn_name, [])):
                 # Skip siblings of a property class the feedback loop already
@@ -1016,6 +1158,10 @@ class AMCPipeline:
                 "--- Phase 3c: Re-verifying %d refined function(s) under tighter preconditions ---",
                 len(self_recheck_queue),
             )
+            self._phase_note(
+                "classify",
+                f"re-verifying {len(self_recheck_queue)} refined function(s)",
+            )
             self_recheck_funcs = {n: all_funcs[n] for n in self_recheck_queue if n in all_funcs}
             self_recheck_verdicts = self.bmc_engine.check_all(
                 funcs=self_recheck_funcs,
@@ -1034,6 +1180,12 @@ class AMCPipeline:
                 spec = current_specs.get(fn_name)
                 if func is None or spec is None:
                     continue
+                # Per-function caption so the workbench nests "CEGAR re-verify"
+                # under this function's row (no n_counterexamples: the bmc count
+                # stands and the ETA classify tally must not double-count).
+                self._emit(type="function", phase="classify", name=fn_name,
+                           detail="feasibility → dynamic → realism",
+                           iter="CEGAR re-verify")
                 for cex in _dedup_counterexamples(
                     verdict.counterexamples,
                     max_per_type=self.config.dedup_max_per_type,
@@ -1105,6 +1257,10 @@ class AMCPipeline:
                 "--- Phase 3b: Re-checking %d caller(s) after refinement ---",
                 len(recheck_queue),
             )
+            self._phase_note(
+                "classify",
+                f"re-checking {len(recheck_queue)} caller(s)",
+            )
             recheck_funcs = {n: all_funcs[n] for n in recheck_queue if n in all_funcs}
             recheck_verdicts = self.bmc_engine.check_all(
                 funcs=recheck_funcs,
@@ -1124,6 +1280,11 @@ class AMCPipeline:
                 spec = current_specs.get(fn_name)
                 if func is None or spec is None:
                     continue
+                # Per-function caption so the workbench nests "re-check caller"
+                # under this caller's row (see Phase 3c note on the omitted count).
+                self._emit(type="function", phase="classify", name=fn_name,
+                           detail="feasibility → dynamic → realism",
+                           iter="re-check caller")
                 for cex in _dedup_counterexamples(
                     verdict.counterexamples,
                     max_per_type=self.config.dedup_max_per_type,
@@ -1260,6 +1421,26 @@ class AMCPipeline:
             logger.info("Phase 4 complete: spec quality analysis done")
 
         self._emit_coverage_diagnostics(driver_name)
+
+        # Surface confirmed findings + close out the classify/report phases for
+        # the web workbench. (No-op without config.progress.)
+        self._emit(type="phase", phase="classify", status="complete", n_findings=len(bug_reports))
+        self._phase_note("report", "compiling evidence report")
+        if self._progress is not None:
+            for _r in bug_reports:
+                self._emit(
+                    type="finding",
+                    bug={
+                        "function": getattr(_r, "function_name", ""),
+                        "file": self._current_file,
+                        "bug_type": getattr(_r, "bug_type", ""),
+                        "violated_property": getattr(_r, "violated_property", ""),
+                        "confidence": getattr(_r, "confidence", ""),
+                        "call_chain": list(getattr(_r, "call_chain", None) or []),
+                        "reasoning": (getattr(_r, "reasoning_trail", "") or "")[:600],
+                    },
+                )
+        self._emit(type="phase", phase="report", status="complete", n_findings=len(bug_reports))
 
         logger.info(
             "=== AMC Pipeline END: %d real bug(s), %d latent, %d unresolved ===",
@@ -3293,9 +3474,14 @@ class AMCPipeline:
         domain_knowledge: str = "",
         exclude_patterns: Optional[list[str]] = None,
         only_functions: Optional[set[str]] = None,
+        files: Optional[list[Path]] = None,
     ) -> dict[str, list[BugReport]]:
         """
         Run AMC on every ``.c`` file in *source_dir*.
+
+        When *files* is given, that pre-scanned list of ``.c`` paths is used
+        instead of re-globbing *source_dir* — this lets a caller that already
+        walked the tree (e.g. :meth:`verify_tree`) avoid a second scan.
 
         Each file is preprocessed with ``cc -E`` (using *include_dirs*) so
         that cross-file ``#include`` references are resolved before parsing.
@@ -3321,13 +3507,25 @@ class AMCPipeline:
         Mapping of filename → list of BugReport.
         """
         import fnmatch
-        from bmc_agent.preprocessor import preprocess
+        from bmc_agent.preprocessor import discover_include_dirs, preprocess
 
         source_dir = Path(source_dir)
         include_dirs = include_dirs or self.config.include_dirs or []
         exclude_patterns = exclude_patterns or []
 
-        c_files = sorted(source_dir.rglob("*.c"))
+        # Auto-discover the repo's own include dirs (e.g. a project's `include/`)
+        # and append them after any explicit -I paths. Without this, a cloned
+        # repo's project headers are invisible to `cc -E`, preprocessing falls
+        # back to raw source (preprocessor._run_preprocessor), the unresolved
+        # #include survives into harness.c, and EVERY function reports "harness
+        # build failed". Explicit dirs keep search precedence; discovered ones
+        # are additive. Set on config so all downstream -I consumers (cc -E,
+        # CBMC harness build, agentic harness gen) see them uniformly.
+        discovered = discover_include_dirs(source_dir, exclude_patterns)
+        include_dirs = list(dict.fromkeys([*include_dirs, *discovered]))
+        self.config.include_dirs = include_dirs
+
+        c_files = sorted(files) if files is not None else sorted(source_dir.rglob("*.c"))
         c_files = [
             f for f in c_files
             if not any(fnmatch.fnmatch(f.name, pat) for pat in exclude_patterns)
@@ -3340,9 +3538,26 @@ class AMCPipeline:
         logger.info(
             "=== run_directory: %d files in '%s' ===", len(c_files), source_dir
         )
+        # Tell the ETA estimator how many files this sweep covers and how large
+        # each is, so overall progress is LOC-weighted across the directory (a
+        # 2000-line file moves the bar far more than a 50-line one) rather than
+        # treating every file as an equal 1/n_files slice. Raw source LOC is a
+        # cheap, stable size proxy; read failures just drop that file's weight.
+        file_locs: dict[str, float] = {}
+        for f in c_files:
+            try:
+                file_locs[f.name] = f.read_text(errors="ignore").count("\n") + 1
+            except OSError:
+                pass
+        self._emit(type="run", n_files=len(c_files), file_locs=file_locs)
 
         # v2 spec-gen: corpus = all .c files in the sweep; boundary headers
         # = autodiscovered from source_dir. Set once for the whole sweep.
+        # These directory-level passes run BEFORE the first file's spec phase,
+        # so without a heartbeat the workbench sits blank for the whole pre-pass
+        # (call-graph build + domain analysis can be slow / LLM-bound). `prep`
+        # events drive the setup checklist; the ETA ignores the type.
+        self._emit(type="prep", detail="analyzing API boundaries")
         self._configure_v2_corpus(
             source_dir=source_dir,
             corpus_files=c_files,
@@ -3356,10 +3571,32 @@ class AMCPipeline:
         #   (a) skip re-running cc -E
         #   (b) run CBMC reachability queries against cross-file callers
         # ------------------------------------------------------------------
-        file_expanded: dict[str, str] = {}           # stem → preprocessed source
-        file_defined: dict[str, set[str]] = {}       # stem → function names defined
-        file_callees: dict[str, set[str]] = {}       # stem → all function names called
-        file_parsed_c: dict[str, ParsedCFile] = {}   # stem → ParsedCFile
+        # Keyed by a per-file token, NOT the bare stem: two files with the same
+        # stem in different sub-dirs (e.g. a/util.c and b/util.c — common in real
+        # trees) would otherwise share one cache slot / artifact dir / result
+        # entry, so the second silently clobbers the first (and is even verified
+        # against the first's expansion). ``_file_key`` encodes the path relative
+        # to source_dir into a single directory segment (separators → "__"), so
+        # the artifact layout depth is unchanged (post-hoc tools that assume
+        # driver/<file>/<function>/ still resolve) and a flat tree's keys are
+        # identical to the old stem — only nested duplicates change.
+        def _file_key(p: "Path") -> str:
+            try:
+                rel = Path(p).resolve().relative_to(Path(source_dir).resolve())
+            except (ValueError, OSError):
+                rel = Path(Path(p).name)
+            return str(rel.with_suffix("")).replace(os.sep, "__") or Path(p).stem
+
+        def _file_relpath(p: "Path") -> str:
+            try:
+                return str(Path(p).resolve().relative_to(Path(source_dir).resolve()))
+            except (ValueError, OSError):
+                return Path(p).name
+
+        file_expanded: dict[str, str] = {}           # file-key → preprocessed source
+        file_defined: dict[str, set[str]] = {}       # file-key → function names defined
+        file_callees: dict[str, set[str]] = {}       # file-key → all function names called
+        file_parsed_c: dict[str, ParsedCFile] = {}   # file-key → ParsedCFile
 
         # In real-libc mode, parse the raw source (without cc -E expansion):
         # otherwise the include path pulls in every header's inline functions
@@ -3375,7 +3612,9 @@ class AMCPipeline:
             len(c_files),
             "with cc -E preprocessing" if use_preprocess else "raw source, real-libc mode",
         )
-        for c_file in c_files:
+        for _pass1_i, c_file in enumerate(c_files, 1):
+            self._emit(type="prep",
+                       detail=f"building call graph · {_pass1_i}/{len(c_files)}")
             try:
                 if use_preprocess:
                     expanded = preprocess(
@@ -3385,6 +3624,22 @@ class AMCPipeline:
                         cc=self.config.cc_path,
                     )
                     parsed_pass1 = parse_c_file(c_file, source_text=expanded)
+                    # When a project header is absent from the upload it gets
+                    # stubbed empty (see preprocessor._run_preprocessor), which
+                    # leaves param/return types undeclared and the parser can
+                    # yield 0 functions — strictly worse than raw, which parses
+                    # fine. Fall back to raw so we still get specs/verdicts (the
+                    # missing-type cost surfaces later as a clear BMC reason).
+                    if not parsed_pass1.functions:
+                        raw_parsed = parse_c_file(c_file)
+                        if raw_parsed.functions:
+                            logger.info(
+                                "Pass 1: %s preprocessed to 0 functions — using raw "
+                                "source (%d functions)",
+                                c_file.name, len(raw_parsed.functions),
+                            )
+                            expanded = c_file.read_text(encoding="utf-8", errors="replace")
+                            parsed_pass1 = raw_parsed
                 else:
                     expanded = c_file.read_text(encoding="utf-8", errors="replace")
                     parsed_pass1 = parse_c_file(c_file)
@@ -3392,8 +3647,12 @@ class AMCPipeline:
                 logger.warning("Pass 1: failed for %s: %s — skipping", c_file.name, exc)
                 continue
             if not parsed_pass1.functions:
+                logger.warning(
+                    "Pass 1: %s parsed with 0 functions (preprocess=%s) — skipping",
+                    c_file.name, use_preprocess,
+                )
                 continue
-            stem = c_file.stem
+            stem = _file_key(c_file)
             file_expanded[stem] = expanded
             file_parsed_c[stem] = parsed_pass1
             file_defined[stem] = set(parsed_pass1.functions.keys())
@@ -3446,6 +3705,7 @@ class AMCPipeline:
             logger.info("Pass 1.5 skipped (lite_mode): domain knowledge not needed for permissive specs")
         else:
             from bmc_agent.domain_analyzer import analyze_codebase as _analyze_domain
+            self._emit(type="prep", detail="analyzing domain knowledge")
             domain_knowledge = _analyze_domain(
                 source_dir=source_dir,
                 include_dirs=include_dirs,
@@ -3466,6 +3726,7 @@ class AMCPipeline:
                 and not (getattr(self.config, "threat_model_context", "") or "").strip()
             ):
                 from bmc_agent.domain_analyzer import derive_attacker_surface
+                self._emit(type="prep", detail="deriving attacker surface")
                 surface = derive_attacker_surface(
                     source_dir=source_dir,
                     include_dirs=include_dirs,
@@ -3495,13 +3756,14 @@ class AMCPipeline:
         self.config.preprocess = False  # preprocessing already done in Pass 1
 
         for c_file in c_files:
-            stem = c_file.stem
+            stem = _file_key(c_file)
+            relpath = _file_relpath(c_file)
             if stem not in file_expanded:
-                logger.info("Skipping %s (failed or empty in Pass 1)", c_file.name)
+                logger.info("Skipping %s (not in Pass 1 cache — see prior warning)", relpath)
                 continue
 
             file_driver = f"{driver_name}/{stem}"
-            logger.info("--- Processing %s (driver=%s) ---", c_file.name, file_driver)
+            logger.info("--- Processing %s (driver=%s) ---", relpath, file_driver)
 
             expanded = file_expanded[stem]
 
@@ -3520,14 +3782,15 @@ class AMCPipeline:
                     cross_file_callers=global_cross_file_callers,
                     cross_file_caller_contexts=global_cross_file_caller_contexts,
                     only_functions=only_functions,
+                    display_name=c_file.name,
                 )
             finally:
                 os.unlink(tmp_path)
 
-            all_results[c_file.name] = bugs
+            all_results[relpath] = bugs
             total_bugs += len(bugs)
             logger.info(
-                "Finished %s: %d bug(s) confirmed", c_file.name, len(bugs)
+                "Finished %s: %d bug(s) confirmed", relpath, len(bugs)
             )
 
         self.config.preprocess = orig_preprocess
@@ -3536,4 +3799,166 @@ class AMCPipeline:
             "=== run_directory DONE: %d files, %d total bug(s) ===",
             len(all_results), total_bugs,
         )
+        return all_results
+
+    def run_directory_generic(
+        self,
+        source_dir: str,
+        driver_name: str,
+        files: list[Path],
+        domain_knowledge: str = "",
+        only_functions: Optional[set[str]] = None,
+    ) -> dict[str, list[BugReport]]:
+        """Verify each file in *files* independently via the single-file path.
+
+        This is the language-agnostic directory sweep used for Rust and Java,
+        where the C-specific cross-file ``cc -E`` analysis of
+        :meth:`run_directory` does not apply. Each file is run on its own
+        through :meth:`run` (which auto-detects language and selects the right
+        backend), and reports are collected into the same
+        ``{filename: [BugReport]}`` shape that :meth:`run_directory` returns.
+        """
+        import os
+        source_dir = Path(source_dir)
+        all_results: dict[str, list[BugReport]] = {}
+        total_bugs = 0
+
+        # Same per-file keying as run_directory: disambiguate same-stem files in
+        # different sub-dirs (separators → "__" keeps the artifact depth flat).
+        def _file_key(p: "Path") -> tuple[str, str]:
+            try:
+                rel = Path(p).resolve().relative_to(source_dir.resolve())
+            except (ValueError, OSError):
+                rel = Path(Path(p).name)
+            seg = str(rel.with_suffix("")).replace(os.sep, "__") or Path(p).stem
+            return seg, str(rel)
+
+        for src in sorted(files):
+            seg, relpath = _file_key(src)
+            file_driver = f"{driver_name}/{seg}"
+            logger.info("--- Processing %s (driver=%s) ---", relpath, file_driver)
+            try:
+                bugs = self.run(
+                    source_file=str(src),
+                    driver_name=file_driver,
+                    domain_knowledge=domain_knowledge,
+                    only_functions=only_functions,
+                )
+            except Exception:
+                logger.exception("Verification failed for %s; skipping", relpath)
+                bugs = []
+            all_results[relpath] = bugs
+            total_bugs += len(bugs)
+            logger.info("Finished %s: %d bug(s) confirmed", relpath, len(bugs))
+
+        logger.info(
+            "=== run_directory_generic DONE: %d files, %d total bug(s) ===",
+            len(all_results), total_bugs,
+        )
+        return all_results
+
+    def verify_tree(
+        self,
+        source_dir: str,
+        driver_name: str,
+        include_dirs: Optional[list[str]] = None,
+        domain_knowledge: str = "",
+        exclude_patterns: Optional[list[str]] = None,
+        only_functions: Optional[set[str]] = None,
+        max_files: Optional[int] = None,
+    ) -> dict[str, list[BugReport]]:
+        """Verify every supported source file under *source_dir*, by language.
+
+        Walks the tree once, groups files by language (via
+        :func:`detect_language`), and dispatches each group to the right
+        sweep: C uses the cross-file :meth:`run_directory` (preserving its
+        ``cc -E`` global call-graph analysis); Rust and Java use the per-file
+        :meth:`run_directory_generic`. Results from all groups merge into one
+        ``{filename: [BugReport]}`` mapping.
+
+        Parameters mirror :meth:`run_directory`, plus *max_files* which caps
+        the total number of files verified (oldest-by-path order) — used by
+        the web layer to bound demo runs. Exclusion and capping happen here,
+        so callers do not need to pre-scan.
+        """
+        import fnmatch
+
+        source_dir = Path(source_dir)
+        exclude_patterns = exclude_patterns or []
+
+        # Single walk of the tree; keep only verifiable, non-excluded files.
+        scanned = sorted(
+            p for p in source_dir.rglob("*")
+            if p.is_file() and is_code_file(p)
+            and not any(fnmatch.fnmatch(p.name, pat) for pat in exclude_patterns)
+        )
+        found_total = len(scanned)
+        if max_files is not None and len(scanned) > max_files:
+            logger.info(
+                "verify_tree: %d source files; verifying the first %d (cap)",
+                len(scanned), max_files,
+            )
+            scanned = scanned[:max_files]
+
+        # Surface the file-selection breakdown to the UI up front (before the
+        # slow sweep): how many files exist, how many the cap reaches, and how
+        # many it doesn't. The verified/skipped split is added in the final
+        # summary below once the sweeps have run. See web workbench `tree_summary`.
+        self._emit(
+            type="tree_summary",
+            files_found=found_total,
+            cap=max_files,
+            attempted=len(scanned),
+            not_reached=max(0, found_total - len(scanned)),
+        )
+
+        if not scanned:
+            logger.warning("No verifiable source files found in '%s'", source_dir)
+            return {}
+
+        # Group by language so each backend's sweep gets only its own files.
+        by_lang: dict[str, list[Path]] = {}
+        for p in scanned:
+            try:
+                by_lang.setdefault(detect_language(p), []).append(p)
+            except Exception:
+                continue  # detect_language rejects unknowns defensively
+
+        all_results: dict[str, list[BugReport]] = {}
+        for lang, paths in by_lang.items():
+            if lang == "c":
+                results = self.run_directory(
+                    source_dir=str(source_dir),
+                    driver_name=driver_name,
+                    include_dirs=include_dirs,
+                    domain_knowledge=domain_knowledge,
+                    exclude_patterns=exclude_patterns,
+                    only_functions=only_functions,
+                    files=paths,
+                )
+            else:
+                results = self.run_directory_generic(
+                    source_dir=str(source_dir),
+                    driver_name=driver_name,
+                    files=paths,
+                    domain_knowledge=domain_knowledge,
+                    only_functions=only_functions,
+                )
+            all_results.update(results or {})
+
+        # Final breakdown: files that actually verified (run_directory only keys
+        # files that had functions) vs attempted-but-skipped (headers/files that
+        # parsed to 0 functions), plus the cap's not-reached count. This is what
+        # makes a "2 of 95 verified" run legible instead of looking like a crash.
+        verified_files = len(all_results)
+        self._emit(
+            type="tree_summary",
+            files_found=found_total,
+            cap=max_files,
+            attempted=len(scanned),
+            verified=verified_files,
+            skipped_no_functions=max(0, len(scanned) - verified_files),
+            not_reached=max(0, found_total - len(scanned)),
+        )
+
         return all_results

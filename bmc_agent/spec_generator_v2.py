@@ -28,7 +28,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.prompts import (
@@ -57,44 +57,10 @@ MAX_PARSE_RETRIES = 1   # one extra retry on JSON parse failure
 # ---------- structured-output parser -----------------------------------------
 
 # The prompt asks for a single JSON object. LLMs sometimes wrap it in a
-# ```json code fence or prepend a leading sentence. We extract the
-# outermost {...} block.
-
-_JSON_BLOCK_RX = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _extract_json_object(text: str) -> Optional[dict]:
-    """Pull the first top-level JSON object out of ``text``.
-
-    Robust to ``` fences and stray prose. Returns None on parse failure.
-    """
-    if not text:
-        return None
-    # Strip code-fence markers first.
-    cleaned = re.sub(r"```(?:json)?\s*", "", text)
-    cleaned = re.sub(r"```", "", cleaned)
-    m = _JSON_BLOCK_RX.search(cleaned)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError:
-        # Try a tightening pass: trim from each end until it parses.
-        candidate = m.group(0)
-        # Try to find a balanced { ... } by walking forward.
-        depth = 0
-        start = candidate.find("{")
-        for i, ch in enumerate(candidate[start:], start=start):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(candidate[start : i + 1])
-                    except json.JSONDecodeError:
-                        return None
-        return None
+# ```json code fence or prepend a leading sentence. The shared extractor pulls
+# out the outermost {...} block. Kept as a module-level alias so existing
+# references in this file (and tests) stay valid.
+from bmc_agent.json_utils import extract_json_object as _extract_json_object
 
 
 def _validate_and_extract(
@@ -570,6 +536,7 @@ class SpecGeneratorV2:
         source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
         only_functions: Optional[set] = None,
+        progress_note: Optional[Callable[..., None]] = None,
     ) -> dict[str, Spec]:
         """Generate specs for every function defined in ``source_file``.
 
@@ -670,6 +637,28 @@ class SpecGeneratorV2:
         layers = _build_bottom_up_layers(filtered_call_graph)
         logger.info("v2: bottom-up layers: %s", layers)
 
+        # Live progress: how many functions will actually get an LLM round-trip
+        # (the rest get cheap trivial specs and never touch the model). Drives
+        # the workbench's "generating specs · done/total" caption.
+        total_to_gen = sum(
+            1 for fn in defined_funcs
+            if (needed is None or fn in needed) and parsed.get_function_info(fn) is not None
+        )
+        gen_done = 0
+
+        def _note_active(fn: str) -> None:
+            # Per-function "spec generation started" — fires for every function
+            # in a layer just before dispatch (a layer runs in parallel, so
+            # several rows can be active at once in the workbench).
+            if progress_note is not None:
+                progress_note(gen_done, total_to_gen, fn, "active")
+
+        def _note_one(fn: Optional[str] = None) -> None:
+            nonlocal gen_done
+            gen_done += 1
+            if progress_note is not None:
+                progress_note(gen_done, total_to_gen, fn, "done")
+
         # Stub specs for external callees (matches v1).
         all_specs: dict[str, Spec] = {}
         for fn_name in defined_funcs:
@@ -709,16 +698,25 @@ class SpecGeneratorV2:
             # all_specs is read-only during this layer (we merge after); safe to
             # share across threads.
             results: dict[str, Spec] = {}
+            # Mark every function in this layer as in-flight before any work
+            # starts — the whole layer runs concurrently.
+            for fn_name, _fi in todo:
+                _note_active(fn_name)
             if len(todo) == 1:
                 fn_name, func_info = todo[0]
                 results[fn_name] = self._generate_one(
                     func_info=func_info, parsed=parsed,
                     all_specs_so_far=all_specs, corpus_paths=corpus,
                 )
+                _note_one(fn_name)
             else:
+                import contextvars
                 with ThreadPoolExecutor(max_workers=min(len(todo), max_workers)) as pool:
+                    # Fresh context copy per task so the web per-run log sink
+                    # (a ContextVar) reaches the worker threads (see bmc_engine).
                     fut_to_fn = {
                         pool.submit(
+                            contextvars.copy_context().run,
                             self._generate_one,
                             func_info=fi, parsed=parsed,
                             all_specs_so_far=all_specs, corpus_paths=corpus,
@@ -734,6 +732,10 @@ class SpecGeneratorV2:
                                 "v2 [%s]: spec-gen raised (%r) — seed-only fallback", fn, exc,
                             )
                             results[fn] = _trivial_spec(fn, "gen_exception")
+                        # Runs in the calling thread (as_completed), so the
+                        # counter needs no lock; a cancel raised here unwinds
+                        # cleanly once the pool's __exit__ drains the workers.
+                        _note_one(fn)
             # Merge this layer's results (single-threaded) before the next layer.
             for fn_name, spec in results.items():
                 all_specs[fn_name] = spec
@@ -788,6 +790,7 @@ class SpecGeneratorV2:
             resp = self.llm.complete(
                 self._spec_system_prompt, prompt, role="spec_gen", max_tokens=1200,
                 cache_prefix=getattr(self, "_domain_knowledge", ""),
+                validate=lambda t: _extract_json_object(t) is not None,
             )
         except Exception as exc:
             logger.warning(

@@ -61,16 +61,20 @@ def test_budget_zero_is_unlimited():
     assert calls == ["f"]  # still ran
 
 
-def test_time_accumulates_per_function():
+def test_time_accumulates_per_function(monkeypatch):
     eng = _engine(1200)
     _stub_impl(eng, [])
+    # Deterministic clock: each check_function consumes exactly one tick (t0 then
+    # end → +1.0), so 'f' running twice must SUM to 2.0. A real clock made the old
+    # `>= 0.0` assertion vacuous — it couldn't catch an overwrite-instead-of-add.
+    ticks = iter(float(i) for i in range(1000))
+    monkeypatch.setattr("bmc_agent.bmc_engine.time.monotonic", lambda: next(ticks))
     eng.check_function(SimpleNamespace(name="f"), None, None, "drv")
     eng.check_function(SimpleNamespace(name="f"), None, None, "drv")
     eng.check_function(SimpleNamespace(name="g"), None, None, "drv")
-    # Both calls to 'f' accumulated; 'g' tracked separately.
-    assert eng._fn_cumulative_time["f"] >= 0.0
-    assert "g" in eng._fn_cumulative_time
-    # Two distinct functions tracked.
+    # 'f' accumulated across both calls (sum, not overwrite); 'g' tracked apart.
+    assert eng._fn_cumulative_time["f"] == 2.0
+    assert eng._fn_cumulative_time["g"] == 1.0
     assert set(eng._fn_cumulative_time) == {"f", "g"}
 
 
@@ -86,3 +90,28 @@ def test_other_functions_unaffected_by_one_exhausted():
     vc = eng.check_function(SimpleNamespace(name="cold"), None, None, "drv")
     assert vc.verified is True
     assert calls == ["cold"]
+
+
+# --- unresolved-verdict reason (workbench bmc chip tooltip) ------------------
+
+def test_unresolved_reason_maps_known_errors():
+    """BMCEngine._unresolved_reason condenses BMCVerdict.error into the one-line
+    reason shown as the ⚠ bmc chip tooltip."""
+    reason = BMCEngine._unresolved_reason
+    assert reason(BMCVerdict("f", False, error="cbmc timed out after 60s")) \
+        == "CBMC timed out before a proof or counterexample"
+    assert reason(BMCVerdict("f", False,
+                  error="vacuous verification: CBMC generated 0 VCCs")) \
+        == "function body not analysed (likely extern / not linked)"
+    assert reason(BMCVerdict("f", False,
+                  error="harness-skipped-unresolvable-types: struct foo")) \
+        == "input types couldn't be modeled for checking"
+    # No error recorded -> generic fallback (never empty, so the tooltip is useful).
+    assert reason(BMCVerdict("f", False, error=None)) \
+        == "BMC could not prove or disprove this function"
+
+
+def test_unresolved_reason_truncates_long_single_line():
+    long_err = "boom " * 100  # one long line, no newline
+    out = BMCEngine._unresolved_reason(BMCVerdict("f", False, error=long_err))
+    assert len(out) <= 160 and out.endswith("…")

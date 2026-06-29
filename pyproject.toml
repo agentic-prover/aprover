@@ -25,6 +25,10 @@ dev = [
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
+    "httpx>=0.27",
+    # Local tokenizer for the pre-run cost estimate (web/estimate.py). Provider
+    # agnostic and offline, so the estimate works for every backend.
+    "tiktoken>=0.7",
 ]
 
 [tool.pytest.ini_options]
