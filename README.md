@@ -5,7 +5,7 @@
 
 ### 🌐 [**Try AProver live → www.aprover.ai**](https://www.aprover.ai)
 
-Paste C code (or a GitHub source URL) into the chat and watch BMC-Agent generate specs, run CBMC, classify counterexamples, and report confirmed bugs with evidence tiers — right in your browser, no install. Bring your own Anthropic API key (it stays in your browser).
+Point the **workbench** at a public repo (or a subdirectory / single file), choose a scope, and watch BMC-Agent generate specs, run CBMC, classify counterexamples, and report confirmed bugs with evidence tiers — with live token/$ spend, pause, and granular recovery — right in your browser, no install. Bring your own API key (it stays in your browser).
 
 ---
 
@@ -13,7 +13,7 @@ Paste C code (or a GitHub source URL) into the chat and watch BMC-Agent generate
 
 > 📄 **Paper:** [*Agentic Model Checking*](https://arxiv.org/abs/2605.21434) — Youcheng Sun, Jiawen Liu, Daniel Kroening, Jason Xue (arXiv:2605.21434, 2026). This is the reference for the ideas implemented here; please [cite it](#citation) if you use AProver / BMC-Agent in your work.
 
-BMC-Agent supports two source languages with two solver backends, selected automatically by the source file's extension: **C** via CBMC, and **Rust** via Kani. The pipeline, classifier, refinement loop, and confidence tiers are shared; the parser and harness generator dispatch per language.
+BMC-Agent supports three source languages with three solver backends, selected automatically by the source file's extension: **C** via CBMC, **Rust** via Kani, and **Java** via JBMC. The pipeline, classifier, refinement loop, and confidence tiers are shared; the parser and harness generator dispatch per language. (Java/JBMC currently runs as whole-program verification; the agentic per-function spec pipeline applies to C and Rust.)
 
 The design principle is *agents propose, conventional tools dispose*: every soundness-relevant decision the LLM produces passes through a conventional check (CBMC query, SMT soundness guard, or runtime confirmation) before affecting the verification verdict.
 
@@ -53,7 +53,13 @@ The **realism checker** (Phase 3 S4) runs an LLM audit on every `REAL_BUG` findi
 - [uv](https://github.com/astral-sh/uv)
 - [CBMC](https://github.com/diffblue/cbmc) on `PATH` (for C input)
 - [Kani](https://github.com/model-checking/kani) on `PATH` (for Rust input; optional if you only verify C)
+- [JBMC](https://github.com/diffblue/cbmc) + a JDK (`javac`) on `PATH` (for Java input; optional otherwise)
 - [Frama-C](https://frama-c.com/) + an SMT prover (e.g. Alt-Ergo) on `PATH` (optional; only for `--oracle frama-c` specification synthesis)
+
+> The Nix devshell and the `aprover-web` service provision all of these
+> automatically — including JBMC and Kani, which are built from source (nixpkgs
+> ships CBMC with `-DWITH_JBMC=OFF` and does not package Kani). See
+> [`nix/tools.nix`](nix/tools.nix). Outside Nix, install the tools yourself.
 - An Anthropic API key (`ANTHROPIC_API_KEY`)
 
 ## Installation
@@ -187,6 +193,12 @@ All settings are available as environment variables or `Config` dataclass fields
 | `BMC_AGENT_CBMC_PATH` | `cbmc` | CBMC binary path |
 | `BMC_AGENT_CBMC_UNWIND` | `4` | Loop unwinding bound |
 | `BMC_AGENT_CBMC_TIMEOUT` | `120` | Solver timeout per function (seconds) |
+| `BMC_AGENT_JBMC_PATH` | `jbmc` | JBMC binary path (Java backend) |
+| `BMC_AGENT_JAVAC_PATH` | `javac` | `javac` path used to compile Java sources before JBMC |
+| `BMC_AGENT_JBMC_UNWIND` | `4` | JBMC loop unwinding bound (falls back to `BMC_AGENT_CBMC_UNWIND`) |
+| `BMC_AGENT_JBMC_TIMEOUT` | `120` | JBMC solver timeout (seconds; falls back to `BMC_AGENT_CBMC_TIMEOUT`) |
+| `BMC_AGENT_JAVA_COMPILE_TIMEOUT` | `60` | `javac` compile timeout (seconds) |
+| `BMC_AGENT_JAVA_CLASSPATH` | `` | Extra classpath entries (os.pathsep-separated) for the Java compile/verify |
 | `BMC_AGENT_MAX_REFINEMENT_ITERS` | `5` | Maximum CEGAR refinement iterations |
 | `BMC_AGENT_ENABLE_DUAL_SPEC` | `true` | Generate each spec twice, flag disagreements |
 | `BMC_AGENT_ENABLE_SPEC_QUALITY` | `false` | Phase 4 spec-quality checks (mutation, coverage) |

@@ -1,180 +1,413 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AProver — agentic prover for AI-generated code</title>
-<link rel="icon" type="image/svg+xml" href="/assets/logo-icon.svg" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AProver — agentic model checking for AI-generated code</title>
+<meta name="description" content="An agent synthesizes a formal spec, a bounded model checker tries to break it, and every counterexample is replayed under a sanitizer before it counts. Real, confirmed bugs — at a scale past human review.">
+<link rel="icon" href="/assets/logo-icon.svg">
 <link rel="preconnect" href="https://rsms.me/" />
 <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
-<link rel="stylesheet" href="/static/style.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+<style>
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{margin:0;background:#ffffff;}
+  a{color:inherit;}
+  @keyframes apvl-pulse{0%,100%{opacity:.55;transform:scale(.82);}50%{opacity:1;transform:scale(1.1);}}
+  @keyframes apvl-ring{0%{box-shadow:0 0 0 0 rgba(37,99,235,.35);}70%{box-shadow:0 0 0 8px rgba(37,99,235,0);}100%{box-shadow:0 0 0 0 rgba(37,99,235,0);}}
+  @keyframes apvl-flow{0%{left:-6px;opacity:0;}12%{opacity:1;}88%{opacity:1;}100%{left:38px;opacity:0;}}
+  @keyframes apvl-blink{0%,50%{opacity:.9;}51%,100%{opacity:.1;}}
+  @keyframes apvl-dash{to{stroke-dashoffset:-28;}}
+  .apvl-nav a{transition:color .15s;}
+  .apvl-nav a:not(.apvl-btn-primary):hover{color:#15181d;}
+  .apvl-btn-primary:hover{background:#1d4ed8 !important;}
+  .apvl-btn-ghost:hover{border-color:#2563eb !important;color:#2563eb !important;}
+  /* responsive: stack the multi-column grids on narrow screens */
+  @media (max-width:760px){
+    .apvl-nav-links{gap:16px !important;}
+    .apvl-nav-links a:not(.apvl-btn-primary){display:none;}
+    .apvl-h1{font-size:42px !important;letter-spacing:-1px !important;}
+    .apvl-preview-grid{grid-template-columns:1fr 1fr !important;}
+    .apvl-grid-2,.apvl-grid-3,.apvl-results{grid-template-columns:1fr !important;gap:24px !important;}
+    .apvl-pipeline{flex-direction:column !important;}
+    .apvl-pipeline .apvl-arrow{transform:rotate(90deg);width:auto !important;height:30px;}
+    .apvl-section{padding-left:20px !important;padding-right:20px !important;}
+  }
+</style>
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <a class="logo-link" href="/" aria-label="AProver">
-      <picture>
-        <source srcset="/assets/logo-dark.svg" media="(prefers-color-scheme: dark)" />
-        <img src="/assets/logo.svg" alt="AProver" class="logo-img" />
-      </picture>
-    </a>
-    <span class="agent-status" id="agent-status">
-      <span class="status-dot idle"></span>
-      <span class="status-text">idle</span>
-    </span>
+<div style="width:100%;background:#ffffff;font-family:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;color:#15181d;">
+
+  <!-- ============ NAV ============ -->
+  <div class="apvl-nav" style="position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;height:64px;padding:0 32px;border-bottom:1px solid #eceef2;background:rgba(255,255,255,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <a href="/" style="display:flex;align-items:center;text-decoration:none;"><img src="/assets/logo.svg" alt="AProver" style="height:26px;display:block;" /></a>
+    </div>
+    <div class="apvl-nav-links" style="display:flex;align-items:center;gap:28px;">
+      <a href="#problem" style="font:500 13.5px/1 'Inter',sans-serif;color:#4b5563;text-decoration:none;">The problem</a>
+      <a href="#how" style="font:500 13.5px/1 'Inter',sans-serif;color:#4b5563;text-decoration:none;">How it works</a>
+      <a href="#results" style="font:500 13.5px/1 'Inter',sans-serif;color:#4b5563;text-decoration:none;">Results</a>
+      <a href="#paper" style="font:500 13.5px/1 'Inter',sans-serif;color:#4b5563;text-decoration:none;">Paper</a>
+      <a class="apvl-btn-primary" href="/workbench" style="display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:9px;background:#2563eb;color:#fff;font:700 13px/1 'Inter',sans-serif;text-decoration:none;box-shadow:0 1px 2px rgba(37,99,235,.3);"><span style="font-family:'JetBrains Mono',monospace;font-size:11px;">▶</span> Open workbench</a>
+    </div>
   </div>
-  <a class="repo-link" href="https://github.com/agentic-prover/aprover" target="_blank" rel="noopener">github ↗</a>
-</header>
 
-<main id="chat" aria-live="polite">
-  <section id="hero">
-    <img src="/assets/logo-icon.svg" alt="" class="hero-mark" aria-hidden="true" />
-    <div class="hero-tag">agentic prover · for AI-generated code</div>
-    <h1>Verify your code by chatting<span class="cursor">▮</span></h1>
-    <p class="hero-sub">
-      AProver is a suite of LLM-driven verification agents.
-      The live demo runs <span class="kbd">BMC-Agent</span> — Claude generates function specs,
-      <span class="kbd">CBMC</span> proves or refutes them, the agent classifies counterexamples,
-      and confirmed bugs come back with evidence tiers. Today: C. On the roadmap: Rust (Kani) and beyond.
-    </p>
-
-    <div class="hero-demo" id="hero-demo" role="button" tabindex="0"
-         aria-label="Live pipeline preview — click to load this demo into the composer">
-      <div class="hero-demo-tag">
-        <span class="hd-pulse"></span>
-        <span>live preview · click to run it yourself</span>
+  <!-- ============ HERO ============ -->
+  <div class="apvl-section" style="position:relative;overflow:hidden;padding:84px 32px 72px;background-image:radial-gradient(900px 480px at 16% -8%,rgba(37,99,235,.06),transparent 60%),radial-gradient(820px 460px at 100% 16%,rgba(5,150,105,.05),transparent 58%);">
+    <div style="max-width:1180px;margin:0 auto;">
+      <div style="display:inline-flex;align-items:center;gap:9px;padding:6px 13px;border:1px solid #e1e4e9;border-radius:999px;background:#fff;margin-bottom:26px;">
+        <span style="width:7px;height:7px;border-radius:50%;background:conic-gradient(from 0deg,#7c3aed,#2563eb,#059669,#7c3aed);"></span>
+        <span style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;color:#5a6068;">Agentic model checking · arXiv:2605.21434</span>
       </div>
-      <div class="demo-grid">
-        <div class="demo-code">
-          <div class="demo-code-head">
-            <span class="demo-file">demo.c</span>
-            <span class="demo-lang">C</span>
+
+      <h1 class="apvl-h1" style="margin:0;max-width:920px;font-size:62px;line-height:1.04;font-weight:800;letter-spacing:-1.6px;">
+        <span style="color:#8b9099;">AI can write the system.</span><br />
+        AProver proves it <span style="color:#2563eb;">correct.</span>
+      </h1>
+
+      <p style="max-width:660px;margin:26px 0 0;font-size:18.5px;line-height:1.6;color:#4b5563;">An agent synthesizes a formal spec, a bounded model checker tries to break it, and every counterexample is replayed under a sanitizer before it counts. The result: <span style="color:#15181d;font-weight:600;">real, confirmed bugs — not guesses</span> — at a scale past human review.</p>
+
+      <div style="display:flex;align-items:center;gap:14px;margin-top:34px;flex-wrap:wrap;">
+        <a class="apvl-btn-primary" href="/workbench" style="display:inline-flex;align-items:center;gap:9px;padding:14px 26px;border-radius:11px;background:#2563eb;color:#fff;font:700 15px/1 'Inter',sans-serif;text-decoration:none;box-shadow:0 2px 10px rgba(37,99,235,.32);"><span style="font-family:'JetBrains Mono',monospace;font-size:13px;">▶</span> Open the workbench</a>
+        <a class="apvl-btn-ghost" href="https://arxiv.org/abs/2605.21434" style="display:inline-flex;align-items:center;gap:8px;padding:14px 24px;border-radius:11px;border:1px solid #d7dbe0;background:#fff;color:#15181d;font:600 15px/1 'Inter',sans-serif;text-decoration:none;">Read the paper</a>
+        <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#8b9099;margin-left:6px;">agents propose · solvers verify</span>
+      </div>
+
+      <!-- hero workbench preview -->
+      <div style="margin-top:54px;border:1px solid #e1e4e9;border-radius:14px;background:#fff;box-shadow:0 24px 60px rgba(40,50,70,.14);overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 18px;height:48px;border-bottom:1px solid #eceef2;background:#fafbfc;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border:1px solid #c7d7fb;border-radius:999px;font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.5px;color:#2563eb;background:rgba(37,99,235,.06);"><span style="width:6px;height:6px;border-radius:50%;background:#2563eb;animation:apvl-pulse 1.1s infinite ease-in-out;"></span>verifying · llm.c / dev</span>
           </div>
-<pre class="demo-src"><span class="ln">1</span> <span class="kw">#include</span> <span class="str">&lt;stdint.h&gt;</span>
-<span class="ln">2</span> <span class="kw">int</span> <span class="fn">add</span>(<span class="kw">int</span> a, <span class="kw">int</span> b) {
-<span class="ln">3</span>     <span class="kw">return</span> a + b;
-<span class="ln">4</span> }</pre>
-          <div class="demo-caret"></div>
+          <span style="font:600 10.5px/1 'JetBrains Mono',monospace;color:#15181d;"><span style="color:#8b9099;font-weight:500;">spent</span> $0.42 <span style="color:#c2c7ce;">·</span> 18.3K tok</span>
         </div>
-        <div class="demo-pipe">
-          <div class="demo-phases" aria-hidden="true">
-            <div class="demo-phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
-            <div class="phase-line"></div>
-            <div class="demo-phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
-            <div class="phase-line"></div>
-            <div class="demo-phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
-            <div class="phase-line"></div>
-            <div class="demo-phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+        <div class="apvl-preview-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;">
+          <!-- spec -->
+          <div style="padding:20px 18px;border-right:1px solid #f1f3f5;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="width:22px;height:22px;border-radius:50%;background:rgba(5,150,105,.1);border:1.5px solid #059669;color:#059669;display:flex;align-items:center;justify-content:center;font:700 10px/1 'JetBrains Mono',monospace;">✓</span><span style="font:600 13px/1 'Inter',sans-serif;color:#15181d;">Spec</span></div>
+            <div style="font:500 10.5px/1.5 'JetBrains Mono',monospace;color:#8b9099;">pre/post · dual-spec · 18 fns</div>
           </div>
-          <div class="demo-now">
-            <span class="now-icon"></span>
-            <span class="demo-now-text">parsing source…</span>
+          <!-- bmc -->
+          <div style="padding:20px 18px;border-right:1px solid #f1f3f5;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="width:22px;height:22px;border-radius:50%;background:rgba(5,150,105,.1);border:1.5px solid #059669;color:#059669;display:flex;align-items:center;justify-content:center;font:700 10px/1 'JetBrains Mono',monospace;">✓</span><span style="font:600 13px/1 'Inter',sans-serif;color:#15181d;">Model check</span></div>
+            <div style="font:500 10.5px/1.5 'JetBrains Mono',monospace;color:#8b9099;">cbmc · unwind 4 · 2 CEX</div>
           </div>
-          <div class="demo-result" hidden>
-            <span class="demo-verdict">▲ real bug · signed overflow</span>
-            <span class="demo-detail">a = INT_MAX, b = 1 &nbsp;⟶&nbsp; <code>a + b</code> overflows</span>
+          <!-- classify -->
+          <div style="padding:20px 18px;border-right:1px solid #f1f3f5;background:rgba(37,99,235,.03);">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="width:22px;height:22px;border-radius:50%;background:rgba(37,99,235,.1);border:1.5px solid #2563eb;color:#2563eb;display:flex;align-items:center;justify-content:center;font:700 8px/1 'JetBrains Mono',monospace;animation:apvl-ring 1.6s infinite;">●</span><span style="font:600 13px/1 'Inter',sans-serif;color:#2563eb;">Classify</span></div>
+            <div style="font:500 10.5px/1.5 'JetBrains Mono',monospace;color:#4b5563;">replay under ASan…</div>
+          </div>
+          <!-- report -->
+          <div style="padding:20px 18px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="width:22px;height:22px;border-radius:50%;background:#fff;border:1.5px solid #d7dbe0;color:#aeb4bd;display:flex;align-items:center;justify-content:center;font:700 8px/1 'JetBrains Mono',monospace;">○</span><span style="font:600 13px/1 'Inter',sans-serif;color:#8b9099;">Report</span></div>
+            <div style="font:500 10.5px/1.5 'JetBrains Mono',monospace;color:#aeb4bd;">tiers · call chains</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-top:1px solid #eceef2;background:rgba(220,38,38,.03);flex-wrap:wrap;">
+          <span style="font:700 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;color:#dc2626;padding:4px 9px;border:1px solid #f0b4b4;border-radius:6px;background:rgba(220,38,38,.06);">confirmed</span>
+          <span style="font:600 12px/1 'JetBrains Mono',monospace;color:#2563eb;">rb_write</span>
+          <span style="font:500 11px/1.5 'JetBrains Mono',monospace;color:#4b5563;">out-of-bounds write · SIGSEGV under GCC harness · head = cap = 8</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PROBLEM ============ -->
+  <div id="problem" class="apvl-section" style="padding:80px 32px;background:#fafbfc;border-top:1px solid #eceef2;border-bottom:1px solid #eceef2;">
+    <div style="max-width:1180px;margin:0 auto;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:#8b9099;margin-bottom:14px;">The problem</div>
+      <h2 style="margin:0 0 16px;max-width:760px;font-size:38px;line-height:1.15;font-weight:700;letter-spacing:-.8px;">A short function you can read. A generated system you cannot.</h2>
+      <p style="max-width:680px;margin:0 0 40px;font-size:16.5px;line-height:1.6;color:#4b5563;">The question is no longer “can the model write it?” — it’s “is what it wrote correct?” That’s easy for ten lines and impossible for ten thousand.</p>
+
+      <div class="apvl-grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:stretch;">
+        <!-- short fn -->
+        <div style="border:1px solid #e1e4e9;border-radius:14px;background:#fff;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #eceef2;background:#fafbfc;">
+            <span style="width:9px;height:9px;border-radius:50%;background:#e5a3a3;"></span><span style="width:9px;height:9px;border-radius:50%;background:#f0cf9a;"></span><span style="width:9px;height:9px;border-radius:50%;background:#a9d8b0;"></span>
+            <span style="font:500 11px/1 'JetBrains Mono',monospace;color:#8b9099;margin-left:6px;">clamp.c</span>
+          </div>
+          <div style="padding:18px 18px;font:500 13px/1.85 'JetBrains Mono',monospace;color:#3a4150;">
+            <div><span style="color:#8b9099;font-style:italic;">// keep x within [lo, hi]</span></div>
+            <div><span style="color:#0369a1;">int</span> <span style="color:#2563eb;font-weight:600;">clamp</span>(<span style="color:#0369a1;">int</span> x, <span style="color:#0369a1;">int</span> lo, <span style="color:#0369a1;">int</span> hi) {</div>
+            <div>&nbsp;&nbsp;<span style="color:#7c3aed;">if</span> (x &lt; lo) <span style="color:#7c3aed;">return</span> lo;</div>
+            <div>&nbsp;&nbsp;<span style="color:#7c3aed;">if</span> (x &gt; hi) <span style="color:#7c3aed;">return</span> hi;</div>
+            <div>&nbsp;&nbsp;<span style="color:#7c3aed;">return</span> x;</div>
+            <div>}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 18px;border-top:1px solid #eceef2;">
+            <span style="display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid rgba(5,150,105,.3);border-radius:999px;font:600 11.5px/1 'Inter',sans-serif;color:#059669;background:rgba(5,150,105,.06);">✓ looks correct</span>
+            <span style="font:500 12px/1 'Inter',sans-serif;color:#8b9099;">— short enough to just read.</span>
+          </div>
+        </div>
+
+        <!-- system wall -->
+        <div style="position:relative;border:1px solid #e1e4e9;border-radius:14px;background:#fff;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.04);padding:18px;">
+          <div style="font:500 11px/1 'JetBrains Mono',monospace;color:#8b9099;margin-bottom:14px;">train_gpt2.c · 41 functions · 6 files</div>
+          <div id="apvl-wall" style="display:grid;grid-template-columns:repeat(9,1fr);gap:6px;"></div>
+          <div style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span style="display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid #f0b4b4;border-radius:999px;font:600 11.5px/1 'Inter',sans-serif;color:#dc2626;background:rgba(220,38,38,.06);">▲ bug threads a path</span>
+            <span style="font:500 12px/1.5 'Inter',sans-serif;color:#8b9099;">— through many functions. You can’t check them one by one, and tests may never hit it.</span>
           </div>
         </div>
       </div>
     </div>
-
-    <div class="quick-actions">
-      <button class="chip" data-prompt="show me a demo">
-        <span class="chip-key">▶</span> run a demo bug
-      </button>
-      <button class="chip" data-prompt="explain how AProver works">
-        <span class="chip-key">▣</span> how it works
-      </button>
-      <button class="chip" data-prompt="I want to verify a public file at this URL: ">
-        <span class="chip-key">↗</span> verify from URL
-      </button>
-    </div>
-
-    <div class="cap-grid">
-      <div class="cap">
-        <div class="cap-h">paste source</div>
-        <div class="cap-d">self-contained file, ≤64KB · today: C</div>
-      </div>
-      <div class="cap">
-        <div class="cap-h">fetch http(s) URLs</div>
-        <div class="cap-d">github blob URLs auto-rewrite to raw</div>
-      </div>
-      <div class="cap">
-        <div class="cap-h">target a function</div>
-        <div class="cap-d">or verify the whole file at once</div>
-      </div>
-      <div class="cap">
-        <div class="cap-h">live phase progress</div>
-        <div class="cap-d">spec → bmc → classify → report</div>
-      </div>
-    </div>
-  </section>
-
-  <div id="thread"></div>
-</main>
-
-<form id="composer" autocomplete="off">
-  <div class="composer-wrap">
-    <textarea
-      id="input"
-      rows="1"
-      placeholder="paste C, drop a github URL, or just chat…"
-      spellcheck="false"></textarea>
-    <button id="send" type="submit" aria-label="Send">
-      <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 10l16-7-7 16-2-7z"/></svg>
-    </button>
   </div>
-  <div class="composer-key">
-    <input
-      id="api-key"
-      type="password"
-      placeholder="your Anthropic API key (sk-ant-…)"
-      autocomplete="off"
-      spellcheck="false" />
-    <span class="key-note" id="key-note">🔒 stored only in your browser · sent only with your requests · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">get a key ↗</a></span>
-  </div>
-  <div class="composer-hint">
-    <span>⏎ send · ⇧⏎ newline</span>
-    <span class="composer-host">claude · cbmc · 64KB cap</span>
-  </div>
-</form>
 
-<template id="msg-tpl">
-  <div class="msg">
-    <div class="role"></div>
-    <div class="body"></div>
-  </div>
-</template>
+  <!-- ============ HOW IT WORKS ============ -->
+  <div id="how" class="apvl-section" style="padding:84px 32px;">
+    <div style="max-width:1180px;margin:0 auto;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:#8b9099;margin-bottom:14px;">How it works</div>
+      <h2 style="margin:0 0 16px;max-width:760px;font-size:38px;line-height:1.15;font-weight:700;letter-spacing:-.8px;">An agent proposes. A solver decides.</h2>
+      <p style="max-width:680px;margin:0 0 44px;font-size:16.5px;line-height:1.6;color:#4b5563;">The BMC-Agent synthesizes a spec, runs a bounded model checker, and refines via CEGAR until the verdict is solid — then pins each finding to a real, replayable path.</p>
 
-<template id="run-tpl">
-  <div class="msg run">
-    <div class="role">aprover</div>
-    <div class="body">
-      <div class="run-head">
-        <div class="phases">
-          <div class="phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
-          <div class="phase-line"></div>
-          <div class="phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
-          <div class="phase-line"></div>
-          <div class="phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
-          <div class="phase-line"></div>
-          <div class="phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+      <!-- pipeline -->
+      <div class="apvl-pipeline" style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+        <!-- node 1 -->
+        <div style="flex:1;min-width:220px;border:1px solid #e1e4e9;border-radius:14px;padding:22px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(124,58,237,.3);background:rgba(124,58,237,.06);color:#7c3aed;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:14px;">✦</div>
+          <div style="font:700 15px/1.2 'Inter',sans-serif;color:#15181d;margin-bottom:6px;">LLM spec synthesis</div>
+          <div style="font:500 12.5px/1.5 'JetBrains Mono',monospace;color:#8b9099;">caller-grounded pre / post conditions, dual-spec for soundness.</div>
         </div>
-        <div class="run-elapsed"><span class="run-elapsed-num">0.0</span><span class="run-elapsed-unit">s</span></div>
+        <div class="apvl-arrow" style="display:flex;align-items:center;justify-content:center;width:54px;color:#c2c7ce;font-size:20px;flex:none;">→</div>
+        <!-- node 2 -->
+        <div style="flex:1;min-width:220px;border:1px solid #e1e4e9;border-radius:14px;padding:22px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(37,99,235,.3);background:rgba(37,99,235,.06);color:#2563eb;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:14px;">⚙</div>
+          <div style="font:700 15px/1.2 'Inter',sans-serif;color:#15181d;margin-bottom:6px;">Bounded model check</div>
+          <div style="font:500 12.5px/1.5 'JetBrains Mono',monospace;color:#8b9099;">CBMC · Kani · JBMC search every path for a counterexample.</div>
+        </div>
+        <div class="apvl-arrow" style="display:flex;align-items:center;justify-content:center;width:54px;color:#c2c7ce;font-size:20px;flex:none;">→</div>
+        <!-- node 3 -->
+        <div style="flex:1;min-width:220px;border:1px solid #e1e4e9;border-radius:14px;padding:22px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(5,150,105,.3);background:rgba(5,150,105,.06);color:#059669;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:14px;">⚕</div>
+          <div style="font:700 15px/1.2 'Inter',sans-serif;color:#15181d;margin-bottom:6px;">Diagnose &amp; replay</div>
+          <div style="font:500 12.5px/1.5 'JetBrains Mono',monospace;color:#8b9099;">real bug or spec gap — confirmed crashes replayed under ASan.</div>
+        </div>
       </div>
-      <div class="now-line">
-        <span class="now-icon"></span>
-        <span class="now-text">starting…</span>
+
+      <!-- CEGAR note -->
+      <div style="margin-top:20px;display:flex;align-items:center;gap:12px;padding:14px 18px;border:1px dashed #e0c98a;border-radius:12px;background:rgba(217,119,6,.04);flex-wrap:wrap;">
+        <svg width="46" height="20" viewBox="0 0 46 20" style="flex:none;"><path d="M 42 5 C 42 18, 4 18, 4 5" fill="none" stroke="#b45309" stroke-width="2" stroke-dasharray="6 5" style="animation:apvl-dash 1s linear infinite;"></path><path d="M 4 5 l -3 4 M 4 5 l 4 2" stroke="#b45309" stroke-width="2" fill="none"></path></svg>
+        <span style="font:600 12.5px/1.4 'JetBrains Mono',monospace;color:#b45309;">CEGAR loop</span>
+        <span style="font:500 13px/1.5 'Inter',sans-serif;color:#4b5563;">When a counterexample is spurious, the spec is refined and re-checked automatically — no false alarm ships.</span>
       </div>
-      <details class="log-disc">
-        <summary>pipeline log</summary>
-        <ol class="run-log"></ol>
-      </details>
     </div>
   </div>
-</template>
 
-<script src="/static/app.js"></script>
+  <!-- ============ BUILT TO SURVIVE A RUN ============ -->
+  <div class="apvl-section" style="padding:80px 32px;background:#fafbfc;border-top:1px solid #eceef2;border-bottom:1px solid #eceef2;">
+    <div style="max-width:1180px;margin:0 auto;">
+      <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:#8b9099;margin-bottom:14px;">The workbench</div>
+      <h2 style="margin:0 0 16px;max-width:780px;font-size:38px;line-height:1.15;font-weight:700;letter-spacing:-.8px;">Built to survive an expensive run.</h2>
+      <p style="max-width:700px;margin:0 0 44px;font-size:16.5px;line-height:1.6;color:#4b5563;">A single run burns real tokens and solver time. So every stage fails in place, partial results are always kept, and recovery is granular.</p>
+
+      <div class="apvl-grid-3" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;">
+        <div style="border:1px solid #e1e4e9;border-radius:14px;background:#fff;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="font:700 11px/1 'JetBrains Mono',monospace;letter-spacing:.5px;color:#2563eb;margin-bottom:14px;">SPEND IN VIEW</div>
+          <div style="font:700 17px/1.3 'Inter',sans-serif;color:#15181d;margin-bottom:8px;">Always know the bill</div>
+          <div style="font:500 13.5px/1.6 'Inter',sans-serif;color:#4b5563;">Tokens and dollars are tallied live against your cap — no surprise invoice at the end.</div>
+        </div>
+        <div style="border:1px solid #e1e4e9;border-radius:14px;background:#fff;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="font:700 11px/1 'JetBrains Mono',monospace;letter-spacing:.5px;color:#059669;margin-bottom:14px;">NOTHING WASTED</div>
+          <div style="font:700 17px/1.3 'Inter',sans-serif;color:#15181d;margin-bottom:8px;">Partial results kept</div>
+          <div style="font:500 13.5px/1.6 'Inter',sans-serif;color:#4b5563;">Specs and harnesses cache to disk. A crash mid-run never throws away work you already paid for.</div>
+        </div>
+        <div style="border:1px solid #e1e4e9;border-radius:14px;background:#fff;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="font:700 11px/1 'JetBrains Mono',monospace;letter-spacing:.5px;color:#b45309;margin-bottom:14px;">GRANULAR RECOVERY</div>
+          <div style="font:700 17px/1.3 'Inter',sans-serif;color:#15181d;margin-bottom:8px;">Retry one function</div>
+          <div style="font:500 13.5px/1.6 'Inter',sans-serif;color:#4b5563;">Resume from a stage or re-run a single function instead of paying for the whole pipeline again.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ RESULTS ============ -->
+  <div id="results" class="apvl-section" style="padding:84px 32px;">
+    <div style="max-width:1180px;margin:0 auto;">
+      <div class="apvl-results" style="display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start;">
+        <div>
+          <div style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;color:#8b9099;margin-bottom:14px;">Results · arXiv:2605.21434</div>
+          <h2 style="margin:0 0 18px;font-size:40px;line-height:1.12;font-weight:700;letter-spacing:-.9px;">Real, <span style="color:#dc2626;">confirmed bugs.</span></h2>
+          <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:14px;">
+            <span style="font-size:72px;font-weight:800;letter-spacing:-2px;color:#15181d;line-height:1;">57</span>
+            <span style="font:600 15px/1.4 'Inter',sans-serif;color:#4b5563;">confirmed, previously-unfixed<br />memory-safety defects across 10 open-source projects</span>
+          </div>
+          <p style="max-width:460px;margin:0 0 22px;font-size:15px;line-height:1.6;color:#4b5563;">Surfaced on mature, OSS-Fuzz-hardened software and present (unfixed) in each project's current HEAD — all human source-audited, 56 of 57 sanitizer-reproduced. The largest cluster is 31 defects in <span style="font-family:'JetBrains Mono',monospace;font-size:13.5px;">u-boot</span>; two pointer-arithmetic UB bugs in <span style="font-family:'JetBrains Mono',monospace;font-size:13.5px;">jq</span> are filed and accepted as upstream advisories (GHSA-ggc9-rpv2-xgpm, GHSA-gvwx-xj9r-3frq). The remainder are under coordinated disclosure.</p>
+          <div style="display:flex;flex-direction:column;gap:9px;max-width:460px;">
+            <div style="font:600 10px/1 'JetBrains Mono',monospace;letter-spacing:.8px;text-transform:uppercase;color:#8b9099;">evaluation benchmarks (LLM-generated, separate)</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <span style="display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid #e5e7eb;border-radius:999px;font:600 11px/1 'JetBrains Mono',monospace;color:#5a6068;"><span style="width:8px;height:8px;border-radius:50%;background:#7a828c;"></span>VibeOS kernel · 12 defects · 21 properties</span>
+              <span style="display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid #e5e7eb;border-radius:999px;font:600 11px/1 'JetBrains Mono',monospace;color:#5a6068;"><span style="width:8px;height:8px;border-radius:50%;background:#7a828c;"></span>CCC compiler · ~50 KLoC Rust</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:20px;">
+          <!-- bar list -->
+          <div style="border:1px solid #e1e4e9;border-radius:14px;background:#fff;padding:24px 26px;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+              <span style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:1px;text-transform:uppercase;color:#4b5563;">confirmed real-world defects by project</span>
+              <span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:#aeb4bd;">57 total</span>
+            </div>
+            <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.8px;text-transform:uppercase;color:#aeb4bd;margin-bottom:12px;">OSS-Fuzz-integrated</div>
+            <!-- u-boot -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">u-boot</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · filesystem / EFI parsers</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:100.0%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">31</span>
+            </div>
+            <!-- gpac -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">gpac</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · multimedia framework</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:29.0%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">9</span>
+            </div>
+            <!-- libbej -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">libbej</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · Redfish BEJ decoder</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:12.9%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">4</span>
+            </div>
+            <!-- jq -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">jq</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · 2 advisories filed</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#059669;width:6.5%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">2</span>
+            </div>
+            <!-- libredwg -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">libredwg</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · DWG/CAD reader</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:6.5%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">2</span>
+            </div>
+            <!-- libarchive -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">libarchive</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · archive formats</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:3.2%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">1</span>
+            </div>
+            <div style="font:600 9.5px/1 'JetBrains Mono',monospace;letter-spacing:.8px;text-transform:uppercase;color:#aeb4bd;margin-bottom:12px;">other open-source</div>
+            <!-- libmikmod -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">libmikmod</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · module-audio loaders</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:12.9%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">4</span>
+            </div>
+            <!-- libmodplug -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">libmodplug</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · module-audio loaders</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:6.5%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">2</span>
+            </div>
+            <!-- adplug -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">adplug</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · AdLib-audio loaders</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#dc2626;width:3.2%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">1</span>
+            </div>
+            <!-- AWS Neuron -->
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:13px;">
+              <span style="width:172px;flex:none;display:flex;flex-direction:column;gap:2px;">
+                <span style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#15181d;">AWS Neuron</span>
+                <span style="font:500 9.5px/1.2 'JetBrains Mono',monospace;color:#aeb4bd;">C · CBMC · Trainium/Inferentia ioctl</span>
+              </span>
+              <span style="flex:1;height:10px;border-radius:5px;background:#f1f3f5;overflow:hidden;"><span style="display:block;height:100%;border-radius:5px;background:#8b9099;width:3.2%;"></span></span>
+              <span style="width:26px;flex:none;text-align:right;font:600 13px/1 'JetBrains Mono',monospace;color:#15181d;">1</span>
+            </div>
+          </div>
+
+          <!-- clean-verify strip -->
+          <div style="border:1px solid #e1e4e9;border-radius:14px;background:#fff;padding:22px 26px;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:16px;">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:rgba(5,150,105,.1);border:1px solid rgba(5,150,105,.3);color:#059669;font:700 10px/1 'JetBrains Mono',monospace;">✓</span>
+              <span style="font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:1px;text-transform:uppercase;color:#4b5563;">bounded clean-verify on hardened C</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 22px;">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;"><span style="font:500 12px/1 'JetBrains Mono',monospace;color:#4b5563;">OpenSSL ASN.1 DER</span><span style="font:600 12px/1 'JetBrains Mono',monospace;color:#059669;">15 / 24</span></div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;"><span style="font:500 12px/1 'JetBrains Mono',monospace;color:#4b5563;">libxml2 pattern.c</span><span style="font:600 12px/1 'JetBrains Mono',monospace;color:#059669;">54 / 54</span></div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;"><span style="font:500 12px/1 'JetBrains Mono',monospace;color:#4b5563;">curl strparse.c</span><span style="font:600 12px/1 'JetBrains Mono',monospace;color:#059669;">8 / 20</span></div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;"><span style="font:500 12px/1 'JetBrains Mono',monospace;color:#4b5563;">protobuf upb decoders</span><span style="font:600 12px/1 'JetBrains Mono',monospace;color:#059669;">3 / 3</span></div>
+            </div>
+            <div style="margin-top:15px;padding-top:14px;border-top:1px solid #f1f3f5;font:500 11.5px/1.5 'JetBrains Mono',monospace;color:#8b9099;">libxml2 <span style="color:#15181d;">encoding.c</span> — 127 raw CBMC counterexamples reduced to <span style="color:#059669;">0 confirmed</span> after the full pipeline.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CTA / FOOTER ============ -->
+  <div id="paper" class="apvl-section" style="padding:78px 32px;background:#15181d;color:#fff;">
+    <div style="max-width:1180px;margin:0 auto;">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:40px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0 0 12px;font-size:40px;line-height:1.1;font-weight:800;letter-spacing:-1px;">Prove it correct.</h2>
+          <p style="margin:0;max-width:460px;font-size:16px;line-height:1.6;color:#aeb4bd;">Agents propose, solvers verify — sound by construction, and scaling past human review.</p>
+          <div style="display:flex;gap:12px;margin-top:26px;flex-wrap:wrap;">
+            <a class="apvl-btn-primary" href="/workbench" style="display:inline-flex;align-items:center;gap:9px;padding:13px 24px;border-radius:11px;background:#2563eb;color:#fff;font:700 14.5px/1 'Inter',sans-serif;text-decoration:none;box-shadow:0 2px 10px rgba(37,99,235,.4);"><span style="font-family:'JetBrains Mono',monospace;font-size:12px;">▶</span> Open the workbench</a>
+            <a href="https://github.com/agentic-prover/aprover" style="display:inline-flex;align-items:center;gap:8px;padding:13px 22px;border-radius:11px;border:1px solid #3a4150;color:#fff;font:600 14.5px/1 'JetBrains Mono',monospace;text-decoration:none;">github.com/agentic-prover/aprover</a>
+          </div>
+        </div>
+        <div style="border-left:1px solid #2a2f37;padding-left:32px;">
+          <div style="font:600 10.5px/1 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;color:#8b9099;margin-bottom:10px;">Paper</div>
+          <a href="https://arxiv.org/abs/2605.21434" style="display:block;font:600 16px/1.4 'Inter',sans-serif;color:#fff;max-width:280px;text-decoration:none;">Agentic Model Checking</a>
+          <div style="font:500 12.5px/1 'JetBrains Mono',monospace;color:#aeb4bd;margin-top:8px;">arXiv:2605.21434</div>
+        </div>
+      </div>
+      <div style="margin-top:48px;padding-top:24px;border-top:1px solid #2a2f37;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;">
+        <span style="font:500 11.5px/1 'JetBrains Mono',monospace;color:#5a6068;">© AProver · bounded model checking for AI-generated software</span>
+        <span style="font:500 11.5px/1 'JetBrains Mono',monospace;color:#5a6068;">sound by construction · bugs confirmed, not guessed</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // "system wall" — 54 cells; a few carry the bug path (indices 10/19/28/29/38)
+  (function(){
+    var wall = document.getElementById('apvl-wall');
+    if(!wall) return;
+    var path = {10:1,19:1,28:1,29:1,38:1};
+    for(var i=0;i<54;i++){
+      var cell = document.createElement('div');
+      if(path[i]){
+        cell.style.cssText = 'height:26px;border-radius:4px;border:1px solid rgba(220,38,38,.55);background:rgba(220,38,38,.10);';
+      }else{
+        cell.style.cssText = 'height:26px;border-radius:4px;border:1px solid #e5e7eb;background:#f6f8fa;';
+      }
+      wall.appendChild(cell);
+    }
+  })();
+</script>
 </body>
 </html>

@@ -20,6 +20,16 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+# Web chat front-end (web/server.py). Kept as an extra so the core CLI install
+# stays lean; the NixOS microVM service and the Docker image install this.
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.27",
+    # Local tokenizer for the pre-run cost estimate (web/estimate.py). Provider
+    # agnostic and offline, so the estimate works for every backend.
+    "tiktoken>=0.7",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
