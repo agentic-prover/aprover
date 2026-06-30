@@ -49,7 +49,7 @@ REALISTIC at b_start AND maps to a fix commit in `b_start..b_end`.
 | H5 | libarchive | `iso9660::parse_rockridge_TF1` | OOB on `isodate17` deref | sibling of `c3cb1c56` (ZF1 fix) |
 | H6 | libarchive | `iso9660::parse_rockridge_SL1` | unbounded `nlen` advance | sibling of `c3cb1c56` |
 
-Plus from yesterday's K2 pass (replaced by OR pass; included for
+Plus from yesterday's reasoning-model pass (replaced by OR pass; included for
 completeness of the seed mapping):
 
 - `iso9660::build_pathname_utf16be` → `750e8d7b` (Joliet pathname overflow)
@@ -63,7 +63,7 @@ completeness of the seed mapping):
   audit case is substantive (triple-corroborated static signal: trivial-spec
   sweep, LLM-spec bug-hunt mode at caller, bug-hunt at the parallel
   write-path). Details, trigger, and PoC sketch are embargoed in
-  `agentic-prover/aprover-findings-embargoed` under
+  `<embargoed-findings-repo>` under
   `findings/aws_neuron_driver/unconfirmed/`.
   - Status: UNCONFIRMED. Path to PoC: KASAN reproducer on a Trainium /
     Inferentia host or QEMU + neuron driver build.

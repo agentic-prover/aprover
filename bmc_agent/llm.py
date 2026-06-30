@@ -6,8 +6,7 @@ Dispatches between three providers, selected by ``config.resolved_provider()``:
 * ``"anthropic"`` -- native Anthropic Messages API via the ``anthropic`` SDK
   (claude-* models on api.anthropic.com or via the OpenRouter proxy).
 * ``"openai"`` -- OpenAI-compatible ``/v1/chat/completions`` over plain HTTPS,
-  covering K2 Think (``api.k2think.ai``), OpenAI, and most self-hosted endpoints
-  that mimic that schema.
+  covering OpenAI and most self-hosted endpoints that mimic that schema.
 * ``"claude-code"`` -- the Claude Code CLI in non-interactive mode (``claude -p``).
   No API key required: the host's existing Claude Code login is reused. Useful
   when you want bmc-agent's reasoning to run through your local subscription
@@ -45,25 +44,6 @@ def _model_rejects_temperature(model: str) -> bool:
     return any(s in m for s in _TEMP_UNSUPPORTED)
 
 
-# K2 Think (IFM) inference-backend selection. The IFM endpoint routes a single
-# request to Cerebras (default, fast) or NVIDIA via a request-body ``metadata``
-# flag; both share one base URL / key / model id. ``auto`` adapts per-call by
-# measured latency with fallback. Anything else is treated as ``cerebras`` (the
-# doc-specified default = omit metadata), preserving current behavior.
-K2_BACKEND_CEREBRAS = "cerebras"
-K2_BACKEND_NVIDIA = "nvidia"
-K2_BACKEND_AUTO = "auto"
-_K2_BACKENDS = (K2_BACKEND_CEREBRAS, K2_BACKEND_NVIDIA)
-
-
-def _is_k2_endpoint(base_url: "str | None") -> bool:
-    """True when ``base_url`` is the K2 Think / IFM endpoint, which is the only
-    place the ``metadata.use_nvidia`` routing flag is honoured. Gates the flag so
-    it never leaks to OpenAI / OpenRouter (which share the ``openai`` provider)."""
-    b = (base_url or "").lower()
-    return "k2think.ai" in b or "ifm.ai" in b
-
-
 def openrouter_attribution_headers() -> dict:
     """HTTP headers attributing AProver's traffic on OpenRouter's public
     rankings and analytics (https://openrouter.ai/docs/app-attribution).
@@ -73,7 +53,7 @@ def openrouter_attribution_headers() -> dict:
     kept for backwards compatibility. Other providers silently ignore these, so
     they are attached unconditionally to every OpenAI-compatible request."""
     return {
-        "HTTP-Referer": "https://aprover.ai",
+        "HTTP-Referer": "https://example.com",
         "X-OpenRouter-Title": "AProver",
         "X-Title": "AProver",
     }
@@ -82,7 +62,7 @@ def openrouter_attribution_headers() -> dict:
 def _default_openai_max_tokens_cap(model: str) -> int:
     """Return a conservative completion-token cap for OpenAI-compatible models.
 
-    The cap must sit at or above the K2 reasoning floor (24576) for reasoning
+    The cap must sit at or above the reasoning floor (24576) for reasoning
     models, otherwise ``min(max(max_tokens, 24576), cap)`` silently clamps the
     floor back down and the model truncates mid-``<think>``. Older OpenAI chat
     models have hard per-request ceilings and must stay capped below the floor.
@@ -96,7 +76,7 @@ def _default_openai_max_tokens_cap(model: str) -> int:
     # gpt-4o-mini hard-caps completions at 16384.
     if "gpt-4o-mini" in m:
         return 16384
-    # K2 Think / reasoning models and other modern OpenAI-compatible endpoints:
+    # Reasoning models and other modern OpenAI-compatible endpoints:
     # a generous cap so the 24576 reasoning floor actually applies and large
     # explicit requests aren't clipped. Override via BMC_AGENT_LLM_MAX_TOKENS_CAP.
     return 32768
@@ -118,7 +98,7 @@ _UNSET = object()
 def _strip_reasoning_blocks(text: str) -> str:
     """Strip `<think>...</think>` reasoning traces emitted by reasoning models.
 
-    K2 Think and similar models on OpenAI-compatible endpoints fold their
+    Reasoning models on OpenAI-compatible endpoints fold their
     chain-of-thought into the response ``content`` as a `<think>...</think>`
     block followed by the actual answer. Downstream BMC-Agent stages expect
     a clean spec/JSON answer, so we strip the reasoning region. Handles
@@ -126,7 +106,7 @@ def _strip_reasoning_blocks(text: str) -> str:
 
     * `<think>...</think>FINAL` -- balanced opening + closing tag
     * `RAW</think>FINAL` -- closing only (model started already inside the
-      think context; observed in practice on K2)
+      think context; observed in practice with some reasoning models)
     * no `</think>` tag at all -- return text unchanged
     """
     if not text:
@@ -244,7 +224,7 @@ def agentic_system_prompt(config, role, system_prompt: str) -> str:
 def _is_openrouter(base_url: "str | None") -> bool:
     """True when the OpenAI-compatible endpoint is OpenRouter, which exposes
     extra body params (e.g. ``usage: {include: true}`` for cost accounting) that
-    plain OpenAI / K2 endpoints would reject."""
+    plain OpenAI endpoints would reject."""
     return "openrouter" in (base_url or "").lower()
 
 
@@ -283,15 +263,15 @@ class LLMRetryableError(LLMError):
 
     Raised for non-conforming output (e.g. the response failed a caller-supplied
     ``validate`` predicate). The ``complete()`` retry loop re-samples the model
-    rather than giving up — reasoning models like K2 Think vary across samples,
-    so re-running often yields conforming output.
+    rather than giving up — reasoning models vary across samples, so re-running
+    often yields conforming output.
     """
 
 
 class LLMTruncatedError(LLMRetryableError):
     """The model ran out of completion budget before emitting its answer.
 
-    Observed on K2 Think when the ``<think>`` reasoning trace consumes the whole
+    Observed on reasoning models when the ``<think>`` trace consumes the whole
     ``max_tokens`` budget (``finish_reason=length`` with no closing ``</think>``).
     Retryable, and the retry loop additionally escalates ``max_tokens``.
     """
@@ -334,11 +314,6 @@ class LLMClient:
         self._reliability_recent: "deque[int]" = deque(maxlen=5)  # 1=failed, 0=ok
         self._latency_total_s = 0.0
         self._latency_recent: "deque[float]" = deque(maxlen=5)    # recent durations (s)
-        # K2 ``auto`` backend selection: EWMA latency (seconds) per backend and a
-        # short cooldown (attempts to skip) applied after a retryable failure so
-        # the next attempt flips to the other backend. Empty EWMA => unprobed.
-        self._k2_latency: "dict[str, float]" = {}
-        self._k2_cooldown: "dict[str, int]" = {b: 0 for b in _K2_BACKENDS}
 
     def _add_usage(self, prompt_tokens, completion_tokens) -> None:
         """Accumulate one completion token usage. Best-effort: non-numeric
@@ -411,65 +386,6 @@ class LLMClient:
         return "other"
 
     # ------------------------------------------------------------------
-    # K2 Think backend routing (auto = adapt by measured latency)
-    # ------------------------------------------------------------------
-    def _k2_enabled(self) -> bool:
-        """Backend routing applies only to the K2/IFM OpenAI-compatible endpoint."""
-        return (
-            self.config.resolved_provider() == "openai"
-            and _is_k2_endpoint(self.config.llm_base_url)
-        )
-
-    def _select_k2_backend(self) -> str:
-        """Resolve which K2 backend to use for the next attempt.
-
-        Explicit ``cerebras``/``nvidia`` are honoured as-is. ``auto`` picks the
-        lowest measured-latency backend that isn't in cooldown, preferring
-        Cerebras (the documented-faster default) before any latency data exists.
-        Empty / unknown settings fall back to Cerebras (current behavior)."""
-        choice = (self.config.llm_k2_backend or "").strip().lower()
-        if choice in _K2_BACKENDS:
-            return choice
-        if choice != K2_BACKEND_AUTO:
-            return K2_BACKEND_CEREBRAS  # "" / unknown => doc-default backend
-
-        # auto: drop backends still cooling down from a recent failure.
-        available = [b for b in _K2_BACKENDS if self._k2_cooldown.get(b, 0) <= 0]
-        if not available:
-            available = list(_K2_BACKENDS)  # both cooling down: ignore cooldowns
-        # Prefer Cerebras until we have a latency sample for it; otherwise route
-        # to the lowest-EWMA available backend (Cerebras wins ties).
-        if K2_BACKEND_CEREBRAS in available and K2_BACKEND_CEREBRAS not in self._k2_latency:
-            return K2_BACKEND_CEREBRAS
-        return min(
-            available,
-            key=lambda b: (self._k2_latency.get(b, float("inf")),
-                           0 if b == K2_BACKEND_CEREBRAS else 1),
-        )
-
-    def _record_k2_latency(self, backend: str, duration_s: float) -> None:
-        """Fold one successful call's latency into the backend's EWMA and clear
-        its cooldown. Best-effort: never raises into the request path."""
-        try:
-            d = float(duration_s)
-        except (TypeError, ValueError):
-            return
-        prev = self._k2_latency.get(backend)
-        # Exponential moving average (alpha=0.5) — reacts fast, stays simple.
-        self._k2_latency[backend] = d if prev is None else (0.5 * prev + 0.5 * d)
-        self._k2_cooldown[backend] = 0
-
-    def _penalise_k2_backend(self, backend: str) -> None:
-        """After a retryable failure, skip this backend for the next 2 ``auto``
-        selections so the loop flips to the other backend (the fallback)."""
-        if backend in self._k2_cooldown:
-            self._k2_cooldown[backend] = 2
-        # Age the *other* backends' cooldowns so a single failure doesn't pin us.
-        for b in _K2_BACKENDS:
-            if b != backend and self._k2_cooldown.get(b, 0) > 0:
-                self._k2_cooldown[b] -= 1
-
-    # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
@@ -512,7 +428,8 @@ class LLMClient:
             Optional role identifier (e.g. "spec_gen", "feedback_distill") used to
             select a per-role LLM backend via ``config.llm_role_overrides``. When
             ``None`` (or the role isn't overridden), the global config is used.
-            Enables hybrid setups: e.g. Claude for spec gen, K2 for refinement.
+            Enables hybrid setups: e.g. Claude for spec gen, another model for
+            refinement.
 
         Raises
         ------
@@ -566,19 +483,16 @@ class LLMClient:
         try:
             for attempt in range(self.config.max_spec_retries):
                 _t0 = time.monotonic()
-                # K2 Think backend for THIS attempt (auto adapts by latency /
-                # flips on a prior failure's cooldown). Empty for non-K2 paths.
-                k2_backend = self._select_k2_backend() if self._k2_enabled() else ""
                 try:
                     if provider == "openai":
-                        # OpenAI-compatible endpoints (K2 Think etc.) ignore the
-                        # Anthropic-only "thinking" knob — many reasoning models
-                        # on this path already emit a <think>...</think> trace
-                        # that _strip_reasoning_blocks() handles transparently.
+                        # OpenAI-compatible endpoints ignore the Anthropic-only
+                        # "thinking" knob — many reasoning models on this path
+                        # already emit a <think>...</think> trace that
+                        # _strip_reasoning_blocks() handles transparently.
                         # No prompt-cache breakpoint API here, so fold the shared
                         # prefix into the system text to preserve its content.
                         sys_oa = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
-                        result = self._complete_openai(sys_oa, user_prompt, max_tokens, temperature, k2_backend)
+                        result = self._complete_openai(sys_oa, user_prompt, max_tokens, temperature)
                     elif provider == "claude-code":
                         sys_cc = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
                         result = self._complete_claude_code(sys_cc, user_prompt, max_tokens, temperature)
@@ -616,8 +530,6 @@ class LLMClient:
                         )
                         return result
                     self._record_call(True, None, _dur)
-                    if k2_backend:
-                        self._record_k2_latency(k2_backend, _dur)
                     return result
                 except Exception as exc:
                     self._record_call(
@@ -628,8 +540,8 @@ class LLMClient:
                     last_error = exc
                     cls_name = type(exc).__name__
                     msg = str(exc).lower()
-                    # Truncated reasoning trace: K2 ran out of completion budget
-                    # mid-<think>. Give it more room and re-sample.
+                    # Truncated reasoning trace: the model ran out of completion
+                    # budget mid-<think>. Give it more room and re-sample.
                     if isinstance(exc, LLMTruncatedError):
                         if provider == "openai":
                             max_tokens = min(
@@ -658,10 +570,6 @@ class LLMClient:
                             for tag in ("ratelimit", "rate_limit", "overload", "server", "timeout", "connection", "503", "502", "504", "429")
                         )
                     if retryable:
-                        # Under K2 auto, cool down the failed backend so the next
-                        # attempt flips to the other one (latency-aware fallback).
-                        if k2_backend:
-                            self._penalise_k2_backend(k2_backend)
                         wait = 2 ** attempt  # 1, 2, 4 seconds
                         logger.warning(
                             "LLM retryable error (%s); retrying in %ds (attempt %d/%d)",
@@ -804,33 +712,32 @@ class LLMClient:
         user_prompt: str,
         max_tokens: int,
         temperature: float,
-        k2_backend: str = "",
     ) -> str:
-        """OpenAI-compatible /v1/chat/completions request (used for K2 Think etc.).
+        """OpenAI-compatible /v1/chat/completions request.
 
-        Reasoning models on this path (K2 Think, R1-style) fold a verbose
+        Reasoning models on this path (R1-style) fold a verbose
         ``<think>...</think>`` trace into ``content`` before emitting the
         answer. If ``max_tokens`` is too tight, the model spends the entire
         budget on the trace and the answer never appears -- we observed this
         on spec-generation prompts with the SDK default of 4096. We pad the
-        requested cap to a high floor on K2-style providers so the answer
+        requested cap to a high floor on reasoning providers so the answer
         has room to land.
         """
         api_key = self.config.resolved_api_key()
         if not api_key:
             raise LLMError(
                 "No API key for OpenAI-compatible provider. "
-                "Export K2THINK_API_KEY (or ANTHROPIC_API_KEY) or set llm_api_key in Config."
+                "Export BMC_AGENT_LLM_API_KEY (or ANTHROPIC_API_KEY) or set llm_api_key in Config."
             )
 
-        base = self.config.llm_base_url.rstrip("/") if self.config.llm_base_url else "https://api.k2think.ai/v1"
+        base = self.config.llm_base_url.rstrip("/") if self.config.llm_base_url else "https://api.openai.com/v1"
         if not base.endswith("/v1") and not base.endswith("/v1/"):
             if "/v1" not in base:
                 base = base + "/v1"
         url = base.rstrip("/") + "/chat/completions"
 
-        # Pad max_tokens for reasoning models (K2 Think, R1-style, etc.).
-        # Live K2 CCC sweep observed completion_tokens=16384 repeatedly --
+        # Pad max_tokens for reasoning models (R1-style, etc.).
+        # Observed completion_tokens=16384 repeatedly --
         # the model was exhausting the prior 16k floor on the spec-gen
         # <think> trace and either emitting a truncated answer or failing
         # with finish_reason=length. Raise the floor to 24k so the
@@ -868,21 +775,14 @@ class LLMClient:
         # ``usage.cost``, but only when usage accounting is requested.
         # ``stream_options.include_usage`` above is the OpenAI flag for *token*
         # telemetry; it does NOT surface cost. Gated to OpenRouter — a stray
-        # ``usage`` body param can 400 plain OpenAI / K2 endpoints.
+        # ``usage`` body param can 400 plain OpenAI endpoints.
         if _is_openrouter(base):
             payload["usage"] = {"include": True}
-        # K2 Think backend routing: only the IFM endpoint honours the body flag,
-        # and only NVIDIA needs it (Cerebras is the default when metadata is
-        # omitted). Gated so the flag never reaches OpenAI / OpenRouter.
-        if k2_backend and _is_k2_endpoint(self.config.llm_base_url):
-            logger.debug("K2 Think backend for this call: %s", k2_backend)
-            if k2_backend == K2_BACKEND_NVIDIA:
-                payload["metadata"] = {"use_nvidia": True}
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "MBZUAI/AProver",
+            "User-Agent": "aprover",
             **openrouter_attribution_headers(),
         }
 
@@ -965,7 +865,7 @@ class LLMClient:
             # ``usage.cost`` in the trailing chunk (token x price can't be
             # reconstructed locally — OpenRouter routes one model id to different
             # upstream providers/prices and applies cache discounts). Plain OpenAI
-            # / K2 endpoints omit it, so _add_cost(None) is a no-op there.
+            # endpoints omit it, so _add_cost(None) is a no-op there.
             self._add_cost(usage.get("cost"))
 
         stripped = _strip_reasoning_blocks(text)
@@ -1029,7 +929,7 @@ class LLMClient:
 
         cmd += ["--output-format", "json"]
         # --model is optional; when ``llm_model`` is empty or looks like a
-        # non-claude name (e.g. left over from a K2 Think config), we let the
+        # non-claude name (e.g. left over from an OpenAI-compatible config), we let the
         # CLI pick the default for the user's session. Also skip provider-prefixed
         # ids like "anthropic/claude-sonnet-4.5" (OpenRouter/LiteLLM form): the
         # claude CLI wants a bare alias ("sonnet"/"opus") or native id, not a
@@ -1158,7 +1058,7 @@ class LLMClient:
 # Multi-turn LLM dialogue with tool dispatch. Used by spec_gen v2.2 and the
 # realism check's walk_call_chain extension. Provider-portable in principle
 # but currently only the OpenAI-compatible path is wired (OpenRouter+Claude,
-# K2 Think, etc.); the Anthropic native path raises a NotImplementedError
+# etc.); the Anthropic native path raises a NotImplementedError
 # until / unless we need it.
 #
 # Safety rails are mandatory: max_iterations bounds the LLM round-trips,
@@ -1254,7 +1154,7 @@ def _add_complete_with_tools_to_llm():
         complete, or ``max_tool_calls`` tool invocations occur.
 
         Provider routing: currently requires the openai-compatible path
-        (OpenRouter+Claude, K2 Think, etc.). The anthropic native path
+        (OpenRouter+Claude, etc.). The anthropic native path
         raises NotImplementedError. Use a per-role override to ensure
         spec-gen / realism land on the openai path.
         """
@@ -1335,10 +1235,10 @@ def _add_complete_with_tools_to_llm():
         if not api_key:
             raise LLMError(
                 "No API key for OpenAI-compatible provider. Export "
-                "BMC_AGENT_LLM_API_KEY / ANTHROPIC_API_KEY / K2THINK_API_KEY "
+                "BMC_AGENT_LLM_API_KEY / ANTHROPIC_API_KEY "
                 "or configure a per-role override."
             )
-        base = (self.config.llm_base_url or "https://api.k2think.ai/v1").rstrip("/")
+        base = (self.config.llm_base_url or "https://api.openai.com/v1").rstrip("/")
         if not base.endswith("/v1") and not base.endswith("/v1/"):
             if "/v1" not in base:
                 base = base + "/v1"
@@ -1378,7 +1278,7 @@ def _add_complete_with_tools_to_llm():
             # OpenRouter reports the authoritative per-request USD spend in
             # ``usage.cost``, but only when usage accounting is requested (mirrors
             # the non-tool _complete_openai path). Gated to OpenRouter — a stray
-            # ``usage`` body param can 400 plain OpenAI / K2 endpoints.
+            # ``usage`` body param can 400 plain OpenAI endpoints.
             if _is_openrouter(base):
                 payload["usage"] = {"include": True}
             headers = {
@@ -1408,7 +1308,7 @@ def _add_complete_with_tools_to_llm():
                 )
                 self._add_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
                 # OpenRouter returns the authoritative per-request USD spend inline
-                # as ``usage.cost``; plain OpenAI / K2 omit it, so this is a no-op
+                # as ``usage.cost``; plain OpenAI omits it, so this is a no-op
                 # there (same contract as _complete_openai).
                 self._add_cost(usage.get("cost"))
 

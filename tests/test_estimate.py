@@ -24,9 +24,9 @@ def c_file(tmp_path: Path) -> Path:
     return src
 
 
-def _llm(model: str, k2: str = "") -> dict:
-    return {"backend": "openai" if "/" in model or k2 else "anthropic",
-            "model": model, "k2_backend": k2}
+def _llm(model: str) -> dict:
+    return {"backend": "openai" if "/" in model else "anthropic",
+            "model": model}
 
 
 def test_estimate_shape_and_range_ordering(c_file: Path):
@@ -44,8 +44,10 @@ def test_estimate_shape_and_range_ordering(c_file: Path):
     assert r["usd"]["expected"] > 0
 
 
-def test_estimate_k2_think_is_free(c_file: Path):
-    r = estimate.estimate_scope(c_file, False, _llm("MBZUAI-IFM/K2-Think-v2", k2="auto"))
+def test_estimate_zero_priced_model_is_free(c_file: Path, monkeypatch):
+    # A preset priced at (0, 0) per Mtok is reported as free.
+    monkeypatch.setattr(estimate.pricing, "preset_price", lambda m: (0.0, 0.0))
+    r = estimate.estimate_scope(c_file, False, _llm("some-free-model"))
     assert r["free"] is True
     assert r["usd"] == {"low": 0.0, "expected": 0.0, "high": 0.0}
     # Tokens are still estimated even though it's free.

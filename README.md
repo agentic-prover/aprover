@@ -3,15 +3,11 @@
   <img alt="AProver" src="assets/logo.svg" height="80">
 </picture>
 
-### 🌐 [**Try AProver live → www.aprover.ai**](https://www.aprover.ai)
-
 Point the **workbench** at a public repo (or a subdirectory / single file), choose a scope, and watch BMC-Agent generate specs, run CBMC, classify counterexamples, and report confirmed bugs with evidence tiers — with live token/$ spend, pause, and granular recovery — right in your browser, no install. Bring your own API key (it stays in your browser).
 
 ---
 
 **AProver — Agentic Prover for AI-Generated Code** — is a suite of LLM-driven formal verification agents. The first agent — **BMC-Agent** — is a prototype of *agentic model checking*: an architecture that pairs an LLM agent (for specification generation, counterexample classification, and spec refinement) with a sound bounded model checking backend. The agent handles semantic reasoning; the solver provides formal guarantees within the unwinding bound.
-
-> 📄 **Paper:** [*Agentic Model Checking*](https://arxiv.org/abs/2605.21434) — Youcheng Sun, Jiawen Liu, Daniel Kroening, Jason Xue (arXiv:2605.21434, 2026). This is the reference for the ideas implemented here; please [cite it](#citation) if you use AProver / BMC-Agent in your work.
 
 BMC-Agent supports three source languages with three solver backends, selected automatically by the source file's extension: **C** via CBMC, **Rust** via Kani, and **Java** via JBMC. The pipeline, classifier, refinement loop, and confidence tiers are shared; the parser and harness generator dispatch per language. (Java/JBMC currently runs as whole-program verification; the agentic per-function spec pipeline applies to C and Rust.)
 
@@ -65,7 +61,7 @@ The **realism checker** (Phase 3 S4) runs an LLM audit on every `REAL_BUG` findi
 ## Installation
 
 ```bash
-git clone https://github.com/agentic-prover/aprover
+git clone https://github.com/anonymous/aprover
 cd aprover
 uv sync
 ```
@@ -185,7 +181,7 @@ All settings are available as environment variables or `Config` dataclass fields
 | Variable | Default | Purpose |
 |---|---|---|
 | `BMC_AGENT_LLM_MODEL` | `claude-sonnet-4-6` | LLM model |
-| `BMC_AGENT_LLM_PROVIDER` | _(auto)_ | LLM provider for all roles: `anthropic`, `openai` (K2 / OpenAI-compatible), or `claude-code` (local `claude` CLI, no API key). Empty = auto-detect. Per-role override: `BMC_AGENT_LLM_<ROLE>_PROVIDER` for `SPEC_GEN`/`REFINEMENT`/`REALISM`/… (CLI sugar: `--provider`, `--specs-via-claude-code`) |
+| `BMC_AGENT_LLM_PROVIDER` | _(auto)_ | LLM provider for all roles: `anthropic`, `openai` (OpenAI-compatible), or `claude-code` (local `claude` CLI, no API key). Empty = auto-detect. Per-role override: `BMC_AGENT_LLM_<ROLE>_PROVIDER` for `SPEC_GEN`/`REFINEMENT`/`REALISM`/… (CLI sugar: `--provider`, `--specs-via-claude-code`) |
 | `BMC_AGENT_CLAUDE_CODE_BIN` | `claude` | Path to the Claude Code CLI (used only when provider is `claude-code`) |
 | `BMC_AGENT_CLAUDE_CODE_TIMEOUT_S` | `600` | Per-call timeout for the `claude -p` path (seconds) |
 | `BMC_AGENT_CLAUDE_CODE_AGENTIC` | `false` | Let the `claude-code` provider use read-only tools (`Read`/`Grep`/`Glob`) to explore the source tree while drafting/refining specs, instead of a one-shot text completion (CLI: `--claude-code-agentic`) |
@@ -246,7 +242,7 @@ Return values use `\result`. Arithmetic operators and C comparisons are translat
 
 **VibeOS** ([repo](https://github.com/kaansenol5/VibeOS/tree/main)) — a ~15,000-line bare-metal ARM64 hobby OS written with substantial LLM assistance. `verify-dir` over all 37 kernel modules (675 functions), every tier on, confirmed **13 realistic bugs** (after the realism filter dropped 48 unrealistic counterexamples) — dynamically-reproduced crashes (`net_get_mac` null deref, `stbtt__h_prefilter` stack OOB write, `stbtt_PackEnd` double-free) and `confirmed_system_entry` flaws (`vfs_lookup` deep-path stack overflow, `vfs_open_handle` `strcpy` overflow, `vfs_close_handle` use-after-free). A separate `calloc` integer overflow (CWE-190) cross-validates [VibeOS issue #26](https://github.com/kaansenol5/VibeOS/issues/26).
 
-**llm.c** ([repo](https://github.com/karpathy/llm.c)) — Karpathy's `train_gpt2.c`, the full GPT-2 forward+backward pass (~1100 lines, no LLM assistance). With the M1–M2 milestones (`--infer-field-validity`, `--infer-array-param-bounds`, `--scale-down`, `--safety-only`), BMC-Agent verifies **22 of 30 functions clean** at scaled-down sizes (`B=T=C=NH=V=Vp=OC=4`), up from 4/30 — including `softmax_forward`, `layernorm_forward/backward`, and `matmul_forward/backward`. To our knowledge this is the first application of bounded model checking to a real ML training program. Full scorecard in [`findings/llm_c/`](findings/llm_c/).
+**llm.c** ([repo](https://github.com/karpathy/llm.c)) — Karpathy's `train_gpt2.c`, the full GPT-2 forward+backward pass (~1100 lines, no LLM assistance). With the M1–M2 milestones (`--infer-field-validity`, `--infer-array-param-bounds`, `--scale-down`, `--safety-only`), BMC-Agent verifies **22 of 30 functions clean** at scaled-down sizes (`B=T=C=NH=V=Vp=OC=4`), up from 4/30 — including `softmax_forward`, `layernorm_forward/backward`, and `matmul_forward/backward`. To our knowledge this is the first application of bounded model checking to a real ML training program.
 
 ## Examples
 
@@ -292,19 +288,7 @@ BMC-Agent is an active research prototype; the pipeline and all confidence tiers
 
 ## Citation
 
-If you use AProver or BMC-Agent in academic work, please cite the paper that introduces *agentic model checking*:
-
-> Youcheng Sun, Jiawen Liu, Daniel Kroening, and Jason Xue. **Agentic Model Checking.** arXiv:2605.21434, 2026. <https://arxiv.org/abs/2605.21434>
-
-```bibtex
-@article{sun2026agentic,
-  title   = {Agentic Model Checking},
-  author  = {Sun, Youcheng and Liu, Jiawen and Kroening, Daniel and Xue, Jason},
-  journal = {arXiv preprint arXiv:2605.21434},
-  year    = {2026},
-  url     = {https://arxiv.org/abs/2605.21434}
-}
-```
+Citation details are withheld for anonymous review.
 
 ## License
 

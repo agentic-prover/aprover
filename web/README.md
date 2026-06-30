@@ -12,7 +12,7 @@ short_description: Chat with an agentic model checker for C
 
 # AProver — chat demo
 
-Web front-end that lets visitors run [AProver](https://github.com/agentic-prover/aprover) by chatting, without configuring the tool.
+Web front-end that lets visitors run [AProver](https://github.com/anonymous/aprover) by chatting, without configuring the tool.
 
 The Space packages:
 

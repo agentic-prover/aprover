@@ -16,7 +16,7 @@
 
 FROM ubuntu:24.04
 
-ARG BMC_AGENT_REPO=https://github.com/agentic-prover/aprover.git
+ARG BMC_AGENT_REPO=https://github.com/anonymous/aprover.git
 ARG BMC_AGENT_REF=main
 
 ENV DEBIAN_FRONTEND=noninteractive \

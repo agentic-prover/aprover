@@ -15,7 +15,7 @@ from web.pricing import MODEL_PRESETS, estimate_usd, preset_price, price_for_mod
 
 def test_model_presets_shape():
     # Every provider the workbench offers has presets, each with one default.
-    for provider in ("anthropic", "openrouter", "openai", "k2think"):
+    for provider in ("anthropic", "openrouter", "openai"):
         presets = MODEL_PRESETS[provider]
         assert presets, provider
         for p in presets:
@@ -25,8 +25,6 @@ def test_model_presets_shape():
 def test_preset_price_exact_only():
     # Priced preset → exact price; unpriced/custom → None (tokens-only estimate).
     assert preset_price("claude-opus-4-8") == (5.0, 25.0)
-    assert preset_price("MBZUAI-IFM/K2-Think-v2") == (0.0, 0.0)  # free
-    assert preset_price("moonshotai/kimi-k2") is None            # paid, no list price yet
     assert preset_price("totally/custom-model") is None
 
 

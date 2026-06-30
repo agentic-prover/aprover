@@ -41,7 +41,6 @@ def _make_config(
     model: str = "",
     base_url: str = "",
     api_key: str = "",
-    k2_backend: str = "",
     progress: "Callable[[dict], None] | None" = None,
     scale_down: bool = False,
     options: "dict | None" = None,
@@ -62,8 +61,6 @@ def _make_config(
         config.llm_base_url = base_url
     if api_key:
         config.llm_api_key = api_key
-    if k2_backend:
-        config.llm_k2_backend = k2_backend
     config.artifact_dir = str(work_dir / "artifacts")
     # Structured-progress hook for the workbench (phase / function / finding /
     # cost events). Attached dynamically — Config has no slots — so the CLI path
@@ -231,7 +228,6 @@ def run_file_streaming(
     provider: str = "",
     model: str = "",
     base_url: str = "",
-    k2_backend: str = "",
     progress: "Callable[[dict], None] | None" = None,
     pause_check: "Callable[[], bool] | None" = None,
     scale_down: bool = False,
@@ -252,7 +248,7 @@ def run_file_streaming(
 
     work_dir = Path(tempfile.mkdtemp(prefix="aprover_web_"))
     config = _make_config(work_dir, provider=provider, model=model, base_url=base_url,
-                          api_key=api_key, k2_backend=k2_backend, progress=progress,
+                          api_key=api_key, progress=progress,
                           scale_down=scale_down, options=options)
     # Discover the repo's include dirs and turn on cc -E preprocessing so a
     # single-file run resolves project headers (the directory path does this in
@@ -284,7 +280,6 @@ def run_directory_streaming(
     provider: str = "",
     model: str = "",
     base_url: str = "",
-    k2_backend: str = "",
     progress: "Callable[[dict], None] | None" = None,
     pause_check: "Callable[[], bool] | None" = None,
     scale_down: bool = False,
@@ -308,7 +303,7 @@ def run_directory_streaming(
 
     work_dir = Path(tempfile.mkdtemp(prefix="aprover_web_"))
     config = _make_config(work_dir, provider=provider, model=model, base_url=base_url,
-                          api_key=api_key, k2_backend=k2_backend, progress=progress,
+                          api_key=api_key, progress=progress,
                           scale_down=scale_down, options=options)
 
     def run_fn(pipeline: AMCPipeline) -> list[tuple[str | None, object]]:
@@ -387,7 +382,6 @@ def run_autonomous_streaming(
     provider: str = "",
     model: str = "",
     base_url: str = "",
-    k2_backend: str = "",
     progress: "Callable[[dict], None] | None" = None,
     pause_check: "Callable[[], bool] | None" = None,
     scale_down: bool = False,
@@ -413,7 +407,7 @@ def run_autonomous_streaming(
 
     work_dir = Path(tempfile.mkdtemp(prefix="aprover_web_"))
     config = _make_config(work_dir, provider=provider, model=model, base_url=base_url,
-                          api_key=api_key, k2_backend=k2_backend, progress=progress,
+                          api_key=api_key, progress=progress,
                           scale_down=scale_down, options=options)
     # Hard safety floor for a public, bring-your-own-key surface: the autonomous
     # loop may NEVER let an LLM patch AProver's own source, whatever the options.

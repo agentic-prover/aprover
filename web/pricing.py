@@ -58,11 +58,6 @@ MODEL_PRESETS: dict[str, list[dict]] = {
         {"id": "gpt-4o", "label": "GPT-4o", "input": 2.5, "output": 10.0, "default": True},
         {"id": "gpt-4o-mini", "label": "GPT-4o mini", "input": 0.15, "output": 0.60},
     ],
-    # K2 Think is the MBZUAI-IFM hosted reasoning model — free. This is a
-    # different thing from OpenRouter's paid "moonshotai/kimi-k2" above.
-    "k2think": [
-        {"id": "MBZUAI-IFM/K2-Think-v2", "label": "K2 Think V2", "input": 0.0, "output": 0.0, "free": True},
-    ],
 }
 
 # Exact model-id → (input, output) $/Mtok, built from the presets. First entry
@@ -201,8 +196,6 @@ _PRICES: list[tuple[str, tuple[float, float]]] = [
     ("o3", (2.0, 8.0)),
     # Common non-Anthropic OpenRouter families, so the live meter still shows a
     # figure when the provider gives no exact cost. Rough public list prices.
-    # NOTE: "kimi"/"k2" here price OpenRouter's *paid* Kimi K2 — the free K2
-    # Think model is handled separately (its provider/backend marks it free).
     ("kimi", (0.6, 2.5)),
     ("deepseek", (0.5, 2.2)),
     ("qwen", (0.4, 1.2)),

@@ -5,8 +5,7 @@ prototype work to see whether the new code surfaces additional real
 bugs. Comparison anchored against:
 - `findings/aws_neuron_driver/scorecard_neuron_cdev.json` (the prior
   trivial-spec sweep — 118 functions × PRE=POST="true")
-- The hybrid_p2 LLM-spec sweep documented in
-  `findings/aws_neuron_driver/hybrid_p2_2026-05-22/`
+- A prior hybrid_p2 LLM-spec sweep on the same target
 
 Two re-runs:
 

@@ -1,12 +1,12 @@
 # Triage — 8 unfiltered real_bug survivors from 2026-05-22 sweeps
 
-Across today's three sweeps (OR-mode Neuron, K2-hybrid P2 Neuron, OR
+Across today's three sweeps (OR-mode Neuron, reasoning-model-hybrid P2 Neuron, OR
 llama.cpp+nghttp2), 32 functions were classified `real_bug` by Phase 3.
 24 of those were correctly downgraded to `unrealistic` by the
 in-sweep feedback loop or the LLM realism check. The remaining **8**
 have `realism_check.verdict ∈ {null, uncertain}` because the realism
 LLM call either failed (8MB OpenRouter limit pre-cbmc.py-patch) or
-hit K2 504 hiccups during the P2 / llama+nghttp2 runs.
+hit reasoning-model 504 hiccups during the P2 / llama+nghttp2 runs.
 
 This document is a manual triage of each survivor based on reading
 the function body and caller sites. **All 8 are FPs.**
@@ -117,8 +117,8 @@ discipline that the kernel + nghttp2 maintain.
 ## How this would close on a re-run with patched bmc-agent
 
 With commits `2ab4dcf` (cbmc raw_output cap), `b7e53eb` (HTTP 4xx
-no-retry), and a healthy K2 backend (current 504 hiccups resolve),
+no-retry), and a healthy reasoning-model backend (current 504 hiccups resolve),
 the realism LLM should fire on each of these 8 candidates and emit
 `UNREALISTIC` with reasoning about the missing caller-side
-initialization context. Estimated re-run cost: ~$0.50 in K2-hybrid
+initialization context. Estimated re-run cost: ~$0.50 in reasoning-model-hybrid
 mode.

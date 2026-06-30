@@ -201,8 +201,8 @@ def estimate_scope(target: Path, is_dir: bool, llm: dict,
                    only_functions: "set[str] | None" = None) -> dict:
     """Estimate tokens + USD for verifying ``target``.
 
-    ``llm`` is the dict from ``server._read_llm_config`` (backend, model,
-    k2_backend). ``max_files`` overrides the reported file cap (per-run setting);
+    ``llm`` is the dict from ``server._read_llm_config`` (backend, model).
+    ``max_files`` overrides the reported file cap (per-run setting);
     None uses the env-default. ``options`` is the validated run-settings dict
     (``web.options.parse_options``) so the estimate reflects the knobs the run
     will actually use (e.g. turning realism on raises the figure).
@@ -275,9 +275,10 @@ def estimate_scope(target: Path, is_dir: bool, llm: dict,
         "high": (float(flags["dedup_max_per_type"]), 1.0, True),
     }
 
-    # Pricing: presets only (custom/unknown → tokens only). K2 Think → free.
-    is_free = bool(llm.get("k2_backend"))
+    # Pricing: presets only (custom/unknown → tokens only). A preset priced at
+    # (0, 0) per Mtok is treated as free.
     price = pricing.preset_price(llm.get("model", "") or "")
+    is_free = price == (0.0, 0.0)
     priced = is_free or price is not None
 
     requests: dict[str, int] = {}

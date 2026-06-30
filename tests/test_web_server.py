@@ -1,7 +1,5 @@
-"""Tests for per-request LLM header parsing in ``web.server._read_llm_config``.
-
-Focus: the K2 Think backend selector (``X-LLM-K2-Backend``) is read, validated to
-the allowed set, and surfaced for the runner to thread into the Config.
+"""Tests for per-request LLM header parsing in ``web.server._read_llm_config``
+and the rest of the web server surface.
 """
 from __future__ import annotations
 
@@ -25,28 +23,13 @@ def _cfg(headers: dict) -> dict:
     return _read_llm_config(_FakeRequest(headers))
 
 
-def test_k2_backend_header_passes_valid_values():
-    for val in ("auto", "cerebras", "nvidia"):
-        cfg = _cfg({"X-LLM-Backend": "openai", "X-LLM-Key": "k",
-                    "X-LLM-K2-Backend": val})
-        assert cfg["k2_backend"] == val
-
-
-def test_k2_backend_header_normalises_case():
+def test_llm_config_reads_headers():
     cfg = _cfg({"X-LLM-Backend": "openai", "X-LLM-Key": "k",
-                "X-LLM-K2-Backend": "NVIDIA"})
-    assert cfg["k2_backend"] == "nvidia"
-
-
-def test_k2_backend_header_invalid_becomes_empty():
-    cfg = _cfg({"X-LLM-Backend": "openai", "X-LLM-Key": "k",
-                "X-LLM-K2-Backend": "gpu-please"})
-    assert cfg["k2_backend"] == ""
-
-
-def test_k2_backend_absent_defaults_empty():
-    cfg = _cfg({"X-LLM-Backend": "openai", "X-LLM-Key": "k"})
-    assert cfg["k2_backend"] == ""
+                "X-LLM-Model": "gpt-4o", "X-LLM-Base-Url": "https://api.openai.com/v1"})
+    assert cfg["backend"] == "openai"
+    assert cfg["model"] == "gpt-4o"
+    assert cfg["base_url"] == "https://api.openai.com/v1"
+    assert cfg["key"] == "k"
 
 
 # --- scope resolution surfaces the repo root for include discovery -----------

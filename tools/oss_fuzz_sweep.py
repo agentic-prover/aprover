@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-project OSS-Fuzz sweep with K2 routing + embargoed-repo auto-upload.
+"""Single-project OSS-Fuzz sweep with per-role LLM routing + embargoed-repo auto-upload.
 
 Per project (e.g. libpng), this script:
 
@@ -7,7 +7,8 @@ Per project (e.g. libpng), this script:
    (only ``main_repo`` is required; everything else is metadata for the report).
 2. Clones / fast-forwards the source repo under ``--corpus-root``.
 3. Invokes ``python -m bmc_agent.cli verify-dir`` on the source directory.
-   Env vars sourced from ``~/.config/bmc-agent/env`` route cheap roles to K2.
+   Env vars sourced from ``~/.config/bmc-agent/env`` route cheap roles to a
+   cheaper model.
 4. Walks the produced ``bug_report.json`` files, keeps the ones that pass the
    full triage gate (confidence ∈ {confirmed_dynamic, confirmed_system_entry,
    confirmed_bmc} AND realism_check.verdict == "realistic"), renders a
@@ -40,7 +41,7 @@ PROJECT_YAML_URL = (
     "https://raw.githubusercontent.com/google/oss-fuzz/master/projects/{name}/project.yaml"
 )
 DEFAULT_CORPUS_ROOT = Path("/tmp/oss_fuzz_corpora")
-DEFAULT_EMBARGOED_ROOT = Path("/tmp/aprover-findings-embargoed")
+DEFAULT_EMBARGOED_ROOT = Path("/tmp/aprover-findings")
 DEFAULT_ARTIFACT_ROOT = Path("/tmp/oss_fuzz_artifacts")
 DEFAULT_ENV_FILE = Path.home() / ".config" / "bmc-agent" / "env"
 DEFAULT_LOG_ROOT = Path(__file__).resolve().parents[1] / "findings" / "oss_fuzz"
@@ -755,7 +756,7 @@ def sweep_one_project(args: argparse.Namespace) -> int:
             print(f"[oss_fuzz_sweep] pruned old artifacts: {stale}")
 
     extra_env = load_env_file(args.env_file)
-    extra_env.setdefault("BMC_AGENT_K2_NOTE", f"run_id={run_id}")
+    extra_env.setdefault("BMC_AGENT_RUN_NOTE", f"run_id={run_id}")
     # Smuggle per-project exclude globs through extra_env so the
     # run_verify_dir() helper can stitch them into --exclude flags.
     excl = excludes_for(meta.name)

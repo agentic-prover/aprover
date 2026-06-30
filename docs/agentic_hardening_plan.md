@@ -10,7 +10,7 @@ Launch Claude with bypass (no prompts), then point it here:
 ```
 claude --dangerously-skip-permissions
 ```
-Prompt: "Resume the AProver --agentic hardening. SSH to syc@135.181.215.190,
+Prompt: "Resume the AProver --agentic hardening. SSH to <server>,
 cd ~/AProver, git checkout reproducer-agent-merge, read
 docs/agentic_hardening_plan.md, and continue the budget-free track autonomously
 (start by wiring agent_registry.py). Validate every change against the

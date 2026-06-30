@@ -6,7 +6,7 @@ Discovered today (2026-05-22) during the P2 hybrid sweep on
 ## The observation
 
 Yesterday's trivial-spec sweep flagged a kernel-driver IOCTL handler
-function (details embargoed — see `aprover-findings-embargoed` under
+function (details embargoed — see `<embargoed-findings-repo>` under
 `findings/aws_neuron_driver/unconfirmed/`) as a heap-OOB-read candidate.
 The shape:
 

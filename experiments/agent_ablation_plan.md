@@ -1,7 +1,7 @@
 # Experiment Plan: "full claude-code agents" vs default bmc-agent (ablation)
 
 Status: PLANNED — start after the CCC curated sweep (171 files) completes.
-Owner: Youcheng. Server: `syc@135.181.215.190:~/AProver`, branch `reproducer-agent-merge`.
+Owner: the team. Server: `~/AProver`, branch `reproducer-agent-merge`.
 
 ## 1. Research question / hypothesis
 Does wrapping each pipeline stage in a **tool-using, code-reading Claude Code agent**
@@ -21,13 +21,13 @@ Both arms: `--agentic` pipeline ON, model **claude-sonnet-4-6**, same files, sam
 - **FULL-AGENT arm** (treatment):
   provider `claude-code` + `claude_code_agentic=True`
   (+ likely `enable_agentic_harness=True`, `--specs-via-claude-code`).
-  CONFIRM the exact flag set with Youcheng — these are SEPARABLE ablations:
+  CONFIRM the exact flag set with the team — these are SEPARABLE ablations:
     (a) `claude_code_agentic` alone (agentic realism/spec reasoning, reads code)
     (b) + `enable_agentic_harness` (code-reading harness builder)
     (c) + `--specs-via-claude-code` (agentic spec generation)
   Consider running (a), (a+b), (a+b+c) as a small ablation ladder if budget allows.
 
-CONFOUND NOTE: claude-code CLI on the **team account (youcheng.sun@mbzuai.ac.ae)** uses
+CONFOUND NOTE: claude-code CLI on the **team account** uses
 sonnet-4-6 (verified) — same model as the anthropic arm. Do NOT let the full arm drift to
 opus/CLI-default, or you measure model+harness together. claude-code arm has a subscription
 spending cap → spread over reset windows or it stalls; this alone forbids whole-codebase.
@@ -87,7 +87,7 @@ Target size: ~12-20 files per project.
 - Aggregate to `findings/ablation/SUMMARY.tsv` (arm, project, file, repeat, findings, recall,
   FPs, harnessed, tokens, wall-clock) -> the paper table.
 
-## 7. Open questions to resolve with Youcheng BEFORE running
+## 7. Open questions to resolve with the team BEFORE running
 1. Exact FULL-arm flag set — (a) / (a+b) / (a+b+c) ladder, or just one config?
 2. N repeats — 3 (default) or more for tighter variance bars?
 3. Which account for the claude-code arm (team metered vs Max) given the cap?

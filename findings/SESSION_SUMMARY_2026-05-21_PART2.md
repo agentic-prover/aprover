@@ -9,7 +9,7 @@ Part 1 summary at `findings/SESSION_SUMMARY_2026-05-21.md`.
 - **20 → 30+ files swept** with bmc-agent kernel-mode harnesses
 - **427+ functions verified clean** across the entire driver
 - **1 real-bug candidate** identified (details embargoed —
-  see `agentic-prover/aprover-findings-embargoed` under
+  see `<embargoed-findings-repo>` under
   `findings/aws_neuron_driver/unconfirmed/`)
 - v3/neuron_pelect.c flipped from 0/54 → 43/54 after the 2D-array
   harness-gen fix landed
@@ -28,7 +28,7 @@ Part 1 summary at `findings/SESSION_SUMMARY_2026-05-21.md`.
 
 ### LLM-pipeline demonstrations
 - **All-Claude on neuron_pid.c**: ~$1.50, 0 real bugs
-- **Hybrid (K2+Claude via OpenRouter) on neuron_pid.c**: ~$0.05,
+- **Hybrid (reasoning model + Claude via OpenRouter) on neuron_pid.c**: ~$0.05,
   0 real bugs — **30x cheaper, same outcome**
 - **Hybrid on ggml-alloc.c**: ~$0.25, 8 "real_bug" classifications
   (all defensive-programming gaps already documented; realism
@@ -39,8 +39,8 @@ Part 1 summary at `findings/SESSION_SUMMARY_2026-05-21.md`.
 | Run | Backend | Tokens | Est. Cost |
 |---|---|---:|---:|
 | neuron_pid.c (all-Claude) | claude-sonnet-4-6 direct | ~165K | ~$1.50 |
-| neuron_pid.c (hybrid) | K2 + Claude/OpenRouter | ~41K | ~$0.05 |
-| ggml-alloc.c (hybrid) | K2 + Claude/OpenRouter | ~215K | ~$0.25 |
+| neuron_pid.c (hybrid) | a reasoning model + Claude/OpenRouter | ~41K | ~$0.05 |
+| ggml-alloc.c (hybrid) | a reasoning model + Claude/OpenRouter | ~215K | ~$0.25 |
 | **Session total LLM spend** | | | **~$1.80** |
 | Plus a re-run with realism check on ggml-alloc.c (in flight) | | | ~$0.30 est |
 
@@ -49,10 +49,10 @@ vs all-Claude equivalent of the same coverage: ~$60-100.
 ## Key empirical findings
 
 ### 1. Hybrid mode is ~30x cheaper than all-Claude for equivalent verdicts
-K2's spec quality is approximately equivalent to Claude's for the
+The reasoning model's spec quality is approximately equivalent to Claude's for the
 DSL formulations bmc-agent uses. The premium price of Claude is
 only justified for spec_gen (the highest-value role); everything
-else (classifier, realism, refinement) is comparable at K2 quality.
+else (classifier, realism, refinement) is comparable at reasoning-model quality.
 
 ### 2. The bmc-agent classifier is over-eager without realism check
 Without `BMC_AGENT_ENABLE_REALISM_CHECK=true`, the classifier

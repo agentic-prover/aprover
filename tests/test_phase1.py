@@ -860,7 +860,7 @@ def test_spec_prompts_no_dsl_grammar_placeholder():
 
 
 # ---------------------------------------------------------------------------
-# Vacuous-spec critique pass (K2/openai provider)
+# Vacuous-spec critique pass (openai provider)
 # ---------------------------------------------------------------------------
 
 def _make_generator_with_mock(tmp_path, responses, provider="openai"):
@@ -915,7 +915,7 @@ def test_vacuous_critique_skips_anthropic_provider(tmp_path):
 
 
 def test_vacuous_critique_runs_on_openai_provider(tmp_path):
-    """openai/K2 path: second call fires when first is vacuous on non-trivial body."""
+    """openai path: second call fires when first is vacuous on non-trivial body."""
     initial = json.dumps({"precondition": "true", "postcondition": "true"})
     upgraded = json.dumps({
         "precondition": "true",
@@ -928,7 +928,7 @@ def test_vacuous_critique_runs_on_openai_provider(tmp_path):
 
 
 def test_vacuous_critique_keeps_first_when_second_is_also_vacuous(tmp_path):
-    """If K2 insists on true/true twice, take that as a signal not to churn further."""
+    """If the model insists on true/true twice, take that as a signal not to churn further."""
     initial = json.dumps({"precondition": "true", "postcondition": "true"})
     again = json.dumps({"precondition": "true", "postcondition": "true"})
     gen, mock = _make_generator_with_mock(tmp_path, [initial, again], provider="openai")

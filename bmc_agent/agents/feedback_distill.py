@@ -61,9 +61,9 @@ class FeedbackDistillAgent(BaseAgent[Remediation]):
         super().__init__(config, llm)
 
     def _llm_call_kwargs(self) -> dict:
-        # K2 Think exhausts a 2048 budget on its <think> trace before
+        # Reasoning models exhaust a 2048 budget on their <think> trace before
         # emitting the JSON remediation — live sweep showed 16 calls
-        # failing with finish_reason=length. Bump budget so K2 has
+        # failing with finish_reason=length. Bump budget so the model has
         # headroom; also turn extended-thinking off since the distill
         # response already includes structured reasoning in the
         # rationale field.

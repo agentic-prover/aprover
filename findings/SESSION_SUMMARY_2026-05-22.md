@@ -13,7 +13,7 @@ fixes in the first place.
 1. **Config: recognise `BMC_AGENT_LLM_API_KEY` env var** (`3a03126`).
    The hybrid env-file convention sets `BMC_AGENT_LLM_API_KEY` alongside
    `_BASE_URL` / `_MODEL` / `_PROVIDER`. Config only honoured
-   `K2THINK_API_KEY` / `ANTHROPIC_API_KEY`, so any sweep using the
+   `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, so any sweep using the
    local key environment got an empty key for non-spec_gen
    roles. The realism check (the feature that downgrades
    defensive-programming gaps from `real_bug` → `unrealistic`) was
@@ -60,7 +60,7 @@ fixes in the first place.
 ### Test suite
 
 **684 passing, 2 skipped** (was 678 baseline). +6 net new tests:
-- `test_bmc_agent_llm_api_key_env` / `_beats_k2think` — env-var fallback.
+- `test_bmc_agent_llm_api_key_env` / `_beats_openai` — env-var fallback.
 - `test_raw_output_capped_for_huge_cbmc_json` — CBMC dump cap.
 - `test_struct_assignment_does_not_blow_up_variable_assignments`.
 - `test_scalar_assignment_still_uses_data_field`.
@@ -69,8 +69,7 @@ fixes in the first place.
 ### Hybrid-mode AWS Neuron sweep (8 files, 61 functions)
 
 Files: `neuron_arch`, `_log`, `_topsp`, `_cinit`, `_module`, `_core`,
-`_ds`, `_reset`. Full per-file table in
-[`findings/aws_neuron_driver/hybrid_sweep_2026-05-22/README.md`](aws_neuron_driver/hybrid_sweep_2026-05-22/README.md).
+`_ds`, `_reset`. Full per-file table not included here.
 
 | Metric | Value |
 |---|---|
@@ -95,13 +94,12 @@ inspection of caller sites in `/tmp/aws-neuron-driver/` confirms they
 follow the same defensive-programming-gap pattern as yesterday's
 `ggml-alloc.c` sweep. **Net: 0 likely-true bugs in this sweep.**
 
-Routing: started K2-hybrid; switched to all-OpenRouter when K2 went
-HTTP 504 mid-sweep. K2 has since recovered.
+Routing: started reasoning-model-hybrid; switched to all-OpenRouter when the reasoning model went
+HTTP 504 mid-sweep. the reasoning model has since recovered.
 
-### Phase-2 sweep (K2-hybrid, giant Neuron files)
+### Phase-2 sweep (reasoning-model-hybrid, giant Neuron files)
 
-`neuron_cdev / dma / mempool / metrics` — see
-[`aws_neuron_driver/hybrid_p2_2026-05-22/README.md`](aws_neuron_driver/hybrid_p2_2026-05-22/README.md).
+`neuron_cdev / dma / mempool / metrics`.
 
 | Metric | Value |
 |---|---|
@@ -123,15 +121,14 @@ runs both modes per target.
 ### Hybrid sweep on llama.cpp + nghttp2 (OR-mode)
 
 `ggml-quants.c` and `nghttp2_frame.c` — see
-[`llama_cpp_ggml/hybrid_sweep_2026-05-22/README.md`](llama_cpp_ggml/hybrid_sweep_2026-05-22/README.md)
-and [`nghttp2/hybrid_sweep_2026-05-22/README.md`](nghttp2/hybrid_sweep_2026-05-22/README.md).
+[`llama_cpp_ggml/hybrid_sweep_2026-05-22/README.md`](llama_cpp_ggml/hybrid_sweep_2026-05-22/README.md).
 
 | Metric | Value |
 |---|---|
 | Functions analysed | 188 (115 ggml + 73 nghttp2) |
 | Verified clean | **71** (33 ggml + 38 nghttp2) |
 | `real_bug` raw | 19 |
-| `real_bug` after filter | 2 (both K2-504-uncertain) |
+| `real_bug` after filter | 2 (both reasoning-model-504-uncertain) |
 | `spurious` | 44 |
 
 Notable: the feedback loop discovered a multi-clause invariant for
@@ -169,7 +166,7 @@ felt wrong — the realism check was supposed to fire. Root-causing it
 surfaced THREE distinct bmc-agent bugs that compounded each other:
 
 1. **Env-var mismatch** — `BMC_AGENT_LLM_API_KEY` set in env but config
-   read `K2THINK_API_KEY`, so the realism LLM had no key at all.
+   read `OPENAI_API_KEY`, so the realism LLM had no key at all.
 2. **CBMC raw_output / struct-stringify blow-up** — bug_report.json hit
    264 MB on `ts_nq_destroy` because CBMC's full trace dump and a struct
    value's recursive `str()` ballooned the in-memory state.
@@ -188,7 +185,7 @@ from one round of empirical sweeping.
 | Sweep | Files | Clean | real_bug raw | After filter | Spurious |
 |---|---:|---:|---:|---:|---:|
 | OR-mode Neuron (8 files) | 8 | 21 | 10 | 4 | 8 |
-| K2-hybrid P2 (4 giant Neuron) | 4 | 85 | 3 | 2 | 35 |
+| reasoning-model-hybrid P2 (4 giant Neuron) | 4 | 85 | 3 | 2 | 35 |
 | OR llama.cpp + nghttp2 | 2 | 71 | 19 | 2 | 44 |
 | **Total** | **14** | **177** | **32** | **8** | **87** |
 
@@ -196,14 +193,14 @@ from one round of empirical sweeping.
 AWS Neuron driver kernel attack surface and two heavily-fuzzed OSS
 targets, in a single ~3-hour session. **8 surviving real_bug
 candidates** — all `confirmed_system_entry` with `realism=null/uncertain`
-due to either K2 504 hiccups during the realism call or upstream
+due to either reasoning-model 504 hiccups during the realism call or upstream
 realism-prompt size issues that the cbmc.py patch fixes for future
 sweeps. Triage tool: `findings/find_unfiltered_real_bugs.py`.
 
 ## Open items for next session
 
 - Re-run the 8 surviving real_bug candidates with the fully-patched
-  pipeline + healthy K2 backend; expect most/all to flip to
+  pipeline + healthy reasoning-model backend; expect most/all to flip to
   `unrealistic` (defensive-programming-gap pattern).
 - Disk cleanup: `/tmp/aprover_neuron_or_sweep` is ~24 GB because the
   in-flight OR pipeline ran before commit `2ab4dcf` landed. The

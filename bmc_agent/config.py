@@ -17,7 +17,7 @@ def _parse_role_overrides_env() -> "dict[str, dict[str, str]]":
     1. **Hybrid quick-start.** Set ``BMC_AGENT_HYBRID_SPEC_GEN_KEY`` (typically
        an OpenRouter key) and bmc-agent will route spec_gen + feedback_distill
        to ``anthropic/claude-sonnet-4.5`` via OpenRouter, leaving every other
-       call on the global default (K2 etc.). Optional overrides for the model
+       call on the global default. Optional overrides for the model
        and base URL: ``BMC_AGENT_HYBRID_SPEC_GEN_MODEL``,
        ``BMC_AGENT_HYBRID_SPEC_GEN_BASE_URL``.
 
@@ -122,26 +122,18 @@ class Config:
     # multi-hour sweep (observed in a libxml2 run that froze for >35 minutes
     # mid-pipeline). Also used as the httpx timeout on the openai-compatible
     # path. Default sized to accommodate reasoning models on the openai path
-    # (K2 Think regularly takes 60-180s on a complex spec-gen prompt).
+    # (reasoning models regularly take 60-180s on a complex spec-gen prompt).
     llm_request_timeout_s: float = 300.0
     # Provider dispatch:
     #   "anthropic"        -- native Anthropic Messages API (claude-* via api.anthropic.com
     #                          or OpenRouter proxy)
-    #   "openai"           -- OpenAI-compatible /v1/chat/completions (K2 Think, OpenAI,
+    #   "openai"           -- OpenAI-compatible /v1/chat/completions (OpenAI,
     #                          most self-hosted endpoints)
     #   "claude-code"      -- shell out to the local Claude Code CLI (`claude -p`).
     #                          No API key required: uses the host's existing login.
     # Empty string => auto-detect: claude-code when no API key is set anywhere,
-    # otherwise openai for K2-Think / /v1 base URLs and anthropic for the rest.
+    # otherwise openai for /v1 base URLs and anthropic for the rest.
     llm_provider: str = ""
-
-    # K2 Think (IFM) inference backend: "auto" | "cerebras" | "nvidia". The IFM
-    # endpoint routes one request to either hardware backend via a body flag
-    # (omit => Cerebras, the fast default; metadata.use_nvidia => NVIDIA). "auto"
-    # adapts per-call by measured latency with fallback (see LLMClient). Empty is
-    # treated as "cerebras", preserving the current implicit default. Honoured
-    # only on the K2/IFM OpenAI-compatible endpoint; ignored elsewhere.
-    llm_k2_backend: str = ""
 
     # Path to the Claude Code CLI binary, used only when provider == "claude-code".
     # Override via BMC_AGENT_CLAUDE_CODE_BIN if `claude` isn't on $PATH.
@@ -206,7 +198,7 @@ class Config:
     #
     # Canonical hybrid setup: route spec_gen + feedback_distill through
     # Claude (higher spec quality) while keeping the workhorse refinement,
-    # realism, and classifier calls on K2 (token volume). Empty by default,
+    # realism, and classifier calls on a cheaper model (token volume). Empty by default,
     # so existing single-backend behaviour is unchanged.
     llm_role_overrides: "dict[str, dict[str, str]]" = field(default_factory=dict)
 
@@ -857,7 +849,6 @@ class Config:
         """Return the effective API key, reading from env if not set directly.
 
         Priority: ``llm_api_key`` field → ``BMC_AGENT_LLM_API_KEY`` →
-        ``K2THINK_API_KEY`` (when provider resolves to openai) →
         ``ANTHROPIC_API_KEY``. The ``claude-code`` provider doesn't need
         a key (it shells out to the locally-logged-in CLI), so this can
         legitimately return an empty string for that provider.
@@ -867,10 +858,6 @@ class Config:
         bmc_key = os.environ.get("BMC_AGENT_LLM_API_KEY", "")
         if bmc_key:
             return bmc_key
-        if self.resolved_provider() == "openai":
-            k2_key = os.environ.get("K2THINK_API_KEY", "")
-            if k2_key:
-                return k2_key
         return os.environ.get("ANTHROPIC_API_KEY", "")
 
     def role_settings(self, role: str | None) -> dict:
@@ -894,7 +881,7 @@ class Config:
 
         If ``llm_provider`` is set explicitly, honour it. Otherwise auto-detect:
 
-        * K2 Think and other OpenAI-compatible base URLs route to "openai".
+        * OpenAI-compatible base URLs (ending in /v1) route to "openai".
         * If no API key is set anywhere (and no explicit base_url suggests
           openai), route to "claude-code" so the local Claude Code CLI is
           used — this is the zero-config default.
@@ -904,7 +891,7 @@ class Config:
         if self.llm_provider:
             return self.llm_provider
         base = (self.llm_base_url or "").lower()
-        if "k2think.ai" in base or base.endswith("/v1") or base.endswith("/v1/"):
+        if base.endswith("/v1") or base.endswith("/v1/"):
             return "openai"
         # Zero-config default: if no API key was found in any of the usual
         # places, fall back to the local Claude Code CLI.
@@ -912,7 +899,6 @@ class Config:
             self.llm_api_key
             or os.environ.get("BMC_AGENT_LLM_API_KEY", "")
             or os.environ.get("ANTHROPIC_API_KEY", "")
-            or os.environ.get("K2THINK_API_KEY", "")
             or os.environ.get("BMC_AGENT_HYBRID_SPEC_GEN_KEY", "")
         ):
             return "claude-code"
@@ -938,7 +924,6 @@ class Config:
                 os.environ.get("BMC_AGENT_LLM_DEFAULT_API_KEY", "")
                 or os.environ.get("BMC_AGENT_LLM_API_KEY", "")
                 or os.environ.get("ANTHROPIC_API_KEY", "")
-                or os.environ.get("K2THINK_API_KEY", "")
             ),
             llm_base_url=(
                 os.environ.get("BMC_AGENT_LLM_DEFAULT_BASE_URL", "")
@@ -949,7 +934,6 @@ class Config:
                 os.environ.get("BMC_AGENT_LLM_DEFAULT_PROVIDER", "")
                 or os.environ.get("BMC_AGENT_LLM_PROVIDER", "")
             ),
-            llm_k2_backend=os.environ.get("BMC_AGENT_LLM_K2_BACKEND", "").strip().lower(),
             claude_code_bin=os.environ.get("BMC_AGENT_CLAUDE_CODE_BIN", "claude"),
             claude_code_timeout_s=float(os.environ.get("BMC_AGENT_CLAUDE_CODE_TIMEOUT_S", "600.0")),
             claude_code_agentic=os.environ.get("BMC_AGENT_CLAUDE_CODE_AGENTIC", "false").lower()

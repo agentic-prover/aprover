@@ -102,7 +102,7 @@ def test_spec_slice_oob_filtered():
     """Slice OOB inside a ``check_<fn>.assertion`` is also a spec-evaluation
     artifact (the functional spec indexes into a slice with an unguarded
     nondet pos). Regression: CCC encoding.rs decode_pua_byte 2026-05-19 —
-    K2's functional spec did ``input[pos]`` without a bounds clause and
+    the functional spec did ``input[pos]`` without a bounds clause and
     Kani picked ``pos > input.len()``. The function itself was fine.
     """
     cex = _cex(

@@ -153,8 +153,7 @@ Introduce **two-clause-class specs** end-to-end:
 2. **DSL coverage.** `valid_range`, `__CPROVER_r_ok`, `__CPROVER_w_ok`
    already exist. Make sure the validity-clause classifier doesn't
    miss any DSL terms in current LLM output. Sample 20 specs from
-   `findings/aws_neuron_driver/hybrid_p2_2026-05-22/` first to
-   inventory the clause vocabulary.
+   a recent LLM-spec sweep first to inventory the clause vocabulary.
 3. **Heuristic fallback quality.** When the LLM emits a flat PRE
    (back-compat), the regex classifier needs to be conservative —
    "if in doubt, classify as validity" (asserting too much is

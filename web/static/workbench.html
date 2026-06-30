@@ -265,15 +265,6 @@
         <input class="field mono" id="set-baseurl" placeholder="https://openrouter.ai/api/v1" autocomplete="off" />
         <div class="hint" id="set-baseurl-hint" style="margin:6px 0 16px;">leave blank for the provider default</div>
       </div>
-      <div id="set-k2backend-wrap" class="hidden">
-        <div class="fld-label">inference backend</div>
-        <select class="field mono" id="set-k2-backend">
-          <option value="auto">auto — fastest, with fallback</option>
-          <option value="cerebras">cerebras — fastest</option>
-          <option value="nvidia">nvidia</option>
-        </select>
-        <div class="hint" style="margin:6px 0 16px;">auto routes each call to the faster backend and falls back if one stalls</div>
-      </div>
       <div class="fld-label">budget cap (usd)</div>
       <input class="field mono" id="set-budget" placeholder="unlimited" autocomplete="off" inputmode="decimal" />
       <div class="hint" style="margin:6px 0 16px;">stops the run cleanly once estimated spend crosses the cap · blank = unlimited</div>

@@ -225,7 +225,7 @@ class BaseAgent(abc.ABC, Generic[T]):
 
         Common overrides:
           * ``max_tokens`` — when the response includes a long reasoning
-            block (K2-Think) before the structured payload.
+            block before the structured payload.
           * ``thinking`` — turn extended-thinking on/off per agent.
         """
         return {}

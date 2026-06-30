@@ -5,7 +5,7 @@ Covers:
   * Agent name routes via BMC_AGENT_LLM_FEEDBACK_DISTILL_* env vars
   * build_prompt substitutes verdict / function / witness / reasoning /
     existing clauses into the DISTILL_PROMPT template
-  * _llm_call_kwargs sets max_tokens + thinking=False (K2 budget /
+  * _llm_call_kwargs sets max_tokens + thinking=False (reasoning-model budget /
     distill-doesn't-need-thinking concerns)
   * parse returns Remediation for each scope value
   * Full run() success / LLM-error
@@ -75,7 +75,7 @@ def test_agent_system_prompt_is_spec_system_prompt():
 # ---------------------------------------------------------------------------
 
 def test_llm_call_kwargs_sets_max_tokens_and_thinking():
-    """K2 Think exhausts a 2k budget on its <think> trace before the
+    """Reasoning models exhaust a 2k budget on their <think> trace before the
     JSON; bump max_tokens. Also turn extended-thinking off (distill
     response has its own structured reasoning)."""
     agent = _make_agent(MagicMock())

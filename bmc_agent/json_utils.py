@@ -1,6 +1,6 @@
 """Shared helpers for pulling a JSON object out of an LLM response.
 
-Reasoning models (K2 Think etc.) and chat models alike often wrap the JSON
+Reasoning models and chat models alike often wrap the JSON
 they were asked for in a ``` fence or prepend a sentence of prose. These
 helpers extract the first top-level ``{...}`` object robustly so call sites
 don't each re-implement the same fence/brace-balancing logic.

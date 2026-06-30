@@ -824,7 +824,7 @@ class JudgeAgent:
         """Dispatch a tool-use turn. Picks Anthropic native Messages API
         when the configured provider is "anthropic" (sk-ant key against
         api.anthropic.com), otherwise an OpenAI-compatible
-        /chat/completions endpoint (OpenRouter, K2 Think, etc.).
+        /chat/completions endpoint (OpenRouter, OpenAI, etc.).
 
         Returns the response in OpenAI shape so the rest of the tool-use
         loop is provider-agnostic.
@@ -841,7 +841,7 @@ class JudgeAgent:
                 messages, tool_choice=tool_choice, rs=rs,
             )
 
-        # ---- OpenAI-compatible path (OpenRouter / K2 / OpenAI) ----
+        # ---- OpenAI-compatible path (OpenRouter / OpenAI) ----
         api_key = rs.get("api_key") or self.config.resolved_api_key()
         base_url = rs.get("base_url") or self.config.llm_base_url or "https://openrouter.ai/api/v1"
         model = rs.get("model") or self.config.llm_model

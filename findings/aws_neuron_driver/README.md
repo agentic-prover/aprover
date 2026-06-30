@@ -43,7 +43,7 @@ yet.)
 **ONE candidate** identified in this sweep. Source-audit case is
 substantive but no KASAN reproducer yet — full details (including the
 function, trigger, and PoC sketch) are embargoed pending verification.
-See the private companion repo `agentic-prover/aprover-findings-embargoed`
+See the private companion repo `<embargoed-findings-repo>`
 under `findings/aws_neuron_driver/unconfirmed/`.
 
 **Status: UNCONFIRMED.** Pending KASAN PoC on a Trainium / Inferentia
@@ -118,5 +118,5 @@ during initial kernel-mode bring-up.
 - `scorecard_*.json` — per-file verdicts
 - `sweep_*.log` — raw sweep output
 - Bug analysis, reproducer sketch, and disclosure draft — moved to
-  the private companion repo `agentic-prover/aprover-findings-embargoed`
+  the private companion repo `<embargoed-findings-repo>`
   under `findings/aws_neuron_driver/unconfirmed/`

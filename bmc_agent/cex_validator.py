@@ -1680,8 +1680,8 @@ class CExValidator:
         """Use LLM to generate a tightened precondition.
 
         If the first response is unchanged (or empty), and we are on the
-        openai/K2 path, re-prompt the model with self-critique. Same pattern
-        as the Phase 1 vacuous-spec critique: reasoning models on K2 routinely
+        openai path, re-prompt the model with self-critique. Same pattern
+        as the Phase 1 vacuous-spec critique: reasoning models routinely
         default to "no change" / "true" when asked to refine, which stalls
         the refinement loop at iteration 1 and produces a SPURIOUS verdict
         with empty refinement_history. Critique converts that quiet stall
@@ -1722,7 +1722,7 @@ class CExValidator:
         spurious_state: str,
         caller_reachable_states: str,
     ) -> str:
-        """One refinement call, with a vacuous-output critique retry on K2."""
+        """One refinement call, with a vacuous-output critique retry."""
         try:
             response = self.llm.complete(system_prompt, user_prompt, role="refinement",
                                          cache_prefix=getattr(self.config, "domain_summary", ""),
@@ -1744,7 +1744,7 @@ class CExValidator:
         if not vacuous:
             return first
 
-        # Provider gate: only critique on the openai/K2 path; Claude rarely
+        # Provider gate: only critique on the openai path; Claude rarely
         # stalls on refinement, so the extra call would just double cost.
         provider = (
             self.config.resolved_provider()

@@ -24,7 +24,7 @@ jobs:
 
       - name: Run bmc-agent
         id: bmc
-        uses: agentic-prover/bmc-agent-pr@main
+        uses: anonymous/bmc-agent-pr@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

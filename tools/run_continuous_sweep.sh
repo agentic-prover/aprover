@@ -16,13 +16,13 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
-# Load K2 routing + API key (gitignored, chmod 600).
+# Load LLM routing + API key (gitignored, chmod 600).
 if [[ -r "$HOME/.config/bmc-agent/env" ]]; then
     # shellcheck disable=SC1091
     source "$HOME/.config/bmc-agent/env"
 else
     echo "FATAL: $HOME/.config/bmc-agent/env not found." >&2
-    echo "Run: mkdir -p ~/.config/bmc-agent && create env with K2THINK_API_KEY=..." >&2
+    echo "Run: mkdir -p ~/.config/bmc-agent && create env with BMC_AGENT_LLM_API_KEY=..." >&2
     exit 1
 fi
 

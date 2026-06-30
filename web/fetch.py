@@ -21,7 +21,7 @@ from urllib.error import HTTPError, URLError
 
 _MAX_BYTES = 64 * 1024
 _TIMEOUT = 15
-_USER_AGENT = "aprover-web/0.1 (+https://github.com/agentic-prover/aprover)"
+_USER_AGENT = "aprover-web/0.1 (+https://github.com/anonymous/aprover)"
 
 _PRIVATE_NETS = [
     ipaddress.ip_network("127.0.0.0/8"),

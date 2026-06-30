@@ -89,10 +89,6 @@ def _read_llm_config(request: Request) -> dict[str, str]:
     model = request.headers.get("X-LLM-Model", "").strip()
     base_url = request.headers.get("X-LLM-Base-Url", "").strip()
     key = request.headers.get("X-LLM-Key", "").strip()
-    # K2 Think inference backend: "auto" | "cerebras" | "nvidia" (else ignored).
-    k2_backend = request.headers.get("X-LLM-K2-Backend", "").strip().lower()
-    if k2_backend not in ("auto", "cerebras", "nvidia"):
-        k2_backend = ""
 
     legacy = request.headers.get("X-Anthropic-Key", "").strip()
     if not key and legacy:
@@ -106,7 +102,7 @@ def _read_llm_config(request: Request) -> dict[str, str]:
     if not key:
         key = os.environ.get("ANTHROPIC_API_KEY", "")
     return {"backend": backend, "model": model, "base_url": base_url,
-            "key": key, "k2_backend": k2_backend}
+            "key": key}
 
 
 def _resolve_repo_dir(workspace: Path, repo: str) -> Path:
@@ -213,7 +209,6 @@ def _build_gen_factory(
                     domain_knowledge=domain_knowledge,
                     api_key=llm["key"], provider=llm["backend"],
                     model=llm["model"], base_url=llm["base_url"],
-                    k2_backend=llm.get("k2_backend", ""),
                     progress=progress, pause_check=pause_check, scale_down=scale_down,
                     options=opts, max_rounds=rounds,
                     **kw,
@@ -224,7 +219,6 @@ def _build_gen_factory(
                 domain_knowledge=domain_knowledge,
                 api_key=llm["key"], provider=llm["backend"],
                 model=llm["model"], base_url=llm["base_url"],
-                k2_backend=llm.get("k2_backend", ""),
                 progress=progress, pause_check=pause_check, scale_down=scale_down,
                 options=opts,
                 **kw,
@@ -235,7 +229,6 @@ def _build_gen_factory(
             domain_knowledge=domain_knowledge,
             api_key=llm["key"], provider=llm["backend"],
             model=llm["model"], base_url=llm["base_url"],
-            k2_backend=llm.get("k2_backend", ""),
             progress=progress, pause_check=pause_check, scale_down=scale_down,
             options=opts,
             source_root=str(source_root) if source_root else "",

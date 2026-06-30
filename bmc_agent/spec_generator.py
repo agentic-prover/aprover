@@ -502,7 +502,7 @@ def _parse_llm_spec_response(
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Fallback: reasoning models (K2 Think etc.) sometimes bracket the JSON
+        # Fallback: reasoning models sometimes bracket the JSON
         # with a trailing prose line ("Hope this helps!", "Note: …") even after
         # the </think> strip. The shared extractor strips fences and returns the
         # first balanced top-level JSON object, already parsed (or None).
@@ -511,7 +511,7 @@ def _parse_llm_spec_response(
     if data is not None:
         pre = data.get("precondition", "").strip()
         post = data.get("postcondition", "").strip()
-        # K2 Think regularly emits an over-strict postcondition of the shape
+        # Reasoning models regularly emit an over-strict postcondition of the shape
         # ``(result == E) && E`` -- a correct reference-equivalence clause
         # ANDed with the same predicate standing on its own. The standalone
         # clause turns the postcondition into "the input satisfies E" which
@@ -625,9 +625,9 @@ def _normalise_expr(s: str) -> str:
 
 
 def _strip_redundant_input_clause(post: str) -> str:
-    """Strip the K2 ``(result == E) && E`` over-strictness pattern.
+    """Strip the ``(result == E) && E`` over-strictness pattern.
 
-    K2 Think functional-spec gen frequently emits postconditions of the shape::
+    Reasoning-model functional-spec gen frequently emits postconditions of the shape::
 
         (result == (P(x)))    &&    (P(x))
 
@@ -636,7 +636,7 @@ def _strip_redundant_input_clause(post: str) -> str:
     satisfies P", which over-constrains the function to only verify on
     "happy-path" inputs and produces a spurious CEX whenever Kani picks an
     input that legitimately makes the function return ``false``. Three
-    instances observed live in the K2 CCC sweep (is_ident_start_byte,
+    instances observed live in a sweep (is_ident_start_byte,
     is_ident_cont, …), all SPURIOUS.
 
     The rewrite is deterministic and zero-cost: if ``post`` matches one of
@@ -707,7 +707,7 @@ class SpecGenerator:
         """Run a spec-gen prompt, then re-prompt once if the first response is
         a vacuous ``true`` / ``true`` spec on a non-trivial function body.
 
-        Reasoning-model providers (K2 Think on the openai-compatible path)
+        Reasoning-model providers (on the openai-compatible path)
         emit ``pre=true, post=true`` on ~85% of CCC functions in a default
         generation pass: the model burns the bulk of its completion budget
         on a ``<think>...`` trace and then defaults to the safest answer.
@@ -738,13 +738,13 @@ class SpecGenerator:
         # Anything with an `if`, `match`, loop, or even a let-then-return has a
         # second brace and warrants the critique pass.
         trivial_body = len(body) < 40 and body.count("{") <= 1
-        # Vacuous patterns we've observed K2 emit:
+        # Vacuous patterns we've observed reasoning models emit:
         #   - pre == "true" AND post == "true" (the giveup-trivial pattern)
         #   - pre == "false" (assume(false) prunes all paths -> any postcondition holds)
         #   - post == "false" with pre also "false" (already covered by pre=="false" but worth flagging)
         # A pre of "false" makes the harness trivially verify regardless of the
         # function under test, because Kani sees an unreachable assertion. We
-        # observed this on byteorder::default where K2 emitted both pre and
+        # observed this on byteorder::default where the model emitted both pre and
         # post as "false".
         is_trivially_true = pre.strip() in ("true", "") and post.strip() in ("true", "")
         is_unreachable = pre.strip() == "false"
@@ -752,7 +752,7 @@ class SpecGenerator:
         if not is_vacuous or trivial_body:
             return first
 
-        # Only run the critique on the K2/openai path -- on Anthropic, vacuous
+        # Only run the critique on the openai path -- on Anthropic, vacuous
         # output is already rare and the extra call would just double cost.
         provider = self.config.resolved_provider() if hasattr(self.config, "resolved_provider") else "anthropic"
         if provider != "openai":
@@ -782,7 +782,7 @@ class SpecGenerator:
 
         try:
             # Critique prompt embeds the original prompt verbatim, so it's
-            # noticeably longer than the first call. K2 Think regularly
+            # noticeably longer than the first call. Reasoning models regularly
             # consumed the full 16384-token floor on the first attempt and
             # tripped finish_reason=length on the critique. Bump the cap
             # so the reasoning model has room to think AND emit the answer.

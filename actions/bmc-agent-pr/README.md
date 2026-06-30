@@ -1,6 +1,6 @@
 # bmc-agent-pr
 
-A GitHub Action that runs [bmc-agent](https://github.com/agentic-prover/aprover)
+A GitHub Action that runs [bmc-agent](https://github.com/anonymous/aprover)
 on C source files changed by a pull request and posts a comment summarising
 any `real_bug` verdicts. Inspired by Google
 [CIFuzz](https://google.github.io/oss-fuzz/getting-started/continuous-integration/),
@@ -39,7 +39,7 @@ jobs:
         with:
           fetch-depth: 0   # action needs full history to diff base..head
 
-      - uses: agentic-prover/bmc-agent-pr@main
+      - uses: anonymous/bmc-agent-pr@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -43,7 +43,6 @@
     anthropic: { backend: "anthropic", base_url: "", model: "claude-sonnet-4-6" },
     openrouter: { backend: "openai", base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.6" },
     openai: { backend: "openai", base_url: "https://api.openai.com/v1", model: "gpt-4o" },
-    k2think: { backend: "openai", base_url: "https://api.k2think.ai/v1", model: "MBZUAI-IFM/K2-Think-v2" },
   };
   // Per-provider page metadata. `baseUrl`: "none" hides it, "fixed" shows it
   // read-only, "editable" lets the user change it. `modelFixed` locks the model.
@@ -51,9 +50,8 @@
     anthropic: { label: "Anthropic", desc: "Claude models · native Messages API", keyPlaceholder: "sk-ant-…", keyLink: "https://console.anthropic.com/settings/keys", baseUrl: "none", modelFixed: false },
     openrouter: { label: "OpenRouter", desc: "Hundreds of models · OpenAI-compatible", keyPlaceholder: "sk-or-…", keyLink: "https://openrouter.ai/keys", baseUrl: "editable", modelFixed: false },
     openai: { label: "OpenAI", desc: "GPT models · or any OpenAI-compatible endpoint", keyPlaceholder: "sk-…", keyLink: "https://platform.openai.com/api-keys", baseUrl: "editable", modelFixed: false },
-    k2think: { label: "K2 Think V2", desc: "MBZUAI IFM · reasoning model · OpenAI-compatible", keyPlaceholder: "your K2 Think API key", keyLink: "https://ifm.ai/docs/quick-start", baseUrl: "fixed", modelFixed: true },
   };
-  const PROVIDER_ORDER = ["anthropic", "openrouter", "openai", "k2think"];
+  const PROVIDER_ORDER = ["anthropic", "openrouter", "openai"];
 
   function loadCfg() {
     try {
@@ -64,8 +62,6 @@
         model: c.model || "claude-sonnet-4-6",
         base_url: c.base_url || "",
         key: c.key || "",
-        // K2 Think inference backend: auto | cerebras | nvidia (blank otherwise).
-        k2_backend: c.k2_backend || "",
         // true when `model` is a free-text custom id (not a priced preset).
         model_is_custom: !!c.model_is_custom,
         budget_cap: c.budget_cap == null ? null : c.budget_cap,
@@ -73,7 +69,7 @@
         max_files: c.max_files == null ? null : c.max_files,
       };
     } catch (_) {
-      return { provider: "anthropic", backend: "anthropic", model: "claude-sonnet-4-6", base_url: "", key: "", k2_backend: "", model_is_custom: false, budget_cap: null, max_files: null };
+      return { provider: "anthropic", backend: "anthropic", model: "claude-sonnet-4-6", base_url: "", key: "", model_is_custom: false, budget_cap: null, max_files: null };
     }
   }
   function saveCfg(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
@@ -85,7 +81,6 @@
     anthropic: [{ id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", input: 3, output: 15, default: true }],
     openrouter: [{ id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", input: 3, output: 15, default: true }],
     openai: [{ id: "gpt-4o", label: "GPT-4o", input: 2.5, output: 10, default: true }],
-    k2think: [{ id: "MBZUAI-IFM/K2-Think-v2", label: "K2 Think V2", input: 0, output: 0, free: true }],
   };
   const CUSTOM_OPT = "__custom__";
   // Live OpenRouter id → [input, output] $/Mtok map, filled from /api/models on
@@ -130,7 +125,6 @@
       "X-LLM-Backend": c.backend,
       "X-LLM-Model": c.model,
       "X-LLM-Base-Url": c.base_url || "",
-      "X-LLM-K2-Backend": c.k2_backend || "",
     };
     if (includeKey) h["X-LLM-Key"] = c.key || "";
     return h;
@@ -764,7 +758,7 @@
       (est.n_files ? " · " + est.n_files + (est.n_files === 1 ? " file" : " files") : "");
     const scope = modeLabel + " — " + countStr;
     let cost;
-    if (est.free) cost = "<b>free</b> (K2 Think)";
+    if (est.free) cost = "<b>free</b>";
     else if (usd.expected == null) cost = "—  <span class='hint'>no estimate for a custom model</span>";
     else cost = "<b>~" + fmtUsd(usd.expected) + "</b>  <span class='hint'>(" + fmtUsd(usd.low) + "–" + fmtUsd(usd.high) + ")</span>";
     let out = row("scope", esc(scope)) +
@@ -2075,15 +2069,6 @@
       $("#set-baseurl-hint").textContent = m.baseUrl === "fixed"
         ? "fixed endpoint for this provider" : "leave blank for the provider default";
     }
-    // K2 Think inference backend selector — only for K2 Think (both backends
-    // share the same key/endpoint; "auto" adapts by speed with fallback).
-    const k2wrap = $("#set-k2backend-wrap");
-    if (id === "k2think") {
-      k2wrap.classList.remove("hidden");
-      $("#set-k2-backend").value = (sameAsSaved && cfg.k2_backend) ? cfg.k2_backend : "auto";
-    } else {
-      k2wrap.classList.add("hidden");
-    }
     $("#set-budget").value = cfg.budget_cap != null ? String(cfg.budget_cap) : "";
     $("#set-maxfiles").value = cfg.max_files != null ? String(cfg.max_files) : "";
     $("#set-error").classList.add("hidden");
@@ -2108,7 +2093,6 @@
       ? ($("#set-model").value.trim() || def.model)
       : (sel.value || def.model);
     const baseUrl = m.baseUrl === "none" ? "" : ($("#set-baseurl").value.trim() || def.base_url);
-    const k2Backend = id === "k2think" ? ($("#set-k2-backend").value || "auto") : "";
     const budgetRaw = $("#set-budget").value.trim();
     const err = $("#set-error");
     if (!key) { err.textContent = "An API key is required."; err.classList.remove("hidden"); return; }
@@ -2128,7 +2112,7 @@
       if (!isFinite(n) || n <= 0 || Math.floor(n) !== n) { err.textContent = "Max files must be a positive whole number."; err.classList.remove("hidden"); return; }
       maxFiles = n;
     }
-    saveCfg({ provider: id, backend: def.backend, model, base_url: baseUrl, key, k2_backend: k2Backend, model_is_custom: isCustom, budget_cap: budget, max_files: maxFiles });
+    saveCfg({ provider: id, backend: def.backend, model, base_url: baseUrl, key, model_is_custom: isCustom, budget_cap: budget, max_files: maxFiles });
     closeSettings();
     refreshModelTag();
     updateScopeSummary();

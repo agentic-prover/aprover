@@ -1304,7 +1304,7 @@ def test_non_unwind_not_suppressed(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Refinement-loop vacuous-critique pass (K2 / openai provider)
+# Refinement-loop vacuous-critique pass (openai provider)
 # ---------------------------------------------------------------------------
 
 def _make_validator_for_refinement(provider="openai", responses=None):
@@ -1368,7 +1368,7 @@ def test_refine_critique_fires_on_openai_stall():
 
 
 def test_refine_critique_accepts_stall_when_second_also_vacuous(tmp_path):
-    """If K2 returns the same precondition twice, accept the stall."""
+    """If the model returns the same precondition twice, accept the stall."""
     import json as _json
     same1 = _json.dumps({"refined_precondition": "true"})
     same2 = _json.dumps({"refined_precondition": "true"})
@@ -1401,7 +1401,7 @@ def test_refine_critique_no_retry_when_first_response_already_tight():
 
 
 def test_vacuous_spec_postcondition_violation_filtered(tmp_path):
-    """Regression: 2026-05-19 K2 sweep — is_mmx and invert_condition both
+    """Regression: 2026-05-19 sweep — is_mmx and invert_condition both
     classified REAL_BUG with `check_<fn>.assertion.N: postcondition violated`
     while their specs were pre=true && post=true. Since vacuous specs emit
     NO `kani::assert`, any 'postcondition violated' is intrinsic safety
