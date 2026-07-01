@@ -392,6 +392,66 @@ async def api_functions(request: Request, repo: str = "", path: str = "") -> JSO
     )
 
 
+@app.post("/api/functions-raw")
+async def api_functions_raw(request: Request) -> JSONResponse:
+    """Function names parsed from raw source text posted by the client, for the
+    scope screen's per-function picker on **local** uploads — those files live as
+    browser File System handles and aren't on the server until run time, so the
+    GET ``/api/functions`` (which reads a workspace file) can't serve them. Accepts
+    either a single ``{name, content}`` (single-file scope) or a ``files``
+    ``[{name, content}]`` batch (whole/subdir scope → union of names). Content never
+    touches disk beyond a short-lived tempfile in the parser; on any error or
+    oversize/over-count payload we return ``functions: []`` so the picker falls back
+    to verifying all."""
+    session_id, _workspace, _ = sessions.STORE.get_or_create(
+        request.cookies.get(sessions.COOKIE_NAME)
+    )
+    body = await request.json()
+    raw_files = body.get("files")
+    if isinstance(raw_files, list):
+        files = raw_files[:_UPLOAD_MAX_FILES]
+        total = sum(len((f.get("content") or "").encode("utf-8", "replace"))
+                    for f in files if isinstance(f, dict))
+        funcs: list[str] = ([] if total > _UPLOAD_MAX_BYTES
+                            else await asyncio.to_thread(tree.list_functions_from_sources, files))
+        return _attach_session_cookie(
+            JSONResponse({"ok": True, "functions": funcs}), session_id
+        )
+    name = (body.get("name") or "").strip()
+    content = body.get("content") or ""
+    if len(content.encode("utf-8", "replace")) > _UPLOAD_MAX_BYTES:
+        funcs = []
+    else:
+        funcs = await asyncio.to_thread(tree.list_functions_from_source, name, content)
+    return _attach_session_cookie(
+        JSONResponse({"ok": True, "name": name, "functions": funcs}), session_id
+    )
+
+
+@app.get("/api/functions-dir")
+async def api_functions_dir(request: Request, repo: str = "", path: str = "") -> JSONResponse:
+    """Union of function names across a directory scope (whole repo or a subdir) of
+    a **cloned/server-side** repo, for the scope screen's per-function picker. Same
+    session-gated, workspace-confined access as ``/api/functions``; ``path`` (empty
+    for whole-repo) is confined via ``sessions.safe_path``."""
+    session_id, workspace, _ = sessions.STORE.get_or_create(
+        request.cookies.get(sessions.COOKIE_NAME)
+    )
+    try:
+        repo_dir = _resolve_repo_dir(workspace, repo.strip())
+        base = sessions.safe_path(repo_dir, path) if path.strip() else repo_dir
+        if not base.is_dir():
+            raise ValueError(f"Not a directory: {path}")
+        funcs = await asyncio.to_thread(tree.list_functions_tree, repo_dir, path.strip())
+    except ValueError as exc:
+        return _attach_session_cookie(
+            JSONResponse({"ok": False, "error": str(exc)}, status_code=400), session_id
+        )
+    return _attach_session_cookie(
+        JSONResponse({"ok": True, "path": path, "functions": funcs}), session_id
+    )
+
+
 @app.get("/api/models")
 async def api_models() -> JSONResponse:
     """Per-provider model presets for the Settings dropdown (single source of

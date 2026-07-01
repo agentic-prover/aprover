@@ -18,8 +18,8 @@ Two guarantees the rest of the web layer relies on:
   silent-and-continue (a bad value is clamped or dropped, never an error) so a
   typo can't disable a run — the same discipline as ``limits._env_int``.
 * **Absent means default.** Only keys the browser actually sent survive, so the
-  runner can tell "user left it alone" (→ today's safe demo default) from "user
-  changed it". The runner applies the demo defaults first, then overlays whatever
+  runner can tell "user left it alone" (→ the Config/CLI default) from "user
+  changed it". The runner starts from ``Config.from_env()`` and overlays whatever
   this returns; the estimator defaults the same way.
 
 Field names inside each group match ``Config`` attributes exactly, so the runner
@@ -43,7 +43,7 @@ _BOOL_FIELDS = {
         "enable_dynamic_validation", "enable_reproducer_agent",
         "enable_flag_selection", "enable_bmc_config_agent",
         "enable_feedback_loop", "enable_spec_refiner", "enable_spec_strengthen",
-        "enable_inlining_advisor", "enable_spec_gen_tools",
+        "enable_inlining_advisor", "enable_spec_gen_tools", "enable_realism_tools",
         "enable_global_invariants", "enable_soundness_gate",
         "soundness_gate_fail_closed", "enforce_spec_refiner_retier",
         "enable_oracle_disagreement_diagnosis", "enable_phase_3e_triage",

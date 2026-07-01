@@ -70,13 +70,13 @@ def test_estimate_directory_scope(tmp_path: Path):
 
 # --- the estimate tracks the chosen run options ----------------------------
 
-def test_estimate_realism_option_raises_cost(c_file: Path):
+def test_estimate_realism_option_lowers_cost(c_file: Path):
+    # Realism is on by default (CLI parity); turning it off drops the per-CEx call.
     base = estimate.estimate_scope(c_file, False, _llm("claude-sonnet-4-6"))
-    withr = estimate.estimate_scope(c_file, False, _llm("claude-sonnet-4-6"),
-                                    options={"ai_layers": {"enable_realism_check": True}})
-    # Realism adds a per-counterexample LLM call → expected cost rises.
-    assert withr["requests"]["expected"] > base["requests"]["expected"]
-    assert withr["total_tokens"]["expected"] > base["total_tokens"]["expected"]
+    without = estimate.estimate_scope(c_file, False, _llm("claude-sonnet-4-6"),
+                                      options={"ai_layers": {"enable_realism_check": False}})
+    assert base["requests"]["expected"] > without["requests"]["expected"]
+    assert base["total_tokens"]["expected"] > without["total_tokens"]["expected"]
 
 
 def test_estimate_lite_mode_drops_specgen_cost(c_file: Path):
@@ -87,12 +87,12 @@ def test_estimate_lite_mode_drops_specgen_cost(c_file: Path):
     assert lite["requests"]["low"] < base["requests"]["low"]
 
 
-def test_estimate_default_assumes_realism_off(c_file: Path):
-    # The web run forces realism off by default; the estimate must match (this is
-    # the historical over-count fix). Passing the equivalent option is a no-op.
+def test_estimate_default_assumes_realism_on(c_file: Path):
+    # The web run inherits the CLI default (realism on); the estimate must match.
+    # Passing the equivalent option explicitly is a no-op.
     a = estimate.estimate_scope(c_file, False, _llm("claude-sonnet-4-6"))
     b = estimate.estimate_scope(c_file, False, _llm("claude-sonnet-4-6"),
-                                options={"ai_layers": {"enable_realism_check": False}})
+                                options={"ai_layers": {"enable_realism_check": True}})
     assert a["requests"]["expected"] == b["requests"]["expected"]
 
 

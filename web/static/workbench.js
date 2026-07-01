@@ -169,8 +169,9 @@
     mode: "whole",     // whole | subdir | file
     selPath: "",       // selected dir/file path
     selFns: 0,
-    fnAll: [],         // all function names in the selected file (single-file scope)
+    fnAll: [],         // all function names in the current scope (file or directory)
     fnSel: null,       // Set of chosen names, or null = verify all
+    fnFilter: "",      // substring filter for the function picker (long dir lists)
     runId: null,
     es: null,          // EventSource
     startMs: 0,
@@ -318,7 +319,18 @@
     return node;
   }
 
+  // A fresh scope load starts from a clean slate: run settings back to their
+  // defaults and the domain-knowledge box cleared. (Global settings — API key,
+  // budget cap, max files — live in the gear modal and are intentionally kept;
+  // the function picker is reset separately by the enter* flows.)
+  function resetScopeFields() {
+    saveOptions({});                                  // run settings → defaults
+    const dk = $("#domain-input"); if (dk) dk.value = "";
+    renderRunSettings();                              // reflect defaults + clear "N changed"
+  }
+
   async function enterScopeLocal() {
+    resetScopeFields();
     $("#scope-repo").textContent = S.localRoot + "/";
     $("#scope-ref").textContent = "local";
     $("#scope-cloned").textContent = S.localFiles.length + " source files · on your machine";
@@ -328,12 +340,14 @@
     syncScopeCards();
     renderTree();
     updateScopeSummary();
+    loadFnPicker();   // whole-project scope: populate the function list up front
   }
 
   // ==================================================================
   // SCOPE
   // ==================================================================
   async function enterScope() {
+    resetScopeFields();
     S.local = false;
     $('#scope-cards .scope-card[data-mode="file"]').classList.remove("hidden");
     $("#scope-repo").textContent = (S.sourceType === "github" ? "github.com/" : "") + $("#repo-input").value.trim();
@@ -348,6 +362,7 @@
       S.tree = data.tree;
       renderTree();
       updateScopeSummary();
+      loadFnPicker();   // whole-project scope: populate the function list up front
     } catch (err) {
       $("#tree").innerHTML = "<div class='empty' style='padding:12px 22px;'>tree failed: " + esc(err.message) + "</div>";
     }
@@ -358,13 +373,29 @@
       S.mode = c.dataset.mode;
       // selection must match the mode; clear if incompatible
       if (S.mode === "whole") { S.selPath = ""; }
-      resetFnPicker();   // picker is single-file only; rebuilt on file select
       syncScopeCards();
       renderTree();
       updateScopeSummary();
+      // Whole scope can load its function list immediately; subdir/file wait for a
+      // tree selection (loadFnPicker resets the picker when there's nothing to load).
+      loadFnPicker();
     }));
     $("#change-source").addEventListener("click", () => { clearRunInUrl(); go("connect"); });
     $("#run-btn").addEventListener("click", startRun);
+    const fnSearch = $("#fnpick-search");
+    if (fnSearch) fnSearch.addEventListener("input", () => {
+      S.fnFilter = fnSearch.value || "";
+      renderFnPicker();
+    });
+    const fnToggle = $("#fnpick-toggle");
+    if (fnToggle) fnToggle.addEventListener("click", () => {
+      if (!fnPickerActive()) return;
+      // All selected → clear (= verify all, a stepping stone to picking a few);
+      // otherwise re-select everything. Operates on the full list, not the filter.
+      S.fnSel = (S.fnSel.size === S.fnAll.length) ? new Set() : new Set(S.fnAll);
+      renderFnPicker();
+      updateScopeSummary();
+    });
   }
 
   function syncScopeCards() {
@@ -427,7 +458,8 @@
         S.selFns = node.n_functions != null ? node.n_functions : 1;
         renderTree();
         updateScopeSummary();
-        if (S.mode === "file") loadFnPicker(); else resetFnPicker();
+        // Both file and subdir scope target a selection — (re)load its functions.
+        loadFnPicker();
       });
     } else {
       row.style.cursor = "default";
@@ -435,11 +467,17 @@
     return row;
   }
 
-  // ---- per-function picker (single-file, cloned/server-side scope) ---------
-  // Local uploads have no server-side file to parse until run time, so the picker
-  // is offered only for cloned/server repos — local single-file runs verify all.
+  // ---- per-function picker (any scope) -------------------------------------
+  // Restrict a run to a subset of functions (only_functions), matching the CLI's
+  // --functions. The function list's source depends on scope + origin:
+  //   single file  — cloned: GET /api/functions; local: POST /api/functions-raw
+  //   whole/subdir — cloned: GET /api/functions-dir; local: POST /api/functions-raw
+  //                  with a {files:[…]} batch (union across the in-scope handles).
+  // For directory scope the cross-file call graph is still built over the whole
+  // dir; only Phase 2 BMC is narrowed to the chosen names (server-side).
   function fnPickerActive() {
-    return S.mode === "file" && !S.local && !!S.selPath && S.fnAll.length > 0;
+    const scoped = S.mode === "whole" || !!S.selPath;
+    return scoped && S.fnAll.length > 0;
   }
   // The chosen subset, or null when "all" (omit only_functions ⇒ verify all).
   function chosenFunctions() {
@@ -448,15 +486,46 @@
     return Array.from(S.fnSel);
   }
   function resetFnPicker() {
-    S.fnAll = []; S.fnSel = null;
+    S.fnAll = []; S.fnSel = null; S.fnFilter = "";
+    const sb = $("#fnpick-search"); if (sb) sb.value = "";
     renderFnPicker();
+  }
+  // Read the in-scope local code-file handles' contents (whole/subdir scope).
+  // Mirrors uploadLocalSelection's inScope prefix, code files only.
+  async function readLocalScopeSources() {
+    const prefix = S.mode === "whole" ? "" : S.selPath;
+    const inScope = (p) => !prefix || p === prefix || p.startsWith(prefix + "/");
+    const chosen = S.localFiles.filter((f) => inScope(f.path));
+    const files = [];
+    for (const f of chosen) {
+      files.push({ name: f.path, content: await (await f.handle.getFile()).text() });
+    }
+    return files;
   }
   async function loadFnPicker() {
     resetFnPicker();
-    if (S.mode !== "file" || S.local || !S.selPath || !S.repo || !S.repo.repo) return;
+    if (S.mode !== "whole" && !S.selPath) return;
     try {
-      const data = await api("GET", "/api/functions?repo=" + encodeURIComponent(S.repo.repo) +
-        "&path=" + encodeURIComponent(S.selPath));
+      let data;
+      if (S.local) {
+        // No server-side files yet — parse the handles the browser already holds.
+        if (S.mode === "file") {
+          const f = S.localFiles.find((x) => x.path === S.selPath);
+          if (!f) { renderFnPicker(); return; }
+          const content = await (await f.handle.getFile()).text();
+          data = await api("POST", "/api/functions-raw", { name: S.selPath, content });
+        } else {
+          const files = await readLocalScopeSources();
+          if (!files.length) { renderFnPicker(); return; }
+          data = await api("POST", "/api/functions-raw", { files });
+        }
+      } else {
+        if (!S.repo || !S.repo.repo) return;
+        const r = encodeURIComponent(S.repo.repo);
+        data = (S.mode === "file")
+          ? await api("GET", "/api/functions?repo=" + r + "&path=" + encodeURIComponent(S.selPath))
+          : await api("GET", "/api/functions-dir?repo=" + r + "&path=" + encodeURIComponent(S.mode === "whole" ? "" : S.selPath));
+      }
       S.fnAll = data.functions || [];
       S.fnSel = new Set(S.fnAll);   // default: all selected
     } catch (_) {
@@ -469,9 +538,14 @@
     const box = $("#fnpick");
     if (!fnPickerActive()) { box.classList.add("hidden"); return; }
     box.classList.remove("hidden");
+    // Show the search box only when the list is long enough to warrant filtering.
+    const search = $("#fnpick-search");
+    if (search) search.classList.toggle("hidden", S.fnAll.length <= 8);
+    const q = (S.fnFilter || "").toLowerCase();
     const list = $("#fnpick-list");
     list.innerHTML = "";
     for (const name of S.fnAll) {
+      if (q && !name.toLowerCase().includes(q)) continue;
       const row = document.createElement("label");
       row.className = "fnrow";
       const cb = document.createElement("input");
@@ -491,9 +565,13 @@
   function updateFnHint() {
     if (!fnPickerActive()) return;
     const sel = S.fnSel.size, all = S.fnAll.length;
-    $("#fnpick-hint").textContent = (sel === 0 || sel === all)
-      ? "all selected (" + all + ")"
+    $("#fnpick-hint").textContent = sel === 0 ? "none selected — verify all"
+      : sel === all ? "all selected (" + all + ")"
       : sel + " of " + all + " selected";
+    // The header button doubles as deselect/reset: clear when all are selected,
+    // otherwise re-select everything.
+    const tog = $("#fnpick-toggle");
+    if (tog) tog.textContent = sel === all ? "deselect all" : "select all";
   }
   // Optional free-text domain knowledge injected into spec generation.
   function domainKnowledge() {
@@ -503,9 +581,9 @@
 
   function selectedFnCount() {
     if (!S.tree) return 0;
-    if (S.mode === "whole") return S.tree.n_functions || 0;
     const chosen = chosenFunctions();
     if (chosen) return chosen.length;
+    if (S.mode === "whole") return S.tree.n_functions || 0;
     return S.selFns || 0;
   }
 
@@ -743,7 +821,9 @@
       const body = { repo: S.repo.repo, mode: "whole", path: "", budget_cap: loadCfg().budget_cap, max_files: loadCfg().max_files, options: buildOptions() };
       const dkLocal = domainKnowledge();
       if (dkLocal) body.domain_knowledge = dkLocal;
-      const est = await fetchEstimate({ repo: S.repo.repo, mode: "whole", path: "", max_files: loadCfg().max_files, options: buildOptions() });
+      const onlyFnsLocal = chosenFunctions();
+      if (onlyFnsLocal) body.only_functions = onlyFnsLocal;
+      const est = await fetchEstimate({ repo: S.repo.repo, mode: "whole", path: "", max_files: loadCfg().max_files, options: buildOptions(), only_functions: onlyFnsLocal || undefined });
       if (!(await confirmRun(est))) { go("scope"); return; }
       setPill("live", "verifying");
       // Single-file source is already shown (loaded above); only swap in the
@@ -2080,9 +2160,9 @@
   // Persisted apart from the LLM config so verification preferences stick across
   // runs. Each field maps 1:1 to a web.options group/field; buildOptions()
   // serializes the panel into the request body's `options`, sending ONLY values
-  // that differ from the web-demo default (so "untouched" stays "server default"
-  // and the body stays small). Resource knobs are re-clamped server-side
-  // regardless of the stepper bounds here.
+  // that differ from the default (so "untouched" stays "server default" — the
+  // Config/CLI default — and the body stays small). Resource knobs are re-clamped
+  // server-side regardless of the stepper bounds here.
   const OPT_KEY = "aprover_run_options";
 
   // type: bool | int | select | segment | text.  group: web.options group.
@@ -2106,16 +2186,16 @@
       fields: [
         { k: "cbmc_unwind", group: "depth", type: "int", label: "Loop unwind", def: 4, min: 1, max: 16,
           hint: "How deep loops unroll. Higher finds deeper bugs but is slower." },
-        { k: "cbmc_timeout", group: "depth", type: "int", label: "CBMC timeout", unit: "s", def: 60, min: 5, max: 120,
+        { k: "cbmc_timeout", group: "depth", type: "int", label: "CBMC timeout", unit: "s", def: 120, min: 5, max: 120,
           hint: "Per-check solver time limit." },
         { k: "cbmc_object_bits", group: "depth", type: "select", def: "auto", label: "Object bits", adv: true,
           opts: [["auto", "auto"], ["8", "8"], ["12", "12"], ["16", "16"]],
           hint: "Address-space bits. Raise for state-heavy parsers (libxml2, ASN.1)." },
         { k: "per_function_time_budget_s", group: "depth", type: "int", label: "Per-function budget", unit: "s",
           def: 1200, min: 30, max: 1800, adv: true, hint: "Total solver budget per function across all phases." },
-        { k: "max_refinement_iters", group: "depth", type: "int", label: "Refinement rounds", def: 2, min: 0, max: 8,
+        { k: "max_refinement_iters", group: "depth", type: "int", label: "Refinement rounds", def: 5, min: 0, max: 8,
           adv: true, hint: "Spec-refinement rounds per function." },
-        { k: "max_spec_retries", group: "depth", type: "int", label: "Spec retries", def: 5, min: 0, max: 10,
+        { k: "max_spec_retries", group: "depth", type: "int", label: "Spec retries", def: 3, min: 0, max: 10,
           adv: true, hint: "Retries when spec generation fails." },
         { k: "dedup_max_per_type", group: "depth", type: "int", label: "Counterexamples / type", def: 3, min: 1, max: 8,
           adv: true, hint: "How many counterexamples to keep per property type." },
@@ -2123,13 +2203,15 @@
     },
     {
       key: "ai_layers", title: "AI layers",
-      blurb: "extra LLM stages — off by default keeps the demo fast and cheap",
+      blurb: "extra LLM stages that audit and refine findings (CLI defaults)",
       fields: [
-        { k: "enable_realism_check", group: "ai_layers", type: "bool", def: false, label: "Realism check",
+        { k: "enable_realism_check", group: "ai_layers", type: "bool", def: true, label: "Realism check",
           hint: "An LLM audits each finding to cut false positives (extra cost)." },
         { k: "enable_realism_thinking", group: "ai_layers", type: "bool", def: false, label: "Realism extended thinking",
           dep: "enable_realism_check", adv: true, hint: "Slower, higher-quality realism reasoning." },
-        { k: "enable_dynamic_validation", group: "ai_layers", type: "bool", def: false, label: "Dynamic validation",
+        { k: "enable_realism_tools", group: "ai_layers", type: "bool", def: true, label: "Realism tools",
+          dep: "enable_realism_check", adv: true, hint: "Tool-use augmentation for the realism check (source lookups)." },
+        { k: "enable_dynamic_validation", group: "ai_layers", type: "bool", def: true, label: "Dynamic validation",
           hint: "Compile + run a reproducer to confirm crashes (needs a build env)." },
         { k: "enable_reproducer_agent", group: "ai_layers", type: "bool", def: true, label: "Reproducer agent",
           dep: "enable_dynamic_validation", adv: true, hint: "Tool-using compile → run → fix reproducer." },
@@ -2139,6 +2221,8 @@
           hint: "Distill false-positive patterns into learned clauses." },
         { k: "enable_spec_refiner", group: "ai_layers", type: "bool", def: true, label: "Spec refiner", adv: true,
           hint: "Realism-driven in-sweep spec refinement." },
+        { k: "enable_spec_gen_tools", group: "ai_layers", type: "bool", def: true, label: "Spec-gen tools", adv: true,
+          hint: "Bounded tool-use during spec generation (v2.2)." },
         { k: "enable_inlining_advisor", group: "ai_layers", type: "bool", def: true, label: "Inlining advisor", adv: true,
           hint: "An LLM promotes small callees to inline to cut stub false positives." },
         { k: "enable_global_invariants", group: "ai_layers", type: "bool", def: true, label: "Global invariants", adv: true,
@@ -2237,7 +2321,7 @@
   }
 
   // Serialize the panel into the grouped `options` request object — only values
-  // that differ from the web-demo default (absent ⇒ server demo default).
+  // that differ from the default (absent ⇒ server Config/CLI default).
   function buildOptions() {
     const store = loadOptions();
     const out = {};

@@ -70,8 +70,9 @@ button{font-family:var(--sans);cursor:pointer;}
   border:1px solid var(--line-3);border-radius:8px;background:#fff;color:var(--muted);font-size:16px;}
 .iconbtn:hover{border-color:var(--blue);color:var(--blue);}
 .minibtn{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border:1px solid var(--line-3);
-  border-radius:7px;background:#fff;font:500 11px/1 var(--mono);color:var(--muted);}
-.minibtn:hover{border-color:var(--amber-2);color:var(--amber);}
+  border-radius:7px;background:#fff;font:500 11px/1 var(--mono);color:var(--muted);cursor:pointer;}
+.minibtn:hover:not(:disabled){border-color:var(--amber-2);color:var(--amber);}
+.minibtn:disabled{opacity:.45;cursor:not-allowed;}
 
 /* ---- buttons ---- */
 .btn{display:inline-flex;align-items:center;gap:9px;padding:13px 24px;border:none;border-radius:10px;
@@ -119,10 +120,14 @@ button{font-family:var(--sans);cursor:pointer;}
 .scope-card .lbl{font:600 13px/1 var(--sans);color:var(--muted);}
 .scope-card.on .lbl{color:var(--blue);font-weight:700;}
 .scope-card .sub{font:500 10.5px/1.4 var(--mono);color:var(--fainter);margin-top:8px;padding-left:23px;}
+/* Single scroll region for the variable-height middle (tree + functions + domain +
+   run settings) so the .scope-foot (Run button) stays pinned and visible even when
+   the function picker and Run settings are both expanded on a short viewport. */
+.scope-scroll{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;}
 .tree-head{display:flex;align-items:center;justify-content:space-between;padding:11px 22px;border-bottom:1px solid #f1f3f5;flex:none;}
 .tree-head .t{font:600 11px/1 var(--mono);letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
 .tree-head .h{font:500 10.5px/1 var(--mono);color:var(--faint);}
-.tree{flex:1;overflow:auto;padding:6px 0;min-height:120px;font:500 12.5px/1 var(--mono);}
+.tree{flex:1;overflow:auto;padding:6px 0;min-height:120px;max-height:46vh;font:500 12.5px/1 var(--mono);}
 .trow{display:flex;align-items:center;gap:10px;padding:7px 22px;cursor:pointer;border-left:2px solid transparent;color:#3a4150;}
 .trow:hover{background:rgba(37,99,235,.03);}
 .trow.sel{background:rgba(37,99,235,.07);border-left:2px solid var(--blue);color:var(--blue);font-weight:600;}
@@ -138,8 +143,14 @@ button{font-family:var(--sans);cursor:pointer;}
 .scope-foot .info .a b{color:var(--blue);}
 .scope-foot .info .b{font:500 11px/1.4 var(--mono);color:var(--faint);margin-top:4px;}
 
-/* per-function picker (single-file scope) + domain-knowledge field */
+/* per-function picker (any scope) + domain-knowledge field */
 .fnpick{border-top:1px solid #f1f3f5;flex:none;}
+.fnpick-toggle{font:600 9.5px/1 var(--mono);letter-spacing:.3px;color:var(--faint);cursor:pointer;
+  margin-right:10px;padding:3px 8px;border:1px solid var(--line-3);border-radius:5px;background:#fff;}
+.fnpick-toggle:hover{border-color:var(--blue);color:var(--blue);}
+.fnpick-search{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 22px;border:none;
+  border-bottom:1px solid #f1f3f5;outline:none;font:500 12px/1 var(--mono);color:#3a4150;background:transparent;}
+.fnpick-search::placeholder{color:var(--faint);}
 .fnpick-list{max-height:180px;overflow:auto;padding:6px 0;}
 .fnrow{display:flex;align-items:center;gap:10px;padding:6px 22px;cursor:pointer;font:500 12.5px/1 var(--mono);color:#3a4150;}
 .fnrow:hover{background:rgba(37,99,235,.03);}
@@ -386,7 +397,9 @@ button{font-family:var(--sans);cursor:pointer;}
 .runset .rs-reset{font:600 9.5px/1 var(--mono);letter-spacing:.3px;text-transform:none;color:var(--faint);
   padding:3px 8px;border:1px solid var(--line-3);border-radius:5px;background:#fff;}
 .runset .rs-reset:hover{border-color:var(--amber-2);color:var(--amber);}
-.runset-body{overflow:auto;max-height:38vh;padding:2px 22px 14px;display:flex;flex-direction:column;gap:8px;}
+/* No inner scroll/height cap — the .scope-scroll wrapper owns the single scroll
+   region, so Run settings flow naturally without a clipped/nested scrollbar. */
+.runset-body{padding:2px 22px 14px;display:flex;flex-direction:column;gap:8px;}
 
 .rs-sec{flex-shrink:0;border:1px solid var(--line-3);border-radius:10px;background:#fff;overflow:hidden;}
 .rs-sec>summary{display:flex;align-items:baseline;gap:10px;padding:11px 14px;cursor:pointer;list-style:none;}

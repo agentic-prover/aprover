@@ -16,6 +16,7 @@ re-requests the tree as the user navigates.
 """
 from __future__ import annotations
 
+import tempfile
 import threading
 from pathlib import Path
 
@@ -68,6 +69,71 @@ def list_functions(path: Path) -> list[str]:
         return list(parsed.functions or {})
     except Exception:
         return []
+
+
+def list_functions_from_source(name: str, content: str) -> list[str]:
+    """Like ``list_functions`` but for raw source text held client-side (local
+    uploads, where no server file exists at scope time). ``parse_source_file``
+    dispatches on file extension, so the content is written to a tempfile whose
+    suffix comes from ``name`` before parsing. Empty list on any error."""
+    suffix = Path(name).suffix or ".c"
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=suffix, delete=False, encoding="utf-8"
+        ) as fh:
+            fh.write(content)
+            tmp = Path(fh.name)
+        return list_functions(tmp)
+    except Exception:
+        return []
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def list_functions_from_sources(files: list) -> list[str]:
+    """Union of function names across raw ``[{name, content}]`` sources (local
+    directory scope, where nothing is on the server at scope time). Sorted-unique,
+    so it feeds the same picker as ``list_functions_tree``."""
+    seen: set[str] = set()
+    for f in files or []:
+        if not isinstance(f, dict):
+            continue
+        for name in list_functions_from_source(f.get("name") or "", f.get("content") or ""):
+            seen.add(name)
+    return sorted(seen)
+
+
+# Cap on functions returned for a whole-directory listing — keeps the picker
+# response (and the checkbox list) bounded on large repos; the user filters/types
+# the few names they want. Env-raisable via the same convention as web.limits.
+_MAX_DIR_FUNCTIONS = 2000
+
+
+def list_functions_tree(root: Path, subdir: str = "") -> list[str]:
+    """Sorted-unique function names defined across every code file under ``root``
+    (optionally rooted at ``subdir``), for the scope screen's per-function picker
+    in whole/subdir scope. Same per-file dispatch as ``list_functions``; caller is
+    responsible for confining ``subdir`` (``sessions.safe_path``)."""
+    base = root / subdir if subdir else root
+    if not base.is_dir():
+        return []
+    seen: set[str] = set()
+    for path in sorted(base.rglob("*")):
+        if len(seen) >= _MAX_DIR_FUNCTIONS:
+            break
+        if not path.is_file() or path.is_symlink():
+            continue
+        if path.suffix.lower() not in CODE_EXTENSIONS:
+            continue
+        if any(part.startswith(".") for part in path.relative_to(base).parts):
+            continue
+        seen.update(list_functions(path))
+    return sorted(seen)[:_MAX_DIR_FUNCTIONS]
 
 
 def _build(node_dir: Path, repo_root: Path) -> dict | None:

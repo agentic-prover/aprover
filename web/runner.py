@@ -8,12 +8,11 @@ points share one streaming harness (``_stream_pipeline``):
 - ``run_file_streaming``      — one existing file (e.g. from a cloned repo)
 - ``run_directory_streaming`` — every supported source file under a directory (a repo)
 
-Web-demo *defaults* differ from the CLI on purpose (a visitor's "Run settings"
-panel overrides any of them via the validated ``options`` dict — see
-``web.options`` and ``_make_config``):
-- dynamic validation off (Stage 3 needs a writable build dir on every host)
-- realism check off (extra LLM calls; the demo is already slow)
-- short refinement loop and CBMC timeout, since visitors won't wait minutes
+A web run uses the same defaults as a bare ``bmc-agent verify`` (``_make_config``
+no longer pins any knob before the options overlay, so ``Config.from_env()``
+stands: realism + dynamic validation on, 120s solver budget, 5 refinement rounds,
+3 spec retries). A visitor's "Run settings" panel overrides any of them via the
+validated ``options`` dict — see ``web.options`` and ``_make_config``.
 
 Pipeline log lines are captured per-run via ``bmc_agent.logger.set_log_sink``
 (a context-local sink set inside each run's worker thread), so concurrent runs
@@ -71,19 +70,12 @@ def _make_config(
     # (progress=None) is unaffected. See AMCPipeline._emit.
     if progress is not None:
         config.progress = progress  # type: ignore[attr-defined]
-    # Web-demo safe defaults. Applied BEFORE the run-options overlay so an unset
-    # knob keeps exactly today's demo behavior (dynamic validation + realism off,
-    # short solver budgets) — a run with options=None is byte-for-byte the
-    # historical web run. The visitor's "Run settings" panel overrides any of
-    # these via the validated, clamped ``options`` (see web.options).
-    config.enable_dynamic_validation = False
-    config.enable_realism_check = False
-    config.enable_realism_thinking = False
-    config.cbmc_timeout = 60
-    config.cbmc_unwind = 4
-    config.max_refinement_iters = 2
-    config.max_spec_retries = 5
-
+    # The web inherits the same defaults as a bare ``bmc-agent verify`` run — i.e.
+    # ``Config.from_env()`` (realism + dynamic validation on, 120s solver budget,
+    # 5 refinement rounds, 3 spec retries). A run with options=None is therefore
+    # CLI-identical. The visitor's "Run settings" panel overrides any knob via the
+    # validated, clamped ``options`` (see web.options); the estimator assumes the
+    # same defaults (see web.estimate).
     _apply_options(config, options or {}, api_key)
 
     # Recovery retry on a solver blow-up (the design's "retry · scaled"): bound
@@ -105,7 +97,7 @@ _OVERLAY_GROUPS = ("depth", "ai_layers", "harness", "threat")
 def _apply_options(config: Config, opts: dict, api_key: str) -> None:
     """Overlay the validated, clamped run ``options`` (``web.options.parse_options``)
     onto ``config``. Only keys the visitor actually sent are present, so this
-    never resets an untouched knob away from its demo default."""
+    never resets an untouched knob away from its Config (CLI) default."""
     for group in _OVERLAY_GROUPS:
         for key, val in (opts.get(group) or {}).items():
             if hasattr(config, key):

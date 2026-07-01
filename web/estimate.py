@@ -83,15 +83,12 @@ def _bool_env(name: str, default: bool) -> bool:
 
 def _pipeline_flags(options: dict | None = None) -> dict:
     """Resolve the request-count-affecting flags the way the WEB run resolves
-    them, so the estimate matches what ``web.runner._make_config`` actually does —
-    not the CLI defaults.
+    them, so the estimate matches what ``web.runner._make_config`` actually does.
 
-    ``realism_check`` and ``dynamic_validation`` are forced OFF by the web demo
-    default (``_make_config`` sets them before the options overlay, and the env is
-    ignored on the web path), so here they default off and only the run options
-    turn them on — this also corrects the historical over-count where the estimate
-    assumed realism on. The rest aren't pinned by the demo default, so they read
-    option-first, then env, then the Config default.
+    The web inherits the CLI/Config defaults (``_make_config`` no longer pins any
+    knob before the options overlay), so ``realism_check`` and
+    ``dynamic_validation`` default ON here too and only the run options turn them
+    off. Every flag reads option-first, then the Config default.
     """
     opts = options or {}
     ai = opts.get("ai_layers") or {}
@@ -102,9 +99,9 @@ def _pipeline_flags(options: dict | None = None) -> dict:
         "enable_flag_selection": bool(
             ai.get("enable_flag_selection", _bool_env("BMC_AGENT_ENABLE_FLAG_SELECTION", True))
         ),
-        # Forced off by the web demo default unless the run options enable them.
-        "enable_realism_check": bool(ai.get("enable_realism_check", False)),
-        "enable_dynamic_validation": bool(ai.get("enable_dynamic_validation", False)),
+        # On by default (CLI/Config parity) unless the run options turn them off.
+        "enable_realism_check": bool(ai.get("enable_realism_check", True)),
+        "enable_dynamic_validation": bool(ai.get("enable_dynamic_validation", True)),
         "dedup_max_per_type": int(
             depth.get("dedup_max_per_type",
                       int(os.environ.get("BMC_AGENT_DEDUP_MAX_PER_TYPE", "3")))
