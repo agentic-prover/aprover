@@ -117,18 +117,24 @@
         </div>
       </div>
     </div>
+    <div class="scope-scroll">
     <div class="tree-head">
       <span class="t">project tree</span>
       <span class="h" id="tree-hint">whole project selected</span>
     </div>
     <div class="tree" id="tree"></div>
-    <!-- function picker: single-file scope only. Lists the file's functions so a
-         run can target a subset (only_functions); all selected = verify all. -->
+    <!-- function picker (any scope): lists the scope's functions so a run can target
+         a subset (only_functions); all selected = verify all. For directory scope the
+         cross-file call graph is still built over the whole dir. -->
     <div class="fnpick hidden" id="fnpick">
       <div class="tree-head">
         <span class="t">functions</span>
+        <span style="flex:1;"></span>
+        <button class="fnpick-toggle" id="fnpick-toggle" type="button">deselect all</button>
         <span class="h" id="fnpick-hint">all selected</span>
       </div>
+      <input id="fnpick-search" class="fnpick-search hidden" type="text"
+        placeholder="filter functions…" autocomplete="off" spellcheck="false" />
       <div class="fnpick-list" id="fnpick-list"></div>
     </div>
     <!-- domain knowledge: optional free-text injected into spec generation. -->
@@ -153,6 +159,7 @@
       </button>
       <div class="runset-body hidden" id="runset-body"></div>
     </div>
+    </div><!-- /.scope-scroll -->
     <div class="scope-foot">
       <div class="info">
         <div class="a">Run scope · <b id="scope-label">Whole project</b> — <span id="scope-detail">—</span></div>

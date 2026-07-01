@@ -1,10 +1,10 @@
-"""Mapping + safe-by-default tests for ``web.runner._make_config``.
+"""Mapping tests for ``web.runner._make_config``.
 
-The crux invariant: ``options=None`` reproduces the historical web-demo Config
-byte-for-byte (so the public demo stays safe by default), and a run-settings
-overlay sets exactly the requested knobs while leaving everything else at its
-Config default. Also covers per-role routing (the single BYOK key is injected
-into every role) and the scaled-recovery path.
+The crux invariant: ``options=None`` reproduces a bare ``bmc-agent verify`` Config
+(the web inherits the CLI/Config defaults), and a run-settings overlay sets exactly
+the requested knobs while leaving everything else at its Config default. Also covers
+per-role routing (the single BYOK key is injected into every role) and the
+scaled-recovery path.
 """
 from __future__ import annotations
 
@@ -17,15 +17,17 @@ def _cfg(tmp_path, **kw):
     return runner._make_config(Path(tmp_path), **kw)
 
 
-def test_options_none_reproduces_demo_defaults(tmp_path):
+def test_options_none_uses_cli_defaults(tmp_path):
+    # No run options ⇒ the web Config matches a bare `bmc-agent verify` (Config
+    # defaults: realism + dynamic validation on, 120s budget, 5 refine, 3 retries).
     c = _cfg(tmp_path)
-    assert c.enable_dynamic_validation is False
-    assert c.enable_realism_check is False
+    assert c.enable_dynamic_validation is True
+    assert c.enable_realism_check is True
     assert c.enable_realism_thinking is False
-    assert c.cbmc_timeout == 60
+    assert c.cbmc_timeout == 120
     assert c.cbmc_unwind == 4
-    assert c.max_refinement_iters == 2
-    assert c.max_spec_retries == 5
+    assert c.max_refinement_iters == 5
+    assert c.max_spec_retries == 3
 
 
 def test_empty_options_equals_none(tmp_path):
@@ -50,9 +52,9 @@ def test_overlay_sets_only_requested(tmp_path):
     # Untouched knobs keep their Config defaults — overlay never resets them.
     assert c.enable_feedback_loop is True
     assert c.enable_spec_refiner is True
-    # Demo defaults the overlay didn't touch are still in force.
-    assert c.enable_dynamic_validation is False
-    assert c.cbmc_timeout == 60
+    # CLI/Config defaults the overlay didn't touch are still in force.
+    assert c.enable_dynamic_validation is True
+    assert c.cbmc_timeout == 120
 
 
 def test_harness_and_math_ints_overlay(tmp_path):

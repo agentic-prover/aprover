@@ -154,12 +154,13 @@ def test_estimate_reflects_options_over_http(monkeypatch):
     client = _client(monkeypatch)
     repo = _upload(client, "est", "m.c",
                    "int f(int x){int r=0;for(int i=0;i<x;i++)r+=i;return r;}\n")
+    # Realism is on by default (CLI parity), so turning it OFF lowers the estimate.
     base = client.post("/api/estimate", json={"repo": repo, "mode": "file", "path": "m.c"}).json()["estimate"]
-    withr = client.post("/api/estimate", json={
+    without = client.post("/api/estimate", json={
         "repo": repo, "mode": "file", "path": "m.c",
-        "options": {"ai_layers": {"enable_realism_check": True}},
+        "options": {"ai_layers": {"enable_realism_check": False}},
     }).json()["estimate"]
-    assert withr["requests"]["expected"] > base["requests"]["expected"]
+    assert base["requests"]["expected"] > without["requests"]["expected"]
 
 
 # --- per-function picker + domain knowledge ----------------------------------
@@ -171,6 +172,69 @@ def test_api_functions_lists_names(monkeypatch):
     body = client.get("/api/functions", params={"repo": repo, "path": "m.c"}).json()
     assert body["ok"], body
     assert set(body["functions"]) == {"alpha", "beta"}
+
+
+def test_api_functions_raw_lists_names(monkeypatch):
+    # Local uploads have no server file at scope time: the picker posts raw
+    # source text and the extension drives the parser.
+    client = _client(monkeypatch)
+    body = client.post("/api/functions-raw", json={
+        "name": "m.c", "content": "int alpha(int x){return x;}\nint beta(void){return 0;}\n",
+    }).json()
+    assert body["ok"], body
+    assert set(body["functions"]) == {"alpha", "beta"}
+    rs = client.post("/api/functions-raw", json={
+        "name": "lib.rs", "content": "fn one() {}\nfn two() -> i32 { 0 }\n",
+    }).json()
+    assert set(rs["functions"]) == {"one", "two"}
+
+
+def test_api_functions_raw_batch_unions_names(monkeypatch):
+    # Whole/subdir local scope posts the in-scope handles as a batch.
+    client = _client(monkeypatch)
+    body = client.post("/api/functions-raw", json={"files": [
+        {"name": "a.c", "content": "int foo(){return 0;}\n"},
+        {"name": "sub/b.c", "content": "int bar(void){return 1;}\n"},
+    ]}).json()
+    assert body["ok"], body
+    assert set(body["functions"]) == {"foo", "bar"}
+
+
+def test_api_functions_dir_unions_names(monkeypatch):
+    # Cloned directory scope: union of names across the (sub)tree.
+    client = _client(monkeypatch)
+    r = client.post("/api/upload", json={"name": "dir", "files": [
+        {"path": "a.c", "content": "int foo(){return 0;}\nint baz(){return 2;}\n"},
+        {"path": "sub/b.c", "content": "int bar(void){return 1;}\n"},
+    ]})
+    repo = r.json()["repo"]
+    whole = client.get("/api/functions-dir", params={"repo": repo, "path": ""}).json()
+    assert whole["ok"], whole
+    assert set(whole["functions"]) == {"foo", "baz", "bar"}
+    sub = client.get("/api/functions-dir", params={"repo": repo, "path": "sub"}).json()
+    assert set(sub["functions"]) == {"bar"}
+
+
+def test_api_functions_dir_rejects_traversal(monkeypatch):
+    client = _client(monkeypatch)
+    repo = _upload(client, "dirtrav", "m.c", "int f(void){return 0;}\n")
+    r = client.get("/api/functions-dir", params={"repo": repo, "path": "../../etc"})
+    assert r.status_code == 400
+    assert r.json()["ok"] is False
+
+
+def test_realism_tools_option_overlays_config():
+    # --no-realism-tools equivalent: the toggle is whitelisted and reaches Config.
+    from web import options as _options
+    from web.runner import _apply_options
+    from bmc_agent.config import Config
+    parsed = _options.parse_options({"ai_layers": {
+        "enable_realism_tools": False, "enable_spec_gen_tools": False}})
+    assert parsed["ai_layers"]["enable_realism_tools"] is False
+    cfg = Config()
+    _apply_options(cfg, parsed, api_key="")
+    assert cfg.enable_realism_tools is False
+    assert cfg.enable_spec_gen_tools is False
 
 
 def test_api_functions_rejects_traversal(monkeypatch):
