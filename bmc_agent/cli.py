@@ -185,7 +185,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # round-trips; disable with --no-realism-tools, or disable realism entirely
         # with --no-realism-check. Set authoritatively here so resolution is
         # independent of arg-handling order.
-        config.enable_realism_check = not getattr(args, "no_realism_check", False)  # type: ignore[attr-defined]
+        config.enable_realism_check = bool(getattr(args, "enable_realism_check", False))  # OFF by default; opt in with --enable-realism-check  # type: ignore[attr-defined]
         config.enable_realism_tools = not getattr(args, "no_realism_tools", False)  # type: ignore[attr-defined]
         # Triage runs ADVISORY by default (annotates UNRESOLVED cexs; never changes the
         # verdict). Disable with --no-triage; promotion is opt-in via --triage-authoritative.
@@ -1919,7 +1919,7 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
     # override individual flags via the CLI; we only force the defaults
     # when the corresponding flag wasn't passed.
     config.lite_mode = True
-    config.enable_realism_check = True
+    config.enable_realism_check = bool(getattr(args, "enable_realism_check", False))  # realism opt-in even in autonomous mode
     config.enable_feedback_loop = True
     if config.feedback_max_iters in (None, 3):
         config.feedback_max_iters = 3
@@ -2432,7 +2432,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-realism-check",
         action="store_true",
         default=False,
-        help="Run LLM realism audit on every REAL_BUG finding to reduce false positives",
+        help="Opt in to the legacy LLM realism audit (can re-tier findings). OFF by default; advisory triage is the default LLM layer.",
     )
     ver.add_argument(
         "--enable-realism-thinking",
@@ -2864,7 +2864,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-realism-check",
         action="store_true",
         default=False,
-        help="Run LLM realism audit on every REAL_BUG finding to reduce false positives",
+        help="Opt in to the legacy LLM realism audit (can re-tier findings). OFF by default; advisory triage is the default LLM layer.",
     )
     vd.add_argument(
         "--enable-realism-thinking",

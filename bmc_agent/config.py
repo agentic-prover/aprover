@@ -644,7 +644,7 @@ class Config:
     agentic_refine_rounds: int = 0
 
     # Realism checker settings (Phase 3 post-validation LLM audit)
-    enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
+    enable_realism_check: bool = False       # OFF by default (opt-in --enable-realism-check); advisory TRIAGE is the default LLM layer
     # Adjacent-bug discovery: a 2nd LLM call on each realism REJECTION hunting for
     # nearby defects. DEFAULT OFF — empirically it yielded 130 leads / 0 confirmed bugs
     # (the harvester that verifies leads is a separate opt-in step), while adding an LLM
@@ -990,7 +990,7 @@ class Config:
             enable_dynamic_validation=(os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION") or os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION") or "true").lower() == "true",
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
-            enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
+            enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "false").lower() == "true",
             enforce_realism_on_dynamic=(os.environ.get("BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC") or "true").lower() == "true",
             enable_classifier=True,  # DEPRECATED/always-on: CEx validation cannot be disabled; BMC_AGENT_ENABLE_CLASSIFIER is ignored (kept as a no-op).
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
