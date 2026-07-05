@@ -82,6 +82,13 @@ class RetryAction(str, Enum):
     ``incomplete type not permitted here`` for opaque-handle params
     whose body lives in another TU."""
 
+    STUB_FUNCTION = "stub_function"
+    """Force-stub a named function (add to session_stub_functions) and regen.
+    For function-symbol redefinitions and generic function-localized parse/
+    convert errors: replacing the offending (usually unused kernel-helper)
+    function body with a nondet stub removes the bad construct. Sound for
+    bug-finding (over-approximation)."""
+
     STUB_CALLEE = "stub_callee"
     """Replace a heavy inlined callee's body with a nondet stub and
     re-run. Primary action for ``CbmcErrorClass.TIMEOUT`` in
@@ -103,6 +110,12 @@ class RetryAction(str, Enum):
     Only used as a recovery from TIMEOUT, where the alternative is
     silently dropping the verdict.
     """
+
+    REDUCE_UNWIND = "reduce_unwind"
+    """Reduce the loop-unwind bound (per-function), bypassing the SVCOMP floor.
+    Mapped from OUT_OF_MEMORY: a SAT OOM is a state explosion; a shallower
+    bound shrinks the formula. Sound for bug-finding (--unwinding-assertions
+    stays on, so a clean verify is only trusted when the bound sufficed)."""
 
     BUMP_TIMEOUT = "bump_timeout"
     """Double the per-function CBMC timeout (capped at 600s) and re-run.
@@ -183,12 +196,30 @@ def plan_retry(diag: CbmcErrorDiagnosis) -> RetryPlan:
     cls = diag.error_class
     tag = diag.identifier
 
+    # --- Actionable: SAT out-of-memory -> reduce unwind (state explosion) ---
+    if cls == CbmcErrorClass.OUT_OF_MEMORY:
+        return RetryPlan(
+            action=RetryAction.REDUCE_UNWIND,
+            target=None,
+            reason="SAT out-of-memory = state explosion; reduce unwind bound "
+                   "(sound for bug-finding, --unwinding-assertions stays on)",
+        )
+
     # --- Actionable: convert-time type redefinition ---
     if cls == CbmcErrorClass.CONVERT_TYPE_REDEFINITION and tag:
         return RetryPlan(
             action=RetryAction.ADD_TYPEDEF_TO_STRIP,
             target=tag,
             reason=f"typedef '{tag}' collides with CBMC built-in libc; strip the harness's variant",
+        )
+
+    # --- Actionable: function redefinition / generic function-localized error ---
+    if cls in (CbmcErrorClass.CONVERT_FUNCTION_REDEFINITION,
+               CbmcErrorClass.GENERIC_FUNCTION_ERROR) and tag:
+        return RetryPlan(
+            action=RetryAction.STUB_FUNCTION,
+            target=tag,
+            reason=f"function '{tag}' breaks parse/typecheck (redef/bad construct); stub it (unused kernel helper, sound over-approximation for bug-finding)",
         )
 
     # --- Actionable: convert-time body redefinition (struct/union) ---

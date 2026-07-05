@@ -446,8 +446,7 @@ def build_havoc_abstraction(source: str, loop: LoopSite, invariants: list,
     step = "\n        ".join(f'__CPROVER_assert({c}, "loopinv_{o}_{n}");' for n, c in enumerate(inv_c))
     assume_inv = " && ".join(f"({c})" for c in inv_c)
     scalars, arrays = modified_vars(loop.body)
-    havoc = "\n    ".join([_havoc_stmt(v, _var_type(source, v)) for v in scalars]
-                          + [f"__CPROVER_havoc_object(&{a});" for a in arrays])
+    scalars = list(scalars)
     if loop.kind == "while":
         guard, body, init, incr = (loop.guard or "1"), loop.body, "", ""
     else:  # for(init; cond; incr)
@@ -455,6 +454,18 @@ def build_havoc_abstraction(source: str, loop: LoopSite, invariants: list,
         init = parts[0].strip()
         guard = (parts[1].strip() if len(parts) > 1 else "") or "1"
         incr = parts[2].strip() if len(parts) > 2 else ""
+        body = loop.body
+        # FRAME-COVERAGE FIX: induction vars modified by for-init/incr (not the
+        # body) must also be havoc'd, else the counter keeps its init value, the
+        # guard stays true, the if-body __CPROVER_assume(0) kills the loop-exit
+        # path, and post-loop code verifies vacuously.
+        for _clause in (init, incr):
+            for _m in re.finditer(r"([A-Za-z_]\w*)\s*(?:\+\+|--|\+=|-=|\*=|/=|=)", _clause or ""):
+                _v = _m.group(1)
+                if _v not in scalars and _v not in arrays:
+                    scalars.append(_v)
+    havoc = "\n    ".join([_havoc_stmt(v, _var_type(source, v)) for v in scalars]
+                          + [f"__CPROVER_havoc_object(&{a});" for a in arrays])
     if math_ints:
         body = _inject_no_overflow(body)
     nl = "\n    "

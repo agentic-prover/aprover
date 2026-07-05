@@ -264,6 +264,16 @@ class BMCEngine:
             conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
             pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
             undefined_shift_check   = bool(getattr(flag_selection, "undefined_shift_check", False))
+            import os as _os_ms
+            if _os_ms.environ.get("BMC_MEMSAFE_ONLY"):
+                # Memory-safety-focused: bounds + pointer checks ONLY. Drop the
+                # conversion / arithmetic-overflow / pointer-overflow checks, which
+                # flag benign idioms (intentional narrowing, one-past-end pointers)
+                # as violations -> false alarms the realism filter cannot reliably
+                # clear. Matches the clean single-shot check set (cex FA ~1/10).
+                pointer_check = bounds_check = True
+                unsigned_overflow_check = signed_overflow_check = False
+                conversion_check = pointer_overflow_check = undefined_shift_check = False
             # --- SV-COMP deterministic per-property check override (env SVCOMP_PROP) ---
             import os as _os
             _svp = _os.environ.get("SVCOMP_PROP", "")

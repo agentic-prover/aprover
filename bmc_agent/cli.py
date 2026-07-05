@@ -187,9 +187,12 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # independent of arg-handling order.
         config.enable_realism_check = not getattr(args, "no_realism_check", False)  # type: ignore[attr-defined]
         config.enable_realism_tools = not getattr(args, "no_realism_tools", False)  # type: ignore[attr-defined]
-        # Triage (severity tiering) stays OFF by default; opt in with --enable-triage.
-        if not getattr(args, "enable_triage", False):
+        # Triage runs ADVISORY by default (annotates UNRESOLVED cexs; never changes the
+        # verdict). Disable with --no-triage; promotion is opt-in via --triage-authoritative.
+        if getattr(args, "no_triage", False):
             config.enable_phase_3e_triage = False  # type: ignore[attr-defined]
+        if getattr(args, "triage_authoritative", False):
+            config.triage_authoritative = True  # type: ignore[attr-defined]
         # Agentic CBMC driver: the agent decides how to configure CBMC by reading
         # the code — per-function checks + unwind (flag selector) and which callees
         # to inline vs stub (inlining advisor). Both become code-reading agents
@@ -1305,18 +1308,53 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"Include dirs: {config.include_dirs}")
     _print_ai_layers(config)
 
-    pipeline = AMCPipeline(config)
-    _scope_only = None
-    if getattr(args, "scope_from_entry", False):
-        _entry = getattr(args, "entry", None) or "main"
-        _scope_only = {_entry}
-        print(f"Scope-from-entry: spec-gen + verification restricted to '{_entry}' + transitive callees")
-    bug_reports = pipeline.run(
-        source_file=args.source,
-        driver_name=args.driver,
-        domain_knowledge=domain_knowledge,
-        only_functions=_scope_only,
-    )
+    if getattr(args, "plan", False):
+        from bmc_agent.parser import parse_c_file as _pcf
+        from bmc_agent.agents.plan_agent import PlanAgent as _PA, apply_plan as _ap
+        _entry0 = getattr(args, "entry", None) or "main"
+        _pa = _PA(config)
+        _plan = _pa.initial_plan(_pcf(args.source), entry=_entry0,
+                    property_class=(getattr(args, "plan_property", None) or "unreach-call"))
+        _tried = []
+        bug_reports = []
+        while True:
+            print(f"[PlanAgent] {_plan.rationale}")
+            print(f"[PlanAgent] {_plan.summary()}")
+            _scope_only = _ap(config, _plan)
+            _tried.append(_plan.strategy)
+            pipeline = AMCPipeline(config)
+            bug_reports = pipeline.run(
+                source_file=args.source,
+                driver_name=args.driver,
+                domain_knowledge=domain_knowledge,
+                only_functions=_scope_only,
+            )
+            _summ = getattr(pipeline, "last_verdict_summary", {}) or {}
+            _stalled = (not bug_reports
+                        and _summ.get("inconclusive", 0) > 0
+                        and _summ.get("bug_candidates", 0) == 0
+                        and _summ.get("verified_clean", 0) == 0)
+            _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
+            if _stalled and _next:
+                print(f"[PlanAgent] strategy '{_tried[-1]}' stalled "
+                      f"(inconclusive={_summ.get('inconclusive')}); re-planning -> '{_next[0]}'")
+                _plan = _pa.plan_for_strategy(_next[0], entry=_entry0,
+                                              property_class=_plan.property_class)
+                continue
+            break
+    else:
+        pipeline = AMCPipeline(config)
+        _scope_only = None
+        if getattr(args, "scope_from_entry", False):
+            _entry = getattr(args, "entry", None) or "main"
+            _scope_only = {_entry}
+            print(f"Scope-from-entry: spec-gen + verification restricted to '{_entry}' + transitive callees")
+        bug_reports = pipeline.run(
+            source_file=args.source,
+            driver_name=args.driver,
+            domain_knowledge=domain_knowledge,
+            only_functions=_scope_only,
+        )
 
     # Filter out bug_reports whose realism check returned UNREALISTIC
     # OR whose final classification (saved to classification.json) was
@@ -2453,6 +2491,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path/name of the JBMC binary for Java sources (default: BMC_AGENT_JBMC_PATH or jbmc).",
     )
     ver.add_argument(
+        "--plan",
+        action="store_true",
+        help="Let the PlanAgent choose the analysis strategy (scope_from_entry / frame_havoc / compositional), entry, and unwind/havoc, instead of hand-setting --scope-from-entry / BMC_FRAME_HAVOC / SVCOMP_UNWIND.",
+    )
+    ver.add_argument(
         "--javac-path",
         default=None,
         help="Path/name of the javac binary for Java sources (default: BMC_AGENT_JAVAC_PATH or javac).",
@@ -2705,6 +2748,11 @@ def build_parser() -> argparse.ArgumentParser:
                      dest="enable_triage",
                      help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "
                           "(independent of classifier/realism).")
+    ver.add_argument("--no-triage", action="store_true", default=False, dest="no_triage",
+                     help="Disable Phase-3e triage (runs ADVISORY by default).")
+    ver.add_argument("--triage-authoritative", action="store_true", default=False,
+                     dest="triage_authoritative",
+                     help="Let triage PROMOTE UNRESOLVED cexs to REAL_BUG (changes the confirmed-bug count; default off = advisory-only).")
     ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
                      help="Disable LLM inline-vs-stub advisor.")
     ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,

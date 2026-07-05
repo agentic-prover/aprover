@@ -133,6 +133,24 @@ class RealismChecker:
         if not self.config.enable_realism_check:
             return _SKIPPED
 
+        # SV-COMP structural gate: when a benchmark property is set (SVCOMP_PROP),
+        # the harness IS the specification (author-written, faithful by
+        # construction) -- there is no over-approximation for realism to catch, and
+        # the solver's reach_error/assertion verdict is authoritative. Realism (an
+        # exploitability filter) has no jurisdiction here and must NOT downgrade the
+        # finding. Pass through as REALISTIC (confidence tier unchanged). Fixes
+        # genuine benchmark bugs being non-deterministically re-tiered to 'unlikely'.
+        import os as _os_svc
+        if _os_svc.environ.get("SVCOMP_PROP"):
+            logger.info("Realism: SV-COMP mode (SVCOMP_PROP set) -> pass-through "
+                        "REALISTIC for '%s' (solver verdict authoritative)", func.name)
+            return RealismCheckResult(
+                verdict=RealismVerdict.REALISTIC,
+                reasoning=("SV-COMP property task: the harness is the specification "
+                           "(faithful by construction), so the solver's reachability "
+                           "verdict is authoritative; realism disabled for this mode."),
+            )
+
         logger.info("Realism check for '%s' (property: %s)",
                     func.name, counterexample.failing_property[:60])
 
@@ -623,6 +641,12 @@ class RealismChecker:
             all_funcs=all_funcs, spec=spec,
             cbmc_harness_path=cbmc_harness_path,
         )
+        # SV-COMP structural gate (matches check()): realism has no jurisdiction
+        # on benchmark-property tasks; the tool-use augmentation must NOT re-judge
+        # and downgrade the solver's authoritative verdict either.
+        import os as _os_svc3
+        if _os_svc3.environ.get("SVCOMP_PROP"):
+            return base
         if not getattr(self.config, "enable_realism_tools", False):
             return base
         # All verdicts go through augmentation when tools are enabled.

@@ -155,6 +155,8 @@ class Config:
     # Off by default (text-only, identical shape to the API path). Toggle via
     # ``--claude-code-agentic`` or ``BMC_AGENT_CLAUDE_CODE_AGENTIC=1``.
     claude_code_agentic: bool = False
+    codex_bin: str = "codex"          # Codex CLI (triage backend "codex"); BMC_AGENT_CODEX_BIN to override
+    codex_timeout_s: float = 600.0
     # Loop-invariant synthesis: assume the loop body's signed arithmetic does not
     # overflow (mathematical-integer semantics), so textbook invariants like
     # x>=1 under x=x+y are inductive. Set by `--math-ints`. Off => machine ints.
@@ -692,7 +694,8 @@ class Config:
     # unresolved bucket. Default off — the agent is expensive (~10-iter
     # tool-use loop per CEx) and the post-hoc ``scripts/triage_unresolved.py``
     # already provides the same data outside the pipeline.
-    enable_phase_3e_triage: bool = False
+    enable_phase_3e_triage: bool = True   # ADVISORY by default: triage annotates UNRESOLVED cexs, never changes the verdict
+    triage_authoritative: bool = False    # opt-in: allow triage to PROMOTE UNRESOLVED -> REAL_BUG (changes confirmed count)
 
     # Feedback loop: distill UNREALISTIC verdicts into learned constraints
     # or code-change TODOs (see bmc_agent/feedback_loop.py). The harness
@@ -991,7 +994,8 @@ class Config:
             enforce_realism_on_dynamic=(os.environ.get("BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC") or "true").lower() == "true",
             enable_classifier=True,  # DEPRECATED/always-on: CEx validation cannot be disabled; BMC_AGENT_ENABLE_CLASSIFIER is ignored (kept as a no-op).
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
-            enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
+            enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "true").lower() == "true",
+            triage_authoritative=(os.environ.get("BMC_AGENT_TRIAGE_AUTHORITATIVE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
             enable_bmc_config_agent=(os.environ.get("BMC_AGENT_ENABLE_BMC_CONFIG_AGENT") or "true").lower() == "true",
             enable_reproducer_agent=(os.environ.get("BMC_AGENT_ENABLE_REPRODUCER_AGENT") or "true").lower() == "true",

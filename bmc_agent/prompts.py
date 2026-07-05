@@ -644,6 +644,18 @@ HARD CONSTRAINTS — your reproducer will be REJECTED if it violates any of thes
      string. Define any input bytes inline as a ``char[]`` / ``uint8_t[]``
      array and match each function's parameter order and types precisely.
 
+  3a. HONOR THE FUNCTION'S MEMORY PRECONDITION. When a pointer parameter is
+     paired with a length/size/count parameter (the function may read or write
+     up to that many elements), you MUST back that pointer with a buffer of AT
+     LEAST that many bytes — e.g. ``uint8_t *b = malloc(n); if (!b) return 0;``
+     — so the call is IN-CONTRACT. A crash that occurs ONLY because you passed
+     a length LARGER than the buffer you allocated is a precondition violation
+     by YOUR harness, not a bug in the function — never emit it. If the
+     counterexample's length/size is absurd (hundreds of MB, or larger than any
+     buffer a real caller could supply), the input is unreachable in practice:
+     emit exactly ``// UNREPRODUCIBLE: <one-line reason>`` per rule 5. A genuine
+     bug crashes even when every buffer is correctly sized to its length arg.
+
   4. Wrap the suspect call in a region marked ``// === BUG TRIGGER ===`` so a
      reviewer can navigate to it. Free anything you allocate so LeakSanitizer
      noise doesn't mask the bug.
@@ -812,6 +824,14 @@ patterns you should rule out FIRST:
      `malloc` returning a 2-byte buffer that the code expected to be
      bigger; a length/size accessor returning 2 when its own logic
      guarantees >= 31), it is NOT a real bug.
+     BUT an allocator returning NULL (``malloc``/``calloc``/``realloc``
+     failure, or a modeled ``can_fail`` / ``bounded`` allocator) is NOT a stub
+     disconnect. Allocation failure is a REAL, admissible environment condition
+     that correct code MUST handle -- a counterexample reachable only because an
+     allocation returned NULL is a GENUINE robustness defect (unhandled
+     allocation failure), not an artifact. Reserve stub-disconnect for a stub
+     returning a value the real callee PROVABLY cannot (a fixed-size allocation
+     yielding a smaller buffer; a size accessor below its guaranteed minimum).
 
   3. **Witness-uses-uninitialized-state**: CBMC may exhibit a witness
      where a pointer is non-NULL but points to deallocated memory, or
@@ -830,6 +850,29 @@ patterns you should rule out FIRST:
   5. **Theoretical overflow without practical input**: A `size_t`
      overflow that requires combining inputs whose product exceeds
      the address space is not exploitable in practice.
+
+CRITICAL DISTINCTION -- symbolic INPUT vs impossible STATE
+=========================================================
+Do NOT confuse "the caller cannot force this specific input VALUE" with
+"no execution can reach this STATE." A counterexample driven by
+nondeterministic/symbolic INPUT VALUES at the analyzed boundary (packet/file
+bytes, argument values, a size/length/index from a public-API parameter,
+values from ``__VERIFIER_nondet_*`` at the harness entry) is REALISTIC by
+construction: the threat model is UNCONSTRAINED input at that boundary, so any
+admissible value is fair game and "no caller forces this exact value" is NOT
+grounds for UNREALISTIC. Reserve UNREALISTIC for counterexamples that depend on
+INTERNAL STATE no real execution can reach: a struct field set to a value the
+type's own constructor/validator forbids (a harness nondet-writing fields and
+bypassing the real constructor's invariants), a stub returning a value the real
+callee cannot, impossible aliasing / uninitialized / dangling pointers, or dead
+code. The test is always "can this STATE arise from SOME admissible input?",
+never "can the caller force this exact input VALUE?". (Patterns 1-3 above are
+about impossible STATE; pattern 5 is genuine INPUT impossibility -- a value
+exceeding a physical limit such as the address space. A plain in-range nondet
+value is not pattern 5.) A ``reach_error`` / ``__VERIFIER_error`` /
+``__VERIFIER_assert`` violation reached through admissible boundary inputs IS
+the property being checked -- it is a real finding, not "just a harness
+assertion."
 
 For your verdict to be REALISTIC, you must be able to answer YES to
 ALL of these:

@@ -33,6 +33,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,22 @@ logger = get_logger("agentic_harness_gen")
 MAX_TURNS = 10
 MAX_RETRIES = 3
 MAX_TOOL_RESULT_CHARS = 12000
+
+def _repair_deadline_s() -> float:
+    """Optional wall-clock cap (seconds) for the agentic harness-REPAIR
+    LLM loop, read from BMC_HARNESS_REPAIR_DEADLINE_S. 0/unset = disabled
+    (legacy behaviour: run up to MAX_TURNS). On heavy kernel/CIL TUs the
+    repair loop can run all MAX_TURNS (each = LLM call + up to 60s cbmc
+    rebuild) and monopolize the per-task wall budget after spec-gen,
+    starving the actual verification (observed: ldv megaraid timed out
+    mid-repair-loop, never reaching a clean cbmc run). Capping it makes a
+    doomed repair fail FAST -> honest unknown, freeing the serial queue.
+    Soundness-neutral: a non-building harness yields no verdict either way.
+    """
+    try:
+        return max(0.0, float(os.environ.get("BMC_HARNESS_REPAIR_DEADLINE_S", "0")))
+    except Exception:
+        return 0.0
 
 
 SYSTEM_PROMPT = """\
@@ -724,6 +741,8 @@ class AgenticHarnessGen(BaseAgent[str]):
     # ------------------------------------------------------------------
 
     def _run_emit_loop(self, messages: list[dict]) -> HarnessResult:
+        _deadline_s = _repair_deadline_s()
+        _loop_start = time.time()
         last_harness = ""
         last_rationale = ""
         last_compile_error = ""
@@ -733,6 +752,13 @@ class AgenticHarnessGen(BaseAgent[str]):
         turn = 0
 
         for turn in range(MAX_TURNS):
+            if _deadline_s and (time.time() - _loop_start) > _deadline_s:
+                logger.info(
+                    "agentic harness repair: wall deadline %.0fs exceeded at turn %d "
+                    "-> stopping repair (returns last_compile_error -> honest unknown)",
+                    _deadline_s, turn + 1,
+                )
+                break
             remaining = MAX_TURNS - turn
             if remaining <= 1:
                 tool_choice = {

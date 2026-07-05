@@ -31,7 +31,7 @@ logger = get_logger("standalone")
 # //@ assert <expr> ;   (ACSL) -> __CPROVER_assert(<expr>, "acsl: <expr>");
 # CBMC ignores //@ comments, so without this the functional assertions in the
 # program would never be checked. Keep it simple: single-line assert clauses.
-_ACSL_ASSERT = re.compile(r"//@\s*assert\s+(.+?)\s*;", re.IGNORECASE)
+_ACSL_ASSERT = re.compile(r"//@\s*assert\b\s*(.+?)\s*;", re.IGNORECASE)
 
 
 def translate_acsl_asserts(text: str) -> tuple[str, int]:

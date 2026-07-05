@@ -174,6 +174,10 @@ class FlagSelection:
     # Capped at _MAX_UNWIND_OVERRIDE; the LLM may propose larger but the
     # parser clamps. None = use global default.
     unwind_override: Optional[int] = None
+    # Hard unwind bound that BYPASSES the SVCOMP_UNWIND floor. Set by the OOM
+    # auto-retry to deliberately go below the proof-adequacy floor for
+    # bug-finding (sound: --unwinding-assertions stays on). None = normal logic.
+    unwind_hard: Optional[int] = None
     # When non-None, overrides the global CBMC timeout (seconds) for THIS
     # function only. Clamped to [_MIN_TIMEOUT_OVERRIDE, _MAX_TIMEOUT_OVERRIDE].
     # Not a CBMC command-line flag — applied by bmc_engine as the
@@ -189,6 +193,7 @@ class FlagSelection:
             "pointer_overflow_check": self.pointer_overflow_check,
             "undefined_shift_check": self.undefined_shift_check,
             "unwind_override": self.unwind_override,
+            "unwind_hard": self.unwind_hard,
             "timeout_override": self.timeout_override,
             "reasoning": self.reasoning,
         }
@@ -201,6 +206,7 @@ class FlagSelection:
             or self.pointer_overflow_check
             or self.undefined_shift_check
             or self.unwind_override is not None
+            or self.unwind_hard is not None
             or self.timeout_override is not None
         )
 
@@ -218,6 +224,18 @@ class FlagSelection:
         # artifact before reaching reach_error). Emit a deterministic,
         # property-appropriate flag set with a competition-grade unwind floor.
         import os as _os
+        if _os.environ.get("BMC_MEMSAFE_ONLY"):
+            # Memory-safety-focused: emit NO optional arithmetic / conversion /
+            # pointer-overflow checks (they flag benign idioms -> false alarms).
+            # bounds+pointer checks come from --threat-model in run_cbmc.
+            _f = []
+            if self.unwind_hard is not None:
+                _f.append(f"--unwind {self.unwind_hard}")
+            elif self.unwind_override is not None:
+                _f.append(f"--unwind {self.unwind_override}")
+            if self.timeout_override is not None:
+                _f.append(f"timeout={self.timeout_override}s")
+            return _f
         _svp = _os.environ.get("SVCOMP_PROP", "")
         if _svp:
             _f = []
@@ -226,7 +244,10 @@ class FlagSelection:
             # memsafety -> memory checks come from --threat-model in run_cbmc;
             # unreach   -> no optional arithmetic checks. Neither emits extras.
             _floor = int(_os.environ.get("SVCOMP_UNWIND", "64"))
-            _uw = max(self.unwind_override or 0, _floor)
+            if self.unwind_hard is not None:
+                _uw = self.unwind_hard  # OOM hard-reduce: bypass the floor
+            else:
+                _uw = max(self.unwind_override or 0, _floor)
             _f.append(f"--unwind {_uw}")
             if self.timeout_override is not None:
                 _f.append(f"timeout={self.timeout_override}s")
@@ -242,7 +263,9 @@ class FlagSelection:
             flags.append("--pointer-overflow-check")
         if self.undefined_shift_check:
             flags.append("--undefined-shift-check")
-        if self.unwind_override is not None:
+        if self.unwind_hard is not None:
+            flags.append(f"--unwind {self.unwind_hard}")
+        elif self.unwind_override is not None:
             flags.append(f"--unwind {self.unwind_override}")
         if self.timeout_override is not None:
             flags.append(f"timeout={self.timeout_override}s")

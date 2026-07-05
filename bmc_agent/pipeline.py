@@ -185,7 +185,18 @@ def _stale_counterexample_reason(ce, harness_path: str) -> "str | None":
     if not isinstance(va, dict) or not va:
         return None
     for key in va:
-        m = re.match(r"([A-Za-z_]\w*)", str(key))
+        skey = str(key)
+        # Skip CBMC-MANGLED symbols. A witness key like
+        # ``_modinfo$$__CPROVER_file_local_<hash>_<file>_<symbol>`` is a
+        # file-local STATIC from the (CIL) source, not a harness-generated
+        # local; its leading token (``_modinfo``) is not what the harness
+        # generator emits, and the mangled name never appears verbatim in the
+        # harness source, so the absence check below would FALSELY flag the CEx
+        # as stale (mem2mem cone-slice reach_error mis-suppressed). The
+        # ``$$`` / ``file_local`` markers identify these CBMC-internal names.
+        if "$$" in skey or "__CPROVER_file_local" in skey or "file_local" in skey:
+            continue
+        m = re.match(r"([A-Za-z_]\w*)", skey)
         if not m:
             continue
         name = m.group(1)
@@ -1282,6 +1293,15 @@ class AMCPipeline:
                 len(cross_file_recheck_needed),
                 ", ".join(sorted(cross_file_recheck_needed)[:20]),
             )
+        try:
+            self.last_verdict_summary = {
+                "targets": len(verdicts),
+                "verified_clean": sum(1 for v in verdicts.values() if getattr(v, "verified", False)),
+                "bug_candidates": sum(1 for v in verdicts.values() if (not getattr(v, "verified", False)) and getattr(v, "counterexamples", None)),
+                "inconclusive": sum(1 for v in verdicts.values() if (not getattr(v, "verified", False)) and not getattr(v, "counterexamples", None)),
+            }
+        except Exception:
+            self.last_verdict_summary = {}
         return bug_reports
 
     # ------------------------------------------------------------------
@@ -1409,6 +1429,10 @@ class AMCPipeline:
         from bmc_agent.agents.triage import TriageVerdict
         from bmc_agent.agents.triage_tools import TriageToolsAgent
 
+        import os as _os_tri
+        if _os_tri.environ.get("SVCOMP_PROP"):
+            return  # SV-COMP: solver verdict is authoritative; skip human-oriented triage
+
         unresolved_snapshot = list(self.reporter._unresolved)
         if not unresolved_snapshot:
             return
@@ -1521,7 +1545,8 @@ class AMCPipeline:
                 )
 
             if (
-                tr.verdict == TriageVerdict.REAL_BUG
+                getattr(self.config, "triage_authoritative", False)
+                and tr.verdict == TriageVerdict.REAL_BUG
                 and tr.confidence == "high"
             ):
                 bug_key = (fn_name, _prop_type(prop))
@@ -1544,6 +1569,11 @@ class AMCPipeline:
                         validation, func, spec, parsed, all_funcs,
                         driver_name, current_specs, cbmc_harness_path="",
                     )
+                    try:  # advisory triage annotation on the report
+                        report.triage = {"verdict": tr.verdict.value, "confidence": tr.confidence,
+                                         "fp_class": tr.fp_class, "reasoning": (tr.reasoning or "")[:600]}
+                    except Exception:
+                        pass
                     self.reporter.save_report(report, driver_name)
                     bug_reports.append(report)
                     confirmed_real_bugs.add(bug_key)
@@ -1890,6 +1920,65 @@ class AMCPipeline:
                 getattr(func, "name", "?"), names,
             )
 
+    def _annotate_triage(self, report, validation, func, spec, parsed, all_funcs,
+                         all_specs=None, cbmc_harness_path=""):
+        """ADVISORY: run triage on a confirmed report and attach report.triage.
+        Never changes the verdict/confidence. Gated on enable_phase_3e_triage;
+        skipped for SV-COMP (solver authoritative). Failures are swallowed."""
+        import os as _os_at
+        if not getattr(self.config, "enable_phase_3e_triage", False):
+            return
+        if _os_at.environ.get("SVCOMP_PROP"):
+            return
+        try:
+            from bmc_agent.agents.triage_tools import TriageToolsAgent
+            corpus_paths = list(getattr(self.spec_gen, "corpus_paths", []) or [])
+            agent = TriageToolsAgent(self.config, self.llm, parsed_file=parsed,
+                                     corpus_paths=corpus_paths, all_specs=all_specs or {})
+            cex = validation.counterexample
+            prop = getattr(cex, "failing_property", "") or ""
+            witness_lines = []
+            for k, v in (getattr(cex, "variable_assignments", {}) or {}).items():
+                if k.startswith("__CPROVER_"):
+                    continue
+                witness_lines.append(f"  {k} = {v}")
+            harness_text = ""
+            try:
+                if cbmc_harness_path:
+                    from pathlib import Path as _P
+                    _hp = _P(cbmc_harness_path)
+                    harness_text = _hp.read_text(encoding="utf-8", errors="replace") if _hp.exists() else ""
+            except Exception:
+                harness_text = ""
+            dyn = getattr(validation, "dynamic_result", None)
+            dyn_outcome = None; dyn_reasoning = None
+            if dyn is not None:
+                ov = getattr(dyn, "outcome", None)
+                dyn_outcome = ov.value if hasattr(ov, "value") else (str(ov) if ov is not None else None)
+                dyn_reasoning = getattr(dyn, "reasoning", None)
+            result = agent.run(
+                function_name=func.name,
+                function_source=func.body or "",
+                cbmc_property=prop,
+                harness_source=harness_text,
+                witness_text="\n".join(witness_lines),
+                caller_path=validation.caller_path or [],
+                dyn_outcome=dyn_outcome,
+                dyn_reasoning=dyn_reasoning,
+                reproducer_source=validation.system_entry_input or "",
+                realism_verdict=None,
+                realism_reasoning=None,
+                pipeline_reasoning=validation.reasoning or "",
+                sys_entry_reached=bool(getattr(validation, "system_entry_reached", False)),
+            )
+            tr = getattr(result, "output", None)
+            if tr is not None:
+                report.triage = {"verdict": tr.verdict.value, "confidence": tr.confidence,
+                                 "fp_class": tr.fp_class, "reasoning": (tr.reasoning or "")[:600]}
+        except Exception as exc:
+            logger.warning("advisory triage annotation failed for %s: %s",
+                           getattr(func, "name", "?"), exc)
+
     def _make_report(
         self,
         validation: ValidationResult,
@@ -2058,7 +2147,9 @@ class AMCPipeline:
             )
 
         realism_arg = realism if self.config.enable_realism_check else None
-        return self.reporter.create_report(validation, func, realism_check=realism_arg)
+        report = self.reporter.create_report(validation, func, realism_check=realism_arg)
+        self._annotate_triage(report, validation, func, spec, parsed, all_funcs, all_specs, cbmc_harness_path)
+        return report
 
     def _try_scenario_guided_dynamic(
         self,
@@ -2216,7 +2307,8 @@ class AMCPipeline:
             actionable_keys = [
                 (a, t) for (a, t) in plans_by_key
                 if a != RetryAction.NO_ACTION and (
-                    t or a in (RetryAction.BUMP_TIMEOUT, RetryAction.STUB_CALLEE)
+                    t or a in (RetryAction.BUMP_TIMEOUT, RetryAction.STUB_CALLEE,
+                               RetryAction.REDUCE_UNWIND)
                 )
             ]
             if not actionable_keys:
@@ -2260,6 +2352,12 @@ class AMCPipeline:
                     if target not in self.config.session_opaque_param_structs:
                         self.config.session_opaque_param_structs.append(target)
                         applied_summary.append(f"force-opaque struct '{target}'")
+                elif action == RetryAction.STUB_FUNCTION:
+                    if target not in self.config.session_stub_functions:
+                        self.config.session_stub_functions.append(target)
+                        applied_summary.append(f"stub function '{target}'")
+                elif action == RetryAction.REDUCE_UNWIND:
+                    applied_summary.append("reduce-unwind (OOM/explosion)")
 
             logger.info(
                 "Phase 2b auto-retry round %d: %d errors, %d distinct fixes "
@@ -2288,6 +2386,32 @@ class AMCPipeline:
             # Both actions are per-function; the global session set
             # mutation for STUB_CALLEE is accumulative across rounds.
             from bmc_agent.flag_selector import FlagSelection
+            _PROP_SINKS = frozenset({
+                "reach_error", "__VERIFIER_error", "__assert_fail", "__assert_func",
+                "ldv_blast_assert", "ldv_error", "ldv_assert", "ldv_check_final_state",
+                "abort", "__VERIFIER_assert",
+            })
+            def _reaches_property_sink(_start, _funcs, _sinks=_PROP_SINKS):
+                """True iff _start transitively reaches any property/assertion sink
+                via the call graph. Stubbing such a fn is never sound (masks bug /
+                vacuous proof)."""
+                if _start in _sinks:
+                    return True
+                _seen, _stack = set(), [_start]
+                while _stack:
+                    _n = _stack.pop()
+                    if _n in _seen:
+                        continue
+                    _seen.add(_n)
+                    _fi = _funcs.get(_n)
+                    if _fi is None:
+                        continue
+                    for _c in (getattr(_fi, "callees", None) or ()):
+                        if _c in _sinks:
+                            return True
+                        if _c not in _seen:
+                            _stack.append(_c)
+                return False
             stubbed_callees: dict[str, str] = {}
             bumped_timeouts: dict[str, int] = {}
             reduced_unwinds: dict[str, "tuple[int, int]"] = {}
@@ -2300,8 +2424,62 @@ class AMCPipeline:
                     "raw_output": getattr(cbmc_res, "raw_output", "") or "",
                     "verified": getattr(cbmc_res, "verified", None),
                 })
-                if diag.error_class != CbmcErrorClass.TIMEOUT:
+                if diag.error_class not in (
+                    CbmcErrorClass.TIMEOUT, CbmcErrorClass.OUT_OF_MEMORY,
+                ):
                     continue
+
+                # OOM = SAT state explosion. The most direct, sound remedy is a
+                # shallower loop-unwind bound: a counterexample at a smaller bound
+                # is still a real bug, and --unwinding-assertions stays on so a
+                # clean verify is only trusted when the bound was sufficient. We
+                # bypass the SVCOMP unwind FLOOR (which exists for proof adequacy)
+                # via unwind_hard, halving down to a floor of 2 across rounds
+                # (8 -> 4 -> 2). Done BEFORE stub-callee so we never perturb the
+                # property path when a cheaper bound suffices.
+                if diag.error_class == CbmcErrorClass.OUT_OF_MEMORY:
+                    import os as _os
+                    if flag_selections is None:
+                        flag_selections = {}
+                    fs = flag_selections.get(fn_name)
+                    _floor = int(_os.environ.get("SVCOMP_UNWIND", "0") or 0)
+                    # The CURRENT effective bound: once we've hard-reduced, it IS
+                    # unwind_hard (the floor no longer applies); otherwise it's the
+                    # floor / override / global default. Including the floor here
+                    # unconditionally would peg eff at 8 forever (8->4, never ->2).
+                    _hard = (getattr(fs, "unwind_hard", None) or 0) if fs else 0
+                    if _hard:
+                        eff = _hard
+                    else:
+                        eff = max(
+                            (getattr(fs, "unwind_override", None) or 0) if fs else 0,
+                            _floor,
+                            int(getattr(self.config, "cbmc_unwind", 4)),
+                        )
+                    new_uw = max(2, eff // 2)
+                    if new_uw < eff:
+                        reason = (
+                            f"auto-retry: SAT OOM at unwind {eff} = state "
+                            f"explosion; hard-reduce unwind {eff}->{new_uw} "
+                            f"(bypass SVCOMP floor; sound for bug-finding, a CEX "
+                            f"at a shallower bound is a real bug)"
+                        )
+                        if fs is None:
+                            flag_selections[fn_name] = FlagSelection(
+                                unwind_hard=new_uw, reasoning=reason,
+                            )
+                        else:
+                            fs.unwind_hard = new_uw
+                        reduced_unwinds[fn_name] = (eff, new_uw)
+                        # NOTE: do NOT `continue` here. OOM is frequently
+                        # cone-size-driven (a large inlined call cone), not just
+                        # loop-driven, so we ALSO fall through to STUB_CALLEE
+                        # below to stub the heaviest OFF-property-path callee this
+                        # same round. Attacking both levers (shallower unwind +
+                        # smaller cone) converges within the round budget; the
+                        # property path is never stubbed (_reaches_property_sink
+                        # guard), so it stays sound for bug-finding.
+                    # (reduced or not) fall through to stub-callee to shrink cone
 
                 # PRIMARY: try STUB_CALLEE. Pick the longest local
                 # callee body that's not already in session_stub_functions.
@@ -2323,6 +2501,15 @@ class AMCPipeline:
                         callee_info = funcs.get(callee_name)
                         if callee_info is None:
                             continue  # only stub LOCAL callees (with a body in TU)
+                        # SOUNDNESS GUARD: never stub a callee that transitively
+                        # reaches a property sink (reach_error / __assert_fail /
+                        # ldv_blast_assert / abort / ...). Stubbing it removes the
+                        # assertion -> a hollow "verified" (vacuous proof) on safe
+                        # tasks and a MASKED bug on buggy ones. The SUT/harness fn
+                        # (main's longest callee) reaches the sink, so this excludes
+                        # it; only heavy callees OFF the property path may be stubbed.
+                        if _reaches_property_sink(callee_name, funcs):
+                            continue
                         body = (callee_info.body or "")
                         candidates.append((len(body), callee_name))
                     if candidates:

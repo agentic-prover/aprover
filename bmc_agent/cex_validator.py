@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from bmc_agent.harness_generator import _strip_conflicting_libc_typedefs
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -967,7 +968,7 @@ class CExValidator:
         with tempfile.NamedTemporaryFile(
             suffix=".c", delete=False, mode="w", encoding="utf-8"
         ) as tmp:
-            tmp.write(harness_src)
+            tmp.write(_strip_conflicting_libc_typedefs(harness_src))
             tmp_path = tmp.name
 
         try:
@@ -1116,7 +1117,7 @@ class CExValidator:
         with tempfile.NamedTemporaryFile(
             suffix=".c", delete=False, mode="w", encoding="utf-8"
         ) as tmp:
-            tmp.write(harness_src)
+            tmp.write(_strip_conflicting_libc_typedefs(harness_src))
             tmp_path = tmp.name
 
         try:
@@ -1474,16 +1475,34 @@ class CExValidator:
                     # constraint isn't a function bug.
                     # Mark UNRESOLVED instead: surface the finding for human
                     # review without claiming it's a confirmed real bug.
-                    fallback_outcome = CExOutcome.UNRESOLVED
+                    # Structural panic + over-refinement REJECTED = the function
+                    # panics/OOBs on an input the precondition PERMITS, and the
+                    # guard confirmed the precondition cannot be tightened without
+                    # excluding legitimate caller states. That is exactly the
+                    # LATENT case (see CExOutcome.LATENT): a real defect reachable
+                    # via the public API surface that in-tree callers may avoid by
+                    # a surrounding invariant. Example: aws_array_eq_c_str reads
+                    # array[array_len-1] with size_t underflow when array_len==0 —
+                    # an input the precondition`s `len==0 ||` disjunct explicitly
+                    # allows. Classify LATENT (SURFACE the finding) instead of
+                    # UNRESOLVED (silently drop it). Not REAL_BUG: in-tree callers
+                    # may maintain a stronger invariant (the base64::add_padding
+                    # case), so LATENT is the honest middle ground — it recovers
+                    # recall on genuine boundary bugs without claiming confirmed.
+                    fallback_outcome = (
+                        CExOutcome.UNRESOLVED
+                        if __import__("os").environ.get("BMC_OVERREF_LATENT", "1") == "0"
+                        else CExOutcome.LATENT
+                    )
                     reasoning = (
                         f"Over-refinement guard rejected at iteration {iteration + 1}: "
                         "could not tighten the precondition without excluding states "
-                        "callers can produce. Failing property is a structural panic. "
-                        "We can't determine whether real callers maintain the "
-                        "implicit invariant that would prevent the panic, so "
-                        "classifying UNRESOLVED (not REAL_BUG) -- the spec generator "
-                        "didn't capture the constraint, but that doesn't mean callers "
-                        "violate it."
+                        "the precondition permits. Failing property is a structural "
+                        "panic (e.g. OOB/underflow on a boundary input the contract "
+                        "allows). Classifying LATENT: a real panic reachable via the "
+                        "public API; in-tree callers may avoid it via a surrounding "
+                        "invariant, so it is surfaced (not silently dropped) but not "
+                        "asserted as a confirmed in-tree bug."
                     )
                 over_result = ValidationResult(
                     function_name=func_name,
@@ -1883,7 +1902,7 @@ class CExValidator:
         with tempfile.NamedTemporaryFile(
             suffix=".c", delete=False, mode="w", encoding="utf-8"
         ) as tmp:
-            tmp.write(harness_src)
+            tmp.write(_strip_conflicting_libc_typedefs(harness_src))
             tmp_path = tmp.name
 
         try:

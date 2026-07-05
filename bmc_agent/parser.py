@@ -553,6 +553,14 @@ def _collect_struct_defs(root, src_bytes: bytes) -> dict[str, list[tuple[str, st
         # function bodies.
         "function_definition", "compound_statement",
         "ERROR",
+        # Bare top-level struct definitions ``struct X { ... };`` (no typedef,
+        # as in aws-c-common) are parsed by tree-sitter as a `declaration`
+        # wrapping the struct_specifier. Without recursing into `declaration`
+        # the collector NEVER reaches them -> 0 structs extracted -> every
+        # struct param treated opaque (verified on aws .i: 0/N structs). Recurse
+        # into declarations too; forward-decls (no field list) are skipped by
+        # _record_struct, so this only adds genuine definitions.
+        "declaration",
     }
     structs: dict[str, list[tuple[str, str]]] = {}
     # Aliases declared via a separate ``typedef struct Tag Alias;``
@@ -1148,11 +1156,54 @@ def _parse_params_regex(raw: str) -> list[tuple[str, str]]:
 
 
 def _extract_body(source: str, open_brace: int) -> str:
-    """Extract the text from the opening brace to its matching closing brace."""
+    """Extract the text from the opening brace to its matching closing brace.
+
+    Skips braces that appear inside char literals (``'}'``), string literals
+    (``"...{..."``), and comments (``/* } */``, ``// }``).  CIL/kernel sources
+    (ldv) embed ``'{'``/``'}'`` char literals in function bodies; a naive brace
+    counter miscounts those and returns a TRUNCATED body.  Downstream that
+    truncation orphaned the remainder of the function as a bare ``{...}`` block
+    (``_kernel_raw_decls`` def->prototype rewrite), yielding a CBMC
+    ``syntax error before '__cil_tmpNNN'`` PARSING ERROR that masked the bug
+    (p54usb).  Proper C lexing fixes it generally; AWS bodies are unaffected
+    (their brace counts already balance)."""
     depth = 0
     i = open_brace
-    while i < len(source):
+    n = len(source)
+    while i < n:
         ch = source[i]
+        # char literal: '..'  (handle escapes like '\\}' / '\\0')
+        if ch == "'":
+            i += 1
+            while i < n and source[i] != "'":
+                if source[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1
+            continue
+        # string literal: "..."
+        if ch == '"':
+            i += 1
+            while i < n and source[i] != '"':
+                if source[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1
+            continue
+        # comments
+        if ch == "/" and i + 1 < n:
+            nxt = source[i + 1]
+            if nxt == "*":
+                i += 2
+                while i + 1 < n and not (source[i] == "*" and source[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+            if nxt == "/":
+                i += 2
+                while i < n and source[i] != "\n":
+                    i += 1
+                continue
         if ch == "{":
             depth += 1
         elif ch == "}":

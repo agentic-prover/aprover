@@ -684,6 +684,17 @@ def precond_to_assume(precondition: str, params: list[str]) -> list[str]:
     )
 
 
+def precond_to_assert(precondition: str, params: list[str]) -> list[str]:
+    """Convert a precondition to assert() statements, using ASSERT-context
+    translation (so valid_range emits a real __CPROVER_r_ok bounds check).
+    Use this to CHECK that a caller satisfies a callee's precondition at the
+    call site (compositional caller-misuse detection) — vs precond_to_assume,
+    which trusts it and cannot catch misuse."""
+    return _filter_tautological(
+        _condition_to_stmts(precondition, context="assert", params=params)
+    )
+
+
 def postcond_to_assert(
     postcondition: str,
     params: list[str],
@@ -808,6 +819,58 @@ def _strip_wrapper(stmt: str) -> str | None:
     return None
 
 
+_CIL_TEMP_RE = re.compile(r'\b(?:__cil_tmp\w*|tmp___\w*|__cil_\w+)\b')
+
+def _clause_has_illegal_construct(inner: str) -> str | None:
+    """Return a short reason if a translated assume/assert EXPR would
+    fail to compile, else None.
+
+    Two failure shapes observed on CIL/ldv kernel translation units where
+    a malformed clause masked a real bug (the whole stub-bearing harness
+    hit a PARSING/CONVERSION ERROR -> the FUT was skipped -> 0 bugs):
+
+      (a) a top-level lone ``=`` (assignment, not a comparison): the LLM
+          emitted ``x = 0`` instead of ``x == 0`` -> CBMC ``syntax error
+          before '='`` (mousedev/orinoco/pch_udc/p54usb masks).
+      (b) a CIL temporary identifier (``__cil_tmpNNN`` / ``tmp___N``):
+          a function-body local that is NOT in the harness's scope ->
+          ``syntax error before '__cil_tmp149'`` / failed-to-find-symbol.
+
+    Dropping such a clause to a comment is SOUNDNESS-NEUTRAL: for a stub
+    precondition assume it only WIDENS the callee input space (cannot
+    hide a bug), and a clause that does not compile yields NO verdict at
+    all (strictly worse). Mirrors the existing unbound-identifier drop.
+    """
+    s = (inner or '').strip()
+    if not s:
+        return None
+    # (b) CIL temporary identifier anywhere in the expr.
+    m = _CIL_TEMP_RE.search(s)
+    if m:
+        return "CIL temporary '%s'" % m.group(0)
+    # (a) top-level lone '=' that is not part of ==, !=, <=, >=, or a
+    #     compound-assign (+=, -=, ...). Scan at paren/bracket depth 0.
+    depth = 0
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch in '([':
+            depth += 1
+        elif ch in ')]':
+            depth -= 1
+        elif depth == 0 and ch == '=':
+            prev = s[i-1] if i > 0 else ''
+            nxt = s[i+1] if i + 1 < n else ''
+            # part of ==, <=, >=, != ; or LHS of == (prev already '=')
+            if nxt == '=' or prev in '=<>!+-*/%&|^':
+                i += 2 if nxt == '=' else 1
+                continue
+            return "top-level assignment '='"
+        i += 1
+    return None
+
+
 def _filter_tautological(stmts: list[str]) -> list[str]:
     """Replace any ``assert(EXPR);`` / ``__CPROVER_assume(EXPR);`` where
     EXPR is a self-comparison (``X OP X``) with an inline comment.  Logs
@@ -835,6 +898,18 @@ def _filter_tautological(stmts: list[str]) -> list[str]:
         new_lines: list[str] = []
         for line in lines:
             inner = _strip_wrapper(line.strip())
+            _bad = _clause_has_illegal_construct(inner) if inner is not None else None
+            if _bad is not None:
+                import logging as _logging2
+                _logging2.getLogger("bmc_agent").warning(
+                    "Dropped malformed clause (%s) -> comment: %s",
+                    _bad, line.strip(),
+                )
+                leading_ws = line[:len(line) - len(line.lstrip())]
+                new_lines.append(
+                    f"{leading_ws}/* dropped malformed clause ({_bad}) */"
+                )
+                continue
             if inner is not None and _is_self_comparison(inner):
                 _logging.getLogger("bmc_agent").warning(
                     "Refused tautological assertion (likely a stripped "
@@ -909,6 +984,16 @@ def _sanitize_condition(condition: str) -> str:
             which the later ``/* ghost: … */`` wrap unable to nest).
             """
             return f"/* {_escape_for_c_comment(clause).replace(';', ' ')} */"
+
+        # Top-level IMPLICATION (=>, ==>, <==>): not valid C. These postconditions
+        # are typically "(case conditions) => (prose consequent)". Splitting on &&
+        # would wrongly ASSERT the antecedent's conjuncts as facts -> false alarms
+        # on safe code (verified: aws_array_eq asserted `len_a==len_b`). The single
+        # arrow `=>` was previously unrecognized (only ==>/<==> were). Drop the
+        # whole implication clause. (Checked widest-first so ==> isn't split as =>.)
+        for _impl in ("<==>", "==>", "=>"):
+            if len(_top_level_split(text, _impl)) > 1:
+                return _comment_out(text)
 
         for p in parts:
             ps = p.strip()
