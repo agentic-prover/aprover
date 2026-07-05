@@ -133,7 +133,7 @@ class RealismChecker:
         if not self.config.enable_realism_check:
             return _SKIPPED
 
-        # SV-COMP structural gate: when a benchmark property is set (SVCOMP_PROP),
+        # SV-COMP structural gate: only for GENUINE SV-COMP runs (BMC_SVCOMP_MODE),
         # the harness IS the specification (author-written, faithful by
         # construction) -- there is no over-approximation for realism to catch, and
         # the solver's reach_error/assertion verdict is authoritative. Realism (an
@@ -141,8 +141,8 @@ class RealismChecker:
         # finding. Pass through as REALISTIC (confidence tier unchanged). Fixes
         # genuine benchmark bugs being non-deterministically re-tiered to 'unlikely'.
         import os as _os_svc
-        if _os_svc.environ.get("SVCOMP_PROP"):
-            logger.info("Realism: SV-COMP mode (SVCOMP_PROP set) -> pass-through "
+        if _os_svc.environ.get("BMC_SVCOMP_MODE"):
+            logger.info("Realism: genuine SV-COMP mode (BMC_SVCOMP_MODE set) -> pass-through "
                         "REALISTIC for '%s' (solver verdict authoritative)", func.name)
             return RealismCheckResult(
                 verdict=RealismVerdict.REALISTIC,
@@ -645,7 +645,7 @@ class RealismChecker:
         # on benchmark-property tasks; the tool-use augmentation must NOT re-judge
         # and downgrade the solver's authoritative verdict either.
         import os as _os_svc3
-        if _os_svc3.environ.get("SVCOMP_PROP"):
+        if _os_svc3.environ.get("BMC_SVCOMP_MODE"):
             return base
         if not getattr(self.config, "enable_realism_tools", False):
             return base

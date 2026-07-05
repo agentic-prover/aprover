@@ -76,6 +76,15 @@ _CRASH_CLASS_PROPERTY_SUFFIXES: tuple[str, ...] = (
 )
 
 
+# (b) Property-type segments that are BMC-INCOMPLETENESS signals (loop-unwinding
+# assertions / recursion-bound), NOT property violations. When one of these is the
+# failing property, Phase 3 deepens the unwind bound ONCE (see
+# AMCPipeline._recheck_unwind_artifact) instead of paying the LLM
+# refine->classify->triage cost on what is almost always an unconstrained-input
+# harness artifact (e.g. `while(*a && *b)` over a non-NUL-terminated symbolic buf).
+_UNWIND_ARTIFACT_TYPES: "frozenset[str]" = frozenset({"unwind", "unwinding", "recursion"})
+
+
 # CBMC property classes that are SILENT undefined behaviour — the bug is
 # real per the C standard, but the runtime doesn't crash without
 # instrumentation (UBSan / ASan-with-pointer-checks).  Dynamic
@@ -754,6 +763,37 @@ class AMCPipeline:
             _deduped[_fn] = list(_dedup_counterexamples(
                 _vd.counterexamples, max_per_type=self.config.dedup_max_per_type,
             ))
+            # (b) Route loop-unwinding / recursion-bound counterexamples OUT of the
+            # expensive LLM validate()->refine->triage flow BEFORE precompute:
+            # deepen the unwind bound once and decide drop / escalate / latent.
+            _kept_uw = []
+            for _uwc in _deduped[_fn]:
+                if _prop_type(_uwc.failing_property) not in _UNWIND_ARTIFACT_TYPES:
+                    _kept_uw.append(_uwc); continue
+                _uw_act, _uw_real = self._recheck_unwind_artifact(_fn, _uwc, _vd)
+                if _uw_act == "drop":
+                    logger.info("'%s' %s: bound-only artifact (VERIFIED CLEAN at "
+                                "deeper unwind) -> dropped without LLM",
+                                _fn, _uwc.failing_property)
+                    continue
+                if _uw_act == "escalate" and _uw_real is not None:
+                    logger.info("'%s': real property '%s' behind unwind artifact "
+                                "'%s' -> validating", _fn,
+                                _uw_real.failing_property, _uwc.failing_property)
+                    _kept_uw.append(_uw_real); continue
+                if _uw_act == "skip":
+                    _kept_uw.append(_uwc); continue  # cannot recheck -> normal flow
+                # 'artifact': persists at deeper unwind under unconstrained input.
+                _uw_lk = (_fn, _prop_type(_uwc.failing_property))
+                if _uw_lk in confirmed_latent:
+                    continue
+                confirmed_latent.add(_uw_lk)
+                logger.info("'%s' %s: unwinding-assertion artifact (persists at "
+                            "deeper unwind) -> latent, skipped LLM refine/triage",
+                            _fn, _uwc.failing_property)
+                latent_reports.append(
+                    self._emit_unwind_artifact_latent(_fn, _uwc, driver_name))
+            _deduped[_fn] = _kept_uw
         # Cache keyed by (fn_name, cex_index). Parallelism granularity is the
         # FUNCTION (not the individual CEx): validate()'s internal CBMC
         # refinement re-runs write artifacts keyed by (driver, function), so
@@ -875,11 +915,28 @@ class AMCPipeline:
                         report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
                         self._maybe_ground_immunity(report, func, validation, all_funcs, source_file)
                         self._maybe_refine_harness(report, func, validation, source_file)
+                        # Triage-driven spec-gen refinement: if advisory triage
+                        # flagged this confirmed finding as a spec-postcondition
+                        # artifact (likely_fp on *.assertion.N), drop the over-
+                        # strict postcondition and re-verify with safety flags
+                        # preserved; downgrade + persist FUNCTION_POST_RELAX iff it
+                        # verifies clean (cannot mask a memory-safety bug).
+                        _spec_refined = self._triage_postcondition_refine(
+                            report, func, spec, parsed, all_funcs, driver_name,
+                            current_specs,
+                        ) or self._triage_precondition_refine(
+                            report, validation, func, spec, parsed, all_funcs,
+                            driver_name, current_specs,
+                        )
                         self.reporter.save_report(report, driver_name)
                         bug_reports.append(report)
-                        # Log post-realism outcome so the log shows what
-                        # actually survived the audit, not just the static tag.
-                        if getattr(report, "confidence", None) == "unlikely":
+                        # Log post-audit outcome so the log shows what actually
+                        # survived, not just the static tag.
+                        if _spec_refined:
+                            logger.info("'%s' → unlikely via triage-driven spec refinement "
+                                        "(over-strict postcondition; verifies clean when relaxed, "
+                                        "flags preserved) — not counted as confirmed", fn_name)
+                        elif getattr(report, "confidence", None) == "unlikely":
                             logger.info("Realism downgraded '%s' → unlikely (not counted as confirmed)", fn_name)
                         else:
                             logger.info("Realism upheld '%s' as %s", fn_name, getattr(report, "confidence", "?"))
@@ -1283,9 +1340,13 @@ class AMCPipeline:
 
         self._emit_coverage_diagnostics(driver_name)
 
+        _n_real = sum(
+            1 for _r in bug_reports
+            if (getattr(_r, "confidence", "") or "").lower() != "unlikely"
+        )
         logger.info(
             "=== AMC Pipeline END: %d real bug(s), %d latent, %d unresolved ===",
-            len(bug_reports),
+            _n_real,
             len(latent_reports),
             len(self.reporter._unresolved),
         )
@@ -1441,8 +1502,8 @@ class AMCPipeline:
         from bmc_agent.agents.triage_tools import TriageToolsAgent
 
         import os as _os_tri
-        if _os_tri.environ.get("SVCOMP_PROP"):
-            return  # SV-COMP: solver verdict is authoritative; skip human-oriented triage
+        if _os_tri.environ.get("BMC_SVCOMP_MODE"):
+            return  # genuine SV-COMP: solver verdict is authoritative; skip human-oriented triage
 
         unresolved_snapshot = list(self.reporter._unresolved)
         if not unresolved_snapshot:
@@ -1931,6 +1992,266 @@ class AMCPipeline:
                 getattr(func, "name", "?"), names,
             )
 
+    def _triage_postcondition_refine(self, report, func, spec, parsed, all_funcs,
+                                     driver_name, all_specs):
+        """Triage-driven spec-gen refinement (user-confirmed "downgrade + persist").
+        When ADVISORY triage flags a CONFIRMED finding as likely_fp on a spec
+        POSTCONDITION assertion (`*.assertion.N` — an auto-generated spec clause,
+        NOT a built-in memory-safety property), test whether it is PURELY a spec
+        artifact: drop the postcondition and RE-VERIFY the function with the SAME
+        flag_selection (safety checks preserved — else CBMC "verifies clean" by no
+        longer checking the property, a documented past regression). If it verifies
+        clean, no memory-safety/overflow/bounds property fails and triage judged the
+        contract over-strict, so the finding is a spec FP: downgrade to 'unlikely'
+        and persist a FUNCTION_POST_RELAX so future sweeps drop the clause. If any
+        real property still fails, the finding is KEPT. Relaxing a postcondition can
+        only suppress the spec assertion, never a memory-safety property, so this
+        cannot mask a mem-safety bug; functional-contract judgment is delegated to
+        triage (per the approved authority model). Returns True iff resolved."""
+        try:
+            t = getattr(report, "triage", None)
+            if not isinstance(t, dict) or t.get("verdict") != "likely_fp":
+                return False
+            prop = getattr(report, "violated_property", "") or ""
+            if _prop_type(prop) != "assertion":
+                return False  # only spec-postcondition assertions
+            orig_post = (getattr(spec, "postcondition", "true") or "true").strip()
+            if orig_post in ("", "true"):
+                return False  # nothing to relax
+            iter_flags = (getattr(self, "_flag_selections", {}) or {}).get(func.name)
+            relaxed = Spec(
+                function_name=func.name,
+                precondition=getattr(spec, "precondition", "true"),
+                postcondition="true",
+                callee_specs=getattr(spec, "callee_specs", None),
+                loop_invariants=getattr(spec, "loop_invariants", None),
+                status=SpecStatus.REFINED,
+            )
+            v = self.bmc_engine.check_function(
+                func, relaxed, parsed, driver_name,
+                all_funcs=all_funcs, flag_selection=iter_flags,
+            )
+            # Ignore residual loop-unwinding artifacts (a DIFFERENT class, handled by
+            # (b)/Path 2): the question here is only whether relaxing the postcondition
+            # clears the *assertion*/real properties, not whether an orthogonal unwind
+            # bound trips. Otherwise a co-located unwind cex masks a real resolution.
+            _residual = [c for c in (v.counterexamples or [])
+                         if _prop_type(c.failing_property) not in _UNWIND_ARTIFACT_TYPES]
+            resolved = bool(v.verified or not _residual)
+            marker = {
+                "action": "postcondition-relax+reverify",
+                "flags_preserved": True,
+                "applied": resolved,
+                "original_postcondition": orig_post[:300],
+                "corrected_postcondition_hint": (t.get("reasoning") or "")[:300],
+            }
+            if not resolved:
+                marker["reason"] = ("a real property still fails with the postcondition "
+                                    "relaxed -> not a pure spec artifact; finding KEPT")
+                t["spec_refinement"] = marker
+                return False
+            # Purely a spec-postcondition artifact -> persist the drop + downgrade.
+            try:
+                from bmc_agent.feedback_loop import (
+                    LearnedConstraintsStore, Remediation, RemediationScope,
+                )
+                store = LearnedConstraintsStore(self.config.artifact_dir)
+                store.record(func.name, Remediation(
+                    scope=RemediationScope.FUNCTION_POST_RELAX,
+                    clause=orig_post,
+                    rationale=("Triage (likely_fp) + re-verify: over-strict auto-generated "
+                               "postcondition on a correct function; dropped + verified clean "
+                               "with safety checks preserved. " + (t.get("reasoning") or "")[:300]),
+                    confidence=t.get("confidence", "high") or "high",
+                ), source_property=prop)
+            except Exception as _pe:
+                logger.debug("persist post-relax for '%s' failed: %s", func.name, _pe)
+            if isinstance(all_specs, dict):
+                all_specs[func.name] = relaxed
+            self.store.save_spec(driver_name, func.name, relaxed)
+            marker["reverified_clean"] = True
+            marker["persisted"] = "function_post_relaxation"
+            t["spec_refinement"] = marker
+            report.confidence = "unlikely"
+            report.cex_outcome = CExOutcome.SPURIOUS
+            logger.info("Triage-driven spec refinement: '%s' resolved as spec-postcondition "
+                        "artifact (dropped postcondition verifies clean, flags preserved) -> "
+                        "downgraded + FUNCTION_POST_RELAX persisted", func.name)
+            return True
+        except Exception as exc:
+            logger.warning("triage spec refinement failed for '%s': %s",
+                           getattr(func, "name", "?"), exc)
+            return False
+
+    def _triage_precondition_refine(self, report, validation, func, spec, parsed,
+                                    all_funcs, driver_name, all_specs):
+        """Triage-driven PRECONDITION refinement (symmetric to the postcondition
+        path). When ADVISORY triage flags a CONFIRMED finding as likely_fp with a
+        caller-established-precondition class (the CEx uses inputs a real caller
+        never produces), distill the caller-guaranteed precondition, gate it with
+        the fail-closed SOUNDNESS check BEFORE persisting (a too-strong precondition
+        would mask a real bug), then persist + RE-VERIFY with safety flags preserved.
+        Downgrade + keep the persisted clause iff it verifies clean. Adding a
+        precondition RESTRICTS inputs, so unlike the postcondition path this is only
+        safe behind the soundness gate; if the gate can't confirm the precondition is
+        caller-guaranteed, the finding is KEPT. Returns True iff resolved."""
+        try:
+            t = getattr(report, "triage", None)
+            if not isinstance(t, dict) or t.get("verdict") != "likely_fp":
+                return False
+            fpc = (t.get("fp_class") or "").lower()
+            if "precondition" not in fpc:
+                return False  # only caller-precondition-class FPs
+            from bmc_agent.feedback_loop import (
+                LearnedConstraintsStore, learn_from_rejection, RemediationScope,
+            )
+            from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+            synth = RealismCheckResult(
+                verdict=RealismVerdict.UNREALISTIC,
+                reasoning=(t.get("reasoning") or "")[:1500],
+                key_concern=("caller-established precondition (triage): " +
+                             (t.get("reasoning") or "")[:280]),
+                llm_confidence=t.get("confidence", "medium") or "medium",
+            )
+            store = LearnedConstraintsStore(self.config.artifact_dir)
+            existing = store.project_clauses() + store.function_clauses(func.name)
+            rem = learn_from_rejection(
+                self.config, self.llm, func, validation.counterexample, synth,
+                existing_project_clauses=existing,
+            )
+            marker = {"action": "precondition-add+reverify", "flags_preserved": True}
+            if getattr(rem, "scope", None) != RemediationScope.FUNCTION_SPEC or not getattr(rem, "clause", ""):
+                marker.update(applied=False, reason="distiller produced no function-spec precondition clause")
+                t["spec_refinement"] = marker
+                return False
+            marker["clause"] = (rem.clause or "")[:300]
+            # SOUNDNESS GATE (fail-closed) BEFORE persisting: the precondition must be
+            # caller-guaranteed, else keep the CEx as a real-bug lead.
+            if self._refinement_soundness_blocks(func, rem.clause, validation.counterexample):
+                marker.update(applied=False, reason="soundness gate: precondition not confirmed caller-guaranteed -> KEPT")
+                t["spec_refinement"] = marker
+                return False
+            store.record(func.name, rem,
+                         source_property=getattr(validation.counterexample, "failing_property", ""))
+            iter_flags = (getattr(self, "_flag_selections", {}) or {}).get(func.name)
+            v = self.bmc_engine.check_function(
+                func, spec, parsed, driver_name,
+                all_funcs=all_funcs, flag_selection=iter_flags,
+            )
+            _residual = [c for c in (v.counterexamples or [])
+                         if _prop_type(c.failing_property) not in _UNWIND_ARTIFACT_TYPES]
+            if not (v.verified or not _residual):
+                marker.update(applied=False, reason="precondition persisted but a real (non-unwind) CEx still reachable on re-verify -> KEPT")
+                t["spec_refinement"] = marker
+                return False
+            marker.update(applied=True, reverified_clean=True, soundness="caller-guaranteed",
+                          persisted="function_clause")
+            t["spec_refinement"] = marker
+            report.confidence = "unlikely"
+            report.cex_outcome = CExOutcome.SPURIOUS
+            logger.info("Triage-driven precondition refinement: '%s' resolved (caller-"
+                        "established precondition added, verifies clean, flags preserved, "
+                        "soundness-gated) -> downgraded + clause persisted", func.name)
+            return True
+        except Exception as exc:
+            logger.warning("triage precondition refinement failed for '%s': %s",
+                           getattr(func, "name", "?"), exc)
+            return False
+
+    def _recheck_unwind_artifact(self, fn_name, cex, verdict):
+        """(b) Deepen the unwind bound once for a loop-unwinding / recursion-bound
+        counterexample before paying the LLM refine->triage cost. Returns:
+          ("drop", None)      clean at deeper bound: the bound was the only issue
+          ("artifact", None)  still only unwind/recursion trips (or deeper solve
+                              inconclusive): genuinely unbounded under unconstrained
+                              input -> latent, no LLM
+          ("escalate", cex)   a REAL property fails at the deeper bound: real bug
+                              behind the artifact -> hand to normal validate()
+          ("skip", None)      cannot recheck (no harness) -> caller proceeds normally
+        """
+        import os as _os
+        harness = getattr(verdict, "harness_path", "") or ""
+        if not harness or not Path(harness).exists():
+            return ("skip", None)
+        cur = int(getattr(self.config, "cbmc_unwind", 4) or 4)
+        try:
+            cur = int(_os.environ.get("SVCOMP_UNWIND", cur))
+        except Exception:
+            pass
+        try:
+            cap = int(_os.environ.get("BMC_UNWIND_ARTIFACT_CAP", "32") or 32)
+        except Exception:
+            cap = 32
+        deeper = min(max(cur * 4, cur + 4), cap)
+        if deeper <= cur:
+            return ("artifact", None)  # already at cap; do not re-solve
+        try:
+            from bmc_agent.cbmc import run_cbmc as _run
+            from bmc_agent.bmc_engine import _harness_entry_of as _entry
+            res = _run(
+                harness_path=harness,
+                unwind=deeper,
+                timeout=int(getattr(self.config, "cbmc_timeout", 120) or 120),
+                cbmc_path=getattr(self.config, "cbmc_path", "cbmc"),
+                include_dirs=list(getattr(self.config, "include_dirs", []) or []),
+                defines=list(getattr(self.config, "cbmc_defines", []) or []),
+                function=_entry(harness),
+            )
+        except Exception as e:
+            logger.warning("unwind-artifact recheck failed for '%s' (%s); "
+                           "proceeding normally", fn_name, e)
+            return ("skip", None)
+        if res.verified:
+            return ("drop", None)
+        real = next((c for c in (res.counterexamples or [])
+                     if _prop_type(c.failing_property) not in _UNWIND_ARTIFACT_TYPES),
+                    None)
+        if real is not None:
+            return ("escalate", real)
+        if getattr(res, "error", None):
+            logger.info("unwind-artifact recheck for '%s' inconclusive at unwind=%d "
+                        "(%s) -> treating as artifact", fn_name, deeper, res.error)
+        return ("artifact", None)
+
+    def _emit_unwind_artifact_latent(self, fn_name, cex, driver_name):
+        """(b) Surface an unwinding-assertion artifact as LATENT without spending
+        LLM refinement or triage. Deterministic annotation; never a confirmed bug."""
+        from bmc_agent.bug_reporter import BugReport, _classify_bug_type
+        from bmc_agent.cex_validator import CExOutcome
+        rep = BugReport(
+            driver_name=driver_name,
+            function_name=fn_name,
+            bug_type=_classify_bug_type(cex.failing_property),
+            violated_property=cex.failing_property,
+            counterexample=cex,
+            call_chain=[],
+            reproducer=None,
+            reasoning_trail=(
+                f"Loop-unwinding/recursion-bound assertion '{cex.failing_property}' "
+                f"still trips at a deepened unwind bound under an unconstrained "
+                f"harness input. This is a BMC-incompleteness signal (the loop is "
+                f"effectively unbounded relative to the symbolic input), NOT a "
+                f"property violation. Routed by the unwind-artifact filter (b) "
+                f"WITHOUT LLM refinement/triage; surfaced as latent so a bounded / "
+                f"NUL-terminated real caller remains visible."
+            ),
+            confidence="likely",
+            cex_outcome=CExOutcome.LATENT,
+            triage={
+                "verdict": "likely_fp",
+                "confidence": "high",
+                "fp_class": "cbmc-unwind-assertion-artifact",
+                "reasoning": ("Deterministic unwind-artifact filter: the unwinding / "
+                              "recursion assertion persists at a deeper unwind bound "
+                              "with unconstrained inputs, so it is a bounded-analysis "
+                              "artifact rather than a memory-safety or assertion "
+                              "violation. No LLM triage was spent."),
+                "source": "heuristic-unwind-filter",
+            },
+        )
+        self.reporter.save_latent_report(rep, driver_name)
+        return rep
+
     def _annotate_triage(self, report, validation, func, spec, parsed, all_funcs,
                          all_specs=None, cbmc_harness_path=""):
         """ADVISORY: run triage on a confirmed report and attach report.triage.
@@ -1939,8 +2260,8 @@ class AMCPipeline:
         import os as _os_at
         if not getattr(self.config, "enable_phase_3e_triage", False):
             return
-        if _os_at.environ.get("SVCOMP_PROP"):
-            return
+        if _os_at.environ.get("BMC_SVCOMP_MODE"):
+            return  # genuine SV-COMP only; --plan property-scoping (SVCOMP_PROP) must NOT suppress advisory triage
         try:
             from bmc_agent.agents.triage_tools import TriageToolsAgent
             corpus_paths = list(getattr(self.spec_gen, "corpus_paths", []) or [])

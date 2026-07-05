@@ -1308,6 +1308,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"Include dirs: {config.include_dirs}")
     _print_ai_layers(config)
 
+    import os as _os_svcm
+    if getattr(args, "svcomp", False):
+        _os_svcm.environ["BMC_SVCOMP_MODE"] = "1"
+    if _os_svcm.environ.get("BMC_SVCOMP_MODE"):
+        print("Mode: SV-COMP (BMC_SVCOMP_MODE) -> solver authoritative; advisory triage + realism skipped")
+
     if getattr(args, "plan", False):
         from bmc_agent.parser import parse_c_file as _pcf
         from bmc_agent.agents.plan_agent import PlanAgent as _PA, apply_plan as _ap
@@ -1411,6 +1417,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     survivors = [
         r for r in bug_reports
         if not _realism_was_unrealistic(r)
+        and (getattr(r, "confidence", "") or "").lower() != "unlikely"
         and not _final_classification_is_spurious(args.driver, r.function_name, getattr(r, "violated_property", "") or "")
     ]
     dropped = len(bug_reports) - len(survivors)
@@ -2513,6 +2520,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan",
         action="store_true",
         help="Let the PlanAgent choose the analysis strategy (scope_from_entry / frame_havoc / compositional), entry, and unwind/havoc, instead of hand-setting --scope-from-entry / BMC_FRAME_HAVOC / SVCOMP_UNWIND.",
+    )
+    ver.add_argument(
+        "--svcomp",
+        action="store_true",
+        help="Genuine SV-COMP benchmark mode: the solver verdict is authoritative, so the human-oriented LLM layers (advisory triage, realism) are skipped. Sets BMC_SVCOMP_MODE. Do NOT pass this for real-world code (e.g. VibeOS) even with --plan -- otherwise advisory triage is suppressed.",
     )
     ver.add_argument(
         "--javac-path",
