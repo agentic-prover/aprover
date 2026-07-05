@@ -158,7 +158,7 @@ class PlanAgent:
         return plan
 
     def plan_for_strategy(self, strategy: str, entry: str = "main",
-                          property_class: str = "unreach-call") -> "Plan":
+                          property_class: str = "unreach-call", unwind=None) -> "Plan":
         """Build a Plan forcing a specific strategy (used by the adaptive re-plan loop)."""
         cu = (self.config.cbmc_unwind if self.config else 4)
         if strategy == "compositional":
@@ -167,8 +167,10 @@ class PlanAgent:
                         rationale="forced compositional (re-plan)", fallback_ladder=[])
         if strategy == "frame_havoc":
             return Plan(strategy="frame_havoc", entry=entry, property_class=property_class,
-                        unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
-                        rationale="forced frame_havoc (re-plan fallback)", fallback_ladder=[])
+                        unwind=(unwind if unwind is not None else 1), timeout=300,
+                        targets={entry}, frame_havoc=True, bughunt=True,
+                        rationale=f"forced frame_havoc (re-plan; unwind={unwind if unwind is not None else 1})",
+                        fallback_ladder=[])
         return Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
                     unwind=64, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
                     rationale="forced scope_from_entry (re-plan fallback)", fallback_ladder=[])

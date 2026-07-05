@@ -1330,9 +1330,28 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 only_functions=_scope_only,
             )
             _summ = getattr(pipeline, "last_verdict_summary", {}) or {}
-            _stalled = (not bug_reports
+            _no_bug = (not bug_reports) and _summ.get("bug_candidates", 0) == 0
+            _FH_UNWIND_CAP = 3
+            # Unwind sweep: for frame_havoc, "no bug at this depth" (inconclusive OR
+            # bounded-clean) -> try a deeper unwind before switching strategy. Low
+            # unwinds are fast and catch shallow bugs; deeper ones catch the rest.
+            # Sweep deeper ONLY when BOUNDED-CLEAN at this depth (CBMC finished, no bug
+            # within the bound -> a deeper bug may exist and still be tractable). Do NOT
+            # sweep on inconclusive/timeout: a deeper unwind is strictly slower.
+            _bounded_clean = (_no_bug and _summ.get("verified_clean", 0) > 0
+                              and _summ.get("inconclusive", 0) == 0)
+            if _bounded_clean and _plan.strategy == "frame_havoc" and (_plan.unwind or 1) < _FH_UNWIND_CAP:
+                _nu = (_plan.unwind or 1) + 1
+                print(f"[PlanAgent] frame_havoc: bounded-clean at unwind={_plan.unwind}; "
+                      f"sweeping deeper -> unwind={_nu}")
+                _swept = _pa.plan_for_strategy("frame_havoc", entry=_entry0,
+                                               property_class=_plan.property_class, unwind=_nu)
+                _swept.fallback_ladder = _plan.fallback_ladder  # preserve strategy fallback after sweep
+                _plan = _swept
+                continue
+            # Strategy fallback: a stalled (inconclusive) attempt escalates to the next ladder strategy.
+            _stalled = (_no_bug
                         and _summ.get("inconclusive", 0) > 0
-                        and _summ.get("bug_candidates", 0) == 0
                         and _summ.get("verified_clean", 0) == 0)
             _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
             if _stalled and _next:
