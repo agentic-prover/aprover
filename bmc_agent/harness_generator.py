@@ -3556,8 +3556,10 @@ def _generate_nd_decls(
 
     For pointer parameters, we allocate a local struct/array on the stack and
     point to it. char* and const char* parameters receive a bounded
-    null-terminated string (max length = cbmc_unwind) so that string-traversal
-    loops always terminate within the unwinding bound.
+    null-terminated string (max length = cbmc_unwind - 1, i.e. one slot of
+    headroom: a `while(*s)` traversal needs L+1 guard checks, so L<=unwind-1
+    keeps it provably within the unwinding bound instead of tripping the
+    loop-unwinding assertion as an artifact).
 
     Parameters that are never passed NULL at any call site in the codebase
     (as determined by _infer_nonnull_params) receive an explicit
@@ -3872,7 +3874,8 @@ def _generate_nd_decls(
                     nul_name = f"_{pname}_nul_at"
                     lines.append(f"    unsigned int {nul_name};")
                     lines.append(
-                        f"    __CPROVER_assume({nul_name} <= (unsigned int){cbmc_unwind});"
+                        f"    __CPROVER_assume({nul_name} <= (unsigned int){max(1, cbmc_unwind - 1)});"
+                        f"  /* (a) L<=unwind-1: while(*s) needs L+1 guard checks */"
                     )
                     lines.append(f"    {backing_name}[{nul_name}] = '\\0';")
                 lines.append(f"    {inner_type} *{cursor_name} = {backing_name};")
@@ -3935,7 +3938,12 @@ def _generate_nd_decls(
                     # into a smaller fixed buffer can overflow (else baked-in
                     # length <= cbmc_unwind hides the bug). Width = the resolved
                     # destination size (or default cap), per plan_copy_source_widening.
-                    str_max = cbmc_unwind
+                    # (a) Headroom under the unwind bound: a NUL-terminated string
+                    # of length L needs L+1 guard checks in a `while(*s)` loop, so
+                    # bound L at cbmc_unwind-1 to keep the traversal provably within
+                    # `--unwind cbmc_unwind`. Without this, the loop-unwinding
+                    # assertion trips as an artifact (see (b) _recheck_unwind_artifact).
+                    str_max = max(1, cbmc_unwind - 1)
                     if copy_param_maxlen.get(pname, 0) > str_max:
                         str_max = copy_param_maxlen[pname]
                         lines.append(f"    /* copy-sink source '{pname}': widened to {str_max} chars to expose fixed-buffer overflow */")
@@ -4146,6 +4154,26 @@ def _generate_nd_decls(
         else:
             # Value parameter
             lines.append(f"    {ptype_stripped} {pname};")
+            # (a)-extension / Path 2: bound a length/size/count-style integer value
+            # param to the unwind ONLY when the body actually uses it as a LOOP BOUND
+            # (e.g. for(i=0;i<n;i++), while(n--)). Then explicit mem*/strncpy-style
+            # traversals are provably within `--unwind` -> the loop-unwinding assertion
+            # HOLDS instead of tripping as an artifact. Gated on loop-bound use so an
+            # arithmetic-only length (n*size overflow candidate) is NOT constrained and
+            # overflow bugs are preserved. Bounded analysis; residual off-by-one -> (b).
+            _lb_body = getattr(func, "body", "") or ""
+            import re as _re_lb
+            _is_loop_bound = bool(_re_lb.search(
+                r'(?:<=?|!=)\s*' + _re_lb.escape(pname) + r'\b'
+                + r'|\b' + _re_lb.escape(pname) + r'\s*(?:--|>\s*0)',
+                _lb_body))
+            if (_is_likely_length_field(pname)
+                    and _looks_like_integer_type(ptype_stripped)
+                    and _is_loop_bound):
+                lines.append(
+                    f"    __CPROVER_assume((unsigned long){pname} <= (unsigned long){cbmc_unwind});"
+                    f"  /* (a) loop-bound length <= unwind: keeps traversal within --unwind */"
+                )
             if pname in cursor_size_assumes:
                 lines.append(cursor_size_assumes[pname])
     if _coupling_assumes:
