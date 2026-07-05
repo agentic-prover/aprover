@@ -123,13 +123,15 @@ class PlanAgent:
             logger.info("plan: FORCED strategy=%s ladder=%s", _force, _pl.fallback_ladder)
             return _pl
 
-        if not p["has_entry"] and p["n_roots"] > 3:
+        if (not p["has_entry"]) or (p["closure_size"] == 0):
             plan = Plan(
                 strategy="compositional", entry=None, property_class=property_class,
                 unwind=(self.config.cbmc_unwind if self.config else 4), targets=None,
                 frame_havoc=False, bughunt=False,
-                rationale=(f"no single harness entry '{entry}'; {p['n_roots']} roots "
-                           f"-> per-function compositional (stub callees)"),
+                rationale=(f"entry '{entry}' absent or empty closure "
+                           f"(has_entry={p['has_entry']}, closure={p['closure_size']}, "
+                           f"{p['n_roots']} roots) -> per-function compositional (stub callees). "
+                           f"scope_from_entry would verify 0 fns here (vacuous)."),
                 fallback_ladder=["scope_from_entry"],
             )
         elif p["kernelish"] or p["closure_size"] > _INLINE_CLOSURE_MAX:
