@@ -135,7 +135,7 @@ class PlanAgent:
         elif p["kernelish"] or p["closure_size"] > _INLINE_CLOSURE_MAX:
             plan = Plan(
                 strategy="frame_havoc", entry=entry, property_class=property_class,
-                unwind=2, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
+                unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
                 rationale=(f"single entry '{entry}' but closure={p['closure_size']} defined "
                            f"fns (kernelish={p['kernelish']}) too large to inline -> "
                            f"inline property path, havoc the rest"),
@@ -167,7 +167,7 @@ class PlanAgent:
                         rationale="forced compositional (re-plan)", fallback_ladder=[])
         if strategy == "frame_havoc":
             return Plan(strategy="frame_havoc", entry=entry, property_class=property_class,
-                        unwind=2, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
+                        unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
                         rationale="forced frame_havoc (re-plan fallback)", fallback_ladder=[])
         return Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
                     unwind=64, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
@@ -207,9 +207,27 @@ def apply_plan(config, plan: "Plan"):
     if plan.frame_havoc:
         os.environ["BMC_FRAME_HAVOC"] = "1"
         os.environ["BMC_BUGHUNT"] = "1"
+        os.environ["BMC_TRANSITIVE_INLINE"] = "0"   # cone-inline, not transitive
+        os.environ["BMC_FAITHFUL_MAIN"] = "0"       # non-faithful main (havoc off-cone)
+        # LEAN: frame-havoc builds the harness mechanically from `main` (inline the
+        # property-reaching cone, havoc the rest) and needs NO per-function contracts.
+        # Skip the agentic phases (spec-gen tools, bmc-config agent, flag selection)
+        # that otherwise run LLM calls over every function of a large driver and
+        # exhaust the time budget -- the Tier-B 0/3 timeout cause. Matches the
+        # specialized --no-agentic Tier-B runner (caught 18/29).
+        if config is not None:
+            for _f in ("enable_bmc_config_agent", "enable_flag_selection", "enable_spec_gen_tools"):
+                try:
+                    setattr(config, _f, False)
+                except Exception:
+                    pass
+            try:
+                config.use_legacy_spec_gen = True
+            except Exception:
+                pass
     else:
-        os.environ.pop("BMC_FRAME_HAVOC", None)
-        os.environ.pop("BMC_BUGHUNT", None)
+        for _v in ("BMC_FRAME_HAVOC", "BMC_BUGHUNT", "BMC_TRANSITIVE_INLINE", "BMC_FAITHFUL_MAIN"):
+            os.environ.pop(_v, None)
     only = set(plan.targets) if plan.targets else None
     logger.info("apply_plan: %s", plan.summary())
     return only

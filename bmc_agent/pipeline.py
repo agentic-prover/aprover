@@ -523,15 +523,26 @@ class AMCPipeline:
         # prefix (shared, byte-identical across the sweep). See LLMClient.complete.
         self.config.domain_summary = domain_knowledge or ""  # type: ignore[attr-defined]
 
-        specs = self.spec_gen.generate_specs(
-            source_file=source_file,
-            driver_name=driver_name,
-            domain_knowledge=domain_knowledge,
-            source_text=preprocessed_source,
-            cross_file_caller_contexts=cross_file_caller_contexts,
-            only_functions=only_functions,
-        )
-        logger.info("Phase 1 complete: %d specs generated", len(specs))
+        import os as _os_p1
+        if _os_p1.environ.get("BMC_FRAME_HAVOC"):
+            # LEAN frame-havoc: the harness is built mechanically from `main`
+            # (inline the property-reaching cone, havoc the rest) and needs NO
+            # per-function contracts. Skip the LLM spec-gen over the whole driver
+            # closure (the Tier-B timeout cause); use trivial permissive specs.
+            from bmc_agent.spec_generator import _fallback_spec
+            specs = {n: _fallback_spec(n, "frame-havoc lean mode")
+                     for n in parsed.functions.keys()}
+            logger.info("--- Phase 1: SKIPPED (frame-havoc lean; %d trivial specs) ---", len(specs))
+        else:
+            specs = self.spec_gen.generate_specs(
+                source_file=source_file,
+                driver_name=driver_name,
+                domain_knowledge=domain_knowledge,
+                source_text=preprocessed_source,
+                cross_file_caller_contexts=cross_file_caller_contexts,
+                only_functions=only_functions,
+            )
+            logger.info("Phase 1 complete: %d specs generated", len(specs))
 
         # Build all_funcs mapping
         all_funcs: dict[str, FunctionInfo] = {}
