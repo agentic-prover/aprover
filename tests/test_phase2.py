@@ -1706,6 +1706,34 @@ def test_bmc_engine_cbmc_not_installed(tmp_path: Path):
     assert "not found" in verdict.error.lower() or "error" in verdict.error.lower()
 
 
+def test_read_harness_src_for_proof_event(tmp_path: Path):
+    """The web 'function' progress event carries the proof harness via
+    _read_harness_src: content for a readable file, '' for missing/oversized/
+    no-path (so a skipped or pathological harness can't break or bloat the
+    event)."""
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.bmc_engine import BMCEngine
+    from bmc_agent.config import Config
+
+    config = Config(artifact_dir=str(tmp_path / "artifacts"), cbmc_unwind=4)
+    store = ArtifactStore(config.artifact_dir)
+    engine = BMCEngine(config, store)
+
+    # no path / missing file -> ""
+    assert engine._read_harness_src("") == ""
+    assert engine._read_harness_src(str(tmp_path / "nope.c")) == ""
+
+    # readable harness -> its content
+    good = tmp_path / "harness.c"
+    good.write_text("int main(){ return 0; }", encoding="utf-8")
+    assert engine._read_harness_src(str(good)) == "int main(){ return 0; }"
+
+    # oversized harness -> "" (guard against bloating the retained event log)
+    big = tmp_path / "big.c"
+    big.write_text("x" * (engine._MAX_HARNESS_BYTES + 1), encoding="utf-8")
+    assert engine._read_harness_src(str(big)) == ""
+
+
 # ---------------------------------------------------------------------------
 # 5. Test check_all with mocked CBMC
 # ---------------------------------------------------------------------------

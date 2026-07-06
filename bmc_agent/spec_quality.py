@@ -276,11 +276,13 @@ class SpecConsistencyChecker:
 
         try:
             from bmc_agent.llm import agentic_system_prompt
+            from bmc_agent.json_utils import extract_json_object
             response = self._llm.complete(
                 agentic_system_prompt(self._llm.config, "spec_gen", system_prompt),
                 user_prompt, role="spec_gen",
+                validate=lambda t: extract_json_object(t) is not None,
             )
-            parsed = json.loads(response.strip())
+            parsed = extract_json_object(response) or {}
             consistent = bool(parsed.get("consistent", True))
             reasoning = parsed.get("reasoning", "")
         except Exception as exc:
@@ -371,14 +373,16 @@ class ExecutableSanityChecker:
 
         try:
             from bmc_agent.llm import agentic_system_prompt
+            from bmc_agent.json_utils import extract_json_object
             response = self._llm.complete(
                 agentic_system_prompt(
                     self._llm.config, "spec_gen",
                     "You are a formal verification expert for C programs.",
                 ),
                 prompt, role="spec_gen",
+                validate=lambda t: extract_json_object(t) is not None,
             )
-            parsed = json.loads(response.strip())
+            parsed = extract_json_object(response) or {}
             tests = parsed.get("tests", [])
             violations = int(parsed.get("violations_found", 0))
             notes = f"{len(tests)} test(s) generated"

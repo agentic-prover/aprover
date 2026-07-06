@@ -1009,6 +1009,7 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
     from bmc_agent.llm import LLMClient
 
     entry = getattr(args, "entry", None) or "main"
+    config.goal_free = bool(getattr(args, "goal_free", False))   # type: ignore[attr-defined]
     if getattr(args, "include_dir", None):
         config.include_dirs = args.include_dir          # type: ignore[attr-defined]
         config.preprocess = True                        # type: ignore[attr-defined]
@@ -1155,7 +1156,10 @@ def _run_loop_invariant_synth(args: argparse.Namespace, config: "object") -> int
                               "mathematical-integer semantics (--math-ints).")
             except Exception as exc:   # never let the rigor recheck mask the result
                 print(f"overflow-rigor: recheck skipped ({exc}); math-int result stands.")
-        print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
+        if getattr(config, "goal_free", False):
+            print(f"RESULT: SATISFIED — {r.note}")
+        else:
+            print("RESULT: SATISFIED — invariants are inductive and prove all goals.")
         return 0
     print(f"RESULT: NOT SATISFIED — {r.note}")
     return 1
@@ -1307,6 +1311,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if config.preprocess:
         print(f"Include dirs: {config.include_dirs}")
     _print_ai_layers(config)
+
+    if getattr(args, "eta", False):
+        from bmc_agent.eta import make_cli_callback
+        config.progress = make_cli_callback()  # type: ignore[attr-defined]
 
     import os as _os_svcm
     if getattr(args, "svcomp", False):
@@ -1739,6 +1747,10 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
     if exclude:
         print(f"Excluded patterns:   {exclude}")
 
+    if getattr(args, "eta", False):
+        from bmc_agent.eta import make_cli_callback
+        config.progress = make_cli_callback()  # type: ignore[attr-defined]
+
     pipeline = AMCPipeline(config)
     only_functions = None
     _fns = getattr(args, "functions", "") or ""
@@ -1961,6 +1973,12 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
         config.allow_self_patch = args.allow_self_patch
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
+
+    if getattr(args, "eta", False):
+        # One reporter for the whole run; each round's run_directory emits a
+        # "run" event that resets the estimate, so the ETA is per round.
+        from bmc_agent.eta import make_cli_callback
+        config.progress = make_cli_callback()  # type: ignore[attr-defined]
 
     include_dirs = args.include_dir or []
     if include_dirs:
@@ -2272,6 +2290,20 @@ def build_parser() -> argparse.ArgumentParser:
             help=(
                 "Override the LLM model (e.g. claude-opus-4-7, claude-sonnet-4-6). "
                 "Defaults to BMC_AGENT_LLM_MODEL env var or claude-sonnet-4-6."
+            ),
+        )
+
+    # Shared --eta argument: print an estimated-time-remaining line to stderr,
+    # extrapolated from elapsed time + pipeline progress. Off by default.
+    def _add_eta_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--eta",
+            action="store_true",
+            default=False,
+            help=(
+                "Print an estimated time remaining to stderr as the run "
+                "progresses (extrapolated from elapsed time + phase/function "
+                "progress)."
             ),
         )
 
@@ -2605,6 +2637,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Specification-synthesis BENCHMARK preset (one flag). Reads the goals (assert/static_assert/__VERIFIER_assert///@ assert), dispatches by program content — loops → loop-invariant synthesis, otherwise → function-contract synthesis — turns on --math-ints (mathematical-integer semantics these benchmarks assume), and emits ACSL. Equivalent to picking the right synthesis mode + --math-ints automatically.",
     )
     ver.add_argument(
+        "--goal-free",
+        action="store_true",
+        default=False,
+        help="Loop-invariant synthesis (--specs-bench): GOAL-FREE mining mode. Synthesize inductive loop invariants that characterise the loop even when the program has NO verification goal (//@ assert / assert / __VERIFIER_assert). Validity-only (no goal to discharge); succeeds when a non-empty inductive invariant set is found. Skips the goal-anchored generality/dedup minimization.",
+    )
+    ver.add_argument(
         "--synth-attempts", type=int, default=0,
         help="Loop-invariant synthesis: number of random-restart attempts (portfolio search); the first WP-verified result wins. 0 = tool default (1; 5 under --specs-bench).",
     )
@@ -2827,6 +2865,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "zero-LLM-cost smoke runs."))
     _add_model_arg(ver)
     _add_provider_args(ver)
+    _add_eta_arg(ver)
     ver.set_defaults(func=_cmd_verify)
 
     # --- baseline ---
@@ -3115,6 +3154,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_model_arg(vd)
     _add_provider_args(vd)
+    _add_eta_arg(vd)
     vd.set_defaults(func=_cmd_verify_dir)
 
     # --- autonomous ---
@@ -3218,6 +3258,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_model_arg(au)
     _add_provider_args(au)
+    _add_eta_arg(au)
     au.set_defaults(func=_cmd_autonomous)
 
     # --- self-patch-review ---

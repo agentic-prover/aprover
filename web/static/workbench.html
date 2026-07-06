@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AProver workbench</title>
+<link rel="icon" href="/assets/logo-icon.svg">
+<link rel="preconnect" href="https://rsms.me/" />
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+<!-- syntax highlighting (highlight.js, pinned) — degrades to plain text if the CDN is blocked -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/c.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/java.min.js"></script>
+<link rel="stylesheet" href="/static/workbench.css" />
+</head>
+<body>
+
+<div class="stage">
+  <!-- ===== SCREEN: CONNECT ===== -->
+  <div class="screen" id="screen-connect">
+    <div class="scr-head">
+      <div class="brand">
+        <a href="/" title="Home" style="display:flex;align-items:center;"><img src="/assets/logo.svg" alt="AProver" /></a>
+        <span class="vrule"></span>
+        <span class="pill"><span class="dot"></span><span id="connect-status">new run · not started</span></span>
+      </div>
+      <div class="right">
+        <span class="modeltag" data-modeltag>anthropic · claude-sonnet-4-6</span>
+        <button class="iconbtn" data-open-settings title="Settings — keys &amp; model">⚙</button>
+      </div>
+    </div>
+    <div class="connect-body">
+      <div class="connect-card">
+        <div class="section-label"><span class="num">1</span><span class="txt">source</span></div>
+        <div class="segment" id="source-seg">
+          <button class="seg on" data-src="github">GitHub</button>
+          <button class="seg" data-src="git">Git URL</button>
+          <button class="seg" data-src="local">Local path</button>
+        </div>
+        <!-- remote (github / git url) -->
+        <div id="remote-block">
+          <div class="fld-label" id="repo-fld-label">repository</div>
+          <div class="input focusy" id="repo-input-wrap">
+            <span class="prefix" id="repo-prefix">github.com/</span>
+            <input id="repo-input" placeholder="owner/repo" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="row" style="margin:14px 0 6px;">
+            <span class="fld-label" style="margin:0;">ref</span>
+            <span class="hint">optional · branch, tag, or commit — defaults to HEAD</span>
+          </div>
+          <div class="row">
+            <div class="input" style="flex:1;">
+              <input id="ref-input" placeholder="HEAD" autocomplete="off" spellcheck="false" />
+            </div>
+            <button class="btn" id="clone-btn"><span class="gly">⤓</span> Clone</button>
+          </div>
+        </div>
+
+        <!-- local folder (File System Access API) -->
+        <div id="local-block" class="hidden">
+          <div class="fld-label">folder</div>
+          <div class="row">
+            <button class="btn ghost" id="pick-folder-btn"><span class="gly">📂</span> Choose folder…</button>
+            <span class="mono" id="local-folder-name" style="font:600 13px/1 var(--mono);color:var(--faint);">no folder selected</span>
+          </div>
+          <div class="hint" style="margin-top:10px;">Reads the directory listing locally — nothing leaves your machine until you pick a scope and run. Only the selected source files are then uploaded for verification. <b>Chromium browsers only.</b></div>
+        </div>
+
+        <div class="hint" id="connect-hint" style="margin-top:14px;">After cloning, you choose what to verify →</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SCREEN: SCOPE ===== -->
+  <div class="screen hidden" id="screen-scope">
+    <div class="scr-head">
+      <div class="brand">
+        <a href="/" title="Home" style="display:flex;align-items:center;"><img src="/assets/logo.svg" alt="AProver" /></a>
+        <span class="vrule"></span>
+        <span class="pill"><span class="dot"></span>new run · not started</span>
+      </div>
+      <div class="right">
+        <span class="modeltag" data-modeltag>anthropic · claude-sonnet-4-6</span>
+        <button class="iconbtn" data-open-settings title="Settings">⚙</button>
+      </div>
+    </div>
+    <div class="repo-banner">
+      <span class="chk">✓</span>
+      <span class="mono" id="scope-repo" style="font-weight:600;">—</span>
+      <span class="tag" id="scope-ref">ref HEAD</span>
+      <span class="hint" id="scope-cloned">cloned</span>
+      <span style="flex:1;"></span>
+      <button class="btn ghost sm" id="change-source">change source</button>
+    </div>
+    <div class="scope-pick">
+      <div class="row" style="justify-content:space-between;margin-bottom:13px;">
+        <div class="section-label" style="margin:0;"><span class="num">2</span><span class="txt">scope</span></div>
+        <span class="hint">what should this run verify?</span>
+      </div>
+      <div class="scope-cards" id="scope-cards">
+        <div class="scope-card on" data-mode="whole">
+          <div class="top"><span class="radio"></span><span class="lbl">Whole project</span></div>
+          <div class="sub">every code file in the repo</div>
+        </div>
+        <div class="scope-card" data-mode="subdir">
+          <div class="top"><span class="radio"></span><span class="lbl">Subdirectory</span></div>
+          <div class="sub">pick a folder in the tree below</div>
+        </div>
+        <div class="scope-card" data-mode="file">
+          <div class="top"><span class="radio"></span><span class="lbl">Single file</span></div>
+          <div class="sub">pick a file in the tree below</div>
+        </div>
+      </div>
+    </div>
+    <div class="scope-scroll">
+    <div class="tree-head">
+      <span class="t">project tree</span>
+      <span class="h" id="tree-hint">whole project selected</span>
+    </div>
+    <div class="tree" id="tree"></div>
+    <!-- function picker (any scope): lists the scope's functions so a run can target
+         a subset (only_functions); all selected = verify all. For directory scope the
+         cross-file call graph is still built over the whole dir. -->
+    <div class="fnpick hidden" id="fnpick">
+      <div class="tree-head">
+        <span class="t">functions</span>
+        <span style="flex:1;"></span>
+        <button class="fnpick-toggle" id="fnpick-toggle" type="button">deselect all</button>
+        <span class="h" id="fnpick-hint">all selected</span>
+      </div>
+      <input id="fnpick-search" class="fnpick-search hidden" type="text"
+        placeholder="filter functions…" autocomplete="off" spellcheck="false" />
+      <div class="fnpick-list" id="fnpick-list"></div>
+    </div>
+    <!-- domain knowledge: optional free-text injected into spec generation. -->
+    <div class="domain">
+      <div class="tree-head">
+        <span class="t">domain knowledge</span>
+        <span class="h">optional — guides spec generation</span>
+      </div>
+      <textarea id="domain-input" class="domain-input" rows="3"
+        placeholder="Context for spec generation — e.g. invariants the caller guarantees, units, or which inputs are attacker-controlled."></textarea>
+    </div>
+    <!-- run settings: friendly controls for the full CLI knob set (web.options).
+         Collapsed by default; defaults match the safe web-demo behavior, so a
+         user can run without opening it. Rendered from a schema in workbench.js. -->
+    <div class="runset" id="runset">
+      <button class="runset-head" id="runset-toggle" type="button">
+        <span class="rs-chev">▸</span>
+        <span class="rs-title">Run settings</span>
+        <span class="rs-count" id="runset-count"></span>
+        <span style="flex:1;"></span>
+        <span class="rs-reset hidden" id="runset-reset" title="Reset all to defaults">reset</span>
+      </button>
+      <div class="runset-body hidden" id="runset-body"></div>
+    </div>
+    </div><!-- /.scope-scroll -->
+    <div class="scope-foot">
+      <div class="info">
+        <div class="a">Run scope · <b id="scope-label">Whole project</b> — <span id="scope-detail">—</span></div>
+        <div class="b" id="scope-est">est. — · budget <span id="scope-budget">unlimited</span></div>
+      </div>
+      <button class="btn" id="run-btn"><span class="gly">▶</span> Run verification</button>
+    </div>
+  </div>
+
+  <!-- ===== SCREEN: RUN (also recovery) ===== -->
+  <div class="screen hidden" id="screen-run">
+    <div class="scr-head">
+      <div class="brand">
+        <a href="/" title="Home" style="display:flex;align-items:center;"><img src="/assets/logo.svg" alt="AProver" /></a>
+        <span class="vrule"></span>
+        <span class="pill live" id="run-pill"><span class="dot"></span><span id="run-status">verifying</span></span>
+      </div>
+      <div class="right">
+        <span class="rel" id="rel-badge" title="API reliability — no calls yet"><span class="reldot"></span><span class="lbl">API</span> <span id="rel-pct">—</span> <span class="lbl" id="rel-lat"></span></span>
+        <span class="spend" id="spend"><span class="lbl">spent</span> <span id="spend-usd">$0.00</span> · <span id="spend-tok" class="lbl">0 tok</span></span>
+        <button class="minibtn" id="pause-btn">❚❚ pause</button>
+        <button class="minibtn" id="cancel-btn">⨯ stop</button>
+      </div>
+    </div>
+
+    <div class="recovery-banner hidden" id="recovery-banner">
+      <span class="ic">!</span>
+      <div class="msg">
+        <div class="a" id="recovery-title">Run halted.</div>
+        <div class="b" id="recovery-sub">Completed work is preserved — recovery won't re-spend on it.</div>
+      </div>
+      <div class="acts" id="recovery-acts"></div>
+    </div>
+
+    <div class="run-grid">
+      <!-- source -->
+      <div class="col">
+        <div class="col-head">
+          <div class="row" style="gap:8px;min-width:0;">
+            <button class="minibtn" id="src-browse-btn" title="Browse in-scope files">📁 files</button>
+            <span class="mono" id="src-name" style="font-weight:600;color:var(--ink);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
+            <span class="tag" id="src-lang">C</span>
+          </div>
+          <span class="h mono" id="src-meta" style="color:var(--fainter);font-size:10px;"></span>
+        </div>
+        <div class="run-tree hidden" id="run-tree"></div>
+        <div class="src" id="src"></div>
+      </div>
+      <!-- pipeline -->
+      <div class="col mid">
+        <div class="col-head"><span class="t">pipeline</span><span class="eta" id="eta-wrap"><span class="u">eta</span>&nbsp;<span id="eta">—</span></span><span class="elapsed"><span class="u">elapsed</span>&nbsp;<span id="elapsed">0s</span></span></div>
+        <div class="ftree" id="pipeline"></div>
+        <div class="cache-strip"><span class="g">⤓</span><span class="t" id="cache-strip">specs + harnesses cache to disk · safe to pause or close</span></div>
+        <div class="activity hidden" id="activity"><span class="dot"></span><span class="t" id="activity-text">starting…</span><span class="sweep"></span></div>
+        <details class="logwrap"><summary>run log</summary><div class="logbox" id="logbox"></div></details>
+      </div>
+      <!-- findings -->
+      <div class="col">
+        <div class="col-head"><span class="t" id="findings-title">findings</span><span id="findings-count" class="tag">0 confirmed</span>
+          <div class="export-wrap" id="export-wrap" hidden>
+            <button class="btn ghost sm" id="export-btn" type="button">⤓ export</button>
+            <div class="export-menu hidden" id="export-menu">
+              <button type="button" data-export="pdf">PDF</button>
+              <button type="button" data-export="csv">CSV</button>
+            </div>
+          </div>
+        </div>
+        <div class="findings" id="findings"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SETTINGS MODAL ===== -->
+<div class="overlay hidden" id="settings-overlay">
+  <div class="scrim" data-close-settings></div>
+  <div class="modal">
+    <div class="mhead">
+      <div>
+        <div class="t" id="set-title">Settings</div>
+        <div class="s" id="set-subtitle">choose a provider · keys stay in your browser</div>
+      </div>
+      <button class="x" data-close-settings>✕</button>
+    </div>
+
+    <!-- view 1: provider chooser -->
+    <div class="mbody" id="settings-chooser"></div>
+
+    <!-- view 2: per-provider page -->
+    <div class="mbody hidden" id="settings-detail">
+      <button class="backlink" id="set-back"><span class="mono">‹</span> All providers</button>
+      <div class="fld-label">api key <a id="set-keylink" href="#" target="_blank" rel="noopener" style="text-transform:none;color:var(--blue);text-decoration:none;float:right;">get a key ↗</a></div>
+      <input class="field mono" id="set-key" type="password" placeholder="sk-ant-…" autocomplete="off" />
+      <div class="hint" style="margin:6px 0 16px;">stored in your browser (localStorage) · sent only with your own requests, never written to artifacts</div>
+      <div id="set-model-wrap">
+        <div class="fld-label">model</div>
+        <select class="field mono" id="set-model-select"></select>
+        <input class="field mono hidden" id="set-model" placeholder="any model id this provider supports" autocomplete="off" style="margin-top:8px;" />
+        <div class="hint" id="set-model-hint" style="margin:6px 0 16px;">presets include a cost estimate · pick Custom for any other model id (no estimate)</div>
+      </div>
+      <div id="set-baseurl-wrap">
+        <div class="fld-label">base url</div>
+        <input class="field mono" id="set-baseurl" placeholder="https://openrouter.ai/api/v1" autocomplete="off" />
+        <div class="hint" id="set-baseurl-hint" style="margin:6px 0 16px;">leave blank for the provider default</div>
+      </div>
+      <div id="set-k2backend-wrap" class="hidden">
+        <div class="fld-label">inference backend</div>
+        <select class="field mono" id="set-k2-backend">
+          <option value="auto">auto — fastest, with fallback</option>
+          <option value="cerebras">cerebras — fastest</option>
+          <option value="nvidia">nvidia</option>
+        </select>
+        <div class="hint" style="margin:6px 0 16px;">auto routes each call to the faster backend and falls back if one stalls</div>
+      </div>
+      <div class="fld-label">budget cap (usd)</div>
+      <input class="field mono" id="set-budget" placeholder="unlimited" autocomplete="off" inputmode="decimal" />
+      <div class="hint" style="margin:6px 0 16px;">stops the run cleanly once estimated spend crosses the cap · blank = unlimited</div>
+      <div class="fld-label">max files (directory sweep)</div>
+      <input class="field mono" id="set-maxfiles" placeholder="server default" autocomplete="off" inputmode="numeric" />
+      <div class="hint" style="margin:6px 0 0;">cap on files verified in a whole-project / folder run · blank = server default</div>
+      <div class="errline hidden" id="set-error"></div>
+    </div>
+
+    <div class="mfoot">
+      <span class="note" id="set-note">keys stay in your browser, sent only with your requests</span>
+      <button class="btn ghost sm" data-close-settings>Close</button>
+      <button class="btn sm hidden" id="set-save">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- run confirm — review the pre-run estimate before spending -->
+<div class="overlay hidden" id="confirm-overlay">
+  <div class="scrim" id="confirm-scrim"></div>
+  <div class="modal">
+    <div class="mhead">
+      <div>
+        <div class="t">Start verification?</div>
+        <div class="s" id="confirm-sub">review the estimate before spending</div>
+      </div>
+      <button class="x" id="confirm-x">✕</button>
+    </div>
+    <div class="mbody" id="confirm-body"></div>
+    <div class="mfoot">
+      <span class="note" id="confirm-note">estimates are approximate · the budget cap stops the run mid-flight</span>
+      <button class="btn ghost sm" id="confirm-cancel">Cancel</button>
+      <button class="btn sm" id="confirm-go"><span class="gly">▶</span> Run verification</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="/static/workbench.js"></script>
+</body>
+</html>

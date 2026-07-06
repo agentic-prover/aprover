@@ -22,10 +22,11 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Callable, NamedTuple, Optional
 
 from bmc_agent.artifacts import ArtifactStore
 from bmc_agent.config import Config
+from bmc_agent.json_utils import extract_json_object as _extract_json_object
 from bmc_agent.llm import LLMClient, LLMError
 from bmc_agent.logger import get_logger
 from bmc_agent.parser import FunctionInfo, ParsedCFile
@@ -503,13 +504,9 @@ def _parse_llm_spec_response(
     except json.JSONDecodeError:
         # Fallback: reasoning models (K2 Think etc.) sometimes bracket the JSON
         # with a trailing prose line ("Hope this helps!", "Note: …") even after
-        # the </think> strip. Extract the first balanced top-level JSON object.
-        obj = _extract_first_json_object(text)
-        if obj is not None:
-            try:
-                data = json.loads(obj)
-            except json.JSONDecodeError:
-                data = None
+        # the </think> strip. The shared extractor strips fences and returns the
+        # first balanced top-level JSON object, already parsed (or None).
+        data = _extract_json_object(text)
 
     if data is not None:
         pre = data.get("precondition", "").strip()
@@ -678,46 +675,6 @@ def _strip_redundant_input_clause(post: str) -> str:
     return post
 
 
-def _extract_first_json_object(text: str) -> Optional[str]:
-    """Return the first top-level ``{...}`` substring whose braces balance.
-
-    Used as a fallback when ``json.loads`` on the full response fails because
-    a reasoning model wrapped the JSON in surrounding prose. Counts brace
-    depth while respecting string literals and escape sequences so that braces
-    inside string values don't throw off the count. Returns ``None`` if no
-    balanced object is found.
-    """
-    if not text:
-        return None
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        i = start
-        in_str = False
-        esc = False
-        while i < len(text):
-            ch = text[i]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-            else:
-                if ch == '"':
-                    in_str = True
-                elif ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return text[start : i + 1]
-            i += 1
-        start = text.find("{", start + 1)
-    return None
-
-
 # ---------------------------------------------------------------------------
 # SpecGenerator
 # ---------------------------------------------------------------------------
@@ -769,6 +726,7 @@ class SpecGenerator:
         """
         response = self.llm.complete(
             self._spec_system_prompt, user_prompt, role="spec_gen",
+            validate=lambda t: _extract_json_object(t) is not None,
         )
         first = _parse_llm_spec_response(response, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         if first is None:
@@ -833,6 +791,7 @@ class SpecGenerator:
                 critique_prompt,
                 max_tokens=32768,
                 role="spec_gen",
+                validate=lambda t: _extract_json_object(t) is not None,
             )
         except LLMError as exc:
             logger.debug(
@@ -876,13 +835,16 @@ class SpecGenerator:
         source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
         only_functions: Optional[set] = None,
+        progress_note: Optional[Callable[..., None]] = None,
     ) -> dict[str, Spec]:
         """
         Generate specs for all functions in source_file.
 
         ``only_functions`` is accepted for drop-in compatibility with v2 (which
         uses it to prune LLM spec-gen to targets + transitive callees); v1 does
-        not prune and ignores it.
+        not prune and ignores it. ``progress_note`` is likewise accepted for
+        drop-in compatibility (v2 emits per-function progress through it); v1
+        generates serially and does not report intermediate progress.
 
         Parameters
         ----------
@@ -1339,6 +1301,7 @@ class SpecGenerator:
         try:
             response = self.llm.complete(
                 self._spec_system_prompt, user_prompt, role="spec_gen",
+                validate=lambda t: _extract_json_object(t) is not None,
             )
             result = _parse_llm_spec_response(response, callee_name, simple_specs=getattr(self.config, 'simple_specs', False))
             if result is not None:
@@ -1403,6 +1366,7 @@ class SpecGenerator:
             )
             response_a = self.llm.complete(
                 self._spec_system_prompt, user_prompt_a, role="spec_gen",
+                validate=lambda t: _extract_json_object(t) is not None,
             )
             result_a = _parse_llm_spec_response(response_a, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         except Exception:
@@ -1416,6 +1380,7 @@ class SpecGenerator:
             )
             response_b = self.llm.complete(
                 self._spec_system_prompt, user_prompt_b, role="spec_gen",
+                validate=lambda t: _extract_json_object(t) is not None,
             )
             result_b = _parse_llm_spec_response(response_b, func.name, simple_specs=getattr(self.config, 'simple_specs', False))
         except Exception:

@@ -307,6 +307,64 @@ class CExValidator:
                 parsed_file=parsed_file,
             )
 
+        # Vacuous-spec postcondition-violation early filter (cost saver).
+        # A spec whose precondition AND postcondition are both `true` emits NO
+        # `kani::assert` in the harness, so a `check_<fn>.assertion.N:
+        # postcondition violated` CEx can only be an intrinsic harness-internal
+        # safety check — never a real functional bug. The general entry-fn
+        # filter further down reaches the same SPURIOUS verdict, but only after
+        # generating a system-entry reproducer (one LLM round-trip). Since the
+        # vacuous case is decidable structurally, short-circuit to SPURIOUS here
+        # without consulting the LLM. Guarded by `not _is_structural_panic` so a
+        # genuine body panic (which would surface under a different property)
+        # is never suppressed.
+        _spec_is_vacuous = (
+            (spec.precondition or "").strip().lower() in ("", "true")
+            and (spec.postcondition or "").strip().lower() in ("", "true")
+        )
+        _fp = counterexample.failing_property or ""
+        # Identify the harness postcondition assertion by its PRECISE property
+        # name only (`check_<fn>.assertion.N`). The earlier fuzzy fallback —
+        # `"postcondition violated" in trace` — was guarded against real body
+        # panics only by Kani's structural-panic markers, so for CBMC/JBMC it
+        # could match a trace substring it shouldn't. Dropping it can at worst
+        # forgo this cost shortcut (the function then falls through to the full,
+        # sound validation path below), never suppress a real verdict.
+        _is_harness_postcondition = bool(
+            re.search(rf"(^|::)check_{re.escape(func_name)}\.assertion\.\d+$", _fp)
+        )
+        if (
+            _spec_is_vacuous
+            and _is_harness_postcondition
+            and not _is_structural_panic(
+                counterexample.failing_property,
+                getattr(counterexample, "trace", None),
+            )
+        ):
+            logger.info(
+                "Vacuous spec (pre/post = true) for '%s' with harness "
+                "postcondition violation '%s' — intrinsic harness check, "
+                "classifying SPURIOUS without an LLM call",
+                func_name, _fp,
+            )
+            return ValidationResult(
+                function_name=func_name,
+                counterexample=counterexample,
+                caller_path=[func_name],
+                system_entry_input=None,
+                refinement_history=[],
+                final_precondition=None,
+                reasoning=(
+                    f"vacuous-spec postcondition-violation: '{func_name}' has a "
+                    f"vacuous spec (precondition and postcondition both `true`), "
+                    f"so the harness emits no postcondition assertion. The "
+                    f"failing property '{_fp}' is therefore an intrinsic "
+                    f"harness-internal safety check, not a real function bug. "
+                    f"Classifying SPURIOUS."
+                ),
+                outcome=CExOutcome.SPURIOUS,
+            )
+
         # Step 1: find all callers of func_name in all_funcs
         callers = self._find_callers(func_name, all_funcs)
         logger.debug("Callers of '%s': %s", func_name, list(callers.keys()))
@@ -1183,7 +1241,8 @@ class CExValidator:
 
         try:
             response = self.llm.complete(system_prompt, user_prompt, role="realism",
-                                         cache_prefix=getattr(self.config, "domain_summary", ""))
+                                         cache_prefix=getattr(self.config, "domain_summary", ""),
+                                         validate=lambda t: _parse_json_response(t) is not None)
             data = _parse_json_response(response)
             if data is not None:
                 is_reachable = bool(data.get("is_reachable", False))
@@ -1685,7 +1744,8 @@ class CExValidator:
         """One refinement call, with a vacuous-output critique retry on K2."""
         try:
             response = self.llm.complete(system_prompt, user_prompt, role="refinement",
-                                         cache_prefix=getattr(self.config, "domain_summary", ""))
+                                         cache_prefix=getattr(self.config, "domain_summary", ""),
+                                         validate=lambda t: _parse_json_response(t) is not None)
         except LLMError as exc:
             logger.warning("LLM refinement failed: %s", exc)
             return ""
@@ -2075,7 +2135,8 @@ class CExValidator:
 
         try:
             response = self.llm.complete(system_prompt, user_prompt, role="realism",
-                                         cache_prefix=getattr(self.config, "domain_summary", ""))
+                                         cache_prefix=getattr(self.config, "domain_summary", ""),
+                                         validate=lambda t: _parse_json_response(t) is not None)
             data = _parse_json_response(response)
             if data is not None:
                 code = data.get("reproducer_code", "").strip()

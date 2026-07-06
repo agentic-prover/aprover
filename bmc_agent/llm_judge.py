@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bmc_agent.config import Config
+from bmc_agent.llm import openrouter_attribution_headers
 from bmc_agent.parser import FunctionInfo, ParsedCFile
 
 # Use the project logger so judge-turn INFO + warnings appear in sweep.log.
@@ -871,6 +872,7 @@ class JudgeAgent:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            **openrouter_attribution_headers(),
         }
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, json=payload, headers=headers)

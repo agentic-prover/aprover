@@ -733,11 +733,20 @@ def _prep_goals_acsl(source: str) -> str:
         r"\b(?:__VERIFIER_assert|europa_assert|static_assert|_Static_assert|assert)\s*\(",
         re.IGNORECASE,
     )
+    # ACSL asserts already written as //@ assert(...) or /*@ assert ... */ are
+    # native WP goals -- leave them intact. Re-wrapping them produced the
+    # malformed `//@ /*@ assert ...; */` (Frama-C parse error -> 0/0 goals).
+    _acsl_spans = [(mm.start(), mm.end()) for mm in re.finditer(r"/\*@.*?\*/", source, re.S)]
+    _acsl_spans += [(mm.start(), mm.end()) for mm in re.finditer(r"//@[^\n]*", source)]
+    def _in_acsl(pos):
+        return any(a <= pos < b for a, b in _acsl_spans)
     out, i = [], 0
     while True:
         m = rx.search(source, i)
         if not m:
             out.append(source[i:]); break
+        if _in_acsl(m.start()):
+            out.append(source[i:m.end()]); i = m.end(); continue
         out.append(source[i:m.start()])
         arg, after = _balanced_arg(source, m.end() - 1)
         out.append(f"/*@ assert {_strip_assert_message(arg)}; */")
@@ -2504,6 +2513,33 @@ def _propose(llm, config, loop, goals, fn_src) -> list:
     return _filter_in_scope(_parse_inv_lines(txt), fn_src)
 
 
+_STRENGTHEN_GF_PROMPT = '''This loop has invariants ALREADY PROVEN inductive:
+{current}
+
+Loop ({kind}, guard `{guard}`) in context:
+{fn_src}
+
+GOAL-FREE STRENGTHENING. There is no goal to prove; capture what the loop ACTUALLY
+computes as PRECISELY as possible. Propose ADDITIONAL, STRONGER invariants beyond
+those above: exact linear relations among the loop variables (e.g. `a + b == c`,
+`x == n - y`), closed-form values of accumulators (e.g. `s == i * (i - 1) / 2`), or
+exact equalities — NOT loose bounds you already have. Each must hold on loop entry
+and be preserved by one iteration. Output one ACSL predicate per line; no
+`loop invariant` keyword, no comments, no prose.'''
+
+
+def _propose_stronger(llm, config, loop, current, fn_src) -> list:
+    """Goal-free: ask the LLM for STRONGER inductive invariants than `current`
+    (exact relations / closed forms), to be validity-filtered by the caller."""
+    from bmc_agent.llm import agentic_system_prompt
+    prompt = _STRENGTHEN_GF_PROMPT.format(
+        current="\n".join(f"  {c}" for c in current) or "  (none)",
+        fn_src=fn_src, kind=loop.kind, guard=loop.guard)
+    txt = llm.complete(agentic_system_prompt(config, "spec_gen", _PROPOSE_SYS),
+                       prompt, max_tokens=512, role="spec_gen")
+    return _filter_in_scope(_parse_inv_lines(txt), fn_src)
+
+
 def _refine(llm, config, loop, current, problem, goals, fn_src) -> list:
     from bmc_agent.llm import agentic_system_prompt
     prompt = _REFINE_PROMPT.format(
@@ -2757,13 +2793,17 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
     src = brace_braceless_loops(src)
     goals = extract_goals(src)
     loops = find_loops(src)
-    if not goals:
+    gf = bool(getattr(config, "goal_free", False))
+    if not goals and not gf:
         # No proof target → N/A, NOT a pass. Without a goal the invariants would
         # "verify" vacuously (nothing to fail adequacy), which would be a misleading
         # pass; report N/A so an assertion-free program is never counted as proved.
         return LoopSynthResult(ok=False, iterations=0, goals=goals, no_goals=True,
                                note="no verification goal (no //@ assert / assert / "
                                     "__VERIFIER_assert) — nothing to prove")
+    # Goal-free MINING: with goals empty the oracle's `verified` reduces to "every
+    # invariant is inductive" (no goal to discharge). Skip the goal-anchored
+    # minimization (generality gate / dedup) and require a NON-EMPTY inductive set.
     if not loops:
         return LoopSynthResult(ok=False, iterations=0, goals=goals,
                                note="no loops to annotate")
@@ -2877,7 +2917,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     # proof genuinely depends on it. Size-minimization is RETIRED — it
                     # could neither remove load-bearing over-fit (dropping breaks the
                     # proof) nor justify dropping sound, independent behavioral facts.
-                    gated, gate_flagged = _generality_gate(annotations, _check, loops, logger)
+                    gated, gate_flagged = ((annotations, []) if gf else _generality_gate(annotations, _check, loops, logger))
                     if gated != annotations:
                         gchk = _check(gated)
                         if gchk.verified:
@@ -2895,7 +2935,7 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                     # ENTAILMENT-DEDUP: remove ONLY logically-redundant restatements
                     # (entailed by the rest); KEEP independent sound facts the goal
                     # doesn't need (e.g. a loop bound) — a spec, not a minimal cert.
-                    deduped = _dedup_invariants(annotations, _check, loops, config, logger)
+                    deduped = (annotations if gf else _dedup_invariants(annotations, _check, loops, config, logger))
                     if deduped != annotations:
                         dchk = _check(deduped)
                         if dchk.verified:
@@ -2971,10 +3011,77 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
                 if countdown_contract_blocks and oracle == "frama-c":
                     for fn, block in countdown_contract_blocks.items():
                         prelude += f"// contract for {fn}\n{block}"
-                note = "invariants are inductive and prove all goals"
-                if gate_flagged:
-                    note += (" — NOTE goal-specific (non-behavioral): proof depends on "
-                             "caller-specific clause(s) " + "; ".join(gate_flagged))
+                if gf and getattr(config, "enable_spec_strengthen", True):
+                    # Maximal inductive strengthening: with no goal to drive precision,
+                    # iteratively mine stronger invariants and keep each that stays
+                    # inductive, until a fixpoint (no new sound clause).
+                    for _sr in range(3):
+                        _added = False
+                        for lp in loops:
+                            cur_cl = annotations.get(lp.ordinal, [])
+                            for cand in _propose_stronger(
+                                    llm, config, by_ord[lp.ordinal], cur_cl,
+                                    fn_src_by_ord[lp.ordinal]):
+                                if cand in annotations.get(lp.ordinal, []):
+                                    continue
+                                trial = {o: list(v) for o, v in annotations.items()}
+                                trial[lp.ordinal] = annotations.get(lp.ordinal, []) + [cand]
+                                _ck = _check(trial)
+                                if _ck.verified:
+                                    annotations, final_chk = trial, _ck
+                                    _added = True
+                                    logger.info("goal-free: strengthened loop %d with %r",
+                                                lp.ordinal, cand)
+                                else:
+                                    # CEGAR (same as the main loop): the candidate is not
+                                    # inductive -> refine on the counterexample (propose the
+                                    # auxiliary that makes it stick) instead of dropping it.
+                                    _ref = _refine(
+                                        llm, config, by_ord[lp.ordinal],
+                                        annotations.get(lp.ordinal, []) + [cand],
+                                        _refine_problem(
+                                            "The candidate invariant %r holds on entry but is "
+                                            "NOT preserved by one iteration. Propose the "
+                                            "auxiliary invariant(s) that make it inductive "
+                                            "(keep it and add what it needs), or a corrected "
+                                            "form." % cand, None),
+                                        [], fn_src_by_ord[lp.ordinal])
+                                    if _ref:
+                                        trial2 = {o: list(v) for o, v in annotations.items()}
+                                        base = annotations.get(lp.ordinal, [])
+                                        trial2[lp.ordinal] = base + [c for c in _ref if c not in base]
+                                        if len(trial2[lp.ordinal]) > len(base):
+                                            _ck2 = _check(trial2)
+                                            if _ck2.verified:
+                                                annotations, final_chk = trial2, _ck2
+                                                _added = True
+                                                logger.info("goal-free: CEGAR-refined "
+                                                            "strengthening on loop %d (from %r)",
+                                                            lp.ordinal, cand)
+                        if not _added:
+                            break
+                if gf:
+                    # entailment-dedup the strengthened set: drop redundant restatements
+                    # (e.g. equivalent closed-form rewrites), keep independent facts, stay
+                    # inductive -> a clean strong spec.
+                    _ded = _dedup_invariants(annotations, _check, loops, config, logger)
+                    if any(_ded.values()):
+                        _dchk = _check(_ded)
+                        if _dchk.verified:
+                            annotations, final_chk = _ded, _dchk
+                    # re-render so the returned ACSL reflects the strengthened+deduped set
+                    rendered = render_loop_invariants_acsl(annotations, loops, variants, disp_assigns)
+                    _nclause = sum(len(v) for v in annotations.values())
+                    if _nclause == 0:
+                        return LoopSynthResult(
+                            False, it, annotations, "", goals,
+                            note="goal-free: no inductive invariants could be mined")
+                    note = f"goal-free: mined {_nclause} inductive loop-invariant clause(s)"
+                else:
+                    note = "invariants are inductive and prove all goals"
+                    if gate_flagged:
+                        note += (" — NOTE goal-specific (non-behavioral): proof depends on "
+                                 "caller-specific clause(s) " + "; ".join(gate_flagged))
                 return LoopSynthResult(
                     ok=True, iterations=it, annotations=annotations,
                     acsl=(prelude + "\n" + rendered if prelude else rendered), goals=goals,
@@ -3055,7 +3162,8 @@ def synthesize_loop_invariants(source_file, config, llm, entry: str = "main",
             if not changed:
                 return LoopSynthResult(False, it, annotations,
                                        render_loop_invariants_acsl(annotations, loops), goals,
-                                       note="refinement reached a fixpoint without proving the goals",
+                                       note=("refinement reached a fixpoint without a fully-inductive invariant set"
+                                             if gf else "refinement reached a fixpoint without proving the goals"),
                                        instrumented=chk.instrumented, cbmc_log=_log)
         return LoopSynthResult(False, max_iters, annotations,
                                render_loop_invariants_acsl(annotations, loops), goals,

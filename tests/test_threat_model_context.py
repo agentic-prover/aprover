@@ -64,7 +64,7 @@ def test_complete_injects_note_centrally(monkeypatch):
 
     captured = {}
 
-    def fake_anthropic(system_prompt, user_prompt, max_tokens, temperature, api_kwargs):
+    def fake_anthropic(system_prompt, user_prompt, max_tokens, temperature, api_kwargs, cache_prefix=""):
         captured["sys"] = system_prompt
         return "ok"
 
@@ -85,7 +85,7 @@ def test_complete_no_note_for_non_trust_role(monkeypatch):
     client = llm_mod.LLMClient(c)
     captured = {}
 
-    def fake_anthropic(system_prompt, user_prompt, max_tokens, temperature, api_kwargs):
+    def fake_anthropic(system_prompt, user_prompt, max_tokens, temperature, api_kwargs, cache_prefix=""):
         captured["sys"] = system_prompt
         return "ok"
 
