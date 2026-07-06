@@ -957,7 +957,9 @@ def _extract_param_ts(param_node, src_bytes: bytes) -> tuple[str, str]:
     # (``const int*a`` -> [``const``, ``int*a``]), losing the pointer type and
     # the real name. Match the pointer-glued shape FIRST; fall back to the
     # whitespace split only when there is no trailing ``*ident``.
-    m = re.match(r"^(.+?)\s*(\*+)\s*([A-Za-z_]\w*)\s*$", full_text)
+    import os as _os_abl
+    m = (None if _os_abl.environ.get("BMC_ABLATE_PARSER_GLUED")
+         else re.match(r"^(.+?)\s*(\*+)\s*([A-Za-z_]\w*)\s*$", full_text))
     if m:
         parts = [m.group(1).strip() + m.group(2), m.group(3)]
     else:
@@ -1150,8 +1152,10 @@ def _parse_params_regex(raw: str) -> list[tuple[str, str]]:
             # identifier is the name, and the '*' (plus everything before it)
             # is part of the type. lstrip('*') only handled a leading star
             # ('*a'), so 'int*a' was mis-split as type='...', name='int*a'.
+            import os as _os_abl2
             _idx = last.rfind("*")
-            if (_idx != -1 and not last.startswith("*")
+            if (not _os_abl2.environ.get("BMC_ABLATE_PARSER_GLUED")
+                    and _idx != -1 and not last.startswith("*")
                     and _idx < len(last) - 1 and last[_idx + 1:].isidentifier()):
                 name = last[_idx + 1:]
                 typ = (" ".join(tokens[:-1]) + " " + last[:_idx + 1]).strip()

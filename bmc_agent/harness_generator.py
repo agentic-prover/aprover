@@ -3576,6 +3576,9 @@ def _detect_elem_buf_len_pairs(parameters):
             if base not in _SCALAR_ELEM_TYPES:
                 break
             out.append((pname, st, base, lname, ltype.strip()))
+            import os as _os_abl
+            if _os_abl.environ.get("BMC_ABLATE_ELEM_PAIRING_RUN"):
+                break   # ablation: adjacent pointer only (pre run-walk behavior)
             k -= 1
     return out
 

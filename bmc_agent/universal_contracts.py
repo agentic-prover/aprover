@@ -295,6 +295,9 @@ def derive_universal_precondition(
             _vr = f"valid_range({_pn}, 0, {_ln})"
             if _vr not in clauses:
                 clauses.append(_vr)
+            import os as _os_abl
+            if _os_abl.environ.get("BMC_ABLATE_ELEM_PAIRING_RUN"):
+                break   # ablation: adjacent pointer only
             _k -= 1
 
     # Pattern 3: ops/vtable non-null. Requires struct_definitions to

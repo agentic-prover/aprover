@@ -338,7 +338,8 @@ class PlanAgent:
         # verify that root with its callees INLINED. That exercises call-site checks
         # (caller-misuse: a bad buffer/len passed into a callee) which per-function
         # isolation with stubbed callees silently misses. Pick the smallest such root.
-        if not p["has_entry"]:
+        import os as _os_ra
+        if not p["has_entry"] and not _os_ra.environ.get("BMC_ABLATE_REANCHOR"):
             _cg = parsed.call_graph or {}
             _defd = set(getattr(parsed, "function_bodies", {}) or {}) or set(parsed.functions or {})
             _called = set()
