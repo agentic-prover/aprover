@@ -86,6 +86,7 @@ class BugReport:
     dynamic_outcome: DynamicOutcome | None = None
     dynamic_signal: str | None = None
     realism_check: RealismCheckResult | None = None  # None when check is disabled
+    triage: dict | None = None       # ADVISORY triage annotation; never affects confidence/verdict
 
     def to_dict(self) -> dict:
         return {
@@ -106,6 +107,7 @@ class BugReport:
             "dynamic_outcome": self.dynamic_outcome.value if self.dynamic_outcome else None,
             "dynamic_signal": self.dynamic_signal,
             "realism_check": self.realism_check.to_dict() if self.realism_check else None,
+            "triage": self.triage,
         }
 
 

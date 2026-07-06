@@ -63,6 +63,31 @@ MAX_PARSE_RETRIES = 1   # one extra retry on JSON parse failure
 from bmc_agent.json_utils import extract_json_object as _extract_json_object
 
 
+import re as _re_canon
+
+def _canonicalize_buffer_extents(pre, param_names):
+    """Normalize valid_range(X, 0, P +/- k) -> valid_range(X, 0, P) when P is a
+    function parameter. A memory-safety precondition whose extent is a length
+    parameter WIDENED by a constant is the body-grounded absorption pattern: it
+    sizes the caller buffer to fit the body's (possibly buggy) overrun, making the
+    code safe-by-construction and unfalsifiable. The documented contract is the
+    bare length parameter, independent of body access offsets. Deterministic;
+    only rewrites the `param +/- const` extent shape, leaving plain extents and
+    non-parameter expressions untouched."""
+    if not pre:
+        return pre
+    pnames = set(param_names or [])
+    def _repl(m):
+        ptr, lo, ext = m.group(1), m.group(2), m.group(3).strip()
+        mm = _re_canon.fullmatch(r"([A-Za-z_]\w*)\s*[+\-]\s*\d+", ext)
+        if mm and mm.group(1) in pnames:
+            return f"valid_range({ptr}, {lo}, {mm.group(1)})"
+        return m.group(0)
+    return _re_canon.sub(
+        r"valid_range\(\s*([A-Za-z_]\w*)\s*,\s*([^,]+?)\s*,\s*([^)]+?)\s*\)",
+        _repl, pre)
+
+
 def _validate_and_extract(
     payload: dict,
     fn_name: str,
@@ -633,6 +658,44 @@ class SpecGeneratorV2:
                 sorted(targets), len(needed), len(defined_funcs),
             )
 
+        # ------------------------------------------------------------------
+        # KERNEL-TU + TRANSITIVE-INLINE spec-gen short-circuit (SV-COMP ldv).
+        # In BMC_TRANSITIVE_INLINE mode on a kernel translation unit, every
+        # DEFINED callee reachable from the entry is INLINED with its REAL body
+        # (harness_generator pulls the whole defined-callee closure into the
+        # inline set) and only EXTERNAL (body-less) callees are stubbed. The
+        # inlined bodies are verified directly by CBMC, so their expensive
+        # caller-grounded LLM spec is never consumed; external callees already
+        # get a cheap _trivial_spec below. On large CIL drivers the pruned
+        # `needed` set is still ~40-150 defined functions, so Phase-1 LLM
+        # spec-gen alone exhausts the wall budget (mousedev: 160+ LLM calls,
+        # >700s) BEFORE CBMC ever runs -> the catchable bug is never reached.
+        # Emptying `needed` here makes EVERY defined function take a trivial
+        # spec (no LLM round-trip); soundness is preserved because (a) inlined
+        # bodies are checked verbatim and (b) trivial/nondet stubs for the
+        # remaining external callees only OVER-approximate reachability (they
+        # can add behaviours, never remove the real one), and cex_validator
+        # re-checks feasibility of any reach_error before confirming. Gated so
+        # AWS userspace (_IO_FILE present) and non-transitive modes are
+        # untouched.
+        import os as _os_sgp
+        if needed is not None and _os_sgp.environ.get("BMC_TRANSITIVE_INLINE"):
+            _src_for_kernel = source_text
+            if _src_for_kernel is None:
+                try:
+                    _src_for_kernel = open(source_file, "r", errors="replace").read()
+                except Exception:
+                    _src_for_kernel = ""
+            _is_kernel_tu = ("_IO_FILE" not in _src_for_kernel)
+            if _is_kernel_tu:
+                logger.info(
+                    "v2: kernel-TU + transitive-inline -> skipping LLM spec-gen "
+                    "for %d defined function(s) (bodies inlined & verified "
+                    "directly; only external stubs need specs)",
+                    len(needed),
+                )
+                needed = set()
+
         # Bottom-up layers: leaves first.
         layers = _build_bottom_up_layers(filtered_call_graph)
         logger.info("v2: bottom-up layers: %s", layers)
@@ -808,7 +871,12 @@ class SpecGeneratorV2:
         pre = data.get("pre_validity")
         if not isinstance(pre, str) or not pre.strip():
             return None
-        return pre.strip()
+        _pnames = [n for _t, n in func_info.signature.parameters]
+        _canon = _canonicalize_buffer_extents(pre.strip(), _pnames)
+        if _canon != pre.strip():
+            logger.info("v2 [%s]: canonicalized body-widened buffer extent: %r -> %r",
+                        func_info.name, pre.strip()[:80], _canon[:80])
+        return _canon
 
     def _maybe_split_precondition(self, spec: Spec, func_info, bundle) -> Spec:
         """If split spec-gen is on, override the (caller-grounded) precondition

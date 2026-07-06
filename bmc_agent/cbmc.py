@@ -96,6 +96,37 @@ def run_cbmc(
     """
     harness_path = Path(harness_path)
 
+    # SV-COMP unwind floor (env SVCOMP_UNWIND, default 64 when SVCOMP_PROP set):
+    # whole-program harnesses call builtin loops (strlen/memcmp/...) that the
+    # per-function bmc-config agent under-sizes (e.g. unwind=12), stalling on a
+    # strlen.unwind artifact before reaching reach_error. Clamp up here so EVERY
+    # CBMC call path (config agent, flag-selection, harness-repair) is covered.
+    import os as _os0
+    if _os0.environ.get("SVCOMP_PROP"):
+        _svc_floor = int(_os0.environ.get("SVCOMP_UNWIND", "64"))
+        if (unwind or 0) < _svc_floor:
+            unwind = _svc_floor
+        # SV-COMP timeout floor: the per-fn bmc-config agent caps cbmc at
+        # ~120-240s, but the SV-COMP budget is 900s; let CBMC use it so heavy
+        # tasks (hash tables) get decided instead of auto-timing-out.
+        _svc_to = int(_os0.environ.get("SVCOMP_TIMEOUT", "800"))
+        if (timeout or 0) < _svc_to:
+            timeout = _svc_to
+    # BUG-FINDING unwind CAP (env BMC_UNWIND_CAP): SVCOMP_UNWIND above is only a
+    # FLOOR (it raises unwind, never lowers it), so the bmc-config agent's pick
+    # (often 8) wins and heavy ldv dispatch loops still explode (10^k paths). For
+    # the bounded bug-finding pass we want to CAP the dispatch depth: any
+    # reach_error found within the cap is a REAL bug (sound); a clean run is NOT
+    # a proof (bounded) and must be scored unknown. Applied last so it overrides
+    # both the floor and the agent's pick, at the single cbmc call gate.
+    _cap = _os0.environ.get("BMC_UNWIND_CAP")
+    if _cap:
+        try:
+            if (unwind or 0) > int(_cap):
+                unwind = int(_cap)
+        except ValueError:
+            pass
+
     # 1. Locate CBMC
     if not shutil.which(cbmc_path):
         return CBMCResult(
@@ -110,8 +141,34 @@ def run_cbmc(
         "--json-ui",
         f"--unwind",
         str(unwind),
-        "--unwinding-assertions",
     ]
+    import os as _osbh
+    if (_osbh.environ.get("BMC_CONE_SLICE") or _osbh.environ.get("BMC_BUGHUNT")) and _osbh.environ.get("SVCOMP_PROP"):
+        # BUG-FINDING pass (cone-slice mode): --partial-loops cuts loops at the
+        # bound and we DROP --unwinding-assertions. Neither is needed to REACH
+        # reach_error; both exist only to PROVE safety. Dropping them removes the
+        # per-loop unwinding-assertion VCCs and lets bounded loop bodies stop at
+        # the bound -> far smaller SAT formula, so heavy ldv drivers finish at
+        # k=8 instead of timing out. SOUND for bug-finding: any reach_error found
+        # is a real (downstream feasibility-checked) bug. A CLEAN run here is NOT
+        # a proof (loops were cut) and MUST be scored unknown, never "true".
+        cmd.append("--partial-loops")
+        # MEMORY: large inlined kernel cones blow up the eager SAT encoding
+        # ("SAT checker ran out of memory" -> cbmc exit 6). --refine uses lazy/
+        # iterative SAT refinement (sound + complete) that encodes only what is
+        # needed, and --slice-formula drops VCCs irrelevant to the property.
+        # Together they let heavy USB/net driver cones (e.g. p54usb, ~7.6k LOC
+        # inlined) REACH reach_error within the memory cap instead of OOMing.
+        # Verified: p54usb VERIFICATION FAILED reach_error.assertion.1 @ uw4
+        # with --refine vs OOM without. Toggle off with BMC_REFINE=0.
+        if _osbh.environ.get("BMC_REFINE", "1") != "0":
+            cmd.append("--refine")
+            cmd.append("--slice-formula")
+    else:
+        cmd.append("--unwinding-assertions")
+    import os as _os
+    if _os.environ.get("SVCOMP_ARCH", "ILP32").upper() == "ILP32":
+        cmd.append("--32")
     # If the harness function isn't `main`, tell CBMC which one to verify.
     # Used by real-libc mode when the included source already defines its
     # own `main()` (e.g. llm.c's train_gpt2.c is a training program, not

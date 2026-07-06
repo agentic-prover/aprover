@@ -264,8 +264,57 @@ class BMCEngine:
             conversion_check        = bool(getattr(flag_selection, "conversion_check", False))
             pointer_overflow_check  = bool(getattr(flag_selection, "pointer_overflow_check", False))
             undefined_shift_check   = bool(getattr(flag_selection, "undefined_shift_check", False))
+            import os as _os_ms
+            if _os_ms.environ.get("BMC_MEMSAFE_ONLY"):
+                # Memory-safety-focused: bounds + pointer checks ONLY. Drop the
+                # conversion / arithmetic-overflow / pointer-overflow checks, which
+                # flag benign idioms (intentional narrowing, one-past-end pointers)
+                # as violations -> false alarms the realism filter cannot reliably
+                # clear. Matches the clean single-shot check set (cex FA ~1/10).
+                pointer_check = bounds_check = True
+                unsigned_overflow_check = signed_overflow_check = False
+                conversion_check = pointer_overflow_check = undefined_shift_check = False
+            # --- SV-COMP deterministic per-property check override (env SVCOMP_PROP) ---
+            import os as _os
+            _svp = _os.environ.get("SVCOMP_PROP", "")
+            # Per-function property class (PlanAgent code-shape inference) overrides the global
+            # token: memsafety everywhere, "all" (adds overflow) on functions with size/ptr
+            # arithmetic. Read-only map -> thread-safe under parallel check_all.
+            _fpm = _os.environ.get("BMC_FUNC_PROP_MAP")
+            if _fpm:
+                try:
+                    import json as _json_fpm
+                    _svp = _json_fpm.loads(_fpm).get(getattr(func, "name", ""), _svp) or _svp
+                except Exception:
+                    pass
+            if _svp == "no-overflow":
+                signed_overflow_check = True
+                unsigned_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
+                pointer_check = bounds_check = div_by_zero_check = False
+            elif _svp == "memsafety":
+                pointer_check = bounds_check = True
+                div_by_zero_check = False
+                unsigned_overflow_check = signed_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
+            elif _svp == "unreach":
+                pointer_check = bounds_check = div_by_zero_check = False
+                unsigned_overflow_check = signed_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
+            elif _svp == "all":
+                # goal=all: every built-in memory-safety AND arithmetic check ON (max coverage;
+                # accepts the higher FP rate -> triage/refinement sort them).
+                pointer_check = bounds_check = div_by_zero_check = True
+                unsigned_overflow_check = signed_overflow_check = True
+                conversion_check = pointer_overflow_check = undefined_shift_check = True
             # Per-function unwind override (None = use global default).
             unwind_for_this_run     = getattr(flag_selection, "unwind_override", None) or self.config.cbmc_unwind
+            # SV-COMP: whole-program harnesses bound their own inputs but call
+            # builtin loops (strlen/memcmp/...) the per-function config agent
+            # cannot size, so its low unwind guess (e.g. 12) stalls on a
+            # strlen.unwind artifact before reaching reach_error. Force a
+            # competition-grade unwind floor so CBMC reaches the real property.
+            if _svp:
+                _svc_unwind = int(_os.environ.get("SVCOMP_UNWIND", "64"))
+                if _svc_unwind > (unwind_for_this_run or 0):
+                    unwind_for_this_run = _svc_unwind
             # Couple the unwind floor to widened string-copy SOURCES: if the
             # harness modeled an input as a long string feeding a strcpy/strcat
             # SINK, the copy loop must unroll past it (max_len + 2) for the

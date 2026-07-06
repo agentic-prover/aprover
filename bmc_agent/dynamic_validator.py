@@ -90,6 +90,54 @@ _INCLUDE_LINE_RE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"]+)[>"].*$',
                               re.MULTILINE)
 
 
+def _strip_conflicting_libc_typedefs(src: str) -> str:
+    """Drop re-emitted libc struct typedefs (div_t/ldiv_t/...) that collide with
+    <stdlib.h>/<inttypes.h>. A preprocessed .i already contains these; re-emitting
+    the anonymous-struct typedef creates a DISTINCT type -> gcc "conflicting types
+    for div_t" when the harness also #includes the header. Strip them only when the
+    providing header is present, so a self-contained harness is untouched."""
+    import re as _re
+    for _name in ("div_t", "ldiv_t", "lldiv_t", "imaxdiv_t"):
+        src = _re.sub(r"typedef\s+struct\s*\{[^{}]*\}\s*" + _name + r"\s*;",
+                      "/* AMC: dropped libc typedef " + _name + " */", src, flags=_re.S)
+    return src
+
+
+def _heal_redef_conflicts(src: str, err: str):
+    """Strip the harness's OWN re-declaration of any type gcc reports as a
+    conflicting/duplicate of a system-header type (e.g. div_t, pthread_mutexattr_t
+    pulled in from a preprocessed .i while <stdlib.h>/<pthread.h> also define them).
+    Uses the reported line: walk back from `} name;` to the `typedef` that starts it
+    and blank that span. Blanks (does not delete) so line numbers stay stable across
+    retries. Returns healed src, or None if no conflict lines were found."""
+    pat = re.compile(r":(\d+):\d+:\s*error:\s*(?:conflicting types for|redefinition of)\s*\W*([A-Za-z_]\w*)")
+    hits = pat.findall(err or "")
+    if not hits:
+        return None
+    lines = src.split("\n")
+    blank = set()
+    for lineno, _name in hits:
+        i = int(lineno) - 1
+        if not (0 <= i < len(lines)):
+            continue
+        j, steps = i, 0
+        while j >= 0 and "typedef" not in lines[j] and steps < 60:
+            j -= 1; steps += 1
+        if j < 0 or "typedef" not in lines[j]:
+            if "typedef" in lines[i]:
+                j = i
+            else:
+                continue
+        for k in range(j, i + 1):
+            blank.add(k)
+    if not blank:
+        return None
+    for k in blank:
+        lines[k] = "/* AMC: removed conflicting redecl (self-heal) */"
+    return "\n".join(lines)
+
+
+
 def _sanitize_reproducer_includes(source: str, config: "Config") -> str:
     """Comment out ``#include`` directives an LLM reproducer cannot compile.
 
@@ -875,80 +923,71 @@ class DynamicValidator:
     def _compile(
         self, harness_src: str, cc: str, extra_flags: "list[str] | None" = None
     ) -> "tuple[str | None, str | None]":
-        """Write harness to a temp file and compile it.  Returns (binary_path, error)."""
-        with tempfile.NamedTemporaryFile(
-            suffix=".c", delete=False, mode="w", encoding="utf-8"
-        ) as src_f:
-            src_f.write(harness_src)
-            src_path = src_f.name
+        """Write harness to a temp file and compile it.  Returns (binary_path, error).
 
-        with tempfile.NamedTemporaryFile(suffix="", delete=False) as bin_f:
-            bin_path = bin_f.name
-
-        cmd = [cc, "-g", "-fno-builtin", "-w", "-o", bin_path, src_path]
-        # Propagate the configured -I paths so dynamic harnesses can resolve
-        # project-internal headers (e.g. libxml.h, openssl/foo.h). Without this,
-        # any harness that #includes the source file via real-libc mode fails
-        # to compile because the GCC frontend can't find the project headers.
-        #
-        # BUT: freestanding targets (e.g. VibeOS kernel/libc) ship their own
-        # stub <signal.h>/<stdio.h>/<stdlib.h> that, on an -I dir, SHADOW the
-        # real system headers. Those stubs have no sig_atomic_t (compile fails)
-        # and a no-op signal()/printf() (the SIGSEGV oracle never installs or
-        # prints) — defeating dynamic validation. For the hosted GCC harness we
-        # need the REAL libc, so skip any include dir that ships stub standard
-        # headers. Soundness is unaffected: this is the runtime replay compile,
-        # not the CBMC verification.
+        Self-heals redefinition/conflicting-type errors: when the harness re-declares a
+        libc aggregate (div_t, pthread_mutexattr_t, ...) that also comes from an included
+        system header, strip the harness's copy (by the line gcc reports) and retry,
+        bounded. Without this the dynamic harness fails to compile on preprocessed .i
+        sources and the pipeline fails OPEN (a spurious boundary cex is never refuted and
+        gets confirmed as a real bug -> Tier-A false alarms)."""
         import os as _os
         def _is_stub_libc_dir(d: str) -> bool:
             return any(_os.path.exists(_os.path.join(d, h))
                        for h in ("signal.h", "stdio.h", "stdlib.h"))
-        include_dirs = getattr(self.config, "include_dirs", None) or []
-        for d in include_dirs:
+        base = [cc, "-g", "-fno-builtin", "-fno-omit-frame-pointer", "-fsanitize=address", "-w"]
+        extra = []
+        for d in (getattr(self.config, "include_dirs", None) or []):
             if _is_stub_libc_dir(str(d)):
-                logger.debug("Dynamic compile: skipping stub-libc include dir %s "
-                             "(would shadow real <signal.h>/<stdio.h>)", d)
+                logger.debug("Dynamic compile: skipping stub-libc include dir %s", d)
                 continue
-            cmd += ["-I", str(d)]
-        defines = getattr(self.config, "cbmc_defines", None) or []
-        for d in defines:
-            cmd += ["-D", str(d)]
+            extra += ["-I", str(d)]
+        for d in (getattr(self.config, "cbmc_defines", None) or []):
+            extra += ["-D", str(d)]
         if extra_flags:
-            cmd.extend(extra_flags)
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except subprocess.TimeoutExpired:
-            _unlink(src_path)
-            _unlink(bin_path)
-            return None, "compilation timed out"
-        except Exception as exc:
-            _unlink(src_path)
-            _unlink(bin_path)
-            return None, str(exc)
-        finally:
-            _unlink(src_path)
+            extra += list(extra_flags)
 
-        if proc.returncode != 0:
-            _unlink(bin_path)
-            err = (proc.stderr or proc.stdout or "").strip()[:500]
-            logger.debug("Dynamic harness compile error for: %s", err[:200])
-            return None, err
-
-        return bin_path, None
+        src = _strip_conflicting_libc_typedefs(harness_src)
+        last_err = None
+        for _heal in range(6):
+            with tempfile.NamedTemporaryFile(suffix=".c", delete=False, mode="w", encoding="utf-8") as src_f:
+                src_f.write(src); src_path = src_f.name
+            with tempfile.NamedTemporaryFile(suffix="", delete=False) as bin_f:
+                bin_path = bin_f.name
+            cmd = base + ["-o", bin_path, src_path] + extra
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                _unlink(src_path); _unlink(bin_path); return None, "compilation timed out"
+            except Exception as exc:
+                _unlink(src_path); _unlink(bin_path); return None, str(exc)
+            if proc.returncode == 0:
+                _unlink(src_path)
+                return bin_path, None
+            full_err = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
+            last_err = full_err
+            _unlink(src_path); _unlink(bin_path)
+            healed = _heal_redef_conflicts(src, full_err)
+            if not healed or healed == src:
+                logger.debug("Dynamic harness compile error for: %s", full_err[:200])
+                return None, full_err[:500]
+            logger.debug("Dynamic harness: self-healed redef conflict(s), retrying (%d)", _heal + 1)
+            src = healed
+        logger.debug("Dynamic harness compile error (heal exhausted): %s", (last_err or "")[:200])
+        return None, (last_err or "")[:500]
 
     def _run(self, binary_path: str) -> DynamicValidationResult:
         """Execute the compiled harness and parse its stdout."""
         try:
+            import os as _os_asan
+            _asan_env = dict(_os_asan.environ)
+            _asan_env["ASAN_OPTIONS"] = ("abort_on_error=1:detect_leaks=0:" + _asan_env.get("ASAN_OPTIONS", ""))
             proc = subprocess.run(
                 [binary_path],
                 capture_output=True,
                 text=True,
                 timeout=self.config.dynamic_validation_timeout,
+                env=_asan_env,
             )
         except subprocess.TimeoutExpired:
             return DynamicValidationResult(

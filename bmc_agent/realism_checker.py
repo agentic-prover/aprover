@@ -62,6 +62,10 @@ class RealismCheckResult:
     key_concern: str = ""      # populated when verdict is UNREALISTIC or UNCERTAIN
     llm_confidence: str = ""   # "high" | "medium" | "low" from the LLM
     adjacent_bugs: list = field(default_factory=list)  # other bugs spotted nearby
+    gate_failed: bool = False  # True iff the realism LLM call ERRORED (not a
+                               # reasoned UNCERTAIN). Lets a budget-exhausted /
+                               # 400-contaminated sweep be told apart from a clean
+                               # one so its findings are not silently "confirmed".
 
     def to_dict(self) -> dict:
         return {
@@ -70,6 +74,7 @@ class RealismCheckResult:
             "key_concern": self.key_concern,
             "llm_confidence": self.llm_confidence,
             "adjacent_bugs": list(self.adjacent_bugs or []),
+            "gate_failed": bool(self.gate_failed),
         }
 
 
@@ -127,6 +132,24 @@ class RealismChecker:
 
         if not self.config.enable_realism_check:
             return _SKIPPED
+
+        # SV-COMP structural gate: only for GENUINE SV-COMP runs (BMC_SVCOMP_MODE),
+        # the harness IS the specification (author-written, faithful by
+        # construction) -- there is no over-approximation for realism to catch, and
+        # the solver's reach_error/assertion verdict is authoritative. Realism (an
+        # exploitability filter) has no jurisdiction here and must NOT downgrade the
+        # finding. Pass through as REALISTIC (confidence tier unchanged). Fixes
+        # genuine benchmark bugs being non-deterministically re-tiered to 'unlikely'.
+        import os as _os_svc
+        if _os_svc.environ.get("BMC_SVCOMP_MODE"):
+            logger.info("Realism: genuine SV-COMP mode (BMC_SVCOMP_MODE set) -> pass-through "
+                        "REALISTIC for '%s' (solver verdict authoritative)", func.name)
+            return RealismCheckResult(
+                verdict=RealismVerdict.REALISTIC,
+                reasoning=("SV-COMP property task: the harness is the specification "
+                           "(faithful by construction), so the solver's reachability "
+                           "verdict is authoritative; realism disabled for this mode."),
+            )
 
         logger.info("Realism check for '%s' (property: %s)",
                     func.name, counterexample.failing_property[:60])
@@ -572,9 +595,14 @@ class RealismChecker:
             return pass1
         except LLMError as exc:
             logger.warning("Realism check LLM call failed for '%s': %s", func.name, exc)
+            # Fail-safe to UNCERTAIN (recall: do NOT silently drop a possibly-real
+            # bug) but mark gate_failed so the run summary can flag that the realism
+            # gate did not actually run on this finding. A wholesale LLM outage
+            # (e.g. budget 400s) must not masquerade as clean "confirmed" findings.
             return RealismCheckResult(
                 verdict=RealismVerdict.UNCERTAIN,
                 reasoning=f"LLM call failed: {exc}",
+                gate_failed=True,
             )
 
     # ------------------------------------------------------------------
@@ -613,6 +641,12 @@ class RealismChecker:
             all_funcs=all_funcs, spec=spec,
             cbmc_harness_path=cbmc_harness_path,
         )
+        # SV-COMP structural gate (matches check()): realism has no jurisdiction
+        # on benchmark-property tasks; the tool-use augmentation must NOT re-judge
+        # and downgrade the solver's authoritative verdict either.
+        import os as _os_svc3
+        if _os_svc3.environ.get("BMC_SVCOMP_MODE"):
+            return base
         if not getattr(self.config, "enable_realism_tools", False):
             return base
         # All verdicts go through augmentation when tools are enabled.

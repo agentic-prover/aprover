@@ -185,11 +185,14 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # round-trips; disable with --no-realism-tools, or disable realism entirely
         # with --no-realism-check. Set authoritatively here so resolution is
         # independent of arg-handling order.
-        config.enable_realism_check = not getattr(args, "no_realism_check", False)  # type: ignore[attr-defined]
+        config.enable_realism_check = bool(getattr(args, "enable_realism_check", False))  # OFF by default; opt in with --enable-realism-check  # type: ignore[attr-defined]
         config.enable_realism_tools = not getattr(args, "no_realism_tools", False)  # type: ignore[attr-defined]
-        # Triage (severity tiering) stays OFF by default; opt in with --enable-triage.
-        if not getattr(args, "enable_triage", False):
+        # Triage runs ADVISORY by default (annotates UNRESOLVED cexs; never changes the
+        # verdict). Disable with --no-triage; promotion is opt-in via --triage-authoritative.
+        if getattr(args, "no_triage", False):
             config.enable_phase_3e_triage = False  # type: ignore[attr-defined]
+        if getattr(args, "triage_authoritative", False):
+            config.triage_authoritative = True  # type: ignore[attr-defined]
         # Agentic CBMC driver: the agent decides how to configure CBMC by reading
         # the code — per-function checks + unwind (flag selector) and which callees
         # to inline vs stub (inlining advisor). Both become code-reading agents
@@ -1313,12 +1316,93 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         from bmc_agent.eta import make_cli_callback
         config.progress = make_cli_callback()  # type: ignore[attr-defined]
 
-    pipeline = AMCPipeline(config)
-    bug_reports = pipeline.run(
-        source_file=args.source,
-        driver_name=args.driver,
-        domain_knowledge=domain_knowledge,
-    )
+    import os as _os_svcm
+    if getattr(args, "svcomp", False):
+        _os_svcm.environ["BMC_SVCOMP_MODE"] = "1"
+    if _os_svcm.environ.get("BMC_SVCOMP_MODE"):
+        print("Mode: SV-COMP (BMC_SVCOMP_MODE) -> solver authoritative; advisory triage + realism skipped")
+
+    if getattr(args, "plan", False):
+        from bmc_agent.parser import parse_c_file as _pcf
+        from bmc_agent.agents.plan_agent import PlanAgent as _PA, apply_plan as _ap
+        _entry0 = getattr(args, "entry", None) or "main"
+        _pa = _PA(config)
+        # PlanAgent chooses the property class from the verification GOAL (real code);
+        # --plan-property overrides everything; --svcomp forces the benchmark property.
+        _goal_map = {"memsafety": "memsafety", "overflow": "no-overflow",
+                     "reach": "unreach-call", "all": "all"}
+        _goal = getattr(args, "goal", None) or "memsafety"
+        _plan_prop = (getattr(args, "plan_property", None)
+                      or ("unreach-call" if getattr(args, "svcomp", False)
+                          else _goal_map.get(_goal, "memsafety")))
+        # Explicit scope log so nothing is SILENTLY out of scope.
+        _scope = {"memsafety": "bounds+pointer (integer-overflow NOT checked -> use --goal overflow/all)",
+                  "no-overflow": "integer overflow/conversion/shift (memory-safety NOT checked -> use --goal memsafety/all)",
+                  "unreach": "reachability of reach_error/asserts",
+                  "all": "ALL built-in checks (bounds+pointer+overflow+conversion+div); higher FP rate"}
+        _tok = {"unreach-call":"unreach","memsafety":"memsafety","no-overflow":"no-overflow","all":"all"}.get(_plan_prop,_plan_prop)
+        print(f"Goal: {_goal if not getattr(args,'svcomp',False) else 'svcomp'} -> property class '{_plan_prop}' "
+              f"| CBMC scope: {_scope.get(_tok,_plan_prop)} | spec/postcondition asserts: ALWAYS checked")
+        _plan = _pa.initial_plan(_pcf(args.source), entry=_entry0, property_class=_plan_prop)
+        _tried = []
+        bug_reports = []
+        while True:
+            print(f"[PlanAgent] {_plan.rationale}")
+            print(f"[PlanAgent] {_plan.summary()}")
+            _scope_only = _ap(config, _plan)
+            _tried.append(_plan.strategy)
+            pipeline = AMCPipeline(config)
+            bug_reports = pipeline.run(
+                source_file=args.source,
+                driver_name=args.driver,
+                domain_knowledge=domain_knowledge,
+                only_functions=_scope_only,
+            )
+            _summ = getattr(pipeline, "last_verdict_summary", {}) or {}
+            _no_bug = (not bug_reports) and _summ.get("bug_candidates", 0) == 0
+            _FH_UNWIND_CAP = 3
+            # Unwind sweep: for frame_havoc, "no bug at this depth" (inconclusive OR
+            # bounded-clean) -> try a deeper unwind before switching strategy. Low
+            # unwinds are fast and catch shallow bugs; deeper ones catch the rest.
+            # Sweep deeper ONLY when BOUNDED-CLEAN at this depth (CBMC finished, no bug
+            # within the bound -> a deeper bug may exist and still be tractable). Do NOT
+            # sweep on inconclusive/timeout: a deeper unwind is strictly slower.
+            _bounded_clean = (_no_bug and _summ.get("verified_clean", 0) > 0
+                              and _summ.get("inconclusive", 0) == 0)
+            if _bounded_clean and _plan.strategy == "frame_havoc" and (_plan.unwind or 1) < _FH_UNWIND_CAP:
+                _nu = (_plan.unwind or 1) + 1
+                print(f"[PlanAgent] frame_havoc: bounded-clean at unwind={_plan.unwind}; "
+                      f"sweeping deeper -> unwind={_nu}")
+                _swept = _pa.plan_for_strategy("frame_havoc", entry=_entry0,
+                                               property_class=_plan.property_class, unwind=_nu)
+                _swept.fallback_ladder = _plan.fallback_ladder  # preserve strategy fallback after sweep
+                _plan = _swept
+                continue
+            # Strategy fallback: a stalled (inconclusive) attempt escalates to the next ladder strategy.
+            _stalled = (_no_bug
+                        and _summ.get("inconclusive", 0) > 0
+                        and _summ.get("verified_clean", 0) == 0)
+            _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
+            if _stalled and _next:
+                print(f"[PlanAgent] strategy '{_tried[-1]}' stalled "
+                      f"(inconclusive={_summ.get('inconclusive')}); re-planning -> '{_next[0]}'")
+                _plan = _pa.plan_for_strategy(_next[0], entry=_entry0,
+                                              property_class=_plan.property_class)
+                continue
+            break
+    else:
+        pipeline = AMCPipeline(config)
+        _scope_only = None
+        if getattr(args, "scope_from_entry", False):
+            _entry = getattr(args, "entry", None) or "main"
+            _scope_only = {_entry}
+            print(f"Scope-from-entry: spec-gen + verification restricted to '{_entry}' + transitive callees")
+        bug_reports = pipeline.run(
+            source_file=args.source,
+            driver_name=args.driver,
+            domain_knowledge=domain_knowledge,
+            only_functions=_scope_only,
+        )
 
     # Filter out bug_reports whose realism check returned UNREALISTIC
     # OR whose final classification (saved to classification.json) was
@@ -1356,6 +1440,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     survivors = [
         r for r in bug_reports
         if not _realism_was_unrealistic(r)
+        and (getattr(r, "confidence", "") or "").lower() != "unlikely"
         and not _final_classification_is_spurious(args.driver, r.function_name, getattr(r, "violated_property", "") or "")
     ]
     dropped = len(bug_reports) - len(survivors)
@@ -1868,7 +1953,7 @@ def _cmd_autonomous(args: argparse.Namespace) -> int:
     # override individual flags via the CLI; we only force the defaults
     # when the corresponding flag wasn't passed.
     config.lite_mode = True
-    config.enable_realism_check = True
+    config.enable_realism_check = bool(getattr(args, "enable_realism_check", False))  # realism opt-in even in autonomous mode
     config.enable_feedback_loop = True
     if config.feedback_max_iters in (None, 3):
         config.feedback_max_iters = 3
@@ -2067,6 +2152,7 @@ def _summarize_autonomous_round(
     # Phase 3 outcomes.
     outcome_counts: dict[str, int] = {}
     realism_counts: dict[str, int] = {}
+    gate_failed_count = 0  # realism findings whose LLM gate ERRORED (unscreened)
     for cls in driver_root.rglob("classification.json"):
         try:
             with cls.open() as f:
@@ -2082,6 +2168,8 @@ def _summarize_autonomous_round(
             rc = bd.get("realism_check") or {}
             v = (rc.get("verdict") if isinstance(rc, dict) else None) or "n/a"
             realism_counts[v] = realism_counts.get(v, 0) + 1
+            if isinstance(rc, dict) and rc.get("gate_failed"):
+                gate_failed_count += 1
         except Exception:
             pass
 
@@ -2102,6 +2190,7 @@ def _summarize_autonomous_round(
         "uncertain_count": int(realism_counts.get("UNCERTAIN", 0)),
         "unrealistic_count": int(realism_counts.get("UNREALISTIC", 0)),
         "realistic_count": int(realism_counts.get("REALISTIC", 0)),
+        "gate_failed_count": int(gate_failed_count),
         "confirmed_bugs": confirmed_bugs,
         "session_strip_typedefs_added": [
             t for t in config.session_strip_typedefs
@@ -2127,6 +2216,12 @@ def _format_round_summary(s: dict) -> str:
     lines.append(f"  CBMC verdicts: {s['cbmc_verdicts']}, errors: {s['cbmc_errors']}, coverage: {s['coverage']:.1%}")
     lines.append(f"  Phase 3 outcomes: {s['outcome_counts']}")
     lines.append(f"  Realism: REALISTIC={s['realistic_count']}, UNCERTAIN={s['uncertain_count']}, UNREALISTIC={s['unrealistic_count']}")
+    if s.get("gate_failed_count"):
+        lines.append(
+            f"  !! REALISM GATE FAILED on {s['gate_failed_count']} finding(s) "
+            f"(LLM error) -- these are UNSCREENED, NOT confirmed. Run may be "
+            f"contaminated (budget/API outage); re-run before trusting results."
+        )
     lines.append(f"  Confirmed bugs (post-realism): {s['confirmed_bugs']}")
     if s.get("session_strip_typedefs_added"):
         lines.append(f"  Auto-retry added typedefs: {s['session_strip_typedefs_added']}")
@@ -2391,7 +2486,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-realism-check",
         action="store_true",
         default=False,
-        help="Run LLM realism audit on every REAL_BUG finding to reduce false positives",
+        help="Opt in to the legacy LLM realism audit (can re-tier findings). OFF by default; advisory triage is the default LLM layer.",
     )
     ver.add_argument(
         "--enable-realism-thinking",
@@ -2458,9 +2553,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Entry function for --standalone / --specs-from-asserts mode; for Java/JBMC, 'main' maps to the primary class main, and non-main methods may be given as method or Class.method (default: main).",
     )
     ver.add_argument(
+        "--scope-from-entry",
+        action="store_true",
+        default=False,
+        help="Agentic mode: restrict spec-gen and verification to the call-graph slice reachable from --entry (harness/main) instead of every function in the translation unit. Prunes LLM spec-gen to {entry} + transitive callees; Phase 2 verifies the entry only. Makes large real-world harnesses (AWS-C-Common, ldv) tractable.",
+    )
+    ver.add_argument(
         "--jbmc-path",
         default=None,
         help="Path/name of the JBMC binary for Java sources (default: BMC_AGENT_JBMC_PATH or jbmc).",
+    )
+    ver.add_argument(
+        "--plan",
+        action="store_true",
+        help="Let the PlanAgent choose the analysis strategy (scope_from_entry / frame_havoc / compositional), entry, and unwind/havoc, instead of hand-setting --scope-from-entry / BMC_FRAME_HAVOC / SVCOMP_UNWIND.",
+    )
+    ver.add_argument(
+        "--goal",
+        choices=["memsafety", "overflow", "reach", "all"],
+        default="memsafety",
+        help="What to verify FOR on real code (PlanAgent maps it to the CBMC property class): "
+             "memsafety=bounds+pointer (default; low FP); overflow=integer overflow/conversion; "
+             "reach=reachability of reach_error/asserts; all=every built-in check (max coverage, "
+             "more FPs -> relies on triage/refine). Spec/postcondition asserts are ALWAYS checked "
+             "regardless. Ignored under --svcomp (benchmark property wins).",
+    )
+    ver.add_argument(
+        "--svcomp",
+        action="store_true",
+        help="Genuine SV-COMP benchmark mode: the solver verdict is authoritative, so the human-oriented LLM layers (advisory triage, realism) are skipped. Sets BMC_SVCOMP_MODE. Do NOT pass this for real-world code (e.g. VibeOS) even with --plan -- otherwise advisory triage is suppressed.",
     )
     ver.add_argument(
         "--javac-path",
@@ -2721,6 +2842,11 @@ def build_parser() -> argparse.ArgumentParser:
                      dest="enable_triage",
                      help="Re-enable Phase-3e triage of UNRESOLVED counterexamples "
                           "(independent of classifier/realism).")
+    ver.add_argument("--no-triage", action="store_true", default=False, dest="no_triage",
+                     help="Disable Phase-3e triage (runs ADVISORY by default).")
+    ver.add_argument("--triage-authoritative", action="store_true", default=False,
+                     dest="triage_authoritative",
+                     help="Let triage PROMOTE UNRESOLVED cexs to REAL_BUG (changes the confirmed-bug count; default off = advisory-only).")
     ver.add_argument("--no-inlining-advisor", action="store_true", default=False,
                      help="Disable LLM inline-vs-stub advisor.")
     ver.add_argument("--no-spec-gen-tools", action="store_true", default=False,
@@ -2814,7 +2940,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--enable-realism-check",
         action="store_true",
         default=False,
-        help="Run LLM realism audit on every REAL_BUG finding to reduce false positives",
+        help="Opt in to the legacy LLM realism audit (can re-tier findings). OFF by default; advisory triage is the default LLM layer.",
     )
     vd.add_argument(
         "--enable-realism-thinking",

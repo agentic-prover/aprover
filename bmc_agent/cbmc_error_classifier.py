@@ -46,6 +46,8 @@ class CbmcErrorClass(str, Enum):
     CONVERT_TYPE_REDEFINITION = "convert_type_redefinition"  # actionable
     CONVERT_BODY_REDEFINITION = "convert_body_redefinition"  # actionable
     CONVERT_UNDEFINED_IDENTIFIER = "convert_undefined_identifier"  # actionable
+    CONVERT_FUNCTION_REDEFINITION = "convert_function_redefinition"  # actionable (stub the fn)
+    GENERIC_FUNCTION_ERROR = "generic_function_error"  # actionable fallback (stub the offending fn)
 
     # Resource limits / unclassified.
     OUT_OF_MEMORY = "out_of_memory"
@@ -125,6 +127,9 @@ _CONVERT_UNDEFINED_IDENTIFIER = re.compile(
 _OOM_HINTS = (
     "Out of memory", "std::bad_alloc", "Cannot allocate memory",
 )
+_CONVERT_FUNCTION_REDEFINITION = re.compile(r"function symbol '(\w+)' redefined with a different type")
+# Generic fallback: any error message localized to a function -> stub it.
+_FUNCTION_LOCALIZED = re.compile(r"function (?:symbol )?'?(\w+)'?[:\s]")
 _TIMEOUT_HINTS = ("Timed out", "timeout",)
 
 
@@ -210,6 +215,14 @@ def classify(cbmc_result: dict) -> CbmcErrorDiagnosis:
                 source_line=source_line,
                 raw_message=text,
             )
+        m = _CONVERT_FUNCTION_REDEFINITION.search(text)
+        if m:
+            return CbmcErrorDiagnosis(
+                error_class=CbmcErrorClass.CONVERT_FUNCTION_REDEFINITION,
+                identifier=m.group(1),
+                source_line=source_line,
+                raw_message=text,
+            )
         if _PARSE_INCOMPLETE_TYPE.search(text):
             # Identifier not present in the message itself; the caller
             # may extract it from the surrounding harness line via
@@ -237,6 +250,22 @@ def classify(cbmc_result: dict) -> CbmcErrorDiagnosis:
     # No concrete pattern matched any error message — bucket as unknown
     # but preserve the first error text so a human can triage.
     first_text = error_msgs[0].get("text", "")
+    # Generic fallback: a parse/convert error localized to a single function
+    # (e.g. void-ptr arithmetic, _Generic remnants) -> stub that function. These
+    # are typically unused kernel helpers, so a nondet stub is sound for
+    # bug-finding (over-approximation). Recovers the codegen tail generically.
+    for _em in error_msgs:
+        _t = _em.get("text", "")
+        if _t in ("PARSING ERROR", "CONVERSION ERROR"):
+            continue
+        _fm = _FUNCTION_LOCALIZED.search(_t)
+        if _fm and _fm.group(1) not in ("symbol",):
+            return CbmcErrorDiagnosis(
+                error_class=CbmcErrorClass.GENERIC_FUNCTION_ERROR,
+                identifier=_fm.group(1),
+                source_line=_em.get("line"),
+                raw_message=_t,
+            )
     return CbmcErrorDiagnosis(
         error_class=CbmcErrorClass.UNKNOWN,
         raw_message=first_text or err_field,

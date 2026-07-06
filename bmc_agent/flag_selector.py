@@ -174,6 +174,10 @@ class FlagSelection:
     # Capped at _MAX_UNWIND_OVERRIDE; the LLM may propose larger but the
     # parser clamps. None = use global default.
     unwind_override: Optional[int] = None
+    # Hard unwind bound that BYPASSES the SVCOMP_UNWIND floor. Set by the OOM
+    # auto-retry to deliberately go below the proof-adequacy floor for
+    # bug-finding (sound: --unwinding-assertions stays on). None = normal logic.
+    unwind_hard: Optional[int] = None
     # When non-None, overrides the global CBMC timeout (seconds) for THIS
     # function only. Clamped to [_MIN_TIMEOUT_OVERRIDE, _MAX_TIMEOUT_OVERRIDE].
     # Not a CBMC command-line flag — applied by bmc_engine as the
@@ -189,6 +193,7 @@ class FlagSelection:
             "pointer_overflow_check": self.pointer_overflow_check,
             "undefined_shift_check": self.undefined_shift_check,
             "unwind_override": self.unwind_override,
+            "unwind_hard": self.unwind_hard,
             "timeout_override": self.timeout_override,
             "reasoning": self.reasoning,
         }
@@ -201,6 +206,7 @@ class FlagSelection:
             or self.pointer_overflow_check
             or self.undefined_shift_check
             or self.unwind_override is not None
+            or self.unwind_hard is not None
             or self.timeout_override is not None
         )
 
@@ -211,6 +217,41 @@ class FlagSelection:
         ``timeout=Ns`` is included as a pseudo-flag for log/audit clarity;
         it isn't an actual CBMC flag, just shown in the enabled list.
         """
+        # --- SV-COMP deterministic override (env SVCOMP_PROP / SVCOMP_UNWIND) ---
+        # On whole-program SV-COMP harnesses the per-function config agent's
+        # flag + unwind guesses misfire (e.g. --pointer-overflow-check on an
+        # unreach-call task, --unwind 12 that stalls on a strlen.unwind
+        # artifact before reaching reach_error). Emit a deterministic,
+        # property-appropriate flag set with a competition-grade unwind floor.
+        import os as _os
+        if _os.environ.get("BMC_MEMSAFE_ONLY"):
+            # Memory-safety-focused: emit NO optional arithmetic / conversion /
+            # pointer-overflow checks (they flag benign idioms -> false alarms).
+            # bounds+pointer checks come from --threat-model in run_cbmc.
+            _f = []
+            if self.unwind_hard is not None:
+                _f.append(f"--unwind {self.unwind_hard}")
+            elif self.unwind_override is not None:
+                _f.append(f"--unwind {self.unwind_override}")
+            if self.timeout_override is not None:
+                _f.append(f"timeout={self.timeout_override}s")
+            return _f
+        _svp = _os.environ.get("SVCOMP_PROP", "")
+        if _svp:
+            _f = []
+            if _svp == "no-overflow":
+                _f.append("--signed-overflow-check")
+            # memsafety -> memory checks come from --threat-model in run_cbmc;
+            # unreach   -> no optional arithmetic checks. Neither emits extras.
+            _floor = int(_os.environ.get("SVCOMP_UNWIND", "64"))
+            if self.unwind_hard is not None:
+                _uw = self.unwind_hard  # OOM hard-reduce: bypass the floor
+            else:
+                _uw = max(self.unwind_override or 0, _floor)
+            _f.append(f"--unwind {_uw}")
+            if self.timeout_override is not None:
+                _f.append(f"timeout={self.timeout_override}s")
+            return _f
         flags = []
         if self.unsigned_overflow_check:
             flags.append("--unsigned-overflow-check")
@@ -222,7 +263,9 @@ class FlagSelection:
             flags.append("--pointer-overflow-check")
         if self.undefined_shift_check:
             flags.append("--undefined-shift-check")
-        if self.unwind_override is not None:
+        if self.unwind_hard is not None:
+            flags.append(f"--unwind {self.unwind_hard}")
+        elif self.unwind_override is not None:
             flags.append(f"--unwind {self.unwind_override}")
         if self.timeout_override is not None:
             flags.append(f"timeout={self.timeout_override}s")
@@ -316,8 +359,12 @@ class FlagSelector:
         tm = getattr(self.config, "threat_model", "security")
         global_unwind = int(getattr(self.config, "cbmc_unwind", 4))
         global_timeout = int(getattr(self.config, "cbmc_timeout", 120))
+        _scope = (getattr(self.config, "threat_model_context", "") or "").strip()
+        _tmc = THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"])
+        if _scope:
+            _tmc = _tmc + "\n\nTASK-SPECIFIC SCOPE (AUTHORITATIVE - overrides the above):\n" + _scope
         prompt = _FLAG_SELECTION_PROMPT.format(
-            threat_model_context=THREAT_MODEL_CONTEXT.get(tm, THREAT_MODEL_CONTEXT["security"]),
+            threat_model_context=_tmc,
             name=func.name,
             signature=signature_str,
             body=body,

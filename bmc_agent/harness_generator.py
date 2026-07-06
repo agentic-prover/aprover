@@ -29,6 +29,19 @@ from bmc_agent.spec import Spec
 # ---------------------------------------------------------------------------
 
 
+def _strip_conflicting_libc_typedefs(text: str) -> str:
+    """Drop re-emitted libc struct typedefs (div_t/ldiv_t/lldiv_t/imaxdiv_t) that
+    collide with <stdlib.h>/<inttypes.h>. Preprocessed .i sources expand these; re-
+    emitting the anonymous-struct typedef makes a DISTINCT type -> gcc/CBMC \"conflicting
+    types for div_t\" when the harness also includes the header. Only strip when the
+    providing header is present in the source context (safe for freestanding)."""
+    import re as _re
+    for _name in ("div_t", "ldiv_t", "lldiv_t", "imaxdiv_t"):
+        text = _re.sub(r"typedef\s+struct\s*\{[^{}]*\}\s*" + _name + r"\s*;",
+                       "/* AMC: dropped libc typedef " + _name + " */", text, flags=_re.S)
+    return text
+
+
 def _extract_type_declarations(source_text: str, parsed_file: Optional["ParsedCFile"] = None) -> str:
     """
     Return only non-function-definition portions of a C source file.
@@ -52,7 +65,7 @@ def _extract_type_declarations(source_text: str, parsed_file: Optional["ParsedCF
         text = _extract_type_decls_using_bodies(source_text, parsed_file)
     else:
         text = _extract_type_decls_heuristic(source_text)
-    return _strip_cpp_linemarkers(text)
+    return _strip_conflicting_libc_typedefs(_strip_cpp_linemarkers(text))
 
 
 # Match cpp ``# N "filename" [flags]`` line directives anchored at line start.
@@ -931,11 +944,34 @@ def _generate_stub(
 
     if callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
         param_names = [pname for _, pname in params]
-        assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
-        if assume_stmts:
-            lines.append("    /* Assume callee precondition */")
-            for stmt in assume_stmts:
-                lines.append(f"    {stmt}")
+        import os as _os
+        _bounds_only = _os.environ.get("BMC_ASSERT_BOUNDS_ONLY", "") in ("1", "true")
+        if _bounds_only or _os.environ.get("BMC_ASSERT_CALLEE_PRECOND", "") in ("1", "true"):
+            # ASSERT the callee precondition at the call site so caller-misuse
+            # (e.g. passing an out-of-bounds size to my_memcpy) is CAUGHT, not
+            # trusted. assert-context translation => valid_range carries a real
+            # __CPROVER_r_ok bounds check. Fixes the compositional bug-finding
+            # soundness hole where assume(precond) masks misuse.
+            # BOUNDS-ONLY refinement: assert only the memory-safety bounds
+            # clauses (those carrying r_ok); ASSUME the structural/functional
+            # clauses (is_valid, etc.) — the caller establishes those via data
+            # flow, and asserting them spuriously fails when the harness can't
+            # reconstruct the full invariant (the assert-mode FA source).
+            from bmc_agent.dsl_to_cbmc import precond_to_assert as _p2a
+            _pre = _p2a(callee_spec.precondition, param_names)
+            if _pre:
+                lines.append("    /* callee precondition: assert bounds (misuse), assume structural */")
+                for stmt in _pre:
+                    if _bounds_only and "r_ok" not in stmt:
+                        lines.append(f"    {stmt.replace('assert(', '__CPROVER_assume(')}")
+                    else:
+                        lines.append(f"    {stmt}")
+        else:
+            assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
+            if assume_stmts:
+                lines.append("    /* Assume callee precondition */")
+                for stmt in assume_stmts:
+                    lines.append(f"    {stmt}")
 
     # D(i)/G5: model output params (bounded count, sized buffer) so the stub
     # respects the structural invariant the real callee enforces.
@@ -3520,8 +3556,10 @@ def _generate_nd_decls(
 
     For pointer parameters, we allocate a local struct/array on the stack and
     point to it. char* and const char* parameters receive a bounded
-    null-terminated string (max length = cbmc_unwind) so that string-traversal
-    loops always terminate within the unwinding bound.
+    null-terminated string (max length = cbmc_unwind - 1, i.e. one slot of
+    headroom: a `while(*s)` traversal needs L+1 guard checks, so L<=unwind-1
+    keeps it provably within the unwinding bound instead of tripping the
+    loop-unwinding assertion as an artifact).
 
     Parameters that are never passed NULL at any call site in the codebase
     (as determined by _infer_nonnull_params) receive an explicit
@@ -3536,6 +3574,10 @@ def _generate_nd_decls(
     """
     if nonnull_params is None:
         nonnull_params = set()
+    # Deferred assumes coupling a buffer param to its length param, realizing a
+    # relational precondition valid_range(ptr, 0, L). Emitted AFTER all params
+    # are declared (L may be declared later in signature order). See below.
+    _coupling_assumes: list = []
 
     # String-copy SOURCE widening: inputs that flow into an unbounded copy SINK
     # (strcpy/strcat/stpcpy) are modeled LONGER than the default so a
@@ -3671,6 +3713,13 @@ def _generate_nd_decls(
         # leaving x as a wild uninitialised pointer (root cause of the
         # ggml-quants.c dequantize_row_*.pointer_dereference.1 FP class).
         ptype_stripped = _strip_restrict_quals(ptype)
+        # Strip the pointer-const qualifier: ``T *const p`` (a const POINTER)
+        # otherwise leaves base_type as ``T *const`` -> matches no type branch
+        # -> falls through to a bare nondet pointer (no backing buffer) ->
+        # spurious memory-safety false alarms. The pointee-constness (leading
+        # ``const``) is preserved for the param-type signature match.
+        import re as _re_pc
+        ptype_stripped = _re_pc.sub(r"\*\s*const\b", "*", ptype_stripped)
 
         if ptype_stripped.endswith("*") or "*" in pname:
             # Pointer parameter
@@ -3694,27 +3743,94 @@ def _generate_nd_decls(
                     # ``scale_down_size**3`` (default 64) under scale-down
                     # or ``cbmc_unwind+1`` otherwise -- enough for typical
                     # block-quantized struct iteration.
-                    bbytes = (
-                        scale_down_size ** 3 if scale_down
-                        else (cbmc_unwind + 1) * 64  # bump for struct-cast targets
-                    )
+                    _coupled_len = None
+                    if precondition:
+                        _mv = _re_pc.search(
+                            r"valid_range\s*\(\s*" + _re_pc.escape(pname)
+                            + r"\s*,\s*[^,]+,\s*([^)]+?)\s*\)", precondition)
+                        if _mv:
+                            _le = (_mv.group(1) or "").strip()
+                            if _re_pc.fullmatch(r"[A-Za-z_]\w*", _le) and _le != pname:
+                                _coupled_len = _le
                     backing_name = f"_{pname}_void_backing"
-                    lines.append(
-                        f"    /* {ptype_stripped} {pname} — void* param, "
-                        f"backed by {bbytes}-byte buffer (later cast in body) */"
-                    )
-                    lines.append(
-                        f"    unsigned char *{backing_name} = "
-                        f"(unsigned char *)malloc({bbytes});"
-                    )
-                    lines.append(f"    __CPROVER_assume({backing_name} != NULL);")
-                    lines.append(
-                        f"    {ptype_stripped} {pname} = "
-                        f"({ptype_stripped}){backing_name};"
-                    )
+                    if _coupled_len is not None:
+                        # Faithful valid_range(pname,0,L) realization: the backing
+                        # OBJECT SIZE must equal the length param L. A fixed-size
+                        # buffer + assume(L<=N) does NOT work (CBMC can't relate a
+                        # symbolic sub-length to a constant-size object's region
+                        # check -> spurious OOB; verified). malloc tied to L proves
+                        # SAFE for all L. Use a fresh nondet size local (no decl-
+                        # order dep) and DEFER assume(L == size) to after all params.
+                        _sz_name = f"_{pname}_sz"
+                        lines.append(
+                            f"    /* {ptype_stripped} {pname} — void* sized to "
+                            f"valid_range length '{_coupled_len}' (object size == length) */")
+                        lines.append(f"    size_t {_sz_name};  /* nondet object size */")
+                        lines.append(f"    __CPROVER_assume({_sz_name} <= 4096);")  # bound size: keep cex/reproducer lengths sane; off-by-one still triggers for size>=8
+                        lines.append(
+                            f"    unsigned char *{backing_name} = (unsigned char *)"
+                            f"__CPROVER_allocate({_sz_name} ? {_sz_name} : 1, 0);")  # CBMC-native exact-size object; immune to a module-defined malloc stub (which yields an INVALID backing -> spurious deref FAILUREs on SAFE code)
+                        lines.append(f"    __CPROVER_assume({backing_name} != NULL);")
+                        lines.append(
+                            f"    {ptype_stripped} {pname} = ({ptype_stripped}){backing_name};")
+                        _coupling_assumes.append(
+                            f"    __CPROVER_assume((size_t)({_coupled_len}) == {_sz_name});"
+                            f"  /* tie len to valid_range({pname},0,{_coupled_len}) object size */")
+                    else:
+                        bbytes = (
+                            scale_down_size ** 3 if scale_down
+                            else (cbmc_unwind + 1) * 64
+                        )
+                        lines.append(
+                            f"    /* {ptype_stripped} {pname} — void* param, "
+                            f"backed by {bbytes}-byte buffer */")
+                        lines.append(
+                            f"    unsigned char *{backing_name} = "
+                            f"(unsigned char *)malloc({bbytes});")
+                        lines.append(f"    __CPROVER_assume({backing_name} != NULL);")
+                        lines.append(
+                            f"    {ptype_stripped} {pname} = "
+                            f"({ptype_stripped}){backing_name};")
                 else:
-                    lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
-                    lines.append(f"    {ptype_stripped} {pname} = NULL;")
+                    # FIX(spec-absorption / vacuous-proof): when the inferred
+                    # precondition already asserts valid_range(p, 0, L), materialize an
+                    # L-sized backing object here too -- even with infer_field_validity
+                    # and infer_array_param_bounds off. Leaving the void* as NULL while a
+                    # later __CPROVER_assume(p != NULL) is emitted makes the path UNSAT,
+                    # so CBMC generates 0 VCCs and proves EVERYTHING vacuously, absorbing
+                    # real OOB bugs (memset/memcpy/ip_checksum off-by-one). Gated on the
+                    # spec so truly-opaque void* params (no validity atom) keep the old
+                    # NULL behavior.
+                    _coupled_len2 = None
+                    if precondition:
+                        _mv2 = _re_pc.search(
+                            r"valid_range\s*\(\s*" + _re_pc.escape(pname)
+                            + r"\s*,\s*[^,]+,\s*([^)]+?)\s*\)", precondition)
+                        if _mv2:
+                            _le2 = (_mv2.group(1) or "").strip()
+                            if _re_pc.fullmatch(r"[A-Za-z_]\w*", _le2) and _le2 != pname:
+                                _coupled_len2 = _le2
+                    if _coupled_len2 is not None:
+                        backing_name = f"_{pname}_void_backing"
+                        _sz_name = f"_{pname}_sz"
+                        lines.append(
+                            f"    /* {ptype_stripped} {pname} — void* sized to "
+                            f"valid_range length '{_coupled_len2}' "
+                            f"(object size == length; vacuous-proof fix) */")
+                        lines.append(f"    size_t {_sz_name};  /* nondet object size */")
+                        lines.append(f"    __CPROVER_assume({_sz_name} <= 4096);")  # bound size: keep cex/reproducer lengths sane; off-by-one still triggers for size>=8
+                        lines.append(
+                            f"    unsigned char *{backing_name} = (unsigned char *)"
+                            f"__CPROVER_allocate({_sz_name} ? {_sz_name} : 1, 0);")  # CBMC-native exact-size object; immune to a module-defined malloc stub (which yields an INVALID backing -> spurious deref FAILUREs on SAFE code)
+                        lines.append(f"    __CPROVER_assume({backing_name} != NULL);")
+                        lines.append(
+                            f"    {ptype_stripped} {pname} = ({ptype_stripped}){backing_name};")
+                        _coupling_assumes.append(
+                            f"    __CPROVER_assume((size_t)({_coupled_len2}) == {_sz_name});"
+                            f"  /* tie len to valid_range({pname},0,{_coupled_len2}) object size */")
+                    else:
+                        lines.append(f"    /* {ptype_stripped} {pname} — void* param, left as NULL */")
+                        lines.append(f"    {ptype_stripped} {pname} = NULL;")
             elif star_count == 2 and pname in cursor_pnames:
                 # T** in-out cursor — allocate backing buffer + cursor + addr-of.
                 #
@@ -3758,7 +3874,8 @@ def _generate_nd_decls(
                     nul_name = f"_{pname}_nul_at"
                     lines.append(f"    unsigned int {nul_name};")
                     lines.append(
-                        f"    __CPROVER_assume({nul_name} <= (unsigned int){cbmc_unwind});"
+                        f"    __CPROVER_assume({nul_name} <= (unsigned int){max(1, cbmc_unwind - 1)});"
+                        f"  /* (a) L<=unwind-1: while(*s) needs L+1 guard checks */"
                     )
                     lines.append(f"    {backing_name}[{nul_name}] = '\\0';")
                 lines.append(f"    {inner_type} *{cursor_name} = {backing_name};")
@@ -3821,7 +3938,12 @@ def _generate_nd_decls(
                     # into a smaller fixed buffer can overflow (else baked-in
                     # length <= cbmc_unwind hides the bug). Width = the resolved
                     # destination size (or default cap), per plan_copy_source_widening.
-                    str_max = cbmc_unwind
+                    # (a) Headroom under the unwind bound: a NUL-terminated string
+                    # of length L needs L+1 guard checks in a `while(*s)` loop, so
+                    # bound L at cbmc_unwind-1 to keep the traversal provably within
+                    # `--unwind cbmc_unwind`. Without this, the loop-unwinding
+                    # assertion trips as an artifact (see (b) _recheck_unwind_artifact).
+                    str_max = max(1, cbmc_unwind - 1)
                     if copy_param_maxlen.get(pname, 0) > str_max:
                         str_max = copy_param_maxlen[pname]
                         lines.append(f"    /* copy-sink source '{pname}': widened to {str_max} chars to expose fixed-buffer overflow */")
@@ -3902,7 +4024,9 @@ def _generate_nd_decls(
             elif (
                 infer_array_param_bounds
                 and star_count == 1
-                and clean_base in _PRIMITIVE_POINTEE_TYPES
+                and (clean_base in _PRIMITIVE_POINTEE_TYPES
+                     or clean_base in ("void", "char", "unsigned char",
+                                       "signed char", "uint8_t", "int8_t"))
             ):
                 # Top-level primitive-pointer param sized from the body.
                 # Default fallback below would emit a single-element
@@ -3935,10 +4059,30 @@ def _generate_nd_decls(
                     f"({bound} elements; "
                     f"{'literal-subscript scan' if max_idx is not None else 'cbmc_unwind+1 fallback'}) */"
                 )
-                lines.append(f"    {clean_base} {buf_name}[{bound}];")
+                _buf_elem = ("unsigned char" if clean_base == "void" else clean_base)
+                lines.append(f"    {_buf_elem} {buf_name}[{bound}];")
                 lines.append(
                     f"    {ptype_stripped} {pname} = ({ptype_stripped}){buf_name};"
                 )
+                # RELATIONAL precondition realization: valid_range(pname, 0, L)
+                # means pname is a valid buffer of L elements. The backing
+                # buffer above has `bound` elements; without coupling, L stays
+                # free nondet and the function reads pname[0..L) past the buffer
+                # -> spurious OOB false alarm (CBMC ties plain --function).
+                # Constrain L <= bound so the length matches the allocation
+                # (bounded, sound for bug-finding). Deferred: L may be a later param.
+                if precondition:
+                    import re as _re_vr
+                    _m_vr = _re_vr.search(
+                        r"valid_range\s*\(\s*" + _re_vr.escape(pname)
+                        + r"\s*,\s*[^,]+,\s*([^)]+?)\s*\)",
+                        precondition)
+                    if _m_vr:
+                        _len_expr = (_m_vr.group(1) or "").strip()
+                        if _re_vr.fullmatch(r"[A-Za-z_]\w*", _len_expr) and _len_expr != pname:
+                            _coupling_assumes.append(
+                                f"    __CPROVER_assume((unsigned long)({_len_expr}) <= {bound});"
+                                f"  /* couple len to valid_range({pname},0,{_len_expr}) buffer (sized {bound}) */")
                 if pname in nonnull_params:
                     lines.append(
                         f"    __CPROVER_assume({pname} != NULL);  /* call-site: never passed NULL */"
@@ -4010,8 +4154,31 @@ def _generate_nd_decls(
         else:
             # Value parameter
             lines.append(f"    {ptype_stripped} {pname};")
+            # (a)-extension / Path 2: bound a length/size/count-style integer value
+            # param to the unwind ONLY when the body actually uses it as a LOOP BOUND
+            # (e.g. for(i=0;i<n;i++), while(n--)). Then explicit mem*/strncpy-style
+            # traversals are provably within `--unwind` -> the loop-unwinding assertion
+            # HOLDS instead of tripping as an artifact. Gated on loop-bound use so an
+            # arithmetic-only length (n*size overflow candidate) is NOT constrained and
+            # overflow bugs are preserved. Bounded analysis; residual off-by-one -> (b).
+            _lb_body = getattr(func, "body", "") or ""
+            import re as _re_lb
+            _is_loop_bound = bool(_re_lb.search(
+                r'(?:<=?|!=)\s*' + _re_lb.escape(pname) + r'\b'
+                + r'|\b' + _re_lb.escape(pname) + r'\s*(?:--|>\s*0)',
+                _lb_body))
+            if (_is_likely_length_field(pname)
+                    and _looks_like_integer_type(ptype_stripped)
+                    and _is_loop_bound):
+                lines.append(
+                    f"    __CPROVER_assume((unsigned long){pname} <= (unsigned long){cbmc_unwind});"
+                    f"  /* (a) loop-bound length <= unwind: keeps traversal within --unwind */"
+                )
             if pname in cursor_size_assumes:
                 lines.append(cursor_size_assumes[pname])
+    if _coupling_assumes:
+        lines.append("    /* relational valid_range(ptr,0,len) coupling */")
+        lines.extend(_coupling_assumes)
     return lines
 
 
@@ -4664,6 +4831,14 @@ class HarnessGenerator:
                         or not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', clean_var)
                         or clean_var in entry_param_names):
                     continue
+                # Gate to GENUINE file-scope globals. CBMC's cex also lists the
+                # function's LOCALS and return capture (result, n64, i, byte, p,
+                # pattern, ...). Emitting those as bare ``name = val;`` references
+                # undeclared identifiers, so the whole dynamic harness fails to
+                # compile -> false ``not_triggered`` (it never even ran the FUT).
+                # Only a name with an actual file-scope definition is a real global.
+                if not _extract_file_scope_var_defs(source_text, {clean_var}, entry_param_names):
+                    continue
                 if _is_simple_value(clean_val):
                     global_assigns.append(
                         f"    {clean_var} = {clean_val};  /* witness */"
@@ -4702,7 +4877,44 @@ class HarnessGenerator:
                     f"    {ptype_s} {arg_var} = {witness};  /* witness */"
                 )
             elif is_pointer:
-                if witness.strip() in ("NULL", "0", ""):
+                # Faithful (pointer,length) sizing from spec valid_range + cex value
+                # (values from the solver, structure from the harness -- no ground
+                # truth, no LLM). Inlined (the spec lookup is cheap; avoids a non-unique
+                # injection anchor).
+                _fb = None
+                _esp = (all_specs or {}).get(fn_name) if all_specs else None
+                _pre = (getattr(_esp, "precondition", "") or "") if _esp else ""
+                _m = re.search(r"valid_range\s*\(\s*" + re.escape(pname)
+                               + r"\s*,\s*[^,]+,\s*([^)]+?)\s*\)", _pre)
+                if _m:
+                    _ex = _m.group(1).strip()
+                    _mm = re.fullmatch(r"([A-Za-z_]\w*)\s*(?:([+\-])\s*(\d+))?", _ex)
+                    if _mm:
+                        _b = _mm.group(1)
+                        if re.fullmatch(r"\d+", _b):
+                            _fb = int(_b)
+                        else:
+                            _wv = counterexample.variable_assignments.get(_b, "")
+                            _mn = re.match(r"\s*(\d+)", _wv)
+                            if _mn:
+                                _fb = int(_mn.group(1))
+                                if _mm.group(2):
+                                    _fb += int(_mm.group(3)) if _mm.group(2) == "+" else -int(_mm.group(3))
+                                _fb = max(_fb, 0)
+                    elif re.fullmatch(r"\d+", _ex):
+                        _fb = int(_ex)
+                if _fb is not None:
+                    nbytes = max(min(_fb, 65536), 1)
+                    buf_var = f"_amc_buf_{pname}"
+                    # ASAN-instrumented, 16-aligned STACK array sized to the concrete cex
+                    # length. NOT malloc (a module may define its own malloc stub -> no
+                    # ASAN redzone). 16-aligned so alignment-gated fast paths run. Zero-init
+                    # via {0} (NOT memset -- memset may BE the function under test).
+                    call_arg_lines.append(
+                        f"    _Alignas(16) unsigned char {buf_var}[{nbytes}] = {{0}};"
+                    )
+                    call_arg_lines.append(f"    {ptype_s} {arg_var} = ({ptype_s}){buf_var};")
+                elif witness.strip() in ("NULL", "0", ""):
                     call_arg_lines.append(
                         f"    {ptype_s} {arg_var} = NULL;  /* witness */"
                     )
@@ -4930,6 +5142,26 @@ class HarnessGenerator:
         fn_name = func.name
         sig = func.signature
 
+        # Complete-harness mode: when the function under test IS the program's
+        # `main` (e.g. an SV-COMP harness that already sets up bounded inputs,
+        # calls the SUT, and asserts via reach_error), the program is ALREADY a
+        # faithful verification harness. The default expand-strip-stub reassembly
+        # corrupts it: it stubs the (public, non-static) SUT -> masks the bug, and
+        # loses the harness's input bounds -> builtin loops (strlen/memcmp) don't
+        # terminate -> CBMC stalls on an unwinding artifact before reaching
+        # reach_error. Emit the preprocessed program verbatim so CBMC verifies the
+        # real code (exactly as --standalone does); the agentic cex / realism /
+        # dynamic-validation layer still runs on the result.
+        import os as _os_fm
+        if fn_name == "main" and _os_fm.environ.get("BMC_FAITHFUL_MAIN", "1") != "0":
+            _full_src = (
+                parsed_file.preprocessed_source
+                if parsed_file.preprocessed_source is not None
+                else _read_source(func.source_file)
+            )
+            if _full_src and _full_src.strip():
+                return _full_src
+
         # --- 1. Collect type declarations from the source ---
         # Prefer preprocessed_source (all includes already expanded) over
         # reading the original file (which may have unresolved #include "...").
@@ -4982,18 +5214,30 @@ class HarnessGenerator:
         _intermediate = _strip_static_inline_defs(_intermediate)
         _session_typedefs2 = set(getattr(self.config, "session_strip_typedefs", None) or [])
         _session_structs2 = set(getattr(self.config, "session_strip_structs", None) or [])
+        # Kernel-TU detection: a kernel/CIL translation unit (ldv) has NO glibc
+        # stdio internals. `_preprocessed` is False for pre-preprocessed .i inputs,
+        # so it is NOT a reliable kernel signal. Use the absence of glibc `_IO_FILE`:
+        # kernel TUs must NOT have their `__`-prefixed structs/typedefs stripped
+        # (those are real kernel internals, e.g. __raw_tickets -> arch_spinlock),
+        # while userspace TUs (AWS, with _IO_FILE) still strip glibc bodies.
+        _is_kernel_tu = ("_IO_FILE" not in source_text)
+        _km = _preprocessed or _is_kernel_tu
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_struct_bodies(
                 _strip_glibc_internal_typedefs(
                     _intermediate,
-                    kernel_mode=_preprocessed,
+                    kernel_mode=_km,
                     extra_strip=_session_typedefs2 or None,
                 ),
-                kernel_mode=_preprocessed,
+                kernel_mode=_km,
                 extra_strip=_session_structs2 or None,
             ),
-            kernel_mode=_preprocessed,
+            kernel_mode=_km,
         )
+        type_decls = _dedupe_typedefs(type_decls)
+        if _is_kernel_tu:
+            # durable: raw source decls (types+globals verbatim), no lossy extract
+            type_decls = _kernel_raw_decls(source_text, parsed_file)
 
         # --- 2. Identify callees to stub ---
         # "local" callees: defined in this parsed file
@@ -5075,6 +5319,218 @@ class HarnessGenerator:
                     "inlining advisor failed for '%s' — keeping mechanical decisions: %s",
                     fn_name, exc,
                 )
+        # Transitive inlining (SV-COMP / bug-finding soundness): when a callee
+        # is inlined (e.g. the bmc-config agent inlines the *harness*), the
+        # harness's own callees — crucially the function-under-test — would
+        # otherwise fall back to a nondet sibling-placeholder STUB. A stub
+        # cannot exhibit the real (possibly buggy) body, so a reachability bug
+        # in the SUT is MASKED (observed: aws_array_eq_c_str stubbed -> 0/7
+        # bugs). Recursively pull every same-file, non-variadic, defined callee
+        # reachable from an inlined function into the inline set so its REAL
+        # body is verified. Gated on SV-COMP mode to avoid changing the general
+        # compositional-scaling behaviour.
+        import os as _os_ti
+        # Body-text call-edge augmentation (BMC_CONE_PROP, default ON): the
+        # parser call_graph misses call edges hidden behind CIL temporaries /
+        # indirection (e.g. driver_open -> mutex_lock). Those gaps drop a
+        # side-effecting driver fn from the reach_error cone -> it is stubbed ->
+        # its ldv_mutex write vanishes -> the lock-protocol bug can never fire
+        # ("miss", verified on cpia2). Recover the missing edges by scanning each
+        # body for `name(` tokens that name a defined function; used to augment
+        # BOTH the forward transitive-inline expansion AND the backward cone, so
+        # every function on a main->sink path stays inlined with its real body
+        # (side-effects preserved) while purely-computational off-path code is
+        # still stubbed (no OOM). Toggle off with BMC_CONE_PROP=0.
+        _text_edges: dict = {}
+        if _os_ti.environ.get("BMC_CONE_PROP", "1") != "0" and _is_kernel_tu:
+            import re as _re_cp
+            _callre_cp = _re_cp.compile(r"\b([A-Za-z_]\w*)\s*\(")
+            _names_cp = set((parsed_file.functions or {}).keys())
+            for _fnx, _fix in (parsed_file.functions or {}).items():
+                _bodyx = (getattr(_fix, "body", "") or "")
+                if not _bodyx:
+                    continue
+                _tc = set(_callre_cp.findall(_bodyx)) & _names_cp
+                _tc.discard(_fnx)
+                if _tc:
+                    _text_edges[_fnx] = _tc
+        # SV-COMP / ldv driver SEED: for a kernel TU whose entry is the LDV
+        # `main` sequence harness, `main`'s DIRECT local callees ARE the driver
+        # functions under test (dp83640_probe/remove/hwtstamp/...). They are
+        # large, non-static, loop-bearing => _should_inline_callee rejects them =>
+        # they fall back to nondet `_stub`s => the bug inside them is UNREACHABLE
+        # (masked: "0 real bugs" on a bug task). The transitive-inline frontier
+        # below only expands from ALREADY-inlined fns, so an empty seed never
+        # reaches the driver. Seed the inline set with every defined, non-variadic
+        # DIRECT callee of the entry so the whole driver call-tree is inlined with
+        # REAL bodies while the kernel API (declared-only, no body in this TU)
+        # stays stubbed automatically. This is the "inline the driver, stub the
+        # kernel" lever. Gated on kernel TU + BMC_TRANSITIVE_INLINE so AWS
+        # userspace and the general compositional path are untouched.
+        if (_os_ti.environ.get("BMC_TRANSITIVE_INLINE") and _is_kernel_tu
+                and fn_name == "main"):
+            for _dc in sorted(local_callees):
+                if _dc in inline_local_callees:
+                    continue
+                _dcfi = parsed_file.get_function_info(_dc)
+                if _dcfi is None or not (_dcfi.body or "").strip():
+                    continue
+                _dc_variadic = bool(any(
+                    (pt == "..." or "va_list" in (pt or ""))
+                    for pt, _ in (getattr(_dcfi.signature, "parameters", None) or [])))
+                if _dc_variadic:
+                    continue
+                inline_local_callees.add(_dc)
+        if _os_ti.environ.get("BMC_TRANSITIVE_INLINE") and inline_local_callees:
+            _cg = getattr(parsed_file, "call_graph", None) or {}
+            if _text_edges:
+                _cg = dict(_cg)
+                for _k, _v in _text_edges.items():
+                    _cg[_k] = (_cg.get(_k) or set()) | _v
+            _defined = set(parsed_file.functions.keys())
+            _frontier = list(inline_local_callees)
+            while _frontier:
+                _fn = _frontier.pop()
+                for _callee in _cg.get(_fn, set()):
+                    if (_callee in _defined and _callee not in inline_local_callees
+                            and _callee != fn_name):
+                        _ok, _ = _should_inline_callee(_callee, parsed_file,
+                                                       max_loc=10**9, size_helper_max_loc=10**9)
+                        _cfi = parsed_file.get_function_info(_callee)
+                        # _should_inline_callee still rejects variadic / non-static-
+                        # but-undefined; for SV-COMP we want any defined non-variadic
+                        # body, so accept on body presence unless it is variadic.
+                        _variadic = bool(_cfi and any(
+                            (pt == "..." or "va_list" in (pt or ""))
+                            for pt, _ in (getattr(_cfi.signature, "parameters", None) or [])))
+                        if _cfi and (_cfi.body or "").strip() and not _variadic:
+                            inline_local_callees.add(_callee)
+                            _frontier.append(_callee)
+        # CONE-SLICE (BMC_CONE_SLICE, bug-finding only): the full-inline kernel
+        # harness bit-blasts past the mandatory memory cap (SAT-OOM) even at low
+        # unwind. Shrink the formula by inlining ONLY functions in the reach_error
+        # BACKWARD CONE — those that transitively call a "checked" assert-bearing
+        # LDV model function (ldv_blast_assert / mutex_* / ldv_check_final_state /
+        # reach_error / __VERIFIER_error). Functions outside the cone are stubbed
+        # (nondet). SOUNDNESS: a nondet stub OVER-approximates the callee (adds
+        # reachable states) -> it can introduce a spurious counterexample but
+        # CANNOT mask a real reach_error -> SOUND FOR BUG-FINDING. It is NOT sound
+        # for PROVING safety (a nondet stub may false-alarm), so this lever must
+        # only be applied to bug/false tasks; gated on BMC_CONE_SLICE which the
+        # driver sets only when hunting a bug. Gated additionally on kernel TU +
+        # BMC_TRANSITIVE_INLINE so AWS / general compositional paths are untouched.
+        if (_os_ti.environ.get("BMC_CONE_SLICE")
+                and _os_ti.environ.get("BMC_TRANSITIVE_INLINE")
+                and _is_kernel_tu and fn_name == "main" and inline_local_callees):
+            _cg2 = getattr(parsed_file, "call_graph", None) or {}
+            if _text_edges:
+                _cg2 = dict(_cg2)
+                for _k, _v in _text_edges.items():
+                    _cg2[_k] = (_cg2.get(_k) or set()) | _v
+            # CORE assertion/check sinks (these CALL ldv_error/reach_error): always
+            # in the cone so every fn that reaches an assertion stays inlined.
+            _checked = {"ldv_blast_assert", "ldv_error", "ldv_assert",
+                        "ldv_check_final_state", "reach_error",
+                        "__VERIFIER_error", "__VERIFIER_assert",
+                        # GFP-flag / atomic-context allocation CHECKS (assert)
+                        "ldv_check_alloc_flags", "ldv_check_alloc_nonatomic",
+                        "ldv_check_alloc_flags_and_return_some_page",
+                        "ldv_after_alloc"}
+            # Lock-state-MODELING primitives below are NOT assertion sinks; they
+            # were force-added to _checked only to pull their callers into the
+            # cone (they write the "in atomic" global that ldv_check_alloc_* reads
+            # via def-use the call-graph can't see) — needed to avoid FALSE ALARMS
+            # when PROVING safe tasks. But locking is pervasive: keeping them makes
+            # the cone engulf the WHOLE driver -> zero formula reduction -> timeout
+            # (mousedev/orinoco/pch_udc). For BUG-FINDING the force-inline is
+            # unnecessary: a nondet stub OVER-approximates the lock-state global
+            # (the real buggy value is included), so a real reach_error stays
+            # reachable — SOUND (no masked bugs), at the cost of possibly more
+            # spurious cex (filtered by realism/feasibility). Drop them under
+            # BMC_CONE_TIGHT to get the minimal sound bug-finding cone.
+            if not _os_ti.environ.get("BMC_CONE_TIGHT"):
+                _checked |= {
+                        "mutex_lock", "mutex_unlock", "mutex_lock_interruptible",
+                        "mutex_lock_killable", "mutex_trylock",
+                        "atomic_dec_and_mutex_lock",
+                        "ldv_spin_lock", "ldv_spin_unlock",
+                        "spin_lock", "spin_unlock",
+                        "spin_lock_irqsave", "spin_unlock_irqrestore",
+                        "spin_lock_irq", "spin_unlock_irq",
+                        "spin_lock_bh", "spin_unlock_bh",
+                        "_raw_spin_lock", "_raw_spin_unlock"}
+            # Forward-reachability: fn is in cone iff it can transitively reach
+            # any _checked fn via the call graph. Compute by fixpoint over the
+            # reverse: start with _checked, repeatedly add any caller of a
+            # cone member.
+            _cone = set(_checked)
+            _changed = True
+            while _changed:
+                _changed = False
+                for _caller, _callees in _cg2.items():
+                    if _caller in _cone:
+                        continue
+                    if _callees & _cone:
+                        _cone.add(_caller)
+                        _changed = True
+            # Restrict the inline set to cone members. ALWAYS keep the SV-COMP
+            # assumption primitives + the checked fns (handled below / via
+            # _kernel_raw_decls). Everything inlined-but-out-of-cone is dropped
+            # back to a nondet stub.
+            _keep_always = _checked | {"assume_abort_if_not", "__VERIFIER_assume",
+                                       "assume_abort_if_unreachable",
+                                       "__VERIFIER_assume_abort", "abort"}
+            _before = len(inline_local_callees)
+            inline_local_callees = {c for c in inline_local_callees
+                                    if c in _cone or c in _keep_always}
+            if _os_ti.environ.get("BMC_CONE_PROP", "1") != "0":
+                # Inline the COMPLETE backward-from-sink cone, not just its
+                # intersection with the forward inline-candidate set. The
+                # candidate set (_should_inline_callee + parser-graph reachability)
+                # has gaps that drop functions which DO reach an assertion (8 of
+                # cpia2's 18-fn cone) -> they get stubbed -> the bug path is broken
+                # -> "miss". Every cone member can reach a property sink, so it is
+                # part of the property-relevant slice and must keep its REAL body.
+                # Restrict to defined, non-variadic, body-bearing fns (declared-only
+                # kernel API can't be inlined and is correctly left as a stub).
+                for _cm in _cone:
+                    if _cm in inline_local_callees or _cm == fn_name:
+                        continue
+                    _cmfi = parsed_file.get_function_info(_cm)
+                    if _cmfi is None or not (_cmfi.body or "").strip():
+                        continue
+                    _cm_variadic = bool(any(
+                        (pt == "..." or "va_list" in (pt or ""))
+                        for pt, _ in (getattr(_cmfi.signature, "parameters", None) or [])))
+                    if _cm_variadic:
+                        continue
+                    inline_local_callees.add(_cm)
+            try:
+                logger.info("cone-slice: inline set %d -> %d (reach_error backward cone)",
+                            _before, len(inline_local_callees))
+            except Exception:
+                pass
+            try:
+                import sys as _sysdbg
+                print("CONE-SLICE-RESULT %d -> %d tight=%r" % (_before, len(inline_local_callees), bool(_os_ti.environ.get("BMC_CONE_TIGHT"))), file=_sysdbg.stderr, flush=True)
+            except Exception:
+                pass
+        # SV-COMP assumption primitives MUST be inlined with their real bodies
+        # (e.g. assume_abort_if_not { if(!c) abort(); }); declared-only -> CBMC
+        # treats them as no-ops -> harness preconditions lost -> spurious reach_error
+        # (false alarms on safe tasks). Force-inline any defined variant.
+        # NOTE: for kernel TUs the primitive is kept in inline_local_callees here
+        # (so its call sites are NOT rewritten to _stub), but its body is NOT
+        # re-emitted in the inline-body loop below — _kernel_raw_decls already
+        # keeps the real body verbatim (its _KEEP_BODY set), and a second emission
+        # gives "function body 'assume_abort_if_not' defined twice" (mousedev).
+        if _os_ti.environ.get("BMC_TRANSITIVE_INLINE"):
+            for _prim in ("assume_abort_if_not", "__VERIFIER_assume",
+                          "assume_abort_if_unreachable", "__VERIFIER_assume_abort"):
+                if _prim in (parsed_file.functions or {}) and _prim not in inline_local_callees:
+                    _pf = parsed_file.get_function_info(_prim)
+                    if _pf and (_pf.body or "").strip():
+                        inline_local_callees.add(_prim)
         stubbed_local_callees = local_callees - inline_local_callees
         all_stub_callees = stubbed_local_callees | extern_callees | registry_callees
 
@@ -5098,8 +5554,20 @@ class HarnessGenerator:
         # --- 3a. Emit inlined-callee bodies verbatim ---
         # The inlined callee may itself call into ``all_stub_callees``; rewrite
         # those nested calls so the inlined body compiles in the harness.
+        # For kernel TUs, _kernel_raw_decls already keeps the verbatim body of the
+        # verification/assumption primitives (its _KEEP_BODY set); re-emitting any
+        # of them here would be "function body X defined twice" (mousedev:
+        # assume_abort_if_not). Keep them in inline_local_callees (so call sites
+        # stay un-rewritten and resolve to the kept body) but skip re-emission.
+        _KERNEL_KEEP_BODY_NAMES = {
+            "ldv_blast_assert", "ldv_error", "ldv_assert", "__VERIFIER_error",
+            "__VERIFIER_assert", "reach_error", "abort", "assume_abort_if_not",
+            "__VERIFIER_assume", "ldv_assume",
+        }
         inline_func_defs: list[str] = []
         for cname in sorted(inline_local_callees):
+            if _is_kernel_tu and cname in _KERNEL_KEEP_BODY_NAMES:
+                continue  # body already kept verbatim by _kernel_raw_decls
             cfi = parsed_file.get_function_info(cname)
             if cfi is None:
                 continue
@@ -5107,7 +5575,7 @@ class HarnessGenerator:
             cparams = _params_str(cfi.signature.parameters)
             inline_func_defs.append(
                 f"/* Inlined real callee body: {cname} */\n"
-                f"static {cfi.signature.return_type} {cname}({cparams})\n{cbody}"
+                f"{'' if _is_kernel_tu else 'static '}{cfi.signature.return_type} {cname}({cparams})\n{cbody}"
             )
 
         # --- 3b. Emit placeholder bodies for sibling functions ---
@@ -5239,7 +5707,7 @@ class HarnessGenerator:
         # bare-struct stripping can't safely remove.  CBMC's
         # __CPROVER_assume/__CPROVER_assert intrinsics don't need any
         # of these headers themselves.
-        preprocessed = parsed_file.preprocessed_source is not None
+        preprocessed = (parsed_file.preprocessed_source is not None) or _is_kernel_tu  # kernel/.i TU -> minimal libc includes (avoid dev_t/sys-types redef)
         if preprocessed:
             inc_lines: list[str] = []
             # The kernel preprocessor expands ``NULL`` to ``((void *)0)``
@@ -5258,11 +5726,84 @@ class HarnessGenerator:
             # IS present, our placeholder would clash; if it isn't,
             # M1's ``sizeof(*pdev)`` in struct-field validity init
             # errors on the incomplete type.
-            _src_text = parsed_file.preprocessed_source or ""
+            # NOTE: ``parsed_file.preprocessed_source`` is None for pre-preprocessed
+            # .i inputs (ldv/CIL), so it is an UNRELIABLE kernel signal — using it
+            # made ``_has_pci_dev_body`` False on ldv even when the source defines
+            # ``struct pci_dev`` itself, so the opaque placeholder was injected and
+            # collided -> "redefinition of body of 'struct pci_dev'" CONVERSION
+            # ERROR (mfd mask). Use the reliable ``source_text`` (same var as
+            # ``_has_atomic_t`` below).
+            _src_text = parsed_file.preprocessed_source or source_text or ""
             _has_pci_dev_body = bool(
-                re.search(r"\bstruct\s+pci_dev\s*\{", _src_text)
+                re.search(r"\bstruct\s+pci_dev\s*\{", source_text)
             )
-            sections.append(
+            # CIL/full-kernel TUs define their OWN atomic_t (e.g.
+            # ``typedef struct __anonstruct_atomic_t_6 atomic_t;``); injecting our
+            # model then yields "type symbol atomic_t defined twice". Only inject
+            # the model when the source does NOT define it (hand-written driver).
+            _has_atomic_t = bool(
+                re.search(r"(typedef\b[^;]{0,400}\batomic_t\s*;|\}\s*atomic_t\s*;)", source_text)
+            )
+            # CIL/full-kernel TUs that include the relevant kernel headers
+            # define these current-task / device helpers THEMSELVES (e.g.
+            # ``__inline static struct task_struct *get_current(void)``), and the
+            # CIL definition returns ``struct task_struct *`` — NOT the ``void *``
+            # our injected prototype declares. Injecting the prototype then yields
+            # "function symbol 'get_current' redefined with a different type"
+            # CONVERSION ERROR (mousedev). Only inject each helper prototype when
+            # the source does NOT already declare/define it. ``\b<name>\s*\(``
+            # matches a declaration or definition (and the prototype line), not a
+            # call (calls also match, which only makes us conservatively SKIP the
+            # injection — safe, since a called symbol is declared somewhere).
+            def _src_declares(_name: str) -> bool:
+                return bool(re.search(rf"\b{_name}\b", source_text))
+            def _src_decl_or_def(_name: str) -> bool:
+                # True iff the source TU itself declares OR defines this
+                # function (type-prefixed ``name( ... ) ;`` or ``{``), as
+                # opposed to merely *calling* it. We only suppress our
+                # fallback prototype when the source genuinely declares the
+                # symbol with its own (possibly conflicting) signature; if
+                # the symbol is only called (body+decl stripped), we KEEP the
+                # fallback so it stays declared. Excludes assignments (``=``)
+                # and statements with a leading ``;`` so call sites don't match.
+                return bool(re.search(
+                    rf"(?m)^[^\n;=]*\b{re.escape(_name)}\s*\([^;{{}}]*\)\s*[;{{]",
+                    source_text,
+                ))
+            def _filter_conflicting_protos(block: str, src: str) -> str:
+                # Drop any fallback *prototype* line whose function the source
+                # already declares/defines, to avoid CBMC "function symbol 'X'
+                # redefined with a different type" CONVERSION ERRORs (e.g. the
+                # kernel's own ``int __ilog2_u32(u32)`` vs our
+                # ``unsigned long __ilog2_u32(unsigned int)``). #defines,
+                # typedefs and comments never match the prototype shape, so
+                # they are preserved verbatim. General across the whole
+                # intrinsic-stub block, not a per-name allowlist.
+                _proto = re.compile(
+                    r"^\s*(?:extern\s+|static\s+|__inline\s+|inline\s+)*"
+                    r"[A-Za-z_][\w\s\*]*?\b(\w+)\s*\([^;{]*\)\s*;\s*$"
+                )
+                kept = []
+                dropped = []
+                for ln in block.split("\n"):
+                    m = _proto.match(ln)
+                    if m and _src_decl_or_def(m.group(1)):
+                        dropped.append(m.group(1))
+                        continue
+                    kept.append(ln)
+                if dropped:
+                    from bmc_agent.logger import get_logger
+                    get_logger("harness").info(
+                        "kernel-intrinsic proto filter: dropped %d fallback "
+                        "prototype(s) the source already declares: %s",
+                        len(dropped), ", ".join(sorted(set(dropped))),
+                    )
+                return "\n".join(kept)
+            _has_get_current = _src_declares("get_current")
+            _has_task_tgid_nr = _src_declares("task_tgid_nr")
+            _has_task_pid_nr = _src_declares("task_pid_nr")
+            _has_device_init_wakeup = _src_declares("device_init_wakeup")
+            _km_prologue = (
                 "/* Kernel-mode harness — provide minimal stddef/assert */\n"
                 "#ifndef NULL\n"
                 "#define NULL ((void *)0)\n"
@@ -5357,22 +5898,26 @@ class HarnessGenerator:
                 # already declare the right shape.
                 ""
 
-                "/* atomic_t is a small struct; CBMC's nondet handles it. */\n"
-                "typedef struct { int counter; } atomic_t;\n"
-                "typedef struct { long long counter; } atomic64_t;\n"
-                "void atomic_set(atomic_t *v, int i);\n"
+                + ("/* atomic_t model (source lacks its own) */\n"
+                 "typedef struct { int counter; } atomic_t;\n"
+                 "typedef struct { long long counter; } atomic64_t;\n"
+                 "void atomic_set(atomic_t *v, int i);\n"
                 "int  atomic_read(const atomic_t *v);\n"
                 "void atomic_inc(atomic_t *v);\n"
                 "void atomic_dec(atomic_t *v);\n"
                 "int  atomic_add_return(int i, atomic_t *v);\n"
                 "int  atomic_sub_return(int i, atomic_t *v);\n"
                 "void atomic64_set(atomic64_t *v, long long i);\n"
-                "long long atomic64_read(const atomic64_t *v);\n"
-                "/* get_current / task_tgid_nr stubs (kernel current-task helpers). */\n"
-                "void *get_current(void);\n"
-                "int task_tgid_nr(void *task);\n"
-                "int task_pid_nr(void *task);\n"
-                "int device_init_wakeup(void *dev, int val);\n"
+                 "long long atomic64_read(const atomic64_t *v);\n"
+                 if not _has_atomic_t else "")
+                + "/* get_current / task_tgid_nr stubs (kernel current-task helpers).\n"
+                " * Each is injected ONLY when the source does not already declare it\n"
+                " * (CIL TUs define get_current returning struct task_struct* -> our\n"
+                " * void* prototype would collide: 'redefined with a different type'). */\n"
+                + ("void *get_current(void);\n" if not _has_get_current else "")
+                + ("int task_tgid_nr(void *task);\n" if not _has_task_tgid_nr else "")
+                + ("int task_pid_nr(void *task);\n" if not _has_task_pid_nr else "")
+                + ("int device_init_wakeup(void *dev, int val);\n" if not _has_device_init_wakeup else "")
                 + (
                     "/* Opaque-struct full-definition backing for struct pci_dev.\n"
                     " * Forward-decl only in this TU; the full body lives in\n"
@@ -5383,6 +5928,7 @@ class HarnessGenerator:
                     if not _has_pci_dev_body else ""
                 )
             )
+            sections.append(_filter_conflicting_protos(_km_prologue, source_text))
         else:
             _stdlib_fns  = {"malloc", "free", "calloc", "realloc", "abort", "exit"}
             _stdio_fns   = {"printf", "fprintf", "sprintf", "snprintf", "puts", "putchar"}
@@ -5421,7 +5967,7 @@ class HarnessGenerator:
         # function the FUT doesn't call directly, so address-of references
         # from TU-scope dispatch tables (Linux driver registration structs)
         # link successfully.
-        if sibling_func_defs:
+        if sibling_func_defs and not _is_kernel_tu:  # kernel: _kernel_raw_decls already declares all fns; placeholders would duplicate (e.g. ldv_blast_assert)
             sections.append("/* --- Sibling placeholders (for TU-scope dispatch tables) --- */")
             sections.extend(sibling_func_defs)
 
@@ -5562,17 +6108,37 @@ class HarnessGenerator:
             for sub_line in stmt.splitlines():
                 harness_body_lines.append(f"    {sub_line}")
 
-        harness_main = (
-            "void main(void) {\n"
-            + "\n".join(harness_body_lines)
-            + "\n}"
-        )
-        sections.append(
-            f"/* --- Harness entry point --- */\n"
-            + harness_main
-        )
+        # When the function under test IS the program entry `main` (e.g. an
+        # SV-COMP harness `int main(void){ X_harness(); return 0; }`), the
+        # program is ALREADY a complete verification harness. Synthesizing a
+        # second `void main(void)` wrapper that calls main() collides with the
+        # real main -> CBMC "function symbol 'main' redefined" CONVERSION ERROR
+        # -> the task silently returns "no bug". Verify the existing main
+        # directly instead (no synthesized wrapper).
+        if fn_name != "main":
+            harness_main = (
+                "void main(void) {\n"
+                + "\n".join(harness_body_lines)
+                + "\n}"
+            )
+            sections.append(
+                f"/* --- Harness entry point --- */\n"
+                + harness_main
+            )
 
         harness = "\n\n".join(sections) + "\n"
+        # Neutralize the SOURCE's own ``int main()`` (e.g. an SV-COMP driver
+        # ``int main(){ X_harness(); return 0; }``, or any program-with-main)
+        # when we have synthesized our own ``void main(void)`` entry above
+        # (fn_name != "main"). Otherwise CBMC reports "function symbol 'main'
+        # redefined with a different type" CONVERSION ERROR (exit 6) and the
+        # whole per-function verification is skipped -> silent 0 bugs. The
+        # real-libc path already guards this (check_<fn> + --function); the
+        # compositional path did not. Rename the int-returning main (def +
+        # any forward decl) to a dead name; our void main stays the entry.
+        if fn_name != "main":
+            import re as _re_dm
+            harness = _re_dm.sub(r"\bint(\s+)main(\s*\()", r"int\1__amc_src_main\2", harness)
         # D-ii: inject signature-matched stubs for any assigned callback fields.
         harness = _inject_funcptr_stubs(harness, source_text)
         return harness
@@ -6855,6 +7421,95 @@ _KERNEL_PRIMITIVE_PAT = re.compile(
 )
 
 
+def _kernel_raw_decls(text: str, parsed_file) -> str:
+    """Durable kernel-TU type section. Take the RAW preprocessed source and turn
+    function DEFINITIONS into PROTOTYPES (keep every function DECLARED), preserving
+    types + GLOBALS verbatim. The raw .i parses cleanly in CBMC; the lossy
+    extract/strip path drops globals (ldv_spin), mangles kernel structs
+    (__raw_tickets->arch_spinlock), and duplicates type tags. Bodies for inlined/
+    stubbed callees are re-emitted by those sections (NON-static for kernel TUs, so
+    they are compatible with the prototype left here). VERIFICATION PRIMITIVES keep
+    their full body — their body IS the property (ldv_blast_assert/reach_error) or
+    the assumption semantics (assume_abort_if_not), so stripping them would mask the
+    bug or drop a precondition."""
+    import re as _re
+    _KEEP_BODY = _re.compile(
+        r"\b(ldv_blast_assert|ldv_error|ldv_assert|__VERIFIER_error|__VERIFIER_assert"
+        r"|reach_error|abort|assume_abort_if_not|__VERIFIER_assume|ldv_assume)\b"
+    )
+    defs = getattr(parsed_file, "function_definitions", None) or {}
+    for fdef in sorted([d for d in defs.values() if d and "{" in d], key=len, reverse=True):
+        # SOUNDNESS/CODEGEN GUARD: a mis-bounded fdef string (parser brace-miscount
+        # on GCC statement-expressions ``({ ... })`` / compound literals
+        # ``(type){ ... }``) would, when rewritten to its prototype, corrupt the
+        # source into invalid C (observed: ``ktime_to_us((;; }))`` -> CBMC PARSING
+        # ERROR, exit 6, ``main`` skipped -> the real bug is masked). Only rewrite
+        # defs whose braces balance; keep mis-bounded ones VERBATIM (the raw .i is
+        # valid C, so CBMC parses the full body fine).
+        if fdef.count("{") != fdef.count("}"):
+            continue
+        head = fdef[:fdef.index("{")]
+        if _KEEP_BODY.search(head):
+            continue  # keep the primitive's real body
+        text = text.replace(fdef, head.rstrip() + ";", 1)  # def -> prototype (stays declared)
+    return text
+
+
+def _dedupe_typedefs(text: str) -> str:
+    """Remove DUPLICATE top-level type definitions, keeping the first occurrence:
+      * ``typedef <...> NAME ;``  (single line), and
+      * ``struct|union|enum NAME { ... } ;`` (brace-aware, multi-line).
+    CBMC rejects "type symbol X defined twice" even for identical bodies; the
+    CIL/kernel reassembly can emit the same tag (atomic_t, dev_t, ...) more than
+    once. Later full definitions are replaced by a forward declaration so any
+    pointer uses still resolve."""
+    import re as _re
+    _tag_def = _re.compile(r'^\s*(struct|union|enum)\s+(\w+)\s*\{')
+    _td_line = _re.compile(r'^\s*typedef\b[^;{}]*\b(\w+)\s*;\s*$')
+    seen_tags = set()
+    seen_td = set()
+    out = []
+    lines = text.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        ln = lines[i]
+        mtag = _tag_def.match(ln)
+        if mtag:
+            kind, name = mtag.group(1), mtag.group(2)
+            # consume the full braced body to the matching close + trailing ';'
+            depth = 0
+            j = i
+            started = False
+            while j < n:
+                depth += lines[j].count('{') - lines[j].count('}')
+                if '{' in lines[j]:
+                    started = True
+                if started and depth <= 0:
+                    break
+                j += 1
+            key = (kind, name)
+            if name and key in seen_tags:
+                out.append('/* dup %s %s removed */ %s %s;' % (kind, name, kind, name))
+            else:
+                if name:
+                    seen_tags.add(key)
+                out.extend(lines[i:j+1])
+            i = j + 1
+            continue
+        mtd = _td_line.match(ln)
+        if mtd:
+            name = mtd.group(1)
+            if name in seen_td:
+                out.append('/* dup typedef %s removed */' % name)
+                i += 1
+                continue
+            seen_td.add(name)
+        out.append(ln)
+        i += 1
+    return "\n".join(out)
+
+
 def _strip_glibc_internal_struct_bodies(
     text: str,
     *,
@@ -7274,6 +7929,16 @@ def _strip_glibc_internal_typedefs(
             outer_fp = re.match(r'\s*typedef\s+[\w\s\*]+?\(\s*\*\s*(\w+)\s*\)\s*\(', typedef_text)
             if outer_fp is not None:
                 target = outer_fp.group(1)
+        # Form 2b: function-TYPE typedef with a PARENTHESIZED name:
+        #   ``typedef <ret> (NAME)(<params>);`` -- like Form 2 but no ``*``.
+        # e.g. ``typedef uint64_t(aws_hash_fn)(const void *key);``. Without
+        # this, Form 3's non-greedy regex grabs the return type (``uint64_t``)
+        # as the typedef name; the system-typedef strip rule then deletes the
+        # whole line, leaving ``aws_hash_fn`` undefined (CBMC parse error).
+        if target is None:
+            paren_ft = re.match(r'\s*typedef\s+[\w\s\*]+?\(\s*(\w+)\s*\)\s*\(', typedef_text)
+            if paren_ft is not None:
+                target = paren_ft.group(1)
         # Form 3: function-type typedef ``typedef <ret> NAME(<params>);``.
         # Name is the identifier immediately preceding the parameter
         # list. Detected by the LAST ``\w+`` token that precedes a ``(``
@@ -7520,7 +8185,14 @@ def _is_simple_value(val: str) -> bool:
     val = val.strip()
     if val in ("NULL", "true", "false"):
         return True
-    # Integers (possibly negative)
+    # Integers (possibly negative), with optional C integer suffix (u/U/l/L
+    # combinations). CBMC emits unsigned/long witnesses like "27u", "0u", "3ul";
+    # without this they fail int() and the arg silently defaults to 0 -- so a
+    # length/size param is passed as n=0 and the function-under-test never
+    # exercises the buggy path (the value is valid C, so it is emitted as-is).
+    import re as _r_suf
+    if _r_suf.fullmatch(r"-?\d+[uUlL]*", val):
+        return True
     try:
         int(val)
         return True

@@ -163,6 +163,8 @@ class Config:
     # Off by default (text-only, identical shape to the API path). Toggle via
     # ``--claude-code-agentic`` or ``BMC_AGENT_CLAUDE_CODE_AGENTIC=1``.
     claude_code_agentic: bool = False
+    codex_bin: str = "codex"          # Codex CLI (triage backend "codex"); BMC_AGENT_CODEX_BIN to override
+    codex_timeout_s: float = 600.0
     # Loop-invariant synthesis: assume the loop body's signed arithmetic does not
     # overflow (mathematical-integer semantics), so textbook invariants like
     # x>=1 under x=x+y are inductive. Set by `--math-ints`. Off => machine ints.
@@ -654,7 +656,7 @@ class Config:
     agentic_refine_rounds: int = 0
 
     # Realism checker settings (Phase 3 post-validation LLM audit)
-    enable_realism_check: bool = True        # LLM agent that audits REAL_BUG findings for realistic exploitability
+    enable_realism_check: bool = False       # OFF by default (opt-in --enable-realism-check); advisory TRIAGE is the default LLM layer
     # Adjacent-bug discovery: a 2nd LLM call on each realism REJECTION hunting for
     # nearby defects. DEFAULT OFF — empirically it yielded 130 leads / 0 confirmed bugs
     # (the harvester that verifies leads is a separate opt-in step), while adding an LLM
@@ -704,7 +706,8 @@ class Config:
     # unresolved bucket. Default off — the agent is expensive (~10-iter
     # tool-use loop per CEx) and the post-hoc ``scripts/triage_unresolved.py``
     # already provides the same data outside the pipeline.
-    enable_phase_3e_triage: bool = False
+    enable_phase_3e_triage: bool = True   # ADVISORY by default: triage annotates UNRESOLVED cexs, never changes the verdict
+    triage_authoritative: bool = False    # opt-in: allow triage to PROMOTE UNRESOLVED -> REAL_BUG (changes confirmed count)
 
     # Feedback loop: distill UNREALISTIC verdicts into learned constraints
     # or code-change TODOs (see bmc_agent/feedback_loop.py). The harness
@@ -1000,11 +1003,12 @@ class Config:
             enable_dynamic_validation=(os.environ.get("BMC_AGENT_ENABLE_DYNAMIC_VALIDATION") or os.environ.get("AMC_ENABLE_DYNAMIC_VALIDATION") or "true").lower() == "true",
             dynamic_validation_timeout=int(os.environ.get("BMC_AGENT_DYNAMIC_VALIDATION_TIMEOUT", "30")),
             dynamic_cc_path=os.environ.get("BMC_AGENT_DYNAMIC_CC_PATH", "gcc"),
-            enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "true").lower() == "true",
+            enable_realism_check=(os.environ.get("BMC_AGENT_ENABLE_REALISM_CHECK") or os.environ.get("AMC_ENABLE_REALISM_CHECK") or "false").lower() == "true",
             enforce_realism_on_dynamic=(os.environ.get("BMC_AGENT_ENFORCE_REALISM_ON_DYNAMIC") or "true").lower() == "true",
             enable_classifier=True,  # DEPRECATED/always-on: CEx validation cannot be disabled; BMC_AGENT_ENABLE_CLASSIFIER is ignored (kept as a no-op).
             enable_realism_thinking=(os.environ.get("BMC_AGENT_ENABLE_REALISM_THINKING") or os.environ.get("AMC_ENABLE_REALISM_THINKING") or "false").lower() == "true",
-            enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "false").lower() == "true",
+            enable_phase_3e_triage=(os.environ.get("BMC_AGENT_ENABLE_PHASE_3E_TRIAGE") or "true").lower() == "true",
+            triage_authoritative=(os.environ.get("BMC_AGENT_TRIAGE_AUTHORITATIVE") or "false").lower() == "true",
             enable_flag_selection=os.environ.get("BMC_AGENT_ENABLE_FLAG_SELECTION", "true").lower() == "true",
             enable_bmc_config_agent=(os.environ.get("BMC_AGENT_ENABLE_BMC_CONFIG_AGENT") or "true").lower() == "true",
             enable_reproducer_agent=(os.environ.get("BMC_AGENT_ENABLE_REPRODUCER_AGENT") or "true").lower() == "true",

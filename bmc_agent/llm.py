@@ -582,6 +582,9 @@ class LLMClient:
                     elif provider == "claude-code":
                         sys_cc = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
                         result = self._complete_claude_code(sys_cc, user_prompt, max_tokens, temperature)
+                    elif provider == "codex":
+                        sys_cx = (cache_prefix + "\n\n" + system_prompt) if cache_prefix else system_prompt
+                        result = self._complete_codex(sys_cx, user_prompt, max_tokens, temperature)
                     else:
                         result = self._complete_anthropic(
                             system_prompt,
@@ -983,6 +986,45 @@ class LLMClient:
                 f"completion_tokens={usage.get('completion_tokens')}"
             )
         return stripped
+
+    def _complete_codex(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """Shell out to the Codex CLI (``codex exec``), non-interactive.
+
+        Mirrors ``_complete_claude_code``: prompt via stdin, auth delegated to
+        the local Codex install. Best-effort -- Codex output is plain text (no
+        JSON envelope); temperature/max_tokens are not exposed per call. Raises
+        LLMError if the CLI is absent so the caller can fall back.
+        """
+        import subprocess
+        cli = (getattr(self.config, "codex_bin", None) or "codex").strip()
+        cmd = [cli, "exec"]
+        model = (self.config.llm_model or "").strip()
+        if model and "/" not in model and "gpt" in model.lower():
+            cmd += ["--model", model]
+        full = (system_prompt + "\n\n" + user_prompt) if system_prompt else user_prompt
+        timeout_s = float(
+            getattr(self.config, "codex_timeout_s", None)
+            or getattr(self.config, "claude_code_timeout_s", None)
+            or getattr(self.config, "llm_request_timeout_s", 180.0)
+        )
+        try:
+            proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            raise LLMError(f"codex exec timed out after {timeout_s}s") from exc
+        except FileNotFoundError as exc:
+            raise LLMError(f"codex CLI not found at {cli!r}. Install Codex or set BMC_AGENT_CODEX_BIN.") from exc
+        if proc.returncode != 0:
+            raise LLMError(f"codex exec exited {proc.returncode}: stderr={proc.stderr[:400]!r}")
+        out = (proc.stdout or "").strip()
+        if not out:
+            raise LLMError("codex exec produced empty stdout")
+        return _strip_reasoning_blocks(out)
 
     def _complete_claude_code(
         self,
