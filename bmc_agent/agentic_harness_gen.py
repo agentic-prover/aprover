@@ -518,6 +518,58 @@ class HarnessResult:
         }
 
 
+_ALLOC_FUNCS = ("__CPROVER_allocate", "malloc", "calloc", "kmalloc_array_noprof",
+                "kmalloc_noprof", "kmalloc", "kzalloc", "kcalloc", "vmalloc_noprof",
+                "vmalloc", "realloc")
+
+
+def _rewrite_alloc(src: str, pvar: str, exact: str) -> "tuple[str, bool]":
+    """Replace the allocation call assigned to *pvar* with *exact* (balanced-paren,
+    cast-preserving). Best-effort: returns (src, False) if no allocation is found."""
+    import re as _re
+    m = _re.search(rf"\b{_re.escape(pvar)}\s*=(?!=)\s*(\([^;={{}}]*?\)\s*)?", src)
+    if not m:
+        return src, False
+    i = m.end()
+    fm = _re.match(r"(" + "|".join(_re.escape(x) for x in _ALLOC_FUNCS) + r")\s*\(", src[i:])
+    if not fm:
+        return src, False
+    j = i + fm.end()          # just past the opening '('
+    depth = 1
+    while j < len(src) and depth:
+        if src[j] == "(":
+            depth += 1
+        elif src[j] == ")":
+            depth -= 1
+        j += 1
+    if depth != 0:
+        return src, False
+    return src[:i] + exact + src[j:], True
+
+
+def _enforce_contract_sizing(harness: str, func, spec) -> str:
+    """Shared post-gen contract enforcement (unifies both repair paths): for each
+    ``valid_range(p, 0, k)`` in the spec, force p's harness allocation to EXACTLY k
+    elements (``__CPROVER_allocate((size_t)(k) * sizeof(*p), 0)``), so an off-by-one
+    past k stays a real OOB no matter what the LLM (claude-code OR API) allocated.
+    Contract-driven (uses the spec's own extent, not a code pattern); best-effort +
+    logged; a mis-parse leaves the harness untouched (never breaks a good harness)."""
+    import re as _re
+    pre = getattr(spec, "precondition", "") or ""
+    vrs = _re.findall(r"valid_range\(\s*([A-Za-z_]\w*)\s*,\s*0\s*,\s*([A-Za-z_]\w*)\s*\)", pre)
+    if not vrs or not harness:
+        return harness
+    out = harness
+    for pvar, k in vrs:
+        exact = f"__CPROVER_allocate((size_t)({k}) * sizeof(*{pvar}), 0)"
+        new, changed = _rewrite_alloc(out, pvar, exact)
+        if changed and new != out:
+            logger.info("harness contract-enforce: sized %r to exactly %r (spec valid_range) "
+                        "so an off-by-one past it stays OOB", pvar, k)
+            out = new
+    return out
+
+
 def _contract_preserve_note(spec_preconditions: str) -> str:
     """Directive appended to ANY harness gen/repair prompt (claude-code OR the
     in-process/API tool loop): PRESERVE the inferred contract; do not re-derive

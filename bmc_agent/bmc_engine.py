@@ -607,6 +607,16 @@ class BMCEngine:
                             prov or "?", func.name)
                 res = agen.generate(**gen_kwargs, spec_preconditions=_precond)
             harness = getattr(res, "harness", None)
+            # Unified contract-enforcement (Layer 2): applies to BOTH provider paths.
+            # Deterministically size element buffers to the spec's valid_range extent,
+            # so an off-by-one past the contract stays a real OOB no matter what the
+            # LLM allocated. A broken rewrite is caught by the re-run's build check.
+            if harness:
+                try:
+                    from bmc_agent.agentic_harness_gen import _enforce_contract_sizing
+                    harness = _enforce_contract_sizing(harness, func, spec)
+                except Exception as _ee:
+                    logger.debug("contract-enforce skipped for '%s': %s", func.name, _ee)
             if harness and not getattr(res, "last_compile_error", None):
                 return str(self._save_harness(driver_name, func.name, harness))
             logger.info(
