@@ -3801,6 +3801,25 @@ class AMCPipeline:
             )
             return validation, realism
 
+        # Canonicalize the refiner's bounds extent BEFORE the gate/apply/re-verify:
+        # strip a body-grounded overrun widening (valid_range(X,0,P+k) ->
+        # valid_range(X,0,P)) so the refiner can't ABSORB an off-by-one by sizing
+        # the caller buffer to fit the (possibly buggy) access -- the documented
+        # contract is the bare length param. spec-gen already applies this guard to
+        # its own output; the refiner's clause previously bypassed it, masking
+        # off-by-one bugs (e.g. fill(a,n){for i<=n a[i]=0} -> valid_range(a,0,n+1)
+        # -> "verified clean"). Now the refiner is held to the same contract.
+        try:
+            from bmc_agent.spec_generator_v2 import _canonicalize_buffer_extents as _canon_ext
+            _pn = [pn for _pt, pn in func.signature.parameters if pn]
+            _canon = _canon_ext(proposal.added_clause, _pn)
+            if _canon != proposal.added_clause:
+                logger.info("spec_refiner (%s): canonicalized body-widened extent in refiner "
+                            "clause: %r -> %r", func.name, proposal.added_clause, _canon)
+                proposal.added_clause = _canon
+        except Exception as _ce:
+            logger.debug("spec_refiner (%s): extent canonicalization skipped (%s)", func.name, _ce)
+
         # Caller-grounded soundness gate. The refiner's clause is derived from
         # the function body and reliably excludes the cex — but that does NOT
         # mean it's guaranteed by the callers. Applying a non-caller-guaranteed
