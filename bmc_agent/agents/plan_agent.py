@@ -291,6 +291,18 @@ def apply_plan(config, plan: "Plan"):
     else:
         for _v in ("BMC_FRAME_HAVOC", "BMC_BUGHUNT", "BMC_TRANSITIVE_INLINE", "BMC_FAITHFUL_MAIN"):
             os.environ.pop(_v, None)
+    # Caller-side precondition checking (compositional caller-misuse detection).
+    # In compositional mode callees are STUBBED, so by default a caller passing an
+    # out-of-contract buffer/size to the stub is ASSUMED away (the soundness hole).
+    # Turn on BOUNDS-ONLY assert mode: the memory-safety clauses of the callee's
+    # precondition (valid_range -> __CPROVER_r_ok) are ASSERTED at the call site so
+    # caller misuse is CAUGHT; structural clauses stay assumed (avoids assert-mode
+    # false alarms). Real-code only -- SV-COMP untouched. scope_from_entry/frame_havoc
+    # inline the callee cone, so they don't stub-and-need this.
+    if plan.strategy == "compositional" and not os.environ.get("BMC_SVCOMP_MODE"):
+        os.environ["BMC_ASSERT_BOUNDS_ONLY"] = "1"
+    else:
+        os.environ.pop("BMC_ASSERT_BOUNDS_ONLY", None)
     only = set(plan.targets) if plan.targets else None
     logger.info("apply_plan: %s", plan.summary())
     return only
