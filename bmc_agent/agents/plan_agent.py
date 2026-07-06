@@ -195,22 +195,40 @@ class PlanAgent:
         return plan
 
     def plan_for_strategy(self, strategy: str, entry: str = "main",
-                          property_class: str = "unreach-call", unwind=None) -> "Plan":
+                          property_class: str = "unreach-call", unwind=None,
+                          template: Optional["Plan"] = None) -> "Plan":
         """Build a Plan forcing a specific strategy (used by the adaptive re-plan loop)."""
+        if template is not None:
+            property_class = getattr(template, "property_class", property_class)
         cu = (self.config.cbmc_unwind if self.config else 4)
         if strategy == "compositional":
-            return Plan(strategy="compositional", entry=None, property_class=property_class,
+            plan = Plan(strategy="compositional", entry=None, property_class=property_class,
                         unwind=cu, targets=None, frame_havoc=False, bughunt=False,
                         rationale="forced compositional (re-plan)", fallback_ladder=[])
+            return self._inherit_plan_context(plan, template)
         if strategy == "frame_havoc":
-            return Plan(strategy="frame_havoc", entry=entry, property_class=property_class,
+            plan = Plan(strategy="frame_havoc", entry=entry, property_class=property_class,
                         unwind=(unwind if unwind is not None else 1), timeout=300,
                         targets={entry}, frame_havoc=True, bughunt=True,
                         rationale=f"forced frame_havoc (re-plan; unwind={unwind if unwind is not None else 1})",
                         fallback_ladder=[])
-        return Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
+            return self._inherit_plan_context(plan, template)
+        plan = Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
                     unwind=64, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
                     rationale="forced scope_from_entry (re-plan fallback)", fallback_ladder=[])
+        return self._inherit_plan_context(plan, template)
+
+    @staticmethod
+    def _inherit_plan_context(plan: "Plan", template: Optional["Plan"]) -> "Plan":
+        """Carry non-strategy planner decisions across adaptive retries."""
+        if template is None:
+            return plan
+        plan.arch = getattr(template, "arch", plan.arch)
+        plan.timeout = getattr(template, "timeout", plan.timeout)
+        plan.agentic = getattr(template, "agentic", plan.agentic)
+        if getattr(template, "func_props", None) is not None:
+            plan.func_props = dict(template.func_props)
+        return plan
 
     def _llm_refine(self, plan: "Plan", probe: dict, parsed) -> "Plan":
         # Optional: let the LLM veto/adjust strategy given the probe features.
