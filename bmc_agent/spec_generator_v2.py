@@ -878,6 +878,44 @@ class SpecGeneratorV2:
                         func_info.name, pre.strip()[:80], _canon[:80])
         return _canon
 
+    def _union_universal_bounds(self, spec: Spec, func_info) -> Spec:
+        """Union the deterministic universal BUFFER-BOUNDS preconditions
+        (valid_range, from universal_contracts incl. the generalized Pattern 2b)
+        into the agentic precondition. Real-code only (skipped under
+        BMC_SVCOMP_MODE). Rationale: caller-side precondition checking asserts a
+        stubbed callee's bounds precondition at the call site; if the LLM omitted
+        valid_range for that callee, caller-misuse goes undetected (observed:
+        subscription-LLM missed a case API-LLM caught). These are universal,
+        caller-grounded contracts (a (T*,size_t n) buffer must hold n elements;
+        violating it is caller UB), so unioning them masks no in-contract bug."""
+        import os as _os_ub
+        if _os_ub.environ.get("BMC_SVCOMP_MODE"):
+            return spec
+        try:
+            from bmc_agent.universal_contracts import derive_universal_precondition
+            uni = derive_universal_precondition(
+                func_info, cbmc_unwind=getattr(self.config, "cbmc_unwind", 4)
+            )
+        except Exception:
+            return spec
+        if not uni or uni.strip() == "true":
+            return spec
+        vr = [c.strip() for c in uni.split("&&") if "valid_range" in c]
+        cur = (spec.precondition or "").strip()
+        added = [c for c in vr if c and c not in cur]
+        if not added:
+            return spec
+        base = [cur] if (cur and cur != "true") else []
+        new_pre = " && ".join(base + added)
+        from dataclasses import replace
+        logger.info("v2 [%s]: unioned deterministic buffer-bounds into precondition "
+                    "(agentic, real-code): + %s", func_info.name, added)
+        try:
+            return replace(spec, precondition=new_pre)
+        except Exception:
+            spec.precondition = new_pre
+            return spec
+
     def _maybe_split_precondition(self, spec: Spec, func_info, bundle) -> Spec:
         """If split spec-gen is on, override the (caller-grounded) precondition
         with the contract-only pass-2 result, keeping the pass-1 postcondition +
@@ -1071,6 +1109,10 @@ class SpecGeneratorV2:
                 # Tool-use failed / declined → fall back to base spec.
             # Split spec-gen, pass 2: override with the contract-only precondition.
             spec = self._maybe_split_precondition(spec, func_info, bundle)
+            # Agentic valid_range union (real-code only): guarantee the deterministic
+            # buffer-bounds contract is in the precondition even when the LLM omitted it,
+            # so caller-side precondition checking is reliable (not LLM-variance-dependent).
+            spec = self._union_universal_bounds(spec, func_info)
             return spec
 
         # Step 6+7: fall back to seed-only spec.

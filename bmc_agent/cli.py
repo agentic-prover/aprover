@@ -1374,7 +1374,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 print(f"[PlanAgent] frame_havoc: bounded-clean at unwind={_plan.unwind}; "
                       f"sweeping deeper -> unwind={_nu}")
                 _swept = _pa.plan_for_strategy("frame_havoc", entry=_entry0,
-                                               property_class=_plan.property_class, unwind=_nu)
+                                               property_class=_plan.property_class, unwind=_nu,
+                                               template=_plan)
                 _swept.fallback_ladder = _plan.fallback_ladder  # preserve strategy fallback after sweep
                 _plan = _swept
                 continue
@@ -1387,7 +1388,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 print(f"[PlanAgent] strategy '{_tried[-1]}' stalled "
                       f"(inconclusive={_summ.get('inconclusive')}); re-planning -> '{_next[0]}'")
                 _plan = _pa.plan_for_strategy(_next[0], entry=_entry0,
-                                              property_class=_plan.property_class)
+                                              property_class=_plan.property_class,
+                                              template=_plan)
                 continue
             break
     else:

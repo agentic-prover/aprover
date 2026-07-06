@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "bmc-agent": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bmc_mcp_server.py"],
+      "env": {
+        "BMC_AGENT_ROOT": "${CLAUDE_PLUGIN_ROOT}/../..",
+        "BMC_AGENT_CC_MODEL": "claude-sonnet-4-6"
+      }
+    }
+  }
+}

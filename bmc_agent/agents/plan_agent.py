@@ -32,9 +32,163 @@ if TYPE_CHECKING:
 
 logger = get_logger("plan_agent")
 
-# Closure-size (defined functions reachable from the entry) above which a full
-# inline is presumed intractable, so we scope+havoc instead of inlining.
-_INLINE_CLOSURE_MAX = 120
+import re as _re_cost
+
+# --- Tractability cost model (family-agnostic) ---------------------------
+# Strategy follows from an ESTIMATE of the formula CBMC would build if it
+# inlined the whole call closure from an entry, compared against ONE global
+# budget. No benchmark family is named or pattern-matched: a kernel driver
+# lands in frame_havoc because its closure is genuinely expensive (large +
+# data-dependent nested loops), not because it "looks like LDV"; a small task
+# lands in scope_from_entry because it is cheap. This replaces both the fixed
+# closure-size threshold and the LDV/SV-COMP structural shortcuts.
+#
+# Units are rough "gates" (unrolled instruction count). The budget is a single
+# calibration point -- fit once by regressing this estimate against observed
+# CBMC solve cost on a HETEROGENEOUS corpus; it is not a per-family constant.
+_INLINE_COST_BUDGET = 300_000
+_W_MEM = 2          # array index / pointer deref -> array-theory constraints
+_W_NL = 4           # nonlinear / bitwise op on non-constants -> SAT-hard
+_UNWIND_DEEP_DEFAULT = 64    # solve-time unwind when loop bounds aren't all constant
+_UNWIND_CAP = 256           # never derive an unwind above this
+
+_LOOP_KW = _re_cost.compile(r"\b(for|while|do)\b")
+_MEM_OP = _re_cost.compile(r"\[|->")
+_NL_OP = _re_cost.compile(r"<<|>>|[*/%]")
+_CONST_CMP = _re_cost.compile(r"[<>]=?\s*(\d+)\b")
+
+
+def _strip_comments_min(s: str) -> str:
+    s = _re_cost.sub(r"/\*.*?\*/", " ", s or "", flags=_re_cost.DOTALL)
+    return _re_cost.sub(r"//[^\n]*", " ", s)
+
+
+def _max_loop_depth(body: str) -> int:
+    """Max loop-nesting depth in a function body. Char scanner that SKIPS
+    parenthesised regions (so ``for(;;)`` header semicolons don't interfere)
+    and tracks which open brace-blocks are loop bodies. Family-agnostic;
+    braced loops are exact. Known approximation: brace-less loop bodies
+    (``for(..) stmt;``) are not counted -- they are single statements, and the
+    undercount biases toward inlining, which the fallback ladder recovers from.
+    """
+    stack = []          # 'L' (loop body) or 'O' (other block)
+    pending = False     # loop keyword seen, awaiting its '{' (header skipped)
+    maxd = 0
+    i, n = 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "(":                       # skip parenthesised region (headers, call args)
+            depth, i = 1, i + 1
+            while i < n and depth:
+                if body[i] == "(":
+                    depth += 1
+                elif body[i] == ")":
+                    depth -= 1
+                i += 1
+            continue
+        if ch == "{":
+            stack.append("L" if pending else "O")
+            pending = False
+            d = stack.count("L")
+            if d > maxd:
+                maxd = d
+            i += 1
+            continue
+        if ch == "}":
+            if stack:
+                stack.pop()
+            i += 1
+            continue
+        if ch == ";":
+            pending = False
+            i += 1
+            continue
+        if ch.isalpha() or ch == "_":
+            j = i
+            while j < n and (body[j].isalnum() or body[j] == "_"):
+                j += 1
+            if body[i:j] in ("for", "while", "do"):
+                pending = True
+            i = j
+            continue
+        i += 1
+    return maxd
+
+
+def _function_cost(body: str, est_unwind: int) -> float:
+    """Estimated unrolled formula size for one function body."""
+    b = _strip_comments_min(body)
+    base = b.count(";") + _W_MEM * len(_MEM_OP.findall(b)) + _W_NL * len(_NL_OP.findall(b))
+    depth = _max_loop_depth(b)
+    return base * (est_unwind ** depth if depth > 0 else 1)
+
+
+def _closure_defined(cg, defined, entry):
+    seen = set()
+    stack = [entry]
+    while stack:
+        f = stack.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        for g in (cg.get(f, ()) or ()):
+            if g not in seen:
+                stack.append(g)
+    return seen, (seen & defined)
+
+
+def _has_cycle(cg, nodes) -> bool:
+    nodes = set(nodes)
+    color = {}
+    def dfs(u):
+        color[u] = 1
+        for v in (cg.get(u, ()) or ()):
+            if v not in nodes:
+                continue
+            c = color.get(v, 0)
+            if c == 1 or (c == 0 and dfs(v)):
+                return True
+        color[u] = 2
+        return False
+    for n in list(nodes):
+        if color.get(n, 0) == 0 and dfs(n):
+            return True
+    return False
+
+
+def _derive_unwind(parsed: "ParsedCFile", entry: str) -> int:
+    """Solve-time unwind from the closure's loop bounds: fully unroll when every
+    loop has a compile-time constant bound (sound); else a deep default."""
+    bodies = getattr(parsed, "function_bodies", {}) or {}
+    cg = parsed.call_graph or {}
+    defined = set(bodies) or set(getattr(parsed, "functions", {}) or {})
+    _, clos = _closure_defined(cg, defined, entry)
+    max_const, all_const, any_loop = 0, True, False
+    for fn in clos:
+        b = _strip_comments_min(bodies.get(fn, ""))
+        for lm in _LOOP_KW.finditer(b):
+            any_loop = True
+            hdr = b[lm.end(): lm.end() + 80]
+            cm = _CONST_CMP.search(hdr)
+            if cm:
+                max_const = max(max_const, int(cm.group(1)))
+            else:
+                all_const = False
+    if any_loop and all_const:
+        return min(max_const + 1, _UNWIND_CAP)
+    return _UNWIND_DEEP_DEFAULT
+
+
+def estimate_inline_cost(parsed: "ParsedCFile", entry: str, est_unwind: int) -> float:
+    """Estimate CBMC formula size for inlining the whole closure from `entry`."""
+    bodies = getattr(parsed, "function_bodies", {}) or {}
+    cg = parsed.call_graph or {}
+    defined = set(bodies) or set(getattr(parsed, "functions", {}) or {})
+    seen, clos = _closure_defined(cg, defined, entry)
+    total = sum(_function_cost(bodies.get(fn, ""), est_unwind) for fn in clos)
+    if _has_cycle(cg, clos):     # recursion -> bounded re-entry inflates cost
+        total *= est_unwind
+    return total
 
 
 @dataclass
@@ -108,22 +262,11 @@ def structural_probe(parsed: "ParsedCFile", entry: str = "main") -> dict:
         called |= (cg.get(f, set()) or set())
     roots = [f for f in defined if f not in called]
 
-    names = defined
-    ldv_like = sum(1 for n in names if n.startswith("ldv_"))
-    # Kernel-driver signal: an LDV verification entry (ldv_main*_sequence_*),
-    # module init/exit hooks, or many ldv_* shims. NOT __VERIFIER_* (both
-    # SV-COMP tiers have those, so it is not a discriminator).
-    driver_sig = (any(("ldv_main" in n and "sequence" in n) for n in names)
-                  or "module_init" in names or "module_exit" in names)
-    kernelish = (ldv_like > 3) or driver_sig
-
     return {
         "n_defined": len(defined),
         "closure_size": len(closure_defined),
         "has_entry": entry in defined,
         "n_roots": len(roots),
-        "kernelish": kernelish,
-        "ldv_like": ldv_like,
     }
 
 
@@ -137,6 +280,26 @@ class PlanAgent:
                      use_llm: bool = False) -> Plan:
         p = structural_probe(parsed, entry)
         logger.info("plan probe: %s", p)
+        # Re-anchor: if the requested entry (e.g. 'main') is absent but the file has a
+        # defined "caller-root" (a root function that calls another defined function),
+        # verify that root with its callees INLINED. That exercises call-site checks
+        # (caller-misuse: a bad buffer/len passed into a callee) which per-function
+        # isolation with stubbed callees silently misses. Pick the smallest such root.
+        if not p["has_entry"]:
+            _cg = parsed.call_graph or {}
+            _defd = set(getattr(parsed, "function_bodies", {}) or {}) or set(parsed.functions or {})
+            _called = set()
+            for _f in _defd:
+                _called |= (_cg.get(_f, set()) or set())
+            _caller_roots = [_f for _f in _defd
+                             if _f not in _called and (_defd & (_cg.get(_f, set()) or set()))]
+            if _caller_roots:
+                _new = min(_caller_roots, key=lambda r: structural_probe(parsed, r)["closure_size"])
+                _p2 = structural_probe(parsed, _new)
+                logger.info("plan: requested entry %r absent; re-anchored on caller-root %r "
+                            "(closure=%d defined) to exercise call-site/caller-misuse checks",
+                            entry, _new, _p2["closure_size"])
+                entry, p = _new, _p2
         import os as _os
         _force = _os.environ.get("BMC_PLAN_FORCE_STRATEGY")
         if _force:
@@ -159,23 +322,31 @@ class PlanAgent:
                            f"scope_from_entry would verify 0 fns here (vacuous)."),
                 fallback_ladder=["scope_from_entry"],
             )
-        elif p["kernelish"] or p["closure_size"] > _INLINE_CLOSURE_MAX:
-            plan = Plan(
-                strategy="frame_havoc", entry=entry, property_class=property_class,
-                unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
-                rationale=(f"single entry '{entry}' but closure={p['closure_size']} defined "
-                           f"fns (kernelish={p['kernelish']}) too large to inline -> "
-                           f"inline property path, havoc the rest"),
-                fallback_ladder=["scope_from_entry"],
-            )
         else:
-            plan = Plan(
-                strategy="scope_from_entry", entry=entry, property_class=property_class,
-                unwind=64, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
-                rationale=(f"single entry '{entry}', closure={p['closure_size']} defined fns "
-                           f"small enough to inline the full call closure (~monolithic)"),
-                fallback_ladder=["frame_havoc"],
-            )
+            _uw = _derive_unwind(parsed, entry)
+            _cost = estimate_inline_cost(parsed, entry, _uw)
+            logger.info("plan cost model: entry=%r closure=%d est_unwind=%d "
+                        "inline_cost=%.0f budget=%d", entry, p["closure_size"],
+                        _uw, _cost, _INLINE_COST_BUDGET)
+            if _cost > _INLINE_COST_BUDGET:
+                plan = Plan(
+                    strategy="frame_havoc", entry=entry, property_class=property_class,
+                    unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
+                    rationale=(f"single entry '{entry}': estimated inline cost {_cost:.0f} > "
+                               f"budget {_INLINE_COST_BUDGET} (closure={p['closure_size']} fns, "
+                               f"unwind~{_uw}) -> too costly to inline; inline property path, "
+                               f"havoc the rest"),
+                    fallback_ladder=["scope_from_entry"],
+                )
+            else:
+                plan = Plan(
+                    strategy="scope_from_entry", entry=entry, property_class=property_class,
+                    unwind=_uw, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
+                    rationale=(f"single entry '{entry}': estimated inline cost {_cost:.0f} <= "
+                               f"budget {_INLINE_COST_BUDGET} (closure={p['closure_size']} fns, "
+                               f"unwind~{_uw}) -> inline the full call closure"),
+                    fallback_ladder=["frame_havoc"],
+                )
 
         if plan.property_class in ("memsafety", "all"):
             try:
@@ -195,22 +366,40 @@ class PlanAgent:
         return plan
 
     def plan_for_strategy(self, strategy: str, entry: str = "main",
-                          property_class: str = "unreach-call", unwind=None) -> "Plan":
+                          property_class: str = "unreach-call", unwind=None,
+                          template: Optional["Plan"] = None) -> "Plan":
         """Build a Plan forcing a specific strategy (used by the adaptive re-plan loop)."""
+        if template is not None:
+            property_class = getattr(template, "property_class", property_class)
         cu = (self.config.cbmc_unwind if self.config else 4)
         if strategy == "compositional":
-            return Plan(strategy="compositional", entry=None, property_class=property_class,
+            plan = Plan(strategy="compositional", entry=None, property_class=property_class,
                         unwind=cu, targets=None, frame_havoc=False, bughunt=False,
                         rationale="forced compositional (re-plan)", fallback_ladder=[])
+            return self._inherit_plan_context(plan, template)
         if strategy == "frame_havoc":
-            return Plan(strategy="frame_havoc", entry=entry, property_class=property_class,
+            plan = Plan(strategy="frame_havoc", entry=entry, property_class=property_class,
                         unwind=(unwind if unwind is not None else 1), timeout=300,
                         targets={entry}, frame_havoc=True, bughunt=True,
                         rationale=f"forced frame_havoc (re-plan; unwind={unwind if unwind is not None else 1})",
                         fallback_ladder=[])
-        return Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
+            return self._inherit_plan_context(plan, template)
+        plan = Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
                     unwind=64, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
                     rationale="forced scope_from_entry (re-plan fallback)", fallback_ladder=[])
+        return self._inherit_plan_context(plan, template)
+
+    @staticmethod
+    def _inherit_plan_context(plan: "Plan", template: Optional["Plan"]) -> "Plan":
+        """Carry non-strategy planner decisions across adaptive retries."""
+        if template is None:
+            return plan
+        plan.arch = getattr(template, "arch", plan.arch)
+        plan.timeout = getattr(template, "timeout", plan.timeout)
+        plan.agentic = getattr(template, "agentic", plan.agentic)
+        if getattr(template, "func_props", None) is not None:
+            plan.func_props = dict(template.func_props)
+        return plan
 
     def _llm_refine(self, plan: "Plan", probe: dict, parsed) -> "Plan":
         # Optional: let the LLM veto/adjust strategy given the probe features.
@@ -273,6 +462,18 @@ def apply_plan(config, plan: "Plan"):
     else:
         for _v in ("BMC_FRAME_HAVOC", "BMC_BUGHUNT", "BMC_TRANSITIVE_INLINE", "BMC_FAITHFUL_MAIN"):
             os.environ.pop(_v, None)
+    # Caller-side precondition checking (compositional caller-misuse detection).
+    # In compositional mode callees are STUBBED, so by default a caller passing an
+    # out-of-contract buffer/size to the stub is ASSUMED away (the soundness hole).
+    # Turn on BOUNDS-ONLY assert mode: the memory-safety clauses of the callee's
+    # precondition (valid_range -> __CPROVER_r_ok) are ASSERTED at the call site so
+    # caller misuse is CAUGHT; structural clauses stay assumed (avoids assert-mode
+    # false alarms). Real-code only -- SV-COMP untouched. scope_from_entry/frame_havoc
+    # inline the callee cone, so they don't stub-and-need this.
+    if plan.strategy == "compositional" and not os.environ.get("BMC_SVCOMP_MODE"):
+        os.environ["BMC_ASSERT_BOUNDS_ONLY"] = "1"
+    else:
+        os.environ.pop("BMC_ASSERT_BOUNDS_ONLY", None)
     only = set(plan.targets) if plan.targets else None
     logger.info("apply_plan: %s", plan.summary())
     return only

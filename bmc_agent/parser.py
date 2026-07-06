@@ -951,17 +951,17 @@ def _extract_param_ts(param_node, src_bytes: bytes) -> tuple[str, str]:
         an element, not the array. ch341/pl2303 sweep regression.)
     """
     full_text = _slice_bytes(src_bytes, param_node).strip()
-    parts = full_text.rsplit(None, 1)
-    # Handle ``void*param`` / ``int**pp`` / etc. — no whitespace between
-    # the pointer stars and the identifier. ``rsplit(None, 1)`` then
-    # returns a single element and the name is lost. Detect and split.
-    if len(parts) == 1:
-        m = re.match(
-            r"^(.+?)\s*(\*+)([A-Za-z_]\w*)\s*$",
-            full_text,
-        )
-        if m:
-            parts = [m.group(1).strip() + m.group(2), m.group(3)]
+    # A ``*`` glued to the identifier (``int*a``, ``const int*a``, ``T **pp``,
+    # ``void*p``) must be split at the pointer, not at whitespace. ``rsplit``
+    # splits on the last space and leaves the star stuck to the name half
+    # (``const int*a`` -> [``const``, ``int*a``]), losing the pointer type and
+    # the real name. Match the pointer-glued shape FIRST; fall back to the
+    # whitespace split only when there is no trailing ``*ident``.
+    m = re.match(r"^(.+?)\s*(\*+)\s*([A-Za-z_]\w*)\s*$", full_text)
+    if m:
+        parts = [m.group(1).strip() + m.group(2), m.group(3)]
+    else:
+        parts = full_text.rsplit(None, 1)
     if len(parts) == 2:
         last = parts[1]
         # Strip leading pointer stars from the name; they belong on the
@@ -1146,9 +1146,19 @@ def _parse_params_regex(raw: str) -> list[tuple[str, str]]:
         tokens = part.split()
         if len(tokens) >= 2:
             last = tokens[-1]
-            name = last.lstrip("*")
-            stars = "*" * (len(last) - len(name))
-            typ = " ".join(tokens[:-1]) + stars
+            # A '*' may be glued to the *name* (e.g. 'int*a'): the trailing
+            # identifier is the name, and the '*' (plus everything before it)
+            # is part of the type. lstrip('*') only handled a leading star
+            # ('*a'), so 'int*a' was mis-split as type='...', name='int*a'.
+            _idx = last.rfind("*")
+            if (_idx != -1 and not last.startswith("*")
+                    and _idx < len(last) - 1 and last[_idx + 1:].isidentifier()):
+                name = last[_idx + 1:]
+                typ = (" ".join(tokens[:-1]) + " " + last[:_idx + 1]).strip()
+            else:
+                name = last.lstrip("*")
+                stars = "*" * (len(last) - len(name))
+                typ = " ".join(tokens[:-1]) + stars
             params.append((typ, name))
         elif tokens:
             params.append((tokens[0], ""))

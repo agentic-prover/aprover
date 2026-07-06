@@ -1,0 +1,6 @@
+{
+  "name": "bmc-agent",
+  "version": "0.1.0",
+  "description": "CBMC-backed bounded-model-checking verification for C, usable inside a Claude Code session. Verify functions/files for memory-safety (and overflow/reachability) bugs, with counterexamples and advisory triage.",
+  "author": { "name": "agentic-prover" }
+}
