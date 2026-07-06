@@ -276,19 +276,26 @@ def derive_universal_precondition(
                    "nbytes", "bytes", "buflen", "bufsize", "datalen", "slen",
                    "width", "height", "nelem", "nelems", "elems"}
     _seq = [(pt, pn) for pt, pn in sig.parameters if pn]
-    for _i in range(len(_seq) - 1):
-        _pt, _pn = _seq[_i]
-        _lt, _ln = _seq[_i + 1]
-        if not _is_pointer_type(_pt) or _pt.count("*") != 1:
-            continue
-        _base = re.sub(r"\bconst\b", "", _pt).replace("*", "").strip()
-        if _base in ("char", "wchar_t"):        # string convention -> NUL path
-            continue
+    # Associate each size with the RUN of consecutive single-indirection pointers
+    # immediately preceding it (cp(int*d,const int*s,size_t n) -> BOTH d and s
+    # bounded by n), not just the adjacent one -- otherwise an off-by-one on the
+    # non-adjacent buffer (typically the write destination) is left unconstrained.
+    for _j in range(1, len(_seq)):
+        _lt, _ln = _seq[_j]
         if _ln.lower() not in _SIZE_NAMES or not _is_integer_type(_lt):
             continue
-        _vr = f"valid_range({_pn}, 0, {_ln})"
-        if _vr not in clauses:
-            clauses.append(_vr)
+        _k = _j - 1
+        while _k >= 0:
+            _pt, _pn = _seq[_k]
+            if not _is_pointer_type(_pt) or _pt.count("*") != 1:
+                break
+            _base = re.sub(r"\bconst\b", "", _pt).replace("*", "").strip()
+            if _base in ("char", "wchar_t"):     # string convention -> NUL path; ends the run
+                break
+            _vr = f"valid_range({_pn}, 0, {_ln})"
+            if _vr not in clauses:
+                clauses.append(_vr)
+            _k -= 1
 
     # Pattern 3: ops/vtable non-null. Requires struct_definitions to
     # know the param's struct body. Multi-level: the ops field itself
