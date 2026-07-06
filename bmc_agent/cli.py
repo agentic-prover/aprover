@@ -1319,8 +1319,23 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         from bmc_agent.agents.plan_agent import PlanAgent as _PA, apply_plan as _ap
         _entry0 = getattr(args, "entry", None) or "main"
         _pa = _PA(config)
-        _plan = _pa.initial_plan(_pcf(args.source), entry=_entry0,
-                    property_class=(getattr(args, "plan_property", None) or "unreach-call"))
+        # PlanAgent chooses the property class from the verification GOAL (real code);
+        # --plan-property overrides everything; --svcomp forces the benchmark property.
+        _goal_map = {"memsafety": "memsafety", "overflow": "no-overflow",
+                     "reach": "unreach-call", "all": "all"}
+        _goal = getattr(args, "goal", None) or "memsafety"
+        _plan_prop = (getattr(args, "plan_property", None)
+                      or ("unreach-call" if getattr(args, "svcomp", False)
+                          else _goal_map.get(_goal, "memsafety")))
+        # Explicit scope log so nothing is SILENTLY out of scope.
+        _scope = {"memsafety": "bounds+pointer (integer-overflow NOT checked -> use --goal overflow/all)",
+                  "no-overflow": "integer overflow/conversion/shift (memory-safety NOT checked -> use --goal memsafety/all)",
+                  "unreach": "reachability of reach_error/asserts",
+                  "all": "ALL built-in checks (bounds+pointer+overflow+conversion+div); higher FP rate"}
+        _tok = {"unreach-call":"unreach","memsafety":"memsafety","no-overflow":"no-overflow","all":"all"}.get(_plan_prop,_plan_prop)
+        print(f"Goal: {_goal if not getattr(args,'svcomp',False) else 'svcomp'} -> property class '{_plan_prop}' "
+              f"| CBMC scope: {_scope.get(_tok,_plan_prop)} | spec/postcondition asserts: ALWAYS checked")
+        _plan = _pa.initial_plan(_pcf(args.source), entry=_entry0, property_class=_plan_prop)
         _tried = []
         bug_reports = []
         while True:
@@ -2520,6 +2535,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan",
         action="store_true",
         help="Let the PlanAgent choose the analysis strategy (scope_from_entry / frame_havoc / compositional), entry, and unwind/havoc, instead of hand-setting --scope-from-entry / BMC_FRAME_HAVOC / SVCOMP_UNWIND.",
+    )
+    ver.add_argument(
+        "--goal",
+        choices=["memsafety", "overflow", "reach", "all"],
+        default="memsafety",
+        help="What to verify FOR on real code (PlanAgent maps it to the CBMC property class): "
+             "memsafety=bounds+pointer (default; low FP); overflow=integer overflow/conversion; "
+             "reach=reachability of reach_error/asserts; all=every built-in check (max coverage, "
+             "more FPs -> relies on triage/refine). Spec/postcondition asserts are ALWAYS checked "
+             "regardless. Ignored under --svcomp (benchmark property wins).",
     )
     ver.add_argument(
         "--svcomp",

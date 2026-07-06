@@ -51,12 +51,37 @@ class Plan:
     agentic: bool = True
     rationale: str = ""
     fallback_ladder: list = field(default_factory=list)
+    func_props: Optional[dict] = None   # per-function property class (code-shape inference)
 
     def summary(self) -> str:
         t = "ALL" if self.targets is None else ",".join(sorted(self.targets))
         return (f"strategy={self.strategy} entry={self.entry} prop={self.property_class} "
                 f"unwind={self.unwind} havoc={self.frame_havoc} targets={t} "
                 f"ladder={self.fallback_ladder}")
+
+
+# Code shapes that make integer-overflow checking worthwhile (size/pointer arithmetic that
+# can overflow -> undersized alloc / bad index). Functions matching this get property class
+# "all" (memsafety + overflow); everything else stays "memsafety" (bounds+pointer only, low FP).
+import re as _re_arith
+_ARITH_SHAPE = _re_arith.compile(
+    r"<<|>>"
+    r"|\b(?:k?z?alloc|k?malloc\w*|kmalloc_array\w*|calloc|realloc\w*|vmalloc\w*|reallocarray)\s*\([^;{}]*\*"
+    r"|\b(?:n|len|size|count|num|nmemb|width|height|stride|cap|capacity|nbytes|bytes|sz)\b\s*\*\s*[\w(]"
+    r"|[\w)]\s*\*\s*\b(?:n|len|size|count|num|nmemb|width|height|stride|cap|capacity|nbytes|bytes|sz)\b"
+)
+
+def infer_function_properties(parsed: "ParsedCFile", base_class: str = "memsafety") -> dict:
+    """Per-function property-class inference (PlanAgent, real code only). memsafety everywhere;
+    add overflow (-> class "all") on functions doing size/pointer arithmetic, where integer
+    overflow can feed a memory-safety bug. Spec/postcondition asserts ride along regardless."""
+    bodies = getattr(parsed, "function_bodies", {}) or {}
+    names = list(bodies.keys()) or list(getattr(parsed, "functions", {}) or {})
+    m = {}
+    for fn in names:
+        body = bodies.get(fn, "") or ""
+        m[fn] = "all" if _ARITH_SHAPE.search(body) else base_class
+    return m
 
 
 def structural_probe(parsed: "ParsedCFile", entry: str = "main") -> dict:
@@ -108,7 +133,7 @@ class PlanAgent:
         self.llm = llm
 
     def initial_plan(self, parsed: "ParsedCFile", entry: str = "main",
-                     property_class: str = "unreach-call",
+                     property_class: str = "memsafety",
                      use_llm: bool = False) -> Plan:
         p = structural_probe(parsed, entry)
         logger.info("plan probe: %s", p)
@@ -152,6 +177,16 @@ class PlanAgent:
                 fallback_ladder=["frame_havoc"],
             )
 
+        if plan.property_class in ("memsafety", "all"):
+            try:
+                plan.func_props = infer_function_properties(parsed, base_class="memsafety")
+                _n_ovf = sum(1 for v in plan.func_props.values() if v == "all")
+                logger.info("[PlanAgent] per-function property inference: %d/%d functions get "
+                            "overflow (size/ptr arithmetic); rest memsafety-only",
+                            _n_ovf, len(plan.func_props))
+            except Exception as _e:
+                logger.warning("[PlanAgent] func-property inference failed (%s); using global %s",
+                               _e, plan.property_class)
         if use_llm and self.llm is not None:
             try:
                 plan = self._llm_refine(plan, p, parsed)
@@ -196,9 +231,15 @@ def apply_plan(config, plan: "Plan"):
     # task's real property is verified. The .prp *path* form does NOT trigger
     # this override, which caused off-property pointer_dereference false alarms.
     _prop_tok = {"unreach-call": "unreach", "unreach": "unreach",
-                 "memsafety": "memsafety", "no-overflow": "no-overflow"}.get(
+                 "memsafety": "memsafety", "no-overflow": "no-overflow",
+                 "all": "all"}.get(
                      plan.property_class, plan.property_class)
     os.environ["SVCOMP_PROP"] = _prop_tok
+    import json as _json_fp
+    if getattr(plan, "func_props", None):
+        os.environ["BMC_FUNC_PROP_MAP"] = _json_fp.dumps(plan.func_props)
+    else:
+        os.environ.pop("BMC_FUNC_PROP_MAP", None)
     # Data model: SV-COMP tasks are LP64; cbmc.py DEFAULTS to ILP32 (--32) when
     # SVCOMP_ARCH is unset, which makes 64-bit overflow checks wrap at 32 bits and
     # emit spurious reach_error cexs on safe tasks. Propagate the plan's data model.

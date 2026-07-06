@@ -277,6 +277,16 @@ class BMCEngine:
             # --- SV-COMP deterministic per-property check override (env SVCOMP_PROP) ---
             import os as _os
             _svp = _os.environ.get("SVCOMP_PROP", "")
+            # Per-function property class (PlanAgent code-shape inference) overrides the global
+            # token: memsafety everywhere, "all" (adds overflow) on functions with size/ptr
+            # arithmetic. Read-only map -> thread-safe under parallel check_all.
+            _fpm = _os.environ.get("BMC_FUNC_PROP_MAP")
+            if _fpm:
+                try:
+                    import json as _json_fpm
+                    _svp = _json_fpm.loads(_fpm).get(getattr(func, "name", ""), _svp) or _svp
+                except Exception:
+                    pass
             if _svp == "no-overflow":
                 signed_overflow_check = True
                 unsigned_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
@@ -288,6 +298,12 @@ class BMCEngine:
             elif _svp == "unreach":
                 pointer_check = bounds_check = div_by_zero_check = False
                 unsigned_overflow_check = signed_overflow_check = conversion_check = pointer_overflow_check = undefined_shift_check = False
+            elif _svp == "all":
+                # goal=all: every built-in memory-safety AND arithmetic check ON (max coverage;
+                # accepts the higher FP rate -> triage/refinement sort them).
+                pointer_check = bounds_check = div_by_zero_check = True
+                unsigned_overflow_check = signed_overflow_check = True
+                conversion_check = pointer_overflow_check = undefined_shift_check = True
             # Per-function unwind override (None = use global default).
             unwind_for_this_run     = getattr(flag_selection, "unwind_override", None) or self.config.cbmc_unwind
             # SV-COMP: whole-program harnesses bound their own inputs but call
