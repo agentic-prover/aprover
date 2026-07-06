@@ -46,7 +46,14 @@ import re as _re_cost
 # Units are rough "gates" (unrolled instruction count). The budget is a single
 # calibration point -- fit once by regressing this estimate against observed
 # CBMC solve cost on a HETEROGENEOUS corpus; it is not a per-family constant.
-_INLINE_COST_BUDGET = 300_000
+# Calibrated 2026-07-06 against 10 real vibeos closures run through CBMC
+# (--bounds-check --pointer-check, unwind 8): ALL solved in <=32s at estimates up
+# to ~693k, so 300k needlessly demoted tractable closures to frame_havoc. Raised to
+# 3M (inline what CBMC handles) with the informed fallback (record_scope_blowup /
+# _effective_budget) as the real safety net -- the a-priori estimate is a weak
+# predictor (it over-counted a wide-but-shallow closure ~250x), so the budget
+# self-lowers below the smallest OBSERVED scope blowup rather than trusting the guess.
+_INLINE_COST_BUDGET = 3_000_000
 _W_MEM = 2          # array index / pointer deref -> array-theory constraints
 _W_NL = 4           # nonlinear / bitwise op on non-constants -> SAT-hard
 _UNWIND_DEEP_DEFAULT = 64    # solve-time unwind when loop bounds aren't all constant
@@ -191,6 +198,51 @@ def estimate_inline_cost(parsed: "ParsedCFile", entry: str, est_unwind: int) -> 
     return total
 
 
+# --- Informed fallback: self-calibrate the budget from OBSERVED scope blowups ----
+# When scope_from_entry is chosen (est <= budget) but the inline verification then
+# exhausts resources (timeout/OOM), that is a labelled mispredict: the estimate was
+# too low. We append the label and, on future plans, drop the effective budget just
+# below the smallest observed blowup so similar closures go straight to frame_havoc.
+# This closes the loop the manual CBMC calibration opened -- the planner learns the
+# real intractability boundary from runs instead of trusting the a-priori guess.
+import os as _os_cal
+import json as _json_cal
+
+def _calib_path() -> str:
+    return _os_cal.environ.get(
+        "BMC_COST_CALIB_LOG", _os_cal.path.expanduser("~/.bmc_cost_calibration.jsonl"))
+
+def record_scope_blowup(entry: str, estimate: float, unwind: int) -> None:
+    """Record that scope_from_entry(entry) exhausted resources at this estimate."""
+    try:
+        with open(_calib_path(), "a") as _fh:
+            _fh.write(_json_cal.dumps({"entry": entry, "estimate": float(estimate),
+                                       "unwind": int(unwind), "outcome": "scope_blowup"}) + "\n")
+    except Exception as _e:
+        logger.debug("record_scope_blowup skipped (%s)", _e)
+
+def _effective_inline_budget() -> float:
+    """Budget lowered to just under the smallest OBSERVED scope blowup (or the static
+    budget if none). A single real resource-exhaustion is trusted over the estimate."""
+    b = float(_INLINE_COST_BUDGET)
+    try:
+        p = _calib_path()
+        if _os_cal.path.exists(p):
+            blown = []
+            for _ln in open(p):
+                try:
+                    _r = _json_cal.loads(_ln)
+                    if _r.get("outcome") == "scope_blowup":
+                        blown.append(float(_r["estimate"]))
+                except Exception:
+                    continue
+            if blown:
+                b = min(b, min(blown) * 0.9)
+    except Exception as _e:
+        logger.debug("_effective_inline_budget fell back to static (%s)", _e)
+    return b
+
+
 @dataclass
 class Plan:
     strategy: str                       # scope_from_entry|frame_havoc|compositional|standalone
@@ -206,6 +258,7 @@ class Plan:
     rationale: str = ""
     fallback_ladder: list = field(default_factory=list)
     func_props: Optional[dict] = None   # per-function property class (code-shape inference)
+    est_cost: float = 0.0               # cost-model estimate for the chosen scope (0 = N/A)
 
     def summary(self) -> str:
         t = "ALL" if self.targets is None else ",".join(sorted(self.targets))
@@ -285,7 +338,8 @@ class PlanAgent:
         # verify that root with its callees INLINED. That exercises call-site checks
         # (caller-misuse: a bad buffer/len passed into a callee) which per-function
         # isolation with stubbed callees silently misses. Pick the smallest such root.
-        if not p["has_entry"]:
+        import os as _os_ra
+        if not p["has_entry"] and not _os_ra.environ.get("BMC_ABLATE_REANCHOR"):
             _cg = parsed.call_graph or {}
             _defd = set(getattr(parsed, "function_bodies", {}) or {}) or set(parsed.functions or {})
             _called = set()
@@ -325,27 +379,31 @@ class PlanAgent:
         else:
             _uw = _derive_unwind(parsed, entry)
             _cost = estimate_inline_cost(parsed, entry, _uw)
+            _budget = _effective_inline_budget()
+            if _budget < _INLINE_COST_BUDGET:
+                logger.info("plan cost model: effective budget lowered to %.0f (from %d) "
+                            "by observed scope blowups", _budget, _INLINE_COST_BUDGET)
             logger.info("plan cost model: entry=%r closure=%d est_unwind=%d "
-                        "inline_cost=%.0f budget=%d", entry, p["closure_size"],
-                        _uw, _cost, _INLINE_COST_BUDGET)
-            if _cost > _INLINE_COST_BUDGET:
+                        "inline_cost=%.0f budget=%.0f", entry, p["closure_size"],
+                        _uw, _cost, _budget)
+            if _cost > _budget:
                 plan = Plan(
                     strategy="frame_havoc", entry=entry, property_class=property_class,
                     unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
                     rationale=(f"single entry '{entry}': estimated inline cost {_cost:.0f} > "
-                               f"budget {_INLINE_COST_BUDGET} (closure={p['closure_size']} fns, "
+                               f"budget {_budget:.0f} (closure={p['closure_size']} fns, "
                                f"unwind~{_uw}) -> too costly to inline; inline property path, "
                                f"havoc the rest"),
-                    fallback_ladder=["scope_from_entry"],
+                    fallback_ladder=["scope_from_entry"], est_cost=_cost,
                 )
             else:
                 plan = Plan(
                     strategy="scope_from_entry", entry=entry, property_class=property_class,
                     unwind=_uw, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
                     rationale=(f"single entry '{entry}': estimated inline cost {_cost:.0f} <= "
-                               f"budget {_INLINE_COST_BUDGET} (closure={p['closure_size']} fns, "
+                               f"budget {_budget:.0f} (closure={p['closure_size']} fns, "
                                f"unwind~{_uw}) -> inline the full call closure"),
-                    fallback_ladder=["frame_havoc"],
+                    fallback_ladder=["frame_havoc"], est_cost=_cost,
                 )
 
         if plan.property_class in ("memsafety", "all"):

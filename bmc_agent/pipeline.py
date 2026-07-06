@@ -1545,11 +1545,23 @@ class AMCPipeline:
                 ", ".join(sorted(cross_file_recheck_needed)[:20]),
             )
         try:
+            def _res_exhausted(v):
+                txt = str(getattr(v, "error", "") or "")
+                cr = getattr(v, "cbmc_result", None)
+                if cr is not None:
+                    txt += str(getattr(cr, "error", "") or "") + str(getattr(cr, "raw_output", "") or "")[:4000]
+                low = txt.lower()
+                return ("timed out" in low or "timeout" in low or "time-budget" in low
+                        or "out of memory" in low or "bad_alloc" in low)
             self.last_verdict_summary = {
                 "targets": len(verdicts),
                 "verified_clean": sum(1 for v in verdicts.values() if getattr(v, "verified", False)),
                 "bug_candidates": sum(1 for v in verdicts.values() if (not getattr(v, "verified", False)) and getattr(v, "counterexamples", None)),
                 "inconclusive": sum(1 for v in verdicts.values() if (not getattr(v, "verified", False)) and not getattr(v, "counterexamples", None)),
+                # cost-blowup signal for the informed planner fallback (subset of inconclusive)
+                "resource_exhausted": sum(1 for v in verdicts.values()
+                    if (not getattr(v, "verified", False)) and not getattr(v, "counterexamples", None)
+                    and _res_exhausted(v)),
             }
         except Exception:
             self.last_verdict_summary = {}

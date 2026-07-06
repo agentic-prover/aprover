@@ -3557,18 +3557,29 @@ def _detect_elem_buf_len_pairs(parameters):
     (handled elsewhere)."""
     params = [(pt.strip(), pn) for pt, pn in parameters if pn]
     out = []
-    for i in range(len(params) - 1):
-        ptype, pname = params[i]
-        ltype, lname = params[i + 1]
-        st = _strip_restrict_quals(ptype)
-        if st.count("*") != 1:
-            continue
-        base = re.sub(r"\bconst\b", "", st.rstrip("*")).strip()
-        if base not in _SCALAR_ELEM_TYPES:
-            continue
+    # Associate each size-named integer with the RUN of consecutive scalar-element
+    # pointers IMMEDIATELY preceding it -- the copy/transform idiom
+    # cp(int*d,const int*s,size_t n) binds BOTH d and s to n, not just the adjacent
+    # s. Walking the run (vs the immediate neighbour only) sizes every shared
+    # buffer, so an off-by-one WRITE to the destination is caught, not just the read.
+    for j in range(1, len(params)):
+        ltype, lname = params[j]
         if "*" in ltype or lname.lower() not in _BUF_LEN_SIZE_NAMES:
             continue
-        out.append((pname, st, base, lname, ltype.strip()))
+        k = j - 1
+        while k >= 0:
+            ptype, pname = params[k]
+            st = _strip_restrict_quals(ptype)
+            if st.count("*") != 1:
+                break
+            base = re.sub(r"\bconst\b", "", st.rstrip("*")).strip()
+            if base not in _SCALAR_ELEM_TYPES:
+                break
+            out.append((pname, st, base, lname, ltype.strip()))
+            import os as _os_abl
+            if _os_abl.environ.get("BMC_ABLATE_ELEM_PAIRING_RUN"):
+                break   # ablation: adjacent pointer only (pre run-walk behavior)
+            k -= 1
     return out
 
 
@@ -3708,20 +3719,25 @@ def _generate_nd_decls(
     # in-bounds element reads are SAFE (kills the unconstrained-buffer FP, e.g.
     # sum(int*a,size_t n)) while an off-by-one past n stays a real OOB. Uses
     # __CPROVER_allocate (exact object size; immune to a module malloc stub).
+    _len_declared: set = set()
     for buf_name, buf_type, elem_base, len_name, len_type in _detect_elem_buf_len_pairs(
         func.signature.parameters
     ):
-        if buf_name in paired_emitted or len_name in paired_emitted:
+        if buf_name in paired_emitted:
             continue
         _bb = f"_{buf_name}_bytes"
         lines.append(
             f"    /* (elem-buf,len) pair: {buf_name} sized to {len_name}*sizeof({elem_base}) "
             f"(element reads in-bounds; off-by-one past {len_name} still caught) */"
         )
-        lines.append(f"    {len_type} {len_name};")
-        lines.append(
-            f"    __CPROVER_assume((unsigned long long)({len_name}) <= {_bl_max}ull);"
-        )
+        # Declare + bound the length ONCE, even when several buffers share it
+        # (cp(dst,src,n): both sized to n, but `n` is declared a single time).
+        if len_name not in paired_emitted and len_name not in _len_declared:
+            lines.append(f"    {len_type} {len_name};")
+            lines.append(
+                f"    __CPROVER_assume((unsigned long long)({len_name}) <= {_bl_max}ull);"
+            )
+            _len_declared.add(len_name)
         lines.append(f"    size_t {_bb} = (size_t)({len_name}) * sizeof({elem_base});")
         lines.append(
             f"    {buf_type} {buf_name} = ({buf_type})__CPROVER_allocate({_bb} ? {_bb} : 1, 0);"

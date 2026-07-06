@@ -518,6 +518,77 @@ class HarnessResult:
         }
 
 
+_ALLOC_FUNCS = ("__CPROVER_allocate", "malloc", "calloc", "kmalloc_array_noprof",
+                "kmalloc_noprof", "kmalloc", "kzalloc", "kcalloc", "vmalloc_noprof",
+                "vmalloc", "realloc")
+
+
+def _rewrite_alloc(src: str, pvar: str, exact: str) -> "tuple[str, bool]":
+    """Replace the allocation call assigned to *pvar* with *exact* (balanced-paren,
+    cast-preserving). Best-effort: returns (src, False) if no allocation is found."""
+    import re as _re
+    m = _re.search(rf"\b{_re.escape(pvar)}\s*=(?!=)\s*(\([^;={{}}]*?\)\s*)?", src)
+    if not m:
+        return src, False
+    i = m.end()
+    fm = _re.match(r"(" + "|".join(_re.escape(x) for x in _ALLOC_FUNCS) + r")\s*\(", src[i:])
+    if not fm:
+        return src, False
+    j = i + fm.end()          # just past the opening '('
+    depth = 1
+    while j < len(src) and depth:
+        if src[j] == "(":
+            depth += 1
+        elif src[j] == ")":
+            depth -= 1
+        j += 1
+    if depth != 0:
+        return src, False
+    return src[:i] + exact + src[j:], True
+
+
+def _enforce_contract_sizing(harness: str, func, spec) -> str:
+    """Shared post-gen contract enforcement (unifies both repair paths): for each
+    ``valid_range(p, 0, k)`` in the spec, force p's harness allocation to EXACTLY k
+    elements (``__CPROVER_allocate((size_t)(k) * sizeof(*p), 0)``), so an off-by-one
+    past k stays a real OOB no matter what the LLM (claude-code OR API) allocated.
+    Contract-driven (uses the spec's own extent, not a code pattern); best-effort +
+    logged; a mis-parse leaves the harness untouched (never breaks a good harness)."""
+    import re as _re
+    pre = getattr(spec, "precondition", "") or ""
+    vrs = _re.findall(r"valid_range\(\s*([A-Za-z_]\w*)\s*,\s*0\s*,\s*([A-Za-z_]\w*)\s*\)", pre)
+    if not vrs or not harness:
+        return harness
+    out = harness
+    for pvar, k in vrs:
+        exact = f"__CPROVER_allocate((size_t)({k}) * sizeof(*{pvar}), 0)"
+        new, changed = _rewrite_alloc(out, pvar, exact)
+        if changed and new != out:
+            logger.info("harness contract-enforce: sized %r to exactly %r (spec valid_range) "
+                        "so an off-by-one past it stays OOB", pvar, k)
+            out = new
+    return out
+
+
+def _contract_preserve_note(spec_preconditions: str) -> str:
+    """Directive appended to ANY harness gen/repair prompt (claude-code OR the
+    in-process/API tool loop): PRESERVE the inferred contract; do not re-derive
+    buffer sizes from the (possibly buggy) body. Shared so both providers honor it.
+    """
+    if not spec_preconditions:
+        return ""
+    return (
+        "\n\n### CONTRACT — PRESERVE EXACTLY (do NOT re-derive from the body)\n"
+        "The verification contract for this function is:\n"
+        f"{spec_preconditions}\n"
+        "Encode it exactly. Size each element buffer to the LENGTH named in the "
+        "contract, NOT to the range the code accesses: "
+        "valid_range(p, 0, k)  =>  p = __CPROVER_allocate((size_t)(k) * sizeof(*p), 0);  "
+        "(EXACTLY k elements). An access at or beyond index k is a BUG to be CAUGHT, "
+        "never a reason to allocate a larger buffer.\n"
+    )
+
+
 class AgenticHarnessGen(BaseAgent[str]):
     """LLM-driven harness builder. One tool-using call per function.
 
@@ -584,6 +655,7 @@ class AgenticHarnessGen(BaseAgent[str]):
         all_funcs_global: dict,
         include_dirs: Optional[list[str]] = None,
         defines: Optional[list[str]] = None,
+        spec_preconditions: str = "",
     ) -> HarnessResult:
         import time as _time
         _t0 = _time.perf_counter()
@@ -594,6 +666,7 @@ class AgenticHarnessGen(BaseAgent[str]):
             self._defines = list(defines or [])
 
             initial_ctx = self._build_initial_context(func, all_funcs_global)
+            initial_ctx += _contract_preserve_note(spec_preconditions)
             messages: list[dict] = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": initial_ctx},
@@ -621,6 +694,7 @@ class AgenticHarnessGen(BaseAgent[str]):
         all_funcs_global: dict,
         include_dirs: Optional[list[str]] = None,
         defines: Optional[list[str]] = None,
+        spec_preconditions: str = "",
     ) -> HarnessResult:
         """Build the harness with the Claude Code agent instead of bmc's
         in-process tool loop. Claude Code runs its OWN Read/Grep loop over the
@@ -656,6 +730,7 @@ class AgenticHarnessGen(BaseAgent[str]):
                 add_dir=(cc_cfg.claude_code_add_dirs[0] if cc_cfg.claude_code_add_dirs else "(cwd)"),
                 prior_error=last_err or "(none — first attempt)",
             )
+            prompt += _contract_preserve_note(spec_preconditions)
             try:
                 resp = client.complete(SYSTEM_PROMPT_CLAUDE_CODE, prompt, max_tokens=4096)
             except Exception as exc:

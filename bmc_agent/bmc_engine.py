@@ -390,6 +390,7 @@ class BMCEngine:
                 repaired_path = self._agentic_repair_harness(
                     func, parsed_file, all_funcs, driver_name,
                     build_error=cbmc_result.error,
+                    spec=spec,
                 )
                 if repaired_path is not None:
                     repaired_result = _run_c_cbmc(
@@ -549,6 +550,7 @@ class BMCEngine:
         all_funcs: "dict | None",
         driver_name: str,
         build_error: str,
+        spec=None,
     ) -> "str | None":
         """Rebuild a non-compiling harness with the agentic, code-reading
         generator (``AgenticHarnessGen``), which reads the real structs/headers
@@ -592,14 +594,29 @@ class BMCEngine:
                 prov = (rs or {}).get("provider") or self.config.resolved_provider()
             except Exception:
                 prov = "claude-code" if getattr(self.config, "claude_code_agentic", False) else ""
+            _precond = ""
+            try:
+                _precond = (getattr(spec, "precondition", "") or "").strip()
+            except Exception:
+                _precond = ""
             if prov == "claude-code":
                 logger.info("agentic harness repair: using Claude Code agent for '%s'", func.name)
-                res = agen.generate_via_claude_code(**gen_kwargs)
+                res = agen.generate_via_claude_code(**gen_kwargs, spec_preconditions=_precond)
             else:
                 logger.info("agentic harness repair: using in-process tool loop (provider=%s) for '%s'",
                             prov or "?", func.name)
-                res = agen.generate(**gen_kwargs)
+                res = agen.generate(**gen_kwargs, spec_preconditions=_precond)
             harness = getattr(res, "harness", None)
+            # Unified contract-enforcement (Layer 2): applies to BOTH provider paths.
+            # Deterministically size element buffers to the spec's valid_range extent,
+            # so an off-by-one past the contract stays a real OOB no matter what the
+            # LLM allocated. A broken rewrite is caught by the re-run's build check.
+            if harness:
+                try:
+                    from bmc_agent.agentic_harness_gen import _enforce_contract_sizing
+                    harness = _enforce_contract_sizing(harness, func, spec)
+                except Exception as _ee:
+                    logger.debug("contract-enforce skipped for '%s': %s", func.name, _ee)
             if harness and not getattr(res, "last_compile_error", None):
                 return str(self._save_harness(driver_name, func.name, harness))
             logger.info(

@@ -163,7 +163,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # read_be64 recovery). Overridable with --no-soundness-gate-fail-closed.
         if not getattr(args, "no_soundness_gate_fail_closed", False):
             config.soundness_gate_fail_closed = True  # type: ignore[attr-defined]
-        config.enable_agentic_harness_repair = True  # type: ignore[attr-defined]
+        config.enable_agentic_harness_repair = not getattr(args, "no_agentic_harness_repair", False)  # honor --no-agentic-harness-repair  # type: ignore[attr-defined]
         # Split spec gen: contract-only precondition (pass 2 runs on whatever
         # provider spec_gen is on — agentic under --agentic, flat under
         # --agentic-refine; the contract POLICY applies either way).
@@ -1324,7 +1324,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     if getattr(args, "plan", False):
         from bmc_agent.parser import parse_c_file as _pcf
-        from bmc_agent.agents.plan_agent import PlanAgent as _PA, apply_plan as _ap
+        from bmc_agent.agents.plan_agent import PlanAgent as _PA, apply_plan as _ap, record_scope_blowup as _rec_blowup
         _entry0 = getattr(args, "entry", None) or "main"
         _pa = _PA(config)
         # PlanAgent chooses the property class from the verification GOAL (real code);
@@ -1385,8 +1385,20 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                         and _summ.get("verified_clean", 0) == 0)
             _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
             if _stalled and _next:
+                _blowup = _summ.get("resource_exhausted", 0) > 0
+                # Informed fallback: a scope_from_entry attempt that exhausted resources
+                # (timeout/OOM) is a labelled cost-model mispredict -- record it so the
+                # inline budget self-lowers below this estimate on future plans.
+                if _blowup and _tried[-1] == "scope_from_entry" and getattr(_plan, "est_cost", 0):
+                    try:
+                        _rec_blowup(_plan.entry or _entry0, _plan.est_cost, _plan.unwind or 1)
+                        print(f"[PlanAgent] scope_from_entry exhausted resources at est_cost="
+                              f"{_plan.est_cost:.0f}; recorded blowup -> inline budget will self-lower")
+                    except Exception:
+                        pass
+                _why = "resource-exhausted (cost blowup)" if _blowup else "inconclusive"
                 print(f"[PlanAgent] strategy '{_tried[-1]}' stalled "
-                      f"(inconclusive={_summ.get('inconclusive')}); re-planning -> '{_next[0]}'")
+                      f"({_why}, inconclusive={_summ.get('inconclusive')}); re-planning -> '{_next[0]}'")
                 _plan = _pa.plan_for_strategy(_next[0], entry=_entry0,
                                               property_class=_plan.property_class,
                                               template=_plan)
