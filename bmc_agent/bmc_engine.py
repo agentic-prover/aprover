@@ -390,6 +390,7 @@ class BMCEngine:
                 repaired_path = self._agentic_repair_harness(
                     func, parsed_file, all_funcs, driver_name,
                     build_error=cbmc_result.error,
+                    spec=spec,
                 )
                 if repaired_path is not None:
                     repaired_result = _run_c_cbmc(
@@ -549,6 +550,7 @@ class BMCEngine:
         all_funcs: "dict | None",
         driver_name: str,
         build_error: str,
+        spec=None,
     ) -> "str | None":
         """Rebuild a non-compiling harness with the agentic, code-reading
         generator (``AgenticHarnessGen``), which reads the real structs/headers
@@ -594,7 +596,12 @@ class BMCEngine:
                 prov = "claude-code" if getattr(self.config, "claude_code_agentic", False) else ""
             if prov == "claude-code":
                 logger.info("agentic harness repair: using Claude Code agent for '%s'", func.name)
-                res = agen.generate_via_claude_code(**gen_kwargs)
+                _precond = ""
+                try:
+                    _precond = (getattr(spec, "precondition", "") or "").strip()
+                except Exception:
+                    _precond = ""
+                res = agen.generate_via_claude_code(**gen_kwargs, spec_preconditions=_precond)
             else:
                 logger.info("agentic harness repair: using in-process tool loop (provider=%s) for '%s'",
                             prov or "?", func.name)

@@ -163,7 +163,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # read_be64 recovery). Overridable with --no-soundness-gate-fail-closed.
         if not getattr(args, "no_soundness_gate_fail_closed", False):
             config.soundness_gate_fail_closed = True  # type: ignore[attr-defined]
-        config.enable_agentic_harness_repair = True  # type: ignore[attr-defined]
+        config.enable_agentic_harness_repair = not getattr(args, "no_agentic_harness_repair", False)  # honor --no-agentic-harness-repair  # type: ignore[attr-defined]
         # Split spec gen: contract-only precondition (pass 2 runs on whatever
         # provider spec_gen is on — agentic under --agentic, flat under
         # --agentic-refine; the contract POLICY applies either way).

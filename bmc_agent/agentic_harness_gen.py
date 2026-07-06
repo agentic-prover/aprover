@@ -621,6 +621,7 @@ class AgenticHarnessGen(BaseAgent[str]):
         all_funcs_global: dict,
         include_dirs: Optional[list[str]] = None,
         defines: Optional[list[str]] = None,
+        spec_preconditions: str = "",
     ) -> HarnessResult:
         """Build the harness with the Claude Code agent instead of bmc's
         in-process tool loop. Claude Code runs its OWN Read/Grep loop over the
@@ -656,6 +657,20 @@ class AgenticHarnessGen(BaseAgent[str]):
                 add_dir=(cc_cfg.claude_code_add_dirs[0] if cc_cfg.claude_code_add_dirs else "(cwd)"),
                 prior_error=last_err or "(none — first attempt)",
             )
+            if spec_preconditions:
+                # #2: the repair must PRESERVE the inferred contract, not re-derive
+                # buffer sizes from the (possibly buggy) body. Size element buffers to
+                # the contract LENGTH, so an off-by-one past it stays a real OOB.
+                prompt += (
+                    "\n\n### CONTRACT — PRESERVE EXACTLY (do NOT re-derive from the body)\n"
+                    "The verification contract for this function is:\n"
+                    f"{spec_preconditions}\n"
+                    "Encode it exactly. Size each element buffer to the LENGTH named in the "
+                    "contract, NOT to the range the code accesses: "
+                    "valid_range(p, 0, k)  =>  p = __CPROVER_allocate((size_t)(k) * sizeof(*p), 0);  "
+                    "(EXACTLY k elements). An access at or beyond index k is a BUG to be CAUGHT, "
+                    "never a reason to allocate a larger buffer.\n"
+                )
             try:
                 resp = client.complete(SYSTEM_PROMPT_CLAUDE_CODE, prompt, max_tokens=4096)
             except Exception as exc:
