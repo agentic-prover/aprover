@@ -3534,6 +3534,44 @@ def _detect_buf_len_pairs(parameters) -> "list[tuple[str, str, str, str]]":
     return pairs
 
 
+# Scalar ELEMENT pointee types for (elem-buf, len) coupling. Excludes char/void
+# and byte-shaped types (handled by the string / _detect_buf_len_pairs paths) and
+# struct/union pointers (left to infer_array_param_bounds).
+_SCALAR_ELEM_TYPES = {
+    "int", "unsigned", "unsigned int", "signed", "signed int",
+    "short", "unsigned short", "short int", "unsigned short int",
+    "long", "unsigned long", "long int", "unsigned long int",
+    "long long", "unsigned long long", "float", "double", "long double",
+    "size_t", "ssize_t", "ptrdiff_t",
+    "int16_t", "uint16_t", "int32_t", "uint32_t", "int64_t", "uint64_t",
+    "intptr_t", "uintptr_t", "wchar_t",
+}
+
+def _detect_elem_buf_len_pairs(parameters):
+    """Real-code precondition modeling: pair a SCALAR-ELEMENT pointer (int*, long*,
+    float*, ...) with an immediately-following size-named integer, the dominant
+    ``f(T *buf, size_t n)`` convention (sum/fill/dot/...). Returns
+    ``(buf_name, buf_type, elem_base, len_name, len_type)``. Sized to
+    ``n*sizeof(elem)`` at emission so in-bounds element access is safe and an
+    off-by-one past ``n`` is still caught. char*/void*/byte and structs excluded
+    (handled elsewhere)."""
+    params = [(pt.strip(), pn) for pt, pn in parameters if pn]
+    out = []
+    for i in range(len(params) - 1):
+        ptype, pname = params[i]
+        ltype, lname = params[i + 1]
+        st = _strip_restrict_quals(ptype)
+        if st.count("*") != 1:
+            continue
+        base = re.sub(r"\bconst\b", "", st.rstrip("*")).strip()
+        if base not in _SCALAR_ELEM_TYPES:
+            continue
+        if "*" in ltype or lname.lower() not in _BUF_LEN_SIZE_NAMES:
+            continue
+        out.append((pname, st, base, lname, ltype.strip()))
+    return out
+
+
 def _generate_nd_decls(
     func: FunctionInfo,
     cbmc_unwind: int = 4,
@@ -3662,6 +3700,32 @@ def _generate_nd_decls(
             f"    __CPROVER_assume((unsigned long long)({len_name}) <= {_bl_max}ull);"
         )
         lines.append(f"    {buf_type} {buf_name} = ({buf_type})malloc({len_name});")
+        lines.append(f"    __CPROVER_assume({buf_name} != NULL);")
+        paired_emitted.add(buf_name)
+        paired_emitted.add(len_name)
+
+    # (elem-buf, len) coupling: size a scalar-element buffer to n*sizeof(elem) so
+    # in-bounds element reads are SAFE (kills the unconstrained-buffer FP, e.g.
+    # sum(int*a,size_t n)) while an off-by-one past n stays a real OOB. Uses
+    # __CPROVER_allocate (exact object size; immune to a module malloc stub).
+    for buf_name, buf_type, elem_base, len_name, len_type in _detect_elem_buf_len_pairs(
+        func.signature.parameters
+    ):
+        if buf_name in paired_emitted or len_name in paired_emitted:
+            continue
+        _bb = f"_{buf_name}_bytes"
+        lines.append(
+            f"    /* (elem-buf,len) pair: {buf_name} sized to {len_name}*sizeof({elem_base}) "
+            f"(element reads in-bounds; off-by-one past {len_name} still caught) */"
+        )
+        lines.append(f"    {len_type} {len_name};")
+        lines.append(
+            f"    __CPROVER_assume((unsigned long long)({len_name}) <= {_bl_max}ull);"
+        )
+        lines.append(f"    size_t {_bb} = (size_t)({len_name}) * sizeof({elem_base});")
+        lines.append(
+            f"    {buf_type} {buf_name} = ({buf_type})__CPROVER_allocate({_bb} ? {_bb} : 1, 0);"
+        )
         lines.append(f"    __CPROVER_assume({buf_name} != NULL);")
         paired_emitted.add(buf_name)
         paired_emitted.add(len_name)
