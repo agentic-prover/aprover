@@ -263,6 +263,33 @@ def derive_universal_precondition(
                 seen_len_params.add(ln)
                 break
 
+    # Pattern 2b (generalized, caller-grounded): a single-indirection pointer
+    # IMMEDIATELY followed by a size-named integer is the universal (buf, len)
+    # contract for ANY buffer name (not just the fixed set) -- e.g.
+    # sum(int *a, size_t n), fill(float *x, int n). Emit valid_range(buf, 0, len):
+    # the EXACT-size caller contract (every real caller passes >= len elements).
+    # Exact (vs len<=unwind) keeps an off-by-one past len a real OOB. Excludes
+    # char*/wchar_t (the NUL-terminated string convention, handled separately).
+    # Sound/universal: a caller violating it has the bug (caught at the caller or
+    # surfaced latent), so assuming it masks no in-contract bug.
+    _SIZE_NAMES = {"n", "len", "length", "size", "sz", "count", "num", "nmemb",
+                   "nbytes", "bytes", "buflen", "bufsize", "datalen", "slen",
+                   "width", "height", "nelem", "nelems", "elems"}
+    _seq = [(pt, pn) for pt, pn in sig.parameters if pn]
+    for _i in range(len(_seq) - 1):
+        _pt, _pn = _seq[_i]
+        _lt, _ln = _seq[_i + 1]
+        if not _is_pointer_type(_pt) or _pt.count("*") != 1:
+            continue
+        _base = re.sub(r"\bconst\b", "", _pt).replace("*", "").strip()
+        if _base in ("char", "wchar_t"):        # string convention -> NUL path
+            continue
+        if _ln.lower() not in _SIZE_NAMES or not _is_integer_type(_lt):
+            continue
+        _vr = f"valid_range({_pn}, 0, {_ln})"
+        if _vr not in clauses:
+            clauses.append(_vr)
+
     # Pattern 3: ops/vtable non-null. Requires struct_definitions to
     # know the param's struct body. Multi-level: the ops field itself
     # is non-NULL AND every function-pointer member of the ops struct
