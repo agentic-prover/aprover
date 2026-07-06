@@ -137,6 +137,26 @@ class PlanAgent:
                      use_llm: bool = False) -> Plan:
         p = structural_probe(parsed, entry)
         logger.info("plan probe: %s", p)
+        # Re-anchor: if the requested entry (e.g. 'main') is absent but the file has a
+        # defined "caller-root" (a root function that calls another defined function),
+        # verify that root with its callees INLINED. That exercises call-site checks
+        # (caller-misuse: a bad buffer/len passed into a callee) which per-function
+        # isolation with stubbed callees silently misses. Pick the smallest such root.
+        if not p["has_entry"]:
+            _cg = parsed.call_graph or {}
+            _defd = set(getattr(parsed, "function_bodies", {}) or {}) or set(parsed.functions or {})
+            _called = set()
+            for _f in _defd:
+                _called |= (_cg.get(_f, set()) or set())
+            _caller_roots = [_f for _f in _defd
+                             if _f not in _called and (_defd & (_cg.get(_f, set()) or set()))]
+            if _caller_roots:
+                _new = min(_caller_roots, key=lambda r: structural_probe(parsed, r)["closure_size"])
+                _p2 = structural_probe(parsed, _new)
+                logger.info("plan: requested entry %r absent; re-anchored on caller-root %r "
+                            "(closure=%d defined) to exercise call-site/caller-misuse checks",
+                            entry, _new, _p2["closure_size"])
+                entry, p = _new, _p2
         import os as _os
         _force = _os.environ.get("BMC_PLAN_FORCE_STRATEGY")
         if _force:
