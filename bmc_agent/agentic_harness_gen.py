@@ -518,6 +518,25 @@ class HarnessResult:
         }
 
 
+def _contract_preserve_note(spec_preconditions: str) -> str:
+    """Directive appended to ANY harness gen/repair prompt (claude-code OR the
+    in-process/API tool loop): PRESERVE the inferred contract; do not re-derive
+    buffer sizes from the (possibly buggy) body. Shared so both providers honor it.
+    """
+    if not spec_preconditions:
+        return ""
+    return (
+        "\n\n### CONTRACT — PRESERVE EXACTLY (do NOT re-derive from the body)\n"
+        "The verification contract for this function is:\n"
+        f"{spec_preconditions}\n"
+        "Encode it exactly. Size each element buffer to the LENGTH named in the "
+        "contract, NOT to the range the code accesses: "
+        "valid_range(p, 0, k)  =>  p = __CPROVER_allocate((size_t)(k) * sizeof(*p), 0);  "
+        "(EXACTLY k elements). An access at or beyond index k is a BUG to be CAUGHT, "
+        "never a reason to allocate a larger buffer.\n"
+    )
+
+
 class AgenticHarnessGen(BaseAgent[str]):
     """LLM-driven harness builder. One tool-using call per function.
 
@@ -584,6 +603,7 @@ class AgenticHarnessGen(BaseAgent[str]):
         all_funcs_global: dict,
         include_dirs: Optional[list[str]] = None,
         defines: Optional[list[str]] = None,
+        spec_preconditions: str = "",
     ) -> HarnessResult:
         import time as _time
         _t0 = _time.perf_counter()
@@ -594,6 +614,7 @@ class AgenticHarnessGen(BaseAgent[str]):
             self._defines = list(defines or [])
 
             initial_ctx = self._build_initial_context(func, all_funcs_global)
+            initial_ctx += _contract_preserve_note(spec_preconditions)
             messages: list[dict] = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": initial_ctx},
@@ -657,20 +678,7 @@ class AgenticHarnessGen(BaseAgent[str]):
                 add_dir=(cc_cfg.claude_code_add_dirs[0] if cc_cfg.claude_code_add_dirs else "(cwd)"),
                 prior_error=last_err or "(none — first attempt)",
             )
-            if spec_preconditions:
-                # #2: the repair must PRESERVE the inferred contract, not re-derive
-                # buffer sizes from the (possibly buggy) body. Size element buffers to
-                # the contract LENGTH, so an off-by-one past it stays a real OOB.
-                prompt += (
-                    "\n\n### CONTRACT — PRESERVE EXACTLY (do NOT re-derive from the body)\n"
-                    "The verification contract for this function is:\n"
-                    f"{spec_preconditions}\n"
-                    "Encode it exactly. Size each element buffer to the LENGTH named in the "
-                    "contract, NOT to the range the code accesses: "
-                    "valid_range(p, 0, k)  =>  p = __CPROVER_allocate((size_t)(k) * sizeof(*p), 0);  "
-                    "(EXACTLY k elements). An access at or beyond index k is a BUG to be CAUGHT, "
-                    "never a reason to allocate a larger buffer.\n"
-                )
+            prompt += _contract_preserve_note(spec_preconditions)
             try:
                 resp = client.complete(SYSTEM_PROMPT_CLAUDE_CODE, prompt, max_tokens=4096)
             except Exception as exc:

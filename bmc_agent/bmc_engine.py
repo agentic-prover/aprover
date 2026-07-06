@@ -594,18 +594,18 @@ class BMCEngine:
                 prov = (rs or {}).get("provider") or self.config.resolved_provider()
             except Exception:
                 prov = "claude-code" if getattr(self.config, "claude_code_agentic", False) else ""
+            _precond = ""
+            try:
+                _precond = (getattr(spec, "precondition", "") or "").strip()
+            except Exception:
+                _precond = ""
             if prov == "claude-code":
                 logger.info("agentic harness repair: using Claude Code agent for '%s'", func.name)
-                _precond = ""
-                try:
-                    _precond = (getattr(spec, "precondition", "") or "").strip()
-                except Exception:
-                    _precond = ""
                 res = agen.generate_via_claude_code(**gen_kwargs, spec_preconditions=_precond)
             else:
                 logger.info("agentic harness repair: using in-process tool loop (provider=%s) for '%s'",
                             prov or "?", func.name)
-                res = agen.generate(**gen_kwargs)
+                res = agen.generate(**gen_kwargs, spec_preconditions=_precond)
             harness = getattr(res, "harness", None)
             if harness and not getattr(res, "last_compile_error", None):
                 return str(self._save_harness(driver_name, func.name, harness))
