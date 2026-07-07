@@ -520,6 +520,34 @@ def apply_plan(config, plan: "Plan"):
     else:
         for _v in ("BMC_FRAME_HAVOC", "BMC_BUGHUNT", "BMC_TRANSITIVE_INLINE", "BMC_FAITHFUL_MAIN"):
             os.environ.pop(_v, None)
+        # SV-COMP reachability tasks are judged by the solver, not by LLM-written
+        # contracts. In scope_from_entry the planner already picked the concrete
+        # entry and unwind; spending the Codex/Claude budget drafting caller-
+        # grounded specs for the entry closure can exhaust the wall clock before
+        # CBMC runs at all. Use deterministic permissive specs here so Codex mode
+        # reaches Phase 2. Keep this PlanAgent-owned: runners still pass only
+        # --plan --svcomp and never choose suite-specific strategy knobs.
+        if (
+            os.environ.get("BMC_SVCOMP_MODE")
+            and plan.strategy == "scope_from_entry"
+            and _prop_tok == "unreach"
+            and config is not None
+        ):
+            for _f in ("enable_bmc_config_agent", "enable_flag_selection", "enable_spec_gen_tools"):
+                try:
+                    setattr(config, _f, False)
+                except Exception:
+                    pass
+            try:
+                config.use_legacy_spec_gen = True
+                config.lite_mode = True
+                config.lite_with_contracts = False
+            except Exception:
+                pass
+            logger.info(
+                "apply_plan: SV-COMP unreach scope_from_entry lean mode "
+                "(permissive deterministic specs; no BMC-config/spec-gen LLM)"
+            )
     # Caller-side precondition checking (compositional caller-misuse detection).
     # In compositional mode callees are STUBBED, so by default a caller passing an
     # out-of-contract buffer/size to the stub is ASSUMED away (the soundness hole).

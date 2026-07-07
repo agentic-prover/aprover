@@ -76,3 +76,132 @@ def test_apply_plan_sets_and_clears_function_property_map(monkeypatch):
     apply_plan(None, Plan(strategy="scope_from_entry", property_class="memsafety"))
 
     assert "BMC_FUNC_PROP_MAP" not in os.environ
+
+
+def test_apply_plan_uses_lean_scope_for_svcomp_unreach(monkeypatch):
+    from bmc_agent.agents.plan_agent import Plan, apply_plan
+
+    class Cfg:
+        cbmc_unwind = 4
+        enable_bmc_config_agent = True
+        enable_flag_selection = True
+        enable_spec_gen_tools = True
+        use_legacy_spec_gen = False
+        lite_mode = False
+        lite_with_contracts = True
+
+    monkeypatch.setenv("BMC_SVCOMP_MODE", "1")
+    cfg = Cfg()
+
+    only = apply_plan(
+        cfg,
+        Plan(
+            strategy="scope_from_entry",
+            entry="main",
+            property_class="unreach-call",
+            targets={"main"},
+        ),
+    )
+
+    assert only == {"main"}
+    assert cfg.enable_bmc_config_agent is False
+    assert cfg.enable_flag_selection is False
+    assert cfg.enable_spec_gen_tools is False
+    assert cfg.use_legacy_spec_gen is True
+    assert cfg.lite_mode is True
+    assert cfg.lite_with_contracts is False
+
+
+def test_svcomp_frame_havoc_bug_requires_scope_confirmation(monkeypatch):
+    from bmc_agent.agents.plan_agent import Plan
+    from bmc_agent.cli import (
+        _svcomp_frame_havoc_bmc_confirmation_strategy,
+        _svcomp_frame_havoc_confirmation_strategy,
+    )
+
+    monkeypatch.delenv("BMC_SVCOMP_MODE", raising=False)
+    args = SimpleNamespace(svcomp=True)
+    plan = Plan(
+        strategy="frame_havoc",
+        entry="main",
+        property_class="unreach-call",
+        fallback_ladder=["scope_from_entry"],
+    )
+
+    assert (
+        _svcomp_frame_havoc_confirmation_strategy(
+            args, plan, bug_reports=[object()], tried=["frame_havoc"]
+        )
+        == "scope_from_entry"
+    )
+    assert (
+        _svcomp_frame_havoc_bmc_confirmation_strategy(
+            args,
+            plan,
+            verdict_summary={"bug_candidates": 1},
+            tried=["frame_havoc"],
+        )
+        == "scope_from_entry"
+    )
+    assert (
+        _svcomp_frame_havoc_bmc_confirmation_strategy(
+            args,
+            plan,
+            verdict_summary={"bug_candidates": 0},
+            tried=["frame_havoc"],
+        )
+        is None
+    )
+
+
+def test_svcomp_frame_havoc_confirmation_is_narrow(monkeypatch):
+    from bmc_agent.agents.plan_agent import Plan
+    from bmc_agent.cli import _svcomp_frame_havoc_confirmation_strategy
+
+    monkeypatch.delenv("BMC_SVCOMP_MODE", raising=False)
+    base = Plan(
+        strategy="frame_havoc",
+        entry="main",
+        property_class="unreach-call",
+        fallback_ladder=["scope_from_entry"],
+    )
+
+    assert (
+        _svcomp_frame_havoc_confirmation_strategy(
+            SimpleNamespace(svcomp=True), base, bug_reports=[], tried=["frame_havoc"]
+        )
+        is None
+    )
+    assert (
+        _svcomp_frame_havoc_confirmation_strategy(
+            SimpleNamespace(svcomp=True),
+            base,
+            bug_reports=[object()],
+            tried=["frame_havoc", "scope_from_entry"],
+        )
+        is None
+    )
+    assert (
+        _svcomp_frame_havoc_confirmation_strategy(
+            SimpleNamespace(svcomp=False),
+            base,
+            bug_reports=[object()],
+            tried=["frame_havoc"],
+        )
+        is None
+    )
+    non_reach = Plan(
+        strategy="frame_havoc",
+        entry="main",
+        property_class="memsafety",
+        fallback_ladder=["scope_from_entry"],
+    )
+    assert (
+        _svcomp_frame_havoc_confirmation_strategy(
+            SimpleNamespace(svcomp=True),
+            non_reach,
+            bug_reports=[object()],
+            tried=["frame_havoc"],
+        )
+        is None
+    )

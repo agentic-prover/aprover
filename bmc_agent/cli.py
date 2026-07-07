@@ -29,6 +29,66 @@ def _resolve_domain_knowledge(raw: str) -> str:
     return raw
 
 
+def _svcomp_frame_havoc_confirmation_target(
+    args: argparse.Namespace,
+    plan: "object",
+    tried: list[str],
+) -> str | None:
+    """Return the strategy needed to confirm a frame-havoc SV-COMP candidate.
+
+    Frame-havoc is an over-approximate, bug-hunting strategy: it can expose a
+    candidate reachability violation by replacing off-cone behavior with weak
+    summaries. For SV-COMP unreach-call tasks the final answer must come from
+    the solver over the faithful entry closure. Therefore a frame-havoc bug is
+    a signal to re-run the available scope-from-entry plan, not a final false.
+    """
+    if getattr(plan, "strategy", None) != "frame_havoc":
+        return None
+    import os as _os
+
+    if not (getattr(args, "svcomp", False) or _os.environ.get("BMC_SVCOMP_MODE")):
+        return None
+    prop = getattr(plan, "property_class", "")
+    prop_tok = {"unreach-call": "unreach", "unreach": "unreach"}.get(prop, prop)
+    if prop_tok != "unreach":
+        return None
+    ladder = list(getattr(plan, "fallback_ladder", None) or [])
+    remaining = [x for x in ladder if x not in tried]
+    if "scope_from_entry" not in remaining:
+        return None
+    return "scope_from_entry"
+
+
+def _svcomp_frame_havoc_confirmation_strategy(
+    args: argparse.Namespace,
+    plan: "object",
+    bug_reports: list,
+    tried: list[str],
+) -> str | None:
+    """Return the confirmation strategy after Phase 3 surfaced real reports."""
+    if not bug_reports:
+        return None
+    return _svcomp_frame_havoc_confirmation_target(args, plan, tried)
+
+
+def _svcomp_frame_havoc_bmc_confirmation_strategy(
+    args: argparse.Namespace,
+    plan: "object",
+    verdict_summary: dict,
+    tried: list[str],
+) -> str | None:
+    """Return the confirmation strategy when Phase 2 found provisional bugs.
+
+    This is the pre-validation version of
+    ``_svcomp_frame_havoc_confirmation_strategy``. It lets PlanAgent re-run a
+    faithful scope-from-entry proof before Codex/Claude spend time validating a
+    witness from an intentionally over-approximate frame-havoc harness.
+    """
+    if (verdict_summary or {}).get("bug_candidates", 0) <= 0:
+        return None
+    return _svcomp_frame_havoc_confirmation_target(args, plan, tried)
+
+
 def _apply_model_arg(config: "object", args: argparse.Namespace) -> None:
     """Override config.llm_model if --model was supplied on the command line."""
     model = getattr(args, "model", None)
@@ -1351,16 +1411,48 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             print(f"[PlanAgent] {_plan.summary()}")
             _scope_only = _ap(config, _plan)
             _tried.append(_plan.strategy)
-            pipeline = AMCPipeline(config)
-            bug_reports = pipeline.run(
-                source_file=args.source,
-                driver_name=args.driver,
-                domain_knowledge=domain_knowledge,
-                only_functions=_scope_only,
+            _phase2_confirm_next = _svcomp_frame_havoc_confirmation_target(
+                args, _plan, _tried
             )
+            _prev_phase2_confirm = getattr(
+                config, "confirm_frame_havoc_candidates_before_validation", False
+            )
+            config.confirm_frame_havoc_candidates_before_validation = bool(_phase2_confirm_next)  # type: ignore[attr-defined]
+            pipeline = AMCPipeline(config)
+            try:
+                bug_reports = pipeline.run(
+                    source_file=args.source,
+                    driver_name=args.driver,
+                    domain_knowledge=domain_knowledge,
+                    only_functions=_scope_only,
+                )
+            finally:
+                config.confirm_frame_havoc_candidates_before_validation = _prev_phase2_confirm  # type: ignore[attr-defined]
             _summ = getattr(pipeline, "last_verdict_summary", {}) or {}
             _no_bug = (not bug_reports) and _summ.get("bug_candidates", 0) == 0
             _FH_UNWIND_CAP = 3
+            _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
+            _confirm_next = (
+                _svcomp_frame_havoc_bmc_confirmation_strategy(
+                    args, _plan, _summ, _tried
+                )
+                or _svcomp_frame_havoc_confirmation_strategy(
+                    args, _plan, bug_reports, _tried
+                )
+            )
+            if _confirm_next:
+                print(
+                    "[PlanAgent] frame_havoc produced bug candidate(s) in "
+                    "SV-COMP unreach mode; re-planning -> "
+                    f"'{_confirm_next}' for faithful solver confirmation"
+                )
+                _plan = _pa.plan_for_strategy(
+                    _confirm_next,
+                    entry=_entry0,
+                    property_class=_plan.property_class,
+                    template=_plan,
+                )
+                continue
             # Unwind sweep: for frame_havoc, "no bug at this depth" (inconclusive OR
             # bounded-clean) -> try a deeper unwind before switching strategy. Low
             # unwinds are fast and catch shallow bugs; deeper ones catch the rest.
@@ -1383,7 +1475,6 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             _stalled = (_no_bug
                         and _summ.get("inconclusive", 0) > 0
                         and _summ.get("verified_clean", 0) == 0)
-            _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
             if _stalled and _next:
                 _blowup = _summ.get("resource_exhausted", 0) > 0
                 # Informed fallback: a scope_from_entry attempt that exhausted resources

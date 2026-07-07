@@ -826,6 +826,28 @@ class AMCPipeline:
             driver_name=driver_name,
             flag_selections=flag_selections,
         )
+        self._record_last_verdict_summary(verdicts)
+
+        if (
+            getattr(self.config, "confirm_frame_havoc_candidates_before_validation", False)
+            and self.last_verdict_summary.get("bug_candidates", 0) > 0
+        ):
+            candidate_count = self.last_verdict_summary.get("bug_candidates", 0)
+            logger.info(
+                "Phase 3: skipped for %d provisional frame-havoc candidate(s); "
+                "PlanAgent will confirm with faithful scope_from_entry",
+                candidate_count,
+            )
+            self._emit(type="phase", phase="classify", status="complete", n_findings=0)
+            self._emit(type="phase", phase="report", status="complete", n_findings=0)
+            logger.info(
+                "=== AMC Pipeline END: 0 real bug(s), 0 latent, 0 unresolved "
+                "(provisional frame-havoc candidates=%d) ===",
+                candidate_count,
+            )
+            self.latent_reports = []
+            self.cross_file_recheck_needed = set()
+            return []
 
         # ------------------------------------------------------------------
         # Phase 3: Validate counterexamples, refine, report bugs
@@ -1544,6 +1566,14 @@ class AMCPipeline:
                 len(cross_file_recheck_needed),
                 ", ".join(sorted(cross_file_recheck_needed)[:20]),
             )
+        self._record_last_verdict_summary(verdicts)
+        return bug_reports
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _record_last_verdict_summary(self, verdicts) -> None:
         try:
             def _res_exhausted(v):
                 txt = str(getattr(v, "error", "") or "")
@@ -1553,6 +1583,7 @@ class AMCPipeline:
                 low = txt.lower()
                 return ("timed out" in low or "timeout" in low or "time-budget" in low
                         or "out of memory" in low or "bad_alloc" in low)
+
             self.last_verdict_summary = {
                 "targets": len(verdicts),
                 "verified_clean": sum(1 for v in verdicts.values() if getattr(v, "verified", False)),
@@ -1565,11 +1596,6 @@ class AMCPipeline:
             }
         except Exception:
             self.last_verdict_summary = {}
-        return bug_reports
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _diagnose_oracle_disagreements(
         self, driver_name: str, fn_name: str,
