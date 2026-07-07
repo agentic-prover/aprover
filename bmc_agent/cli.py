@@ -141,7 +141,11 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
                                  the local Claude Code CLI provider (the previous
                                  --agentic behaviour). A per-role env override
                                  still wins, so individual agents can be repointed.
-      --provider X               sets the global default provider for every role.
+      --agentic-codex            Like --agentic, but selects the local Codex CLI
+                                 provider as the default and FORCES every agent
+                                 role onto Codex. A per-role env override still
+                                 wins.
+      --provider X               explicitly sets the global default provider.
       --specs-via-claude-code    routes ONLY the spec_gen + refinement roles to
                                  the Claude Code CLI provider (your local
                                  ``claude`` login; no API key), leaving every
@@ -156,11 +160,14 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     """
     agentic = getattr(args, "agentic", False)
     agentic_cc = getattr(args, "agentic_claude_code", False)
+    agentic_codex = getattr(args, "agentic_codex", False)
     agentic_refine = getattr(args, "agentic_refine", False)
 
     provider = getattr(args, "provider", "") or ""
     if provider:
         config.llm_provider = provider  # type: ignore[attr-defined]
+    elif agentic_codex:
+        config.llm_provider = "codex"  # type: ignore[attr-defined]
 
     # Every LLM-driven agent role. Under --agentic ALL of them default to the
     # Claude Code agent (strongest, code-reading). The conventional core (CBMC,
@@ -2450,6 +2457,18 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
         p.add_argument(
+            "--agentic-codex",
+            action="store_true",
+            default=False,
+            dest="agentic_codex",
+            help=(
+                "Codex mode: select the local Codex CLI provider (`codex exec`, "
+                "read-only sandbox, your Codex login), enable Codex tool-use, and "
+                "force every agent role onto Codex. A per-role "
+                "BMC_AGENT_LLM_<ROLE>_PROVIDER override still wins."
+            ),
+        )
+        p.add_argument(
             "--agentic-refine",
             action="store_true",
             default=False,
@@ -2468,7 +2487,8 @@ def build_parser() -> argparse.ArgumentParser:
             choices=["", "anthropic", "openai", "claude-code"],
             metavar="PROVIDER",
             help=(
-                "LLM provider for all roles (default: auto-detect / env). "
+                "Explicit LLM provider for all roles (default: auto-detect / env; "
+                "--agentic-codex implies codex). "
                 "'claude-code' shells out to the local Claude Code CLI, reusing "
                 "your existing login — no API key required."
             ),
@@ -2670,8 +2690,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ver.add_argument(
         "--plan",
-        action="store_true",
-        help="Let the PlanAgent choose the analysis strategy (scope_from_entry / frame_havoc / compositional), entry, and unwind/havoc, instead of hand-setting --scope-from-entry / BMC_FRAME_HAVOC / SVCOMP_UNWIND.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Let the PlanAgent choose the analysis strategy (scope_from_entry / frame_havoc / compositional), entry, and unwind/havoc, instead of hand-setting --scope-from-entry / BMC_FRAME_HAVOC / SVCOMP_UNWIND. Default ON; pass --no-plan for the legacy manual strategy path.",
     )
     ver.add_argument(
         "--goal",

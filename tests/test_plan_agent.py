@@ -205,3 +205,51 @@ def test_svcomp_frame_havoc_confirmation_is_narrow(monkeypatch):
         )
         is None
     )
+
+
+def test_verify_plan_is_default_with_no_plan_escape():
+    from bmc_agent.cli import build_parser
+
+    parser = build_parser()
+
+    default_args = parser.parse_args(
+        ["verify", "--source", "example.c", "--driver", "drv"]
+    )
+    assert default_args.plan is True
+
+    manual_args = parser.parse_args(
+        ["verify", "--source", "example.c", "--driver", "drv", "--no-plan"]
+    )
+    assert manual_args.plan is False
+
+
+def test_agentic_codex_implies_codex_provider():
+    from bmc_agent.cli import _apply_provider_args, build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        ["verify", "--source", "example.c", "--driver", "drv", "--agentic-codex"]
+    )
+    config = SimpleNamespace()
+
+    _apply_provider_args(config, args)
+
+    assert config.llm_provider == "codex"
+
+    explicit = parser.parse_args(
+        [
+            "verify",
+            "--source",
+            "example.c",
+            "--driver",
+            "drv",
+            "--agentic-codex",
+            "--provider",
+            "openai",
+        ]
+    )
+    explicit_config = SimpleNamespace()
+
+    _apply_provider_args(explicit_config, explicit)
+
+    assert explicit_config.llm_provider == "openai"

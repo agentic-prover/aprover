@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Full RQ1-shaped Codex-mode runner.
 # Generates an AWS+LDV task manifest from the RQ1 artifact and runs each task
-# through bmc-agent with --agentic-codex and --plan. Designed for detached
-# overnight use.
+# through bmc-agent with --agentic-codex. PlanAgent is default-on for verify.
+# Designed for detached overnight use.
 set -u
 
 cd "$HOME/AProver" || exit 1
@@ -174,7 +174,7 @@ run_one(){
   local t0=$(date +%s)
   log "start suite=$suite task=$task expected=$expected"
   (ulimit -v 42000000; timeout "$TASK_TIMEOUT" "$PY" -m bmc_agent.cli verify \
-    --source "$src" --provider codex --agentic-codex --entry main --plan --svcomp \
+    --source "$src" --agentic-codex --entry main --svcomp \
     --driver "rq1codex_${suite}_${task}" --output "$wd") > "$wd/run.log" 2>&1
   local rc=$? t1=$(date +%s)
   cleanup_after_timeout "$rc" "$wd"
