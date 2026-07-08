@@ -131,6 +131,8 @@ class Config:
     #                          most self-hosted endpoints)
     #   "claude-code"      -- shell out to the local Claude Code CLI (`claude -p`).
     #                          No API key required: uses the host's existing login.
+    #   "codex"            -- shell out to the local Codex CLI (`codex exec`).
+    #                          No API key required: uses the host's existing login.
     # Empty string => auto-detect: claude-code when no API key is set anywhere,
     # otherwise openai for K2-Think / /v1 base URLs and anthropic for the rest.
     llm_provider: str = ""
@@ -163,7 +165,7 @@ class Config:
     # Off by default (text-only, identical shape to the API path). Toggle via
     # ``--claude-code-agentic`` or ``BMC_AGENT_CLAUDE_CODE_AGENTIC=1``.
     claude_code_agentic: bool = False
-    codex_bin: str = "codex"          # Codex CLI (triage backend "codex"); BMC_AGENT_CODEX_BIN to override
+    codex_bin: str = "codex"          # Codex CLI; BMC_AGENT_CODEX_BIN to override
     codex_timeout_s: float = 600.0
     # Loop-invariant synthesis: assume the loop body's signed arithmetic does not
     # overflow (mathematical-integer semantics), so textbook invariants like
@@ -893,7 +895,7 @@ class Config:
         }
 
     def resolved_provider(self) -> str:
-        """Return the active provider ("anthropic", "openai", or "claude-code").
+        """Return the active provider ("anthropic", "openai", "claude-code", or "codex").
 
         If ``llm_provider`` is set explicitly, honour it. Otherwise auto-detect:
 
@@ -961,6 +963,8 @@ class Config:
             claude_code_permission_mode=os.environ.get(
                 "BMC_AGENT_CLAUDE_CODE_PERMISSION_MODE", "bypassPermissions"
             ),
+            codex_bin=os.environ.get("BMC_AGENT_CODEX_BIN", "codex"),
+            codex_timeout_s=float(os.environ.get("BMC_AGENT_CODEX_TIMEOUT_S", "600.0")),
             lite_mode=os.environ.get("BMC_AGENT_LITE_MODE", "false").lower() == "true",
             cbmc_path=os.environ.get("BMC_AGENT_CBMC_PATH", "cbmc"),
             cbmc_unwind=int(os.environ.get("BMC_AGENT_CBMC_UNWIND", "4")),
