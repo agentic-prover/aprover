@@ -384,6 +384,44 @@ def test_complete_with_tools_codex_accepts_domain_json_as_final():
     assert mock_codex.call_count == 1
 
 
+def test_complete_codex_uses_ephemeral_read_only_and_guard():
+    """Codex CLI calls should be stateless and read-only."""
+    from pathlib import Path
+    from bmc_agent.config import Config
+
+    cfg = Config(artifact_dir="/tmp/_llm_tu_test")
+    cfg.llm_provider = "codex"
+    cfg.codex_bin = "codex"
+    cfg.codex_timeout_s = 77
+    client = LLMClient(cfg)
+    seen = {}
+
+    class Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, *, input=None, capture_output=None, text=None, timeout=None):
+        seen["cmd"] = cmd
+        seen["input"] = input
+        seen["timeout"] = timeout
+        out_path = Path(cmd[cmd.index("--output-last-message") + 1])
+        out_path.write_text("FINAL", encoding="utf-8")
+        return Proc()
+
+    with patch("subprocess.run", side_effect=fake_run):
+        out = client._complete_codex("SYS", "USER", 128, 0.0)
+
+    assert out == "FINAL"
+    assert seen["cmd"][:2] == ["codex", "exec"]
+    assert "--ephemeral" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--sandbox") + 1] == "read-only"
+    assert seen["timeout"] == 77.0
+    assert seen["input"].startswith(
+        "You are executing a single stateless BMC-Agent backend request."
+    )
+
+
 def test_complete_with_tools_serializes_non_string_result():
     """Handler returning a dict/list gets json.dumps'd before being sent back."""
     cfg = _mock_config_openai()

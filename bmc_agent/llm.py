@@ -12,8 +12,9 @@ Dispatches between four providers, selected by ``config.resolved_provider()``:
   No API key required: the host's existing Claude Code login is reused. Useful
   when you want bmc-agent's reasoning to run through your local subscription
   rather than the API.
-* ``"codex"`` -- the Codex CLI in non-interactive mode (``codex exec``), again
-  reusing the host's existing login instead of an API key.
+* ``"codex"`` -- the Codex CLI in non-interactive ephemeral mode
+  (``codex exec --ephemeral``), again reusing the host's existing login instead
+  of an API key.
 
 All paths share the same public surface (``complete(system, user) -> str``),
 the same retry policy (exponential backoff on rate-limit / server / transient
@@ -34,6 +35,14 @@ from bmc_agent.config import Config
 from bmc_agent.logger import get_logger
 
 logger = get_logger("llm")
+
+_CODEX_COMPLETION_GUARD = (
+    "You are executing a single stateless BMC-Agent backend request. "
+    "Do not edit files, run shell commands, inspect the repository, start "
+    "follow-up tasks, or broaden the investigation. Use only the prompt below "
+    "unless it explicitly defines a bounded JSON tool protocol. Return only "
+    "the requested final content/schema.\n\n"
+)
 
 
 #: Anthropic model families that reject the ``temperature`` parameter (newer
@@ -999,9 +1008,11 @@ class LLMClient:
         """Shell out to the Codex CLI (``codex exec``), non-interactive.
 
         Mirrors ``_complete_claude_code``: prompt via stdin, auth delegated to
-        the local Codex install. Best-effort -- Codex output is plain text (no
-        JSON envelope); temperature/max_tokens are not exposed per call. Raises
-        LLMError if the CLI is absent so the caller can fall back.
+        the local Codex install. Calls are ephemeral so this behaves like a
+        one-shot backend request, not a persistent interactive session.
+        Best-effort -- Codex output is plain text (no JSON envelope);
+        temperature/max_tokens are not exposed per call. Raises LLMError if the
+        CLI is absent so the caller can fall back.
         """
         import subprocess
         import tempfile
@@ -1013,13 +1024,14 @@ class LLMClient:
         except OSError:
             out_path = ""
 
-        cmd = [cli, "exec", "--sandbox", "read-only", "--cd", os.getcwd()]
+        cmd = [cli, "exec", "--ephemeral", "--sandbox", "read-only", "--cd", os.getcwd()]
         if out_path:
             cmd += ["--output-last-message", out_path]
         model = (self.config.llm_model or "").strip()
         if model and "/" not in model and "gpt" in model.lower():
             cmd += ["--model", model]
-        full = (system_prompt + "\n\n" + user_prompt) if system_prompt else user_prompt
+        prompt_body = (system_prompt + "\n\n" + user_prompt) if system_prompt else user_prompt
+        full = _CODEX_COMPLETION_GUARD + prompt_body
         timeout_s = float(
             getattr(self.config, "codex_timeout_s", None)
             or getattr(self.config, "claude_code_timeout_s", None)

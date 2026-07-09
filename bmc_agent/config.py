@@ -131,7 +131,7 @@ class Config:
     #                          most self-hosted endpoints)
     #   "claude-code"      -- shell out to the local Claude Code CLI (`claude -p`).
     #                          No API key required: uses the host's existing login.
-    #   "codex"            -- shell out to the local Codex CLI (`codex exec`).
+    #   "codex"            -- shell out to the local Codex CLI (`codex exec --ephemeral`).
     #                          No API key required: uses the host's existing login.
     # Empty string => auto-detect: claude-code when no API key is set anywhere,
     # otherwise openai for K2-Think / /v1 base URLs and anthropic for the rest.
@@ -165,7 +165,9 @@ class Config:
     # Off by default (text-only, identical shape to the API path). Toggle via
     # ``--claude-code-agentic`` or ``BMC_AGENT_CLAUDE_CODE_AGENTIC=1``.
     claude_code_agentic: bool = False
-    codex_bin: str = "codex"          # Codex CLI; BMC_AGENT_CODEX_BIN to override
+    # Codex CLI provider. LLM calls are invoked with `codex exec --ephemeral`
+    # so they behave as one-shot backend requests.
+    codex_bin: str = "codex"          # BMC_AGENT_CODEX_BIN to override
     codex_timeout_s: float = 600.0
     # Loop-invariant synthesis: assume the loop body's signed arithmetic does not
     # overflow (mathematical-integer semantics), so textbook invariants like

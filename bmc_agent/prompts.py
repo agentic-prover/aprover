@@ -539,9 +539,12 @@ Respond with ONLY valid JSON in this exact format:
 
 REPRODUCER_PROMPT = """\
 You are generating a C reproducer that demonstrates a bug AGAINST THE REAL
-LIBRARY. The reproducer will be compiled and linked against the project's
-installed .so / .a; a crash in YOUR fabricated code does NOT validate the
-bug, only a crash in the real library code does.
+TARGET, not against a mock, harness artifact, or fabricated copy of the code.
+For a user-space library this usually means compiling and linking against the
+installed .so / .a. For a Linux driver or kernel context, this means identifying
+the realistic kernel/framework entrypoint or honestly reporting that a standalone
+user-space C reproducer is not the right artifact. A crash in YOUR fabricated
+code does NOT validate the bug; only a failure in the real target code does.
 
 A real bug was found in function '{buggy_function}'. The call chain from the
 system entry point to the buggy function is:
@@ -553,47 +556,48 @@ The counterexample (variable state that triggers the bug):
 Function signatures (these are real symbols you call — do NOT re-implement them):
 {function_signatures}
 
-Your task: emit a minimal C ``main()`` that drives the REAL library to
-trigger the bug.
+Your task: emit the minimal C reproducer when the target exposes a user-space
+entrypoint that can drive the REAL target to trigger the bug. If the target is a
+kernel driver or the counterexample is only reachable through the verification
+harness, emit the UNREPRODUCIBLE marker with the concrete reason.
 
 HARD CONSTRAINTS — your reproducer will be REJECTED if it violates any of these:
 
-  1. MUST `#include <archive.h>` (and `<archive_entry.h>` if you use entries).
-     The reproducer is compiled with `-larchive` and linked against the real
-     project's shared library. Internal headers (`*_private.h`) are NOT on
-     the include path — don't reach for them.
+  1. Use only the externally reachable interface for THIS target. For a
+     user-space library, include the real installed public header(s) named by
+     the context and link the real library; do not assume any project-specific
+     header unless the context explicitly says so. For Linux drivers / DRIVER
+     CONTEXT PACKET, reason in terms of kernel framework callbacks, probe/remove
+     lifecycles, ioctl/sysfs/IIO/netdev entrypoints, or documented
+     hardware/event paths; a normal `main()` often cannot reproduce those
+     directly.
 
-  2. MUST NOT re-implement project functions inline. If you redefine
-     `entry_list_add`, `add_entry`, `archive_match_*`, etc. in your own C,
-     you're testing your own stub, not the real library. The link step
-     will use the real symbols regardless of what you define, but any
-     "crash" in your inline duplicate is a synthetic FP, not a real bug.
+  2. MUST NOT re-implement project functions inline. If you define your own
+     copy of the target function, helpers, framework functions, or library
+     functions in the reproducer, you are testing your own stub, not the real
+     target. Any "crash" in that duplicate is a synthetic FP, not a real bug.
 
-  3. MUST NOT fabricate copies of internal structs (`struct match_file`,
-     `struct entry_list`, `struct archive_match`, etc.). These are opaque
-     types. Use the public-API constructors (`archive_match_new()`,
-     `archive_entry_new()`, …) to obtain instances, and the public setters
-     to populate them. Pointer arithmetic on opaque pointers / direct
-     field access is forbidden — there is no way to do that from outside
-     the library and reach a real bug.
+  3. MUST NOT fabricate copies of internal structs or write internal fields
+     directly unless those fields are part of a documented external ABI. Use
+     real public constructors/setters, syscalls/ioctls, sysfs/IIO attributes,
+     framework callbacks, or lifecycle events to build state. Pointer arithmetic
+     on opaque pointers and direct field access to private data are forbidden.
 
-  4. MUST drive state via public-API calls only. To set a struct's
-     internal state, you call the public functions that set that state.
-     If the counterexample requires a state no public API can produce,
-     emit exactly `// UNREPRODUCIBLE: <one-line reason>` and nothing else
-     — that's the honest answer, and it's what realism uses to demote
-     the finding.
+  4. MUST drive state via externally reachable operations only. If the
+     counterexample requires a state no real caller, kernel lifecycle, hardware
+     event, or documented API can produce, emit exactly
+     `// UNREPRODUCIBLE: <one-line reason>` and nothing else. That is the honest
+     answer, and realism uses it to demote the finding.
 
-  5. If the function can take attacker-controlled bytes (filename,
-     archive contents), construct those as plain `char[]` arrays inline.
-     Keep everything in-memory: `archive_read_open_memory`,
-     `archive_write_open_memory` (correct signatures: buffer is `void*`
-     not `void**`; size is `size_t value` not `&size_t`).
+  5. If the function can take attacker-controlled bytes or values, construct
+     those concrete values inline and pass them through the realistic entrypoint
+     for this target domain. Do not invent a generic userspace API path when the
+     context only describes a kernel-driver callback or CBMC harness state.
 
 Respond with ONLY valid JSON in this exact format:
 {{
-  "reproducer_code": "<complete C source — MUST start with #include <archive.h> OR be exactly the UNREPRODUCIBLE comment>",
-  "explanation": "<brief explanation of why these inputs trigger the real-library bug>",
+  "reproducer_code": "<complete C source for a user-space externally reachable target OR exactly the UNREPRODUCIBLE comment>",
+  "explanation": "<brief explanation of why these inputs trigger the real target bug>",
   "concrete_values": {{
     "<variable>": "<value>",
     ...
@@ -630,10 +634,10 @@ HARD CONSTRAINTS — your reproducer will be REJECTED if it violates any of thes
      function, its parameter types, and the project's declarations are
      compiled together with your program. Do NOT assume any specific
      third-party library and do NOT ``#include`` a library public-API header
-     such as ``<archive.h>`` — that framing is a stray artifact of an upstream
-     step and does NOT apply to this target. Use only the standard headers you
-     actually need (``<stdint.h>``, ``<string.h>``, ``<stdlib.h>`` ...) plus
-     any project header that genuinely declares the functions you call.
+     — that framing is a stray artifact of an upstream step and does NOT apply
+     to this target. Use only the standard headers you actually need
+     (``<stdint.h>``, ``<string.h>``, ``<stdlib.h>`` ...) plus any project
+     header that genuinely declares the functions you call.
 
   2. MUST NOT re-implement the project functions inline. The link/compile step
      uses the real symbols; any "crash" in a duplicate you define yourself is a
@@ -812,9 +816,10 @@ patterns you should rule out FIRST:
      struct states no real caller can produce. Before voting
      REALISTIC, you must identify the SPECIFIC entry point an attacker
      controls — appropriate to THIS codebase per the threat model below
-     (a library public-API call, a syscall/trap argument, a network
-     packet or file/image/format the code parses, a device/MMIO/DMA
-     interface) — AND the inputs to it that produce the state the
+     (a library public-API call, syscall/ioctl/sysfs/IIO/netdev path, kernel
+     framework callback/lifecycle, network packet or file/image/format the code
+     parses, device/MMIO/DMA interface, hardware event) — AND the inputs/events
+     to it that produce the state the
      counterexample requires. If you can only say "an attacker could
      somehow corrupt this field," it's not enough — name the entry point.
 
@@ -835,7 +840,7 @@ patterns you should rule out FIRST:
 
   3. **Witness-uses-uninitialized-state**: CBMC may exhibit a witness
      where a pointer is non-NULL but points to deallocated memory, or
-     a field has a stack-address value. If no public-API sequence
+     a field has a stack-address value. If no real entrypoint sequence
      produces that exact state (free-without-null, write-then-free
      out of order, etc.), it is NOT a real bug — even if the function
      under test lacks the guard that would prevent it.
@@ -879,11 +884,12 @@ ALL of these:
 
   (a) Can you name a specific entry point an attacker controls,
       appropriate to THIS codebase per the threat model below (a
-      library public-API call, a syscall/trap argument, a network
-      packet or file/image/format the code parses, a device/MMIO
-      interface)?
-  (b) Can you describe what bytes/values the attacker supplies (file or
-      packet bytes, header fields, argument values) to that entry point?
+      library public-API call, syscall/ioctl/sysfs/IIO/netdev path,
+      kernel framework callback/lifecycle, network packet or file/image/format
+      the code parses, device/MMIO/DMA interface, hardware event)?
+  (b) Can you describe what bytes/values/events the attacker or environment
+      supplies (file or packet bytes, header fields, argument values, lifecycle
+      events, hardware/device states) to that entry point?
   (c) Walking from that entry point through the codebase, can you
       explain how those bytes turn into the counterexample's
       precondition state?
@@ -925,8 +931,9 @@ the class is real but cannot name that caller, the verdict is UNREALISTIC.
 
 EXCEPTION — ENTRY POINTS need no caller. If the function under test is ITSELF an
 attacker-controlled boundary — a syscall/trap handler, a parser of attacker bytes
-(file / image / packet / DTB / ELF), a public library API, or a device/MMIO/DMA
-interface (i.e. you can answer (a) by pointing at the function itself) — then its
+(file / image / packet / DTB / ELF), a public library API, a kernel framework
+callback/lifecycle, or a device/MMIO/DMA interface (i.e. you can answer (a) by
+pointing at the function itself) — then its
 OWN parameters ARE the attacker input. No in-corpus caller is required: a
 REALISTIC direct input to the function makes it REALISTIC. Do not demote a genuine
 entry-point bug merely because no other function in the corpus calls it.
@@ -1017,28 +1024,30 @@ TURN 1 — FIRST READ (no skepticism yet)
   pattern-match. Don't audit yet.
 
 TURN 2 — REACHABILITY CHALLENGE
-  Now play the skeptic. Find an entry point an attacker controls (per
-  the threat model below — a library public-API call, a syscall/trap
-  argument, a network packet or file/image/format the code parses, a
-  device/MMIO interface) which (directly or transitively) invokes
-  `{function_name}`. You need to commit to one of three answers:
+  Now play the skeptic. Find an externally reachable entry point for this
+  target domain which (directly or transitively) invokes `{function_name}`. Per
+  the threat model below, this may be a library public-API call, syscall/ioctl,
+  sysfs/IIO/netdev path, kernel framework callback/lifecycle, network packet or
+  file/image/format the code parses, device/MMIO/DMA interface, or hardware
+  event. You need to commit to one of three answers:
 
   (a) BEHAVIORAL REACHABILITY (sufficient for REALISTIC):
-      You can identify an attacker-controlled entry that calls this
-      function with attacker-controllable input AND you can describe a
-      behavioral pattern in this function that misbehaves under
-      hostile inputs (missing guard, length-based parser without
-      bounds check, type confusion on attacker-typed field, etc).
+      You can identify a real domain entry point that calls this function with
+      attacker-controllable or environment-controllable input AND you can
+      describe a behavioral pattern in this function that misbehaves under
+      hostile inputs/events (missing guard, length-based parser without bounds
+      check, type confusion on attacker-typed field, lifecycle state mismatch,
+      etc).
       You do NOT need to fully byte-trace from file-format bytes
       to the counterexample's exact precondition values — that
       level of trace is rarely possible without active code
       search. Documented seed bugs (next_field-class OOB reads
       on length-based parsers, off-by-one in size calculators
-      called from public format-text APIs) live here.
+      called from externally reachable formatting/parsing paths) live here.
 
   (b) STRUCTURAL UNREACHABILITY (forces UNREALISTIC):
       The counterexample requires a struct state that NO
-      sequence of public-API calls can produce — for example,
+      sequence of real domain-entrypoint operations can produce — for example,
       a pointer that is freed-but-not-nulled when the only free
       site in the codebase nulls immediately after. This is the
       classic harness-artifact pattern.
@@ -1056,17 +1065,17 @@ TURN 2 — REACHABILITY CHALLENGE
 TURN 2.5 — HARNESS INITIAL-STATE AUDIT (NEW, REQUIRED)
   Read the CBMC HARNESS section above carefully. The harness is the
   code that set up the variables before {function_name} ran. Audit
-  its initial-state setup against the public-API invariants:
+  its initial-state setup against the real domain-entrypoint invariants:
 
-  Q1: Does the harness call public-API functions to construct the
-      input struct(s), or does it use ``__VERIFIER_nondet_*`` /
+  Q1: Does the harness call real public/domain entrypoint operations to
+      construct the input struct(s), or does it use ``__VERIFIER_nondet_*`` /
       direct field writes / arbitrary memory layouts?
   Q2: For every struct field that appears in the counterexample
-      witness, ask: does a public-API call sequence ever produce
+      witness, ask: does a real entrypoint sequence ever produce
       that field value? Specific FP patterns to catch:
         - pointer field non-NULL but pointing at a stack address
-          ("&stack_buf") or freed memory — public APIs never leak
-          stack/freed pointers into struct fields
+          ("&stack_buf") or freed memory — real construction/lifecycle paths
+          should not leak stack/freed pointers into struct fields
         - "freed but not nulled" state — if the codebase's free
           paths null the pointer immediately after free, this state
           is unreachable
@@ -1075,24 +1084,22 @@ TURN 2.5 — HARNESS INITIAL-STATE AUDIT (NEW, REQUIRED)
           ≥ N", an index outside the allocated bound)
         - arbitrary 2-3 byte buffers ("char buf[2]") passed where
           callers always pass full structs
-        - the harness skips initializing a field that public-API
-          construction always sets (e.g. magic number, type tag)
+        - the harness skips initializing a field that real construction or
+          lifecycle code always sets (e.g. magic number, type tag)
         - PAIRED FIELDS (count, array_pointer): when a struct has a
           (count, pointer) pair and the witness has count > 0 with
           pointer == NULL, look in the codebase for a sibling
           add_*/append_*/*_init function that maintains the invariant
-          "set pointer before incrementing count". The libarchive
-          archive_match add_owner_id pattern (count incremented AFTER
-          realloc sets ids->ids) is the canonical example. Witness
-          state count>0+pointer==NULL is unreachable from public-API
-          construction → UNREALISTIC.
+          "set pointer before incrementing count". Witness state
+          count>0+pointer==NULL is unreachable from real construction if that
+          invariant always holds -> UNREALISTIC.
   Q3: Is the trigger sequence (e.g. "free X then read X") something
-      a public API can produce, or only the harness's nondet writes?
+      a real domain entrypoint can produce, or only the harness's nondet writes?
 
-  If Q1 shows the harness shortcuts public-API construction AND Q2
-  surfaces any field whose witness value is unreachable from public-
-  API state, this is a HARNESS-ARTIFACT FP. Vote UNREALISTIC, citing
-  the specific harness line(s) and the public-API invariant that
+  If Q1 shows the harness shortcuts real construction/lifecycle setup AND Q2
+  surfaces any field whose witness value is unreachable from real domain state,
+  this is a HARNESS-ARTIFACT FP. Vote UNREALISTIC, citing
+  the specific harness line(s) and the real entrypoint invariant that
   rules out the witness state. This Turn catches the FP class that
   Turn 3's stub-callee analysis misses: invalid INPUTS to the
   function-under-test (vs. invalid OUTPUTS from its callees).
@@ -1128,7 +1135,7 @@ TURN 5 — FINAL VERDICT
   - UNREALISTIC if ANY of these holds:
     * turn 2 reached STRUCTURAL unreachability (case b);
     * turn 2.5 surfaced a harness-artifact in the initial state
-      (impossible struct field values for public-API construction);
+      (impossible struct field values for real construction/lifecycle);
     * turn 3 surfaced a stub disconnect;
     * turn 4 Q1 failed (the bug type is mathematically impossible
       with realistic input).
@@ -1142,13 +1149,13 @@ TURN 5 — FINAL VERDICT
 OUTPUT FORMAT — JSON, all turns visible
 {{
   "turn_1_first_read": "<pattern matched>",
-  "turn_2_reachability": "<public-API entry + behavioral pattern (case a), structural unreachability (case b), or genuinely uncertain (case c)>",
-  "turn_2_5_harness_initial_state": "<Q1: harness uses public-API construction OR nondet/direct field writes? Q2: any field value in witness that public-API state cannot produce (cite specific harness line + public-API invariant)? Q3: trigger sequence achievable from public API?>",
+  "turn_2_reachability": "<real domain entrypoint + behavioral pattern (case a), structural unreachability (case b), or genuinely uncertain (case c)>",
+  "turn_2_5_harness_initial_state": "<Q1: harness uses real construction/lifecycle OR nondet/direct field writes? Q2: any field value in witness that real domain state cannot produce (cite specific harness line + invariant)? Q3: trigger sequence achievable from a real domain entrypoint?>",
   "turn_3_stub_disconnect": "<yes + specific clause violated, OR 'no disconnect'>",
   "turn_4_q1_q2": "<Q1 result + reason, Q2 result + reason>",
   "verdict": "REALISTIC" | "UNREALISTIC" | "UNCERTAIN",
   "reasoning": "<one-paragraph synthesis of turns 1-5>",
-  "exploit_scenario": "<for REALISTIC: the specific public-API call sequence + attacker bytes. For UNREALISTIC: which turn failed and why. For UNCERTAIN: what info you need>",
+  "exploit_scenario": "<for REALISTIC: the specific real entrypoint sequence + attacker/kernel-visible inputs. For UNREALISTIC: which turn failed and why. For UNCERTAIN: what info you need>",
   "confidence": "high" | "medium" | "low"
 }}
 """
@@ -1168,15 +1175,16 @@ Your task is DIFFERENT: independently scan the FUNCTION UNDER TEST, its
 callers, callees, and the surrounding source for OTHER exploitable defects
 that the CBMC finding did NOT capture.
 
-A defect is exploitable if an attacker who controls external input (file
-bytes, network data, malformed archive, hostile API call sequence) can reach
+A defect is exploitable if an attacker who controls external input (file bytes,
+network data, malformed packets, device state, or hostile API/lifecycle
+sequence) can reach
 a state that crashes, corrupts memory, leaks data, or otherwise violates a
 safety/security property.
 
 EXAMPLES of patterns worth reporting:
 - Partial-init / error-rollback paths that leave a struct half-initialized,
   so a later cleanup or use operates on inconsistent state.
-- Public-API call sequences (double-init, call-after-cleanup, out-of-order)
+- Public/domain entrypoint sequences (double-init, call-after-cleanup, out-of-order)
   the implementation doesn't handle defensively.
 - Untrusted input fields controlling a size/index that bypasses a check.
 - A nearby function in the same file has the same vulnerability pattern.
