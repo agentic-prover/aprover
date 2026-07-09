@@ -225,16 +225,21 @@ def test_verify_plan_is_default_with_no_plan_escape():
 
 def test_agentic_codex_implies_codex_provider():
     from bmc_agent.cli import _apply_provider_args, build_parser
+    from bmc_agent.agent_registry import AGENT_ROLES
 
     parser = build_parser()
     args = parser.parse_args(
         ["verify", "--source", "example.c", "--driver", "drv", "--agentic-codex"]
     )
-    config = SimpleNamespace()
+    config = SimpleNamespace(llm_role_overrides={})
 
     _apply_provider_args(config, args)
 
     assert config.llm_provider == "codex"
+    assert {
+        role: settings.get("provider")
+        for role, settings in config.llm_role_overrides.items()
+    } == {role: "codex" for role in AGENT_ROLES}
 
     explicit = parser.parse_args(
         [
@@ -248,8 +253,29 @@ def test_agentic_codex_implies_codex_provider():
             "openai",
         ]
     )
-    explicit_config = SimpleNamespace()
+    explicit_config = SimpleNamespace(llm_role_overrides={})
 
     _apply_provider_args(explicit_config, explicit)
 
     assert explicit_config.llm_provider == "openai"
+
+
+def test_provider_codex_is_accepted_for_non_agentic_runs():
+    from bmc_agent.cli import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "verify",
+            "--source",
+            "example.c",
+            "--driver",
+            "drv",
+            "--no-agentic",
+            "--provider",
+            "codex",
+        ]
+    )
+
+    assert args.agentic is False
+    assert args.provider == "codex"

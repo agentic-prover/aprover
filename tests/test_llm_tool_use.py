@@ -314,6 +314,76 @@ def test_complete_with_tools_anthropic_uses_native_loop():
     assert m.called
 
 
+def test_complete_with_tools_codex_dispatches_handler():
+    """Codex provider uses the bounded JSON protocol instead of Anthropic."""
+    from bmc_agent.config import Config
+
+    cfg = Config(artifact_dir="/tmp/_llm_tu_test")
+    cfg.llm_provider = "codex"
+    client = LLMClient(cfg)
+    handler_calls = []
+
+    def handler(args):
+        handler_calls.append(args)
+        return {"answer": 42}
+
+    with patch.object(
+        LLMClient,
+        "_complete_codex",
+        side_effect=[
+            '{"tool":"lookup","arguments":{"name":"target"}}',
+            '{"final":"DONE"}',
+        ],
+    ) as mock_codex:
+        result = client.complete_with_tools(
+            "sys",
+            "usr",
+            tools=[
+                ToolDef(
+                    name="lookup",
+                    description="Look up a target",
+                    parameters={"type": "object"},
+                )
+            ],
+            tool_handlers={"lookup": handler},
+            max_iterations=3,
+            max_tool_calls=2,
+        )
+
+    assert result.text == "DONE"
+    assert result.iterations == 2
+    assert result.tool_calls_made == 1
+    assert handler_calls == [{"name": "target"}]
+    assert mock_codex.call_count == 2
+
+
+def test_complete_with_tools_codex_accepts_domain_json_as_final():
+    """Tool-using agents often request a final domain JSON object."""
+    from bmc_agent.config import Config
+
+    cfg = Config(artifact_dir="/tmp/_llm_tu_test")
+    cfg.llm_provider = "codex"
+    client = LLMClient(cfg)
+
+    with patch.object(
+        LLMClient,
+        "_complete_codex",
+        return_value='{"flags":{"signed_overflow":true},"reasoning":"needed"}',
+    ) as mock_codex:
+        result = client.complete_with_tools(
+            "sys",
+            "usr",
+            tools=[ToolDef(name="lookup", description="d", parameters={})],
+            tool_handlers={"lookup": lambda args: "unused"},
+            max_iterations=3,
+        )
+
+    assert result.text == '{"flags":{"signed_overflow":true},"reasoning":"needed"}'
+    assert result.iterations == 1
+    assert result.tool_calls_made == 0
+    assert mock_codex.call_count == 1
+
+
 def test_complete_with_tools_serializes_non_string_result():
     """Handler returning a dict/list gets json.dumps'd before being sent back."""
     cfg = _mock_config_openai()

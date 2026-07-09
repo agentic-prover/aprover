@@ -106,7 +106,7 @@ uv run bmc-agent verify-dir \
 
 # Route spec-gen + refinement through your local Claude Code login (no API key);
 # add --claude-code-agentic to let it read the source tree (Read/Grep/Glob), or
-# --provider claude-code to route every role through the CLI.
+# --provider claude-code / --provider codex to route every role through a local CLI.
 uv run bmc-agent verify --source examples/simple_driver.c --driver simple_driver \
                         --specs-via-claude-code
 
@@ -185,11 +185,13 @@ All settings are available as environment variables or `Config` dataclass fields
 | Variable | Default | Purpose |
 |---|---|---|
 | `BMC_AGENT_LLM_MODEL` | `claude-sonnet-4-6` | LLM model |
-| `BMC_AGENT_LLM_PROVIDER` | _(auto)_ | LLM provider for all roles: `anthropic`, `openai` (K2 / OpenAI-compatible), or `claude-code` (local `claude` CLI, no API key). Empty = auto-detect. Per-role override: `BMC_AGENT_LLM_<ROLE>_PROVIDER` for `SPEC_GEN`/`REFINEMENT`/`REALISM`/… (CLI sugar: `--provider`, `--specs-via-claude-code`) |
+| `BMC_AGENT_LLM_PROVIDER` | _(auto)_ | LLM provider for all roles: `anthropic`, `openai` (K2 / OpenAI-compatible), `claude-code` (local `claude` CLI), or `codex` (local `codex exec`), with no API key for local CLI modes. Empty = auto-detect. Per-role override: `BMC_AGENT_LLM_<ROLE>_PROVIDER` for `SPEC_GEN`/`REFINEMENT`/`REALISM`/… (CLI sugar: `--provider`, `--specs-via-claude-code`) |
 | `BMC_AGENT_CLAUDE_CODE_BIN` | `claude` | Path to the Claude Code CLI (used only when provider is `claude-code`) |
 | `BMC_AGENT_CLAUDE_CODE_TIMEOUT_S` | `600` | Per-call timeout for the `claude -p` path (seconds) |
 | `BMC_AGENT_CLAUDE_CODE_AGENTIC` | `false` | Let the `claude-code` provider use read-only tools (`Read`/`Grep`/`Glob`) to explore the source tree while drafting/refining specs, instead of a one-shot text completion (CLI: `--claude-code-agentic`) |
 | `BMC_AGENT_CLAUDE_CODE_TOOLS` | `Read,Grep,Glob` | Tool allowlist for agentic claude-code mode (keep read-only) |
+| `BMC_AGENT_CODEX_BIN` | `codex` | Path to the Codex CLI (used only when provider is `codex`) |
+| `BMC_AGENT_CODEX_TIMEOUT_S` | `600` | Per-call timeout for the `codex exec` path (seconds) |
 | `BMC_AGENT_CBMC_PATH` | `cbmc` | CBMC binary path |
 | `BMC_AGENT_CBMC_UNWIND` | `4` | Loop unwinding bound |
 | `BMC_AGENT_CBMC_TIMEOUT` | `120` | Solver timeout per function (seconds) |

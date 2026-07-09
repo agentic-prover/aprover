@@ -174,16 +174,20 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
     # deterministic harness translation, compile+run dynamic validation) has no
     # LLM and is unaffected.
     ALL_AGENT_ROLES = AGENT_ROLES
-    # Which roles are FORCED onto the Claude Code CLI:
+    # Which roles are FORCED onto a local CLI backend:
     #   --agentic-claude-code -> EVERY agent role (the "all claude-code" preset)
+    #   --agentic-codex       -> EVERY agent role (the "all codex" preset)
     #   --agentic-refine      -> refinement only (LEAN; rest stay on the default
     #                            provider — recommended for batches)
     #   --specs-via-claude-code -> spec_gen + refinement (explicit)
     #   --agentic (general)   -> forces NOTHING; each role keeps its per-role /
     #                            default / resolved provider (API, claude-code, …).
     cc_roles: set[str] = set()
+    codex_roles: set[str] = set()
     if agentic_cc:
         cc_roles |= set(ALL_AGENT_ROLES)
+    if agentic_codex and provider in ("", "codex"):
+        codex_roles |= set(ALL_AGENT_ROLES)
     if getattr(args, "specs_via_claude_code", False):
         cc_roles |= {"spec_gen", "refinement"}
     if agentic_refine:
@@ -206,6 +210,20 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
                 merged["provider"] = "claude-code"
             overrides[role] = merged
 
+    if codex_roles:
+        overrides = getattr(config, "llm_role_overrides", None)
+        if overrides is None:
+            overrides = {}
+            config.llm_role_overrides = overrides  # type: ignore[attr-defined]
+        for role in sorted(codex_roles):
+            merged = dict(overrides.get(role, {}))
+            # The flag is the DEFAULT; an explicit per-agent env override
+            # (BMC_AGENT_LLM_<ROLE>_PROVIDER=...) WINS so any agent can be
+            # re-pointed to an API/claude-code backend.
+            if not merged.get("provider"):
+                merged["provider"] = "codex"
+            overrides[role] = merged
+
     if want_cc_tools:
         config.claude_code_agentic = True  # type: ignore[attr-defined]
         # Scope the read-only file access to the source tree: the source file's
@@ -220,7 +238,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         seen: set[str] = set()
         config.claude_code_add_dirs = [d for d in dirs if not (d in seen or seen.add(d))]  # type: ignore[attr-defined]
 
-    if agentic or agentic_cc or agentic_refine:
+    if agentic or agentic_cc or agentic_refine or agentic_codex:
         # The verify/verify-dir-only guards. Harmless on commands that don't use
         # them (generate, etc.) — the fields just go unread.
         config.enable_soundness_gate = True  # type: ignore[attr-defined]
@@ -236,7 +254,7 @@ def _apply_provider_args(config: "object", args: argparse.Namespace) -> None:
         # --agentic-refine; the contract POLICY applies either way).
         config.enable_split_spec_gen = True  # type: ignore[attr-defined]
 
-    if agentic or agentic_cc:
+    if agentic or agentic_cc or agentic_codex:
         # Component gating (both agentic presets). The CLASSIFIER stays ON: it drives
         # the spurious→refinement→soundness-gate loop (the agentic centerpiece),
         # so it must NOT be disabled by default. The dynamic reproducer is ON.
@@ -1332,6 +1350,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_spec_gen_tools = False
     if getattr(args, "no_realism_tools", False):
         config.enable_realism_tools = False
+    if getattr(args, "no_triage", False):
+        config.enable_phase_3e_triage = False
     if getattr(args, "minimal", False):
         config.enable_realism_check = False
         config.enable_dynamic_validation = False
@@ -1339,6 +1359,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_feedback_loop = False
         config.enable_spec_refiner = False
         config.enable_inlining_advisor = False
+        config.enable_bmc_config_agent = False  # type: ignore[attr-defined]
+        config.enable_reproducer_agent = False  # type: ignore[attr-defined]
+        config.enable_agentic_harness_repair = False
+        config.enable_phase_3e_triage = False
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
     _apply_model_arg(config, args)
@@ -1833,9 +1857,12 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_feedback_loop = False
         config.enable_spec_refiner = False
         config.enable_inlining_advisor = False
+        config.enable_bmc_config_agent = False  # type: ignore[attr-defined]
+        config.enable_reproducer_agent = False  # type: ignore[attr-defined]
+        config.enable_agentic_harness_repair = False
+        config.enable_phase_3e_triage = False
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
-        config.enable_phase_3e_triage = False
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
 
@@ -2484,12 +2511,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--provider",
             default="",
-            choices=["", "anthropic", "openai", "claude-code"],
+            choices=["", "anthropic", "openai", "claude-code", "codex"],
             metavar="PROVIDER",
             help=(
                 "Explicit LLM provider for all roles (default: auto-detect / env; "
                 "--agentic-codex implies codex). "
-                "'claude-code' shells out to the local Claude Code CLI, reusing "
+                "'claude-code' and 'codex' shell out to the local CLI, reusing "
                 "your existing login — no API key required."
             ),
         )

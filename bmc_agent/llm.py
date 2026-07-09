@@ -1,7 +1,7 @@
 """
 LLM client wrapper for BMC-Agent.
 
-Dispatches between three providers, selected by ``config.resolved_provider()``:
+Dispatches between four providers, selected by ``config.resolved_provider()``:
 
 * ``"anthropic"`` -- native Anthropic Messages API via the ``anthropic`` SDK
   (claude-* models on api.anthropic.com or via the OpenRouter proxy).
@@ -12,6 +12,8 @@ Dispatches between three providers, selected by ``config.resolved_provider()``:
   No API key required: the host's existing Claude Code login is reused. Useful
   when you want bmc-agent's reasoning to run through your local subscription
   rather than the API.
+* ``"codex"`` -- the Codex CLI in non-interactive mode (``codex exec``), again
+  reusing the host's existing login instead of an API key.
 
 All paths share the same public surface (``complete(system, user) -> str``),
 the same retry policy (exponential backoff on rate-limit / server / transient
@@ -1002,8 +1004,18 @@ class LLMClient:
         LLMError if the CLI is absent so the caller can fall back.
         """
         import subprocess
+        import tempfile
         cli = (getattr(self.config, "codex_bin", None) or "codex").strip()
-        cmd = [cli, "exec"]
+        out_path = ""
+        try:
+            fd, out_path = tempfile.mkstemp(prefix="bmc-agent-codex-", suffix=".txt")
+            os.close(fd)
+        except OSError:
+            out_path = ""
+
+        cmd = [cli, "exec", "--sandbox", "read-only", "--cd", os.getcwd()]
+        if out_path:
+            cmd += ["--output-last-message", out_path]
         model = (self.config.llm_model or "").strip()
         if model and "/" not in model and "gpt" in model.lower():
             cmd += ["--model", model]
@@ -1019,12 +1031,30 @@ class LLMClient:
             raise LLMError(f"codex exec timed out after {timeout_s}s") from exc
         except FileNotFoundError as exc:
             raise LLMError(f"codex CLI not found at {cli!r}. Install Codex or set BMC_AGENT_CODEX_BIN.") from exc
-        if proc.returncode != 0:
-            raise LLMError(f"codex exec exited {proc.returncode}: stderr={proc.stderr[:400]!r}")
-        out = (proc.stdout or "").strip()
-        if not out:
-            raise LLMError("codex exec produced empty stdout")
-        return _strip_reasoning_blocks(out)
+        try:
+            if proc.returncode != 0:
+                raise LLMError(
+                    f"codex exec exited {proc.returncode}: "
+                    f"stderr={proc.stderr[:400]!r} stdout={proc.stdout[:200]!r}"
+                )
+            out = ""
+            if out_path:
+                try:
+                    with open(out_path, "r", encoding="utf-8", errors="replace") as fh:
+                        out = fh.read().strip()
+                except OSError:
+                    out = ""
+            if not out:
+                out = (proc.stdout or "").strip()
+            if not out:
+                raise LLMError("codex exec produced empty output")
+            return _strip_reasoning_blocks(out)
+        finally:
+            if out_path:
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
 
     def _complete_claude_code(
         self,
@@ -1267,6 +1297,27 @@ def _tools_to_anthropic_schema(tools: "list[ToolDef]") -> "list[dict]":
     ]
 
 
+def _extract_json_object(text: str) -> "dict | None":
+    """Best-effort parse of a JSON object from an LLM response."""
+    if not text:
+        return None
+    cleaned = re.sub(r"```(?:json)?\s*", "", text)
+    cleaned = re.sub(r"```", "", cleaned).strip()
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
 def _add_complete_with_tools_to_llm():
     """Bind ``complete_with_tools`` onto :class:`LLMClient`. Done as a
     separate function rather than inlining inside the class body because
@@ -1295,10 +1346,9 @@ def _add_complete_with_tools_to_llm():
         emits a non-tool-call response, ``max_iterations`` round-trips
         complete, or ``max_tool_calls`` tool invocations occur.
 
-        Provider routing: currently requires the openai-compatible path
-        (OpenRouter+Claude, K2 Think, etc.). The anthropic native path
-        raises NotImplementedError. Use a per-role override to ensure
-        spec-gen / realism land on the openai path.
+        Provider routing: OpenAI-compatible and Anthropic-native providers use
+        their function/tool APIs. Codex uses a bounded JSON control protocol
+        over ``codex exec`` and still executes the same in-process handlers.
         """
         # Trust-boundary note — central injection, mirrors :meth:`complete`.
         system_prompt = system_prompt + render_threat_model_context(self.config, role)
@@ -1327,6 +1377,19 @@ def _add_complete_with_tools_to_llm():
 
         try:
             provider = self.config.resolved_provider()
+            if provider == "codex":
+                return self._codex_tool_use_loop(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    tools=tools,
+                    tool_handlers=tool_handlers,
+                    max_iterations=max_iterations,
+                    max_tool_calls=max_tool_calls,
+                    max_tokens_per_turn=max_tokens_per_turn,
+                    temperature=temperature,
+                    result_truncate=result_truncate,
+                )
+
             if provider != "openai":
                 return self._anthropic_tool_use_loop(
                     system_prompt=system_prompt,
@@ -1358,6 +1421,142 @@ def _add_complete_with_tools_to_llm():
                 self.config.llm_api_key = saved_settings["api_key"]
                 self.config.llm_provider = saved_settings["provider"]
                 self._client = saved_settings["client"]
+
+    def _codex_tool_use_loop(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[ToolDef],
+        tool_handlers: "dict[str, Callable[[dict], object]]",
+        max_iterations: int,
+        max_tool_calls: int,
+        max_tokens_per_turn: int,
+        temperature: float,
+        result_truncate: int,
+    ) -> ToolUseResult:
+        """Bounded in-process tool loop driven through ``codex exec``.
+
+        Codex CLI does not expose OpenAI/Anthropic-style function calling, so we
+        ask it to emit one JSON control object per turn and execute the existing
+        bmc-agent tool handlers locally. That keeps tool behavior identical to
+        the API paths while using the user's local Codex login for reasoning.
+        """
+        tool_desc = "\n".join(
+            "- {name}: {desc}; JSON schema: {schema}".format(
+                name=t.name,
+                desc=t.description,
+                schema=json.dumps(t.parameters, sort_keys=True),
+            )
+            for t in tools
+        ) or "(no tools)"
+        protocol = (
+            "\n\n## Tool protocol for this Codex run\n"
+            "You are in a bounded tool-use loop. Respond with exactly one JSON "
+            "object and no surrounding prose.\n"
+            "To call a tool: {\"tool\":\"tool_name\",\"arguments\":{...}}\n"
+            "To finish with non-JSON text: {\"final\":\"your final answer\"}\n"
+            "If the task's requested final answer is itself a JSON object, "
+            "emit that object directly instead of wrapping it.\n"
+            "Available tools:\n"
+            f"{tool_desc}\n"
+            "Use only these JSON control objects for tool calls. The host will "
+            "execute tools and show results in the next turn."
+        )
+        sys = system_prompt + protocol
+        transcript = user_prompt
+        messages: list = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user_prompt},
+        ]
+        tool_calls_made = 0
+
+        for iteration in range(max_iterations):
+            raw = self._complete_codex(
+                sys,
+                transcript,
+                max_tokens=max_tokens_per_turn,
+                temperature=temperature,
+            )
+            messages.append({"role": "assistant", "content": raw})
+            data = _extract_json_object(raw)
+
+            if data is None:
+                # Be tolerant of a direct final answer; most downstream parsers
+                # already recover JSON from prose when they require it.
+                return ToolUseResult(
+                    text=_strip_reasoning_blocks(raw),
+                    iterations=iteration + 1,
+                    tool_calls_made=tool_calls_made,
+                    messages=messages,
+                )
+
+            if "final" in data:
+                return ToolUseResult(
+                    text=_strip_reasoning_blocks(str(data.get("final") or "")),
+                    iterations=iteration + 1,
+                    tool_calls_made=tool_calls_made,
+                    messages=messages,
+                )
+
+            name = str(data.get("tool") or data.get("name") or "").strip()
+            if not name:
+                # Most bmc-agent tool users ask for a domain JSON object as the
+                # final answer. Treat such an object as final instead of forcing
+                # Codex to wrap it in {"final": "..."} and wasting turns.
+                return ToolUseResult(
+                    text=_strip_reasoning_blocks(raw),
+                    iterations=iteration + 1,
+                    tool_calls_made=tool_calls_made,
+                    messages=messages,
+                )
+
+            args = data.get("arguments") or data.get("args") or {}
+            if not isinstance(args, dict):
+                args = {}
+
+            if tool_calls_made >= max_tool_calls:
+                content = (
+                    "ERROR: max_tool_calls cap reached. Emit a final answer now "
+                    "using the evidence you have gathered."
+                )
+                transcript += f"\n\nTOOL RESULT {name}:\n{content}"
+                messages.append({"role": "tool", "name": name, "content": content})
+                continue
+
+            handler = tool_handlers.get(name)
+            if handler is None:
+                content = f"ERROR: tool {name!r} is not registered"
+                transcript += f"\n\nTOOL RESULT {name}:\n{content}"
+                messages.append({"role": "tool", "name": name, "content": content})
+                continue
+
+            try:
+                result = handler(args)
+            except Exception as exc:  # noqa: BLE001
+                content = f"ERROR: tool {name!r} raised {type(exc).__name__}: {exc}"
+                tool_calls_made += 1
+            else:
+                if isinstance(result, str):
+                    content = result
+                else:
+                    try:
+                        content = json.dumps(result, default=str)
+                    except TypeError:
+                        content = str(result)
+                tool_calls_made += 1
+            if len(content) > result_truncate:
+                content = content[:result_truncate] + "\n...[truncated]"
+            transcript += f"\n\nTOOL RESULT {name}:\n{content}"
+            messages.append({"role": "tool", "name": name, "content": content})
+
+        return ToolUseResult(
+            text="",
+            iterations=max_iterations,
+            tool_calls_made=tool_calls_made,
+            messages=messages,
+            error=f"max_iterations ({max_iterations}) exceeded",
+        )
 
     def _openai_tool_use_loop(
         self,
@@ -1683,6 +1882,7 @@ def _add_complete_with_tools_to_llm():
         )
 
     LLMClient.complete_with_tools = complete_with_tools  # type: ignore[attr-defined]
+    LLMClient._codex_tool_use_loop = _codex_tool_use_loop  # type: ignore[attr-defined]
     LLMClient._openai_tool_use_loop = _openai_tool_use_loop  # type: ignore[attr-defined]
     LLMClient._anthropic_tool_use_loop = _anthropic_tool_use_loop  # type: ignore[attr-defined]
 
