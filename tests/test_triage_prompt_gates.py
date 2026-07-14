@@ -140,9 +140,15 @@ def test_g4_documents_the_procedure_and_example():
 
 def test_prompt_addendum_appended_to_base_prompt():
     """The TriageToolsAgent prompt is BASE + addendum, not a
-    replacement. Sanity-check that the base prompt's REAL_BUG /
-    LIKELY_FP / NEEDS_HUMAN vocabulary is still present after the
-    addendum loads."""
+    replacement. Since the base prompt moved to a STRUCTURED judgment
+    (the verdict is DERIVED from sub-answers, not named), sanity-check
+    that BOTH compose: the addendum's G1-G5 gate vocabulary AND the
+    base's structured-judgment schema fields are present."""
+    # addendum gate vocabulary (the G1-G5 reachability gates)
     assert "REAL_BUG" in _SYSTEM_PROMPT_TOOLS
     assert "LIKELY_FP" in _SYSTEM_PROMPT_TOOLS
-    assert "NEEDS_HUMAN" in _SYSTEM_PROMPT_TOOLS
+    # base structured-judgment schema (verdict derived from these)
+    assert "real_defect" in _SYSTEM_PROMPT_TOOLS
+    assert "defect_reachable_in_tree" in _SYSTEM_PROMPT_TOOLS
+    assert "witness_reproducible_as_is" in _SYSTEM_PROMPT_TOOLS
+    assert "needs_human" in _SYSTEM_PROMPT_TOOLS

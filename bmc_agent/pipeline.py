@@ -1052,6 +1052,7 @@ class AMCPipeline:
                         cross_file_caller_contexts=cross_file_caller_contexts,
                     )
 
+                self._log_evidence(validation, fn_name)
                 # Always persist the classification result for this counterexample
                 self.store.save_classification(driver_name, fn_name, validation)
 
@@ -1096,8 +1097,19 @@ class AMCPipeline:
                         # caller, or a stub-disconnect witness with a genuine underlying defect).
                         # Re-tier from confirmed -> latent (a sound DOWNGRADE, not a delete).
                         _tri = getattr(report, "triage", None)
+                        # Triage is the SOLE judge over the merged evidence bundle
+                        # (reproducer / system-entry / dynamic). Its verdict governs the
+                        # disposition: latent -> re-tier; likely_fp/needs_human -> drop to
+                        # unlikely; real_bug -> keep. A spec-refined finding is handled by
+                        # the refiner above, so it is excluded here.
                         _triage_latent = (
                             isinstance(_tri, dict) and _tri.get("verdict") == "latent"
+                            and not _spec_refined
+                            and getattr(report, "confidence", "") != "unlikely"
+                        )
+                        _triage_unreal = (
+                            isinstance(_tri, dict)
+                            and _tri.get("verdict") in ("likely_fp", "needs_human")
                             and not _spec_refined
                             and getattr(report, "confidence", "") != "unlikely"
                         )
@@ -1112,6 +1124,14 @@ class AMCPipeline:
                             logger.info("'%s' -> LATENT via triage verdict (real defect; witness not "
                                         "reachable through an in-tree call path as-is) -- re-tiered "
                                         "from confirmed (sound downgrade)", fn_name)
+                        elif _triage_unreal:
+                            try:
+                                report.confidence = "unlikely"
+                            except Exception:
+                                pass
+                            logger.info("'%s' -> UNLIKELY via triage verdict '%s' (under-determined; "
+                                        "guardrail did not settle it, triage is sole judge here) -- "
+                                        "not counted as confirmed", fn_name, _tri.get("verdict"))
                         else:
                             self.reporter.save_report(report, driver_name)
                             bug_reports.append(report)
@@ -1123,6 +1143,8 @@ class AMCPipeline:
                                         "flags preserved) — not counted as confirmed", fn_name)
                         elif _triage_latent:
                             pass  # already re-tiered + logged as LATENT above
+                        elif _triage_unreal:
+                            pass  # already logged as UNLIKELY via triage above
                         elif getattr(report, "confidence", None) == "unlikely":
                             logger.info("Realism downgraded '%s' → unlikely (not counted as confirmed)", fn_name)
                         else:
@@ -1327,6 +1349,7 @@ class AMCPipeline:
                         parsed_file=parsed,
                         driver_name=driver_name,
                     )
+                    self._log_evidence(validation, fn_name)
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
@@ -1426,6 +1449,7 @@ class AMCPipeline:
                         parsed_file=parsed,
                         driver_name=driver_name,
                     )
+                    self._log_evidence(validation, fn_name)
                     if validation.outcome == CExOutcome.UNRESOLVED:
                         self.reporter._unresolved.append(validation)
                     elif validation.is_real_bug:
@@ -2551,6 +2575,21 @@ class AMCPipeline:
         except Exception as exc:
             logger.warning("advisory triage annotation failed for %s: %s",
                            getattr(func, "name", "?"), exc)
+
+    def _log_evidence(self, validation, fn_name: str = "?") -> None:
+        """Log the merged reproducer / system-entry / dynamic evidence bundle that
+        the triage agent will judge. This makes NO decision -- triage is the sole
+        judge of real / latent / unreal over these artifacts. Skipped under
+        SV-COMP (solver verdict authoritative)."""
+        import os as _os_e
+        if _os_e.environ.get("BMC_SVCOMP_MODE"):
+            return
+        try:
+            from bmc_agent.cex_validator import collect_evidence
+            logger.info("Evidence for '%s' (triage decides real/latent/unreal): %s",
+                        fn_name, collect_evidence(validation))
+        except Exception:
+            pass
 
     def _make_report(
         self,

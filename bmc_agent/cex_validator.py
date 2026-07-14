@@ -2622,6 +2622,53 @@ def _witness_obvious_artifact(counterexample, func=None) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Evidence + adjudication (bug-finding path).
+#
+# Design (2026-07): cex_validator GATHERS EVIDENCE (reachability, dynamic run,
+# reproducer). It does NOT get the final say on real/latent/unreal. The three
+# former signals (reproducer / system-entry reachability / dynamic validation)
+# are merged into one dynamic-reproducer artifact bundle here. The bundle is
+# EVIDENCE only -- it makes no real/latent/unreal judgment. The triage agent is
+# the SOLE judge over these artifacts (pipeline disposition + _log_evidence).
+# ---------------------------------------------------------------------------
+
+def collect_evidence(validation, public_headers=None) -> dict:
+    """Pure extraction of validation ARTIFACTS from a finalized ValidationResult.
+    No judgment of real/latent/unreal happens here."""
+    dyn = getattr(validation, "dynamic_result", None)
+    sei = getattr(validation, "system_entry_input", None) or ""
+    cex = validation.counterexample
+    unreproducible = "UNREPRODUCIBLE" in sei
+    # public-API reachability: either CBMC traced the CEx to a no-caller system
+    # entry, or the reproducer actually links the real public headers (not a
+    # fabricated inline stub that "crashes" on its own re-implementation).
+    public_api_reachable = bool(getattr(validation, "system_entry_reached", False)) or (
+        bool(sei) and not unreproducible and _reproducer_uses_public_api(sei, public_headers)
+    )
+    try:
+        witness_artifact = _witness_obvious_artifact(cex, None) is not None
+    except Exception:
+        witness_artifact = False
+    dyn_outcome = getattr(dyn, "outcome", None)
+    # STRONG signal: the reproducer actually links the real public library (not a
+    # fabricated inline stub, not merely a no-caller "system entry"). Only this
+    # earns a DECISIVE real verdict; a bare no-caller fault via absurd witness
+    # values defers to triage.
+    public_api_reproducer = bool(sei) and not unreproducible and _reproducer_uses_public_api(sei, public_headers)
+    return {
+        "provisional_outcome": validation.outcome.value if getattr(validation, "outcome", None) else None,
+        "public_api_reachable": bool(public_api_reachable),          # weak: system-entry OR real-linking reproducer
+        "public_api_reproducer": bool(public_api_reproducer),        # strong: reproducer links the real library
+        "no_caller_entry": bool(getattr(validation, "system_entry_reached", False)),
+        "dynamic_ran": dyn_outcome in (DynamicOutcome.CONFIRMED, DynamicOutcome.NOT_TRIGGERED),
+        "dynamic_faulted": dyn_outcome == DynamicOutcome.CONFIRMED,
+        "dynamic_signal": getattr(dyn, "signal_name", None),
+        "stub_dependent": bool(witness_artifact),
+        "unreproducible": bool(unreproducible),
+    }
+
+
 def _reproducer_uses_public_api(
     code: str,
     public_headers: "Optional[list[str]]" = None,
