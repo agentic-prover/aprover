@@ -109,31 +109,44 @@ _SYSTEM_PROMPT = (
     "REAL_BUG on that witness. Then ask the independent question: is there still a "
     "real underlying defect reachable by SOME (possibly future) caller? -> LATENT if "
     "yes, LIKELY_FP if no.\n\n"
-    "Four verdicts, no thumbnail:\n"
-    "  * REAL_BUG  — a specific source-level defect that an IN-TREE call path can "
-    "reach AS-IS (a real caller establishes the triggering input).\n"
-    "  * LATENT    — a real source-level defect EXISTS, but the witness is NOT "
-    "reachable through an in-tree call path as-is: it needs an input/precondition NO "
-    "current in-tree caller establishes (a future/adversarial-caller risk), OR the "
-    "specific witness is a stub-disconnect yet the underlying defect is genuine. Use "
-    "LATENT (not REAL_BUG) when the defect is real but only a non-existent/violating "
-    "caller reaches it; use LATENT (not LIKELY_FP) whenever a real defect REMAINS "
-    "after you strip the spurious witness.\n"
-    "  * LIKELY_FP — NO real source-level defect: the witness violates a UNIVERSAL "
-    "invariant no real execution breaks (pure harness/stub artifact), AND you found "
-    "no genuine defect upstream. 'The harness is over-permissive' is necessary but "
-    "NOT sufficient — you must also confirm there is no real defect.\n"
-    "  * NEEDS_HUMAN — the audit is incomplete or genuinely ambiguous after reading "
-    "every relevant function.\n\n"
+    "DELIVER A STRUCTURED JUDGMENT. Answer each sub-question from what you "
+    "ACTUALLY READ; the verdict is DERIVED from your answers, so do not guess "
+    "a label.\n"
+    "  (1) witness_reproducible_as_is: is the EXACT counterexample reachable "
+    "through a real call path? false if it needs harness/stub permissiveness the "
+    "real callee lacks (stub-disconnect — e.g. a stub returns non-NULL for a "
+    "size the real bounded allocator would reject), or an input no code path "
+    "supplies.\n"
+    "  (2) real_defect: treating the CEx as a POINTER to where a bug MIGHT be "
+    "(not the bug itself), is there a genuine source-level defect? It frequently "
+    "lives N frames UPSTREAM or in the CALLER, not where the CEx fired — an "
+    "unchecked multiply/length, a size calculator that under-counts, a caller "
+    "that writes more than the callee allocated. A spurious witness can still "
+    "point to a real defect elsewhere; a reproducible witness with no real defect "
+    "is not one.\n"
+    "  (3) defect_site: file:function where that real defect ACTUALLY manifests "
+    "(where the wrong access happens), or null if real_defect is false.\n"
+    "  (4) defect_reachable_in_tree: at that real site, can an EXISTING in-tree "
+    "caller drive the program into the wrong state AS-IS? false if only a future/"
+    "adversarial or contract-violating caller (one that breaks a precondition "
+    "every current caller respects) reaches it.\n\n"
+    "The verdict is DERIVED from your answers — do NOT emit it yourself:\n"
+    "  * real_defect=false                                   -> LIKELY_FP\n"
+    "  * real_defect=true AND defect_reachable_in_tree=true   -> REAL_BUG\n"
+    "  * real_defect=true AND defect_reachable_in_tree=false  -> LATENT\n"
+    "  (set needs_human=true ONLY if you could not finish the audit after reading "
+    "every relevant function.)\n\n"
     "Respond with ONLY valid JSON, no markdown fences, no commentary:\n"
     "{\n"
-    '  "verdict": "real_bug" | "latent" | "likely_fp" | "needs_human",\n'
+    '  "witness_reproducible_as_is": true | false,\n'
+    '  "real_defect": true | false,\n'
+    '  "defect_site": "<file:function OR null>",\n'
+    '  "defect_reachable_in_tree": true | false,\n'
+    '  "needs_human": true | false,\n'
     '  "confidence": "low" | "medium" | "high",\n'
-    '  "fp_class": "<short tag for the FP pattern OR null>",\n'
-    '  "reasoning": "<5-10 sentences. If REAL_BUG: quote the buggy line, '
-    "explain the precondition violation and what in-tree caller reaches "
-    "it. If LIKELY_FP: list what you audited and why each was safe. "
-    'CITE SOURCE LINES — file:line when possible.>"\n'
+    '  "reasoning": "<5-10 sentences: cite file:line for what you read; state '
+    "whether the witness is reproducible, where the real defect is (if any), and "
+    'why an in-tree caller does or does not reach it.>"\n'
     "}"
 )
 
@@ -296,19 +309,53 @@ class TriageAgent(BaseAgent[TriageResult]):
                 parsed = json.loads(cand.strip())
             except Exception:
                 continue
-            if isinstance(parsed, dict) and "verdict" in parsed:
+            if isinstance(parsed, dict) and ("verdict" in parsed or "real_defect" in parsed):
                 data = parsed
                 break
         if data is None:
             return None
+        confidence = (data.get("confidence") or "low").lower().strip()
+        if confidence not in ("low", "medium", "high"):
+            confidence = "low"
+        # Structured judgment (preferred): DERIVE the verdict from the agent's own
+        # tool-grounded sub-answers, so the label faithfully follows its reasoning
+        # (read the real callee -> witness reproducible? follow the CEx as a
+        # POINTER -> real defect + where? -> reachable by an in-tree caller?). This
+        # is how a careful triager reaches "latent" -- a real defect that no
+        # in-tree caller reaches -- and it removes the label-inconsistency of
+        # asking the model to *name* the verdict directly. Agent decides the
+        # substance; this only labels what it concluded.
+        if "real_defect" in data and "defect_reachable_in_tree" in data:
+            def _b(v):
+                if isinstance(v, bool):
+                    return v
+                return str(v).strip().lower() in ("true", "yes", "1")
+            real_defect = _b(data.get("real_defect"))
+            reachable = _b(data.get("defect_reachable_in_tree"))
+            wit_repro = data.get("witness_reproducible_as_is")
+            if _b(data.get("needs_human")):
+                verdict, fp_class = TriageVerdict.NEEDS_HUMAN, None
+            elif not real_defect:
+                verdict = TriageVerdict.LIKELY_FP
+                fp_class = "no-defect" if wit_repro is False else None
+            elif reachable:
+                verdict, fp_class = TriageVerdict.REAL_BUG, None
+            else:
+                verdict = TriageVerdict.LATENT
+                fp_class = "stub-disconnect" if wit_repro is False else "caller-established-precondition"
+            return TriageResult(
+                verdict=verdict,
+                confidence=confidence,
+                reasoning=str(data.get("reasoning", "")),
+                fp_class=fp_class,
+                raw_response=response,
+            )
+        # Legacy fallback: model emitted the verdict word directly.
         verdict_str = (data.get("verdict") or "").lower().strip()
         try:
             verdict = TriageVerdict(verdict_str)
         except Exception:
             return None
-        confidence = (data.get("confidence") or "low").lower().strip()
-        if confidence not in ("low", "medium", "high"):
-            confidence = "low"
         fp_class = data.get("fp_class")
         if fp_class in (None, "", "null"):
             fp_class = None
