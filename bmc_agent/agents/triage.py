@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 class TriageVerdict(str, Enum):
     REAL_BUG = "real_bug"
     LIKELY_FP = "likely_fp"
+    LATENT = "latent"
     NEEDS_HUMAN = "needs_human"
 
 
@@ -98,18 +99,35 @@ _SYSTEM_PROMPT = (
     "calculator. If any write has no matching budget — REAL BUG. If "
     "any write is conditional on a flag/branch the calculator doesn't "
     "also check — REAL BUG.\n\n"
-    "Three verdicts, no thumbnail:\n"
-    "  * REAL_BUG  — your audit identified at least one specific "
-    "source-level defect that an in-tree call path can reach.\n"
-    "  * LIKELY_FP — your audit found no source-level defect, AND you "
-    "actively considered upstream size/precondition mismatches (NOT just "
-    "'the harness is over-permissive', which is necessary but not "
-    "sufficient).\n"
-    "  * NEEDS_HUMAN — the audit is incomplete or the evidence is "
-    "genuinely ambiguous after reading every relevant function.\n\n"
+    "STUB-DISCONNECT CHECK (mandatory whenever a callee is stubbed): if the "
+    "CEx\u2019s failing state depends on a STUBBED callee\u2019s return value, "
+    "you MUST read the real callee\u2019s definition and decide whether the real "
+    "callee could actually produce that value. If the stub is MORE PERMISSIVE than "
+    "the real callee (e.g. it returns a non-NULL pointer for a size the real bounded "
+    "allocator would reject, or a value that violates the real callee\u2019s "
+    "guaranteed contract), the witness is NOT reproducible as-is \u2014 do NOT return "
+    "REAL_BUG on that witness. Then ask the independent question: is there still a "
+    "real underlying defect reachable by SOME (possibly future) caller? -> LATENT if "
+    "yes, LIKELY_FP if no.\n\n"
+    "Four verdicts, no thumbnail:\n"
+    "  * REAL_BUG  — a specific source-level defect that an IN-TREE call path can "
+    "reach AS-IS (a real caller establishes the triggering input).\n"
+    "  * LATENT    — a real source-level defect EXISTS, but the witness is NOT "
+    "reachable through an in-tree call path as-is: it needs an input/precondition NO "
+    "current in-tree caller establishes (a future/adversarial-caller risk), OR the "
+    "specific witness is a stub-disconnect yet the underlying defect is genuine. Use "
+    "LATENT (not REAL_BUG) when the defect is real but only a non-existent/violating "
+    "caller reaches it; use LATENT (not LIKELY_FP) whenever a real defect REMAINS "
+    "after you strip the spurious witness.\n"
+    "  * LIKELY_FP — NO real source-level defect: the witness violates a UNIVERSAL "
+    "invariant no real execution breaks (pure harness/stub artifact), AND you found "
+    "no genuine defect upstream. 'The harness is over-permissive' is necessary but "
+    "NOT sufficient — you must also confirm there is no real defect.\n"
+    "  * NEEDS_HUMAN — the audit is incomplete or genuinely ambiguous after reading "
+    "every relevant function.\n\n"
     "Respond with ONLY valid JSON, no markdown fences, no commentary:\n"
     "{\n"
-    '  "verdict": "real_bug" | "likely_fp" | "needs_human",\n'
+    '  "verdict": "real_bug" | "latent" | "likely_fp" | "needs_human",\n'
     '  "confidence": "low" | "medium" | "high",\n'
     '  "fp_class": "<short tag for the FP pattern OR null>",\n'
     '  "reasoning": "<5-10 sentences. If REAL_BUG: quote the buggy line, '

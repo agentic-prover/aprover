@@ -1091,14 +1091,38 @@ class AMCPipeline:
                             report, validation, func, spec, parsed, all_funcs,
                             driver_name, current_specs,
                         )
-                        self.reporter.save_report(report, driver_name)
-                        bug_reports.append(report)
+                        # Honor a LATENT triage verdict: a real defect whose witness is
+                        # NOT reachable through an in-tree call path as-is (future/adversarial
+                        # caller, or a stub-disconnect witness with a genuine underlying defect).
+                        # Re-tier from confirmed -> latent (a sound DOWNGRADE, not a delete).
+                        _tri = getattr(report, "triage", None)
+                        _triage_latent = (
+                            isinstance(_tri, dict) and _tri.get("verdict") == "latent"
+                            and not _spec_refined
+                            and getattr(report, "confidence", "") != "unlikely"
+                        )
+                        if _triage_latent:
+                            try:
+                                report.confidence = "latent"
+                            except Exception:
+                                pass
+                            confirmed_latent.add((fn_name, _prop_type(cex.failing_property)))
+                            self.reporter.save_latent_report(report, driver_name)
+                            latent_reports.append(report)
+                            logger.info("'%s' -> LATENT via triage verdict (real defect; witness not "
+                                        "reachable through an in-tree call path as-is) -- re-tiered "
+                                        "from confirmed (sound downgrade)", fn_name)
+                        else:
+                            self.reporter.save_report(report, driver_name)
+                            bug_reports.append(report)
                         # Log post-audit outcome so the log shows what actually
                         # survived, not just the static tag.
                         if _spec_refined:
                             logger.info("'%s' → unlikely via triage-driven spec refinement "
                                         "(over-strict postcondition; verifies clean when relaxed, "
                                         "flags preserved) — not counted as confirmed", fn_name)
+                        elif _triage_latent:
+                            pass  # already re-tiered + logged as LATENT above
                         elif getattr(report, "confidence", None) == "unlikely":
                             logger.info("Realism downgraded '%s' → unlikely (not counted as confirmed)", fn_name)
                         else:
@@ -1109,7 +1133,7 @@ class AMCPipeline:
                         # door open for CEx_2 / CEx_3 of the same property
                         # type — the deeper indices often expose the real
                         # bug behind the artifact.
-                        if getattr(report, "confidence", "") != "unlikely":
+                        if getattr(report, "confidence", "") != "unlikely" and not _triage_latent:
                             confirmed_real_bugs.add(bug_key)
                         else:
                             # If _make_report's in-sweep feedback loop / spec
