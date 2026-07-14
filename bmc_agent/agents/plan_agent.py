@@ -213,7 +213,16 @@ def _calib_path() -> str:
         "BMC_COST_CALIB_LOG", _os_cal.path.expanduser("~/.bmc_cost_calibration.jsonl"))
 
 def record_scope_blowup(entry: str, estimate: float, unwind: int) -> None:
-    """Record that scope_from_entry(entry) exhausted resources at this estimate."""
+    """Record that scope_from_entry(entry) exhausted resources at this estimate.
+
+    Ignores implausibly-small estimates: a genuine COST blowup only happens on a
+    large closure. A "blowup" at a tiny estimate is a mis-recorded non-cost timeout
+    (LLM hang / harness error) and must NOT poison the budget (the est=54 incident
+    that collapsed the budget to 49 and forced everything to frame_havoc)."""
+    if float(estimate) < 0.1 * _INLINE_COST_BUDGET:
+        logger.debug("record_scope_blowup: ignoring implausibly-small blowup est=%.0f for %r",
+                     float(estimate), entry)
+        return
     try:
         with open(_calib_path(), "a") as _fh:
             _fh.write(_json_cal.dumps({"entry": entry, "estimate": float(estimate),
@@ -228,16 +237,19 @@ def _effective_inline_budget() -> float:
     try:
         p = _calib_path()
         if _os_cal.path.exists(p):
+            _floor = 0.1 * _INLINE_COST_BUDGET   # never collapse below 10% of static
             blown = []
             for _ln in open(p):
                 try:
                     _r = _json_cal.loads(_ln)
-                    if _r.get("outcome") == "scope_blowup":
+                    # trust only plausibly-large blowups; a tiny-estimate "blowup" is
+                    # a mis-recorded non-cost timeout (the est=54 poison)
+                    if _r.get("outcome") == "scope_blowup" and float(_r["estimate"]) >= _floor:
                         blown.append(float(_r["estimate"]))
                 except Exception:
                     continue
             if blown:
-                b = min(b, min(blown) * 0.9)
+                b = max(_floor, min(b, min(blown) * 0.9))
     except Exception as _e:
         logger.debug("_effective_inline_budget fell back to static (%s)", _e)
     return b
@@ -347,13 +359,39 @@ class PlanAgent:
                 _called |= (_cg.get(_f, set()) or set())
             _caller_roots = [_f for _f in _defd
                              if _f not in _called and (_defd & (_cg.get(_f, set()) or set()))]
-            if _caller_roots:
-                _new = min(_caller_roots, key=lambda r: structural_probe(parsed, r)["closure_size"])
+            # Only re-anchor+scope onto a HARNESS-SHAPED root: a NO-ARGUMENT driver
+            # (main/bad-style) that sets up inputs and calls a callee -- the caller-
+            # misuse case (b3). Scoping onto a *parameterised* library root would
+            # verify ONLY that one function and skip every other one (the coverage-
+            # collapse bug: 1/9, 1/54, 1/13). Such files stay COMPOSITIONAL so ALL
+            # functions are verified.
+            def _no_args(_r):
+                try:
+                    _ps = (parsed.get_function_info(_r).signature.parameters) or []
+                    _ps = [1 for (_t, _n) in _ps
+                           if (_n or (str(_t).strip() not in ("void", "")))]
+                    return len(_ps) == 0
+                except Exception:
+                    return False
+            _harness_roots = [_r for _r in _caller_roots if _no_args(_r)]
+            _scoped = False
+            if len(_harness_roots) == 1:
+                _new = _harness_roots[0]
                 _p2 = structural_probe(parsed, _new)
-                logger.info("plan: requested entry %r absent; re-anchored on caller-root %r "
-                            "(closure=%d defined) to exercise call-site/caller-misuse checks",
-                            entry, _new, _p2["closure_size"])
-                entry, p = _new, _p2
+                # Scope ONLY if this root's closure covers ~ALL defined functions
+                # (a true micro-harness, e.g. b3 {bad,sum}). A no-arg *library* fn
+                # (e.g. memory_init) whose closure is a small fraction must NOT scope
+                # -- that re-collapses coverage; such files stay compositional.
+                if _p2["closure_size"] >= max(1, p["n_defined"] - 1):
+                    logger.info("plan: requested entry %r absent; re-anchored on no-arg caller-root "
+                                "%r (micro-harness, closure=%d/%d) to exercise call-site checks",
+                                entry, _new, _p2["closure_size"], p["n_defined"])
+                    entry, p = _new, _p2
+                    _scoped = True
+            if not _scoped:
+                logger.info("plan: requested entry %r absent (%d caller-root(s), %d harness-shaped, "
+                            "none cover the file) -> compositional (verify ALL functions)",
+                            entry, len(_caller_roots), len(_harness_roots))
         import os as _os
         _force = _os.environ.get("BMC_PLAN_FORCE_STRATEGY")
         if _force:
