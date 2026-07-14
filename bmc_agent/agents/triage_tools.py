@@ -295,7 +295,20 @@ _TOOLS_PROMPT_ADDENDUM = (
     "    counts under real_defect (-> LATENT), it is not erased by the spurious\n"
     "    witness.\n"
     "Carry your G-gate fp reason into the reasoning. The verdict is DERIVED from\n"
-    "these fields, so answer them honestly instead of naming a verdict.\n"
+    "these fields, so answer them honestly instead of naming a verdict.\n\n"
+    "Respond with ONLY this JSON object — no prose, no markdown fences, and NOT\n"
+    "the {\"verdict\": ...} shape:\n"
+    "{\n"
+    '  "witness_reproducible_as_is": true | false,\n'
+    '  "real_defect": true | false,\n'
+    '  "defect_site": "<file:function OR null>",\n'
+    '  "defect_reachable_in_tree": true | false,\n'
+    '  "needs_human": true | false,\n'
+    '  "confidence": "low" | "medium" | "high",\n'
+    '  "reasoning": "<cite file:line; state witness reproducibility, the real '
+    "defect if any and where it manifests, and whether an in-tree caller reaches "
+    'it>"\n'
+    "}"
 )
 
 
