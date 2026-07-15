@@ -1177,21 +1177,16 @@ class AMCPipeline:
                                 )
                 elif validation.is_latent_bug:
                     latent_key = (fn_name, _prop_type(cex.failing_property))
-                    if latent_key in confirmed_latent:
+                    if latent_key in confirmed_latent or latent_key in confirmed_real_bugs:
                         logger.debug(
                             "Skipping duplicate latent bug for '%s' (type '%s')",
                             fn_name, latent_key[1],
                         )
                     else:
-                        confirmed_latent.add(latent_key)
-                        logger.info(
-                            "LATENT panic on pub API of '%s' — no in-tree caller "
-                            "reaches state, future-caller / cargo-fuzz risk",
-                            fn_name,
-                        )
                         report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
-                        self.reporter.save_latent_report(report, driver_name)
-                        latent_reports.append(report)
+                        self._dispose_latent(report, fn_name, latent_key, driver_name,
+                                             bug_reports, latent_reports,
+                                             confirmed_real_bugs, confirmed_latent)
                 else:
                     logger.info(
                         "Spurious counterexample for '%s' — refined precondition: %s",
@@ -1367,15 +1362,11 @@ class AMCPipeline:
                             bug_reports.append(report)
                     elif validation.is_latent_bug:
                         latent_key = (fn_name, _prop_type(cex.failing_property))
-                        if latent_key not in confirmed_latent:
-                            confirmed_latent.add(latent_key)
-                            logger.info(
-                                "LATENT (Phase 3c) panic on pub API of '%s'",
-                                fn_name,
-                            )
+                        if latent_key not in confirmed_latent and latent_key not in confirmed_real_bugs:
                             report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
-                            self.reporter.save_latent_report(report, driver_name)
-                            latent_reports.append(report)
+                            self._dispose_latent(report, fn_name, latent_key, driver_name,
+                                                 bug_reports, latent_reports,
+                                                 confirmed_real_bugs, confirmed_latent)
                     else:
                         logger.info(
                             "Phase 3c: spurious (further refined) for '%s': %s",
@@ -1470,14 +1461,11 @@ class AMCPipeline:
                             )
                     elif validation.is_latent_bug:
                         latent_key = (fn_name, _prop_type(cex.failing_property))
-                        if latent_key not in confirmed_latent:
-                            confirmed_latent.add(latent_key)
-                            logger.info(
-                                "LATENT (recheck) panic on pub API of '%s'", fn_name,
-                            )
+                        if latent_key not in confirmed_latent and latent_key not in confirmed_real_bugs:
                             report = self._make_report(validation, func, spec, parsed, all_funcs, driver_name, current_specs, cbmc_harness_path=getattr(verdict, "harness_path", ""))
-                            self.reporter.save_latent_report(report, driver_name)
-                            latent_reports.append(report)
+                            self._dispose_latent(report, fn_name, latent_key, driver_name,
+                                                 bug_reports, latent_reports,
+                                                 confirmed_real_bugs, confirmed_latent)
 
             # RQ3: build PropagationEvent objects grouped by which refinement
             # triggered each caller recheck.
@@ -2590,6 +2578,37 @@ class AMCPipeline:
                         fn_name, collect_evidence(validation))
         except Exception:
             pass
+
+    def _dispose_latent(self, report, fn_name, latent_key, driver_name,
+                        bug_reports, latent_reports, confirmed_real_bugs, confirmed_latent):
+        """Triage is the SOLE judge over a classifier-latent finding, symmetric
+        with the real-bug branch. Its verdict governs the disposition:
+          * real_bug              -> promote to a confirmed bug report
+          * likely_fp/needs_human -> dismiss (drop; not even latent)
+          * latent / triage off   -> keep as a latent report
+        This closes the seam where a classifier-latent finding ignored the triage
+        verdict (the 'LATENT (triage: real_bug)' contradiction)."""
+        _tri = getattr(report, "triage", None)
+        v = _tri.get("verdict") if isinstance(_tri, dict) else None
+        if v == "real_bug":
+            self.reporter.save_report(report, driver_name)
+            bug_reports.append(report)
+            confirmed_real_bugs.add(latent_key)
+            logger.info("'%s' -> REAL_BUG via triage (promoted from classifier-latent; "
+                        "triage judges the defect reachable)", fn_name)
+        elif v in ("likely_fp", "needs_human"):
+            try:
+                report.confidence = "unlikely"
+            except Exception:
+                pass
+            logger.info("'%s' -> dismissed via triage verdict '%s' (classifier-latent; "
+                        "no real reachable defect)", fn_name, v)
+        else:
+            confirmed_latent.add(latent_key)
+            self.reporter.save_latent_report(report, driver_name)
+            latent_reports.append(report)
+            logger.info("LATENT on pub API of '%s' -- triage concurs (no in-tree caller "
+                        "reaches state; future-caller / cargo-fuzz risk)", fn_name)
 
     def _make_report(
         self,
