@@ -407,7 +407,7 @@ _TOOLS_PROMPT_ADDENDUM_NONE = (
 
 import os as _os_scaffold
 # Scaffold level: full (default, current behavior) | distilled | none.
-_TRIAGE_SCAFFOLD = (_os_scaffold.environ.get("BMC_TRIAGE_SCAFFOLD") or "full").strip().lower()
+_TRIAGE_SCAFFOLD = (_os_scaffold.environ.get("BMC_TRIAGE_SCAFFOLD") or "distilled").strip().lower()
 _TOOLS_PROMPT_ADDENDUM = {
     "full": _TOOLS_PROMPT_ADDENDUM_FULL,
     "distilled": _TOOLS_PROMPT_ADDENDUM_DISTILLED,

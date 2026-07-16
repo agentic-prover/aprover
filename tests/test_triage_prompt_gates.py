@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from bmc_agent.agents.triage_tools import _SYSTEM_PROMPT_TOOLS
+from bmc_agent.agents.triage_tools import _TOOLS_PROMPT_ADDENDUM_FULL as _SYSTEM_PROMPT_TOOLS  # gates now live in the opt-in 'full' scaffold; guard it explicitly
 
 
 def test_prompt_contains_five_gate_headings():
