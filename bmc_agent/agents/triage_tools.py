@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from bmc_agent.spec import Spec
 
 
-_TOOLS_PROMPT_ADDENDUM = (
+_TOOLS_PROMPT_ADDENDUM_FULL = (
     "\n\nTOOLS:\n"
     "  * lookup_function(name) — full source + callees of any function.\n"
     "  * find_more_callers(name, k) — discover callers beyond the 2-frame\n"
@@ -311,6 +311,108 @@ _TOOLS_PROMPT_ADDENDUM = (
     "}"
 )
 
+
+_TRIAGE_OUTPUT_SCHEMA = (
+    "Respond with ONLY this JSON object — no prose, no markdown fences, and NOT\n"
+    "the {\"verdict\": ...} shape:\n"
+    "{\n"
+    '  "witness_reproducible_as_is": true | false,\n'
+    '  "real_defect": true | false,\n'
+    '  "defect_site": "<file:function OR null>",\n'
+    '  "defect_reachable_in_tree": true | false,\n'
+    '  "needs_human": true | false,\n'
+    '  "confidence": "low" | "medium" | "high",\n'
+    '  "reasoning": "<cite file:line; state witness reproducibility, the real '
+    "defect if any and where it manifests, and whether an in-tree caller reaches "
+    'it>"\n'
+    "}"
+)
+
+_TOOLS_HEADER = (
+    "\n\nTOOLS:\n"
+    "  * lookup_function(name) — full source + callees of any function.\n"
+    "  * find_more_callers(name, k) — callers beyond the 2-frame caller_path.\n"
+    "  * lookup_struct(tag) — struct field details.\n"
+    "  * grep_corpus(pattern, k) — regex search across the corpus.\n\n"
+)
+
+# DISTILLED scaffold: the generalizable FP-shape PRINCIPLES, WITHOUT the
+# corpus-specific worked examples or the "vote X" imperatives (which push
+# checklist-matching over reasoning). Keeps the reliability knowledge; drops the
+# libarchive overfitting.
+_TOOLS_PROMPT_ADDENDUM_DISTILLED = (
+    _TOOLS_HEADER
+    + "INVESTIGATE before you judge (10-iteration / 8-tool-call budget — use it). "
+    "Read the REAL code; never answer from this prompt alone:\n"
+    "  * Trace the call chain to the public-API entry point (find_more_callers + "
+    "lookup_function on each caller).\n"
+    "  * For a buffer/length counterexample, read the SIZE CALCULATOR and the "
+    "WRITER and check that every write path has a matching length budget; an "
+    "unbudgeted or conditionally-mismatched write is a genuine defect.\n"
+    "  * If a callee is STUBBED, read the REAL callee: a stub more permissive "
+    "than the real one (e.g. returns non-NULL for a size the real bounded "
+    "allocator rejects) makes the exact witness non-reproducible as-is.\n\n"
+    "Do NOT dismiss a finding merely because the harness is over-permissive, a "
+    "size calculator exists, or a runtime guard is present — a guard is evidence "
+    "the developers feared this bug, not proof of safety. Decide by reading the "
+    "code.\n\n"
+    "REACHABILITY PRINCIPLES — a counterexample can require a state no in-tree "
+    "caller produces. Before judging a defect in-tree reachable, consider whether "
+    "any of these makes the required precondition UNREACHABLE from current "
+    "callers. Apply only the ones the actual code supports, and cite the source "
+    "that proves it:\n"
+    "  * PUBLIC-API REACHABILITY: is the function callable from outside the "
+    "library, or is its prototype in an internal-only header? If in-tree callers "
+    "are the whole reachable set, judge reachability against them.\n"
+    "  * ALLOCATION-SITE INVARIANT: does the witness need a field to be "
+    "garbage/non-NULL that every in-tree allocation site zero-inits (calloc / "
+    "memset / embedding in a zeroed struct)? (free(NULL) is a no-op.)\n"
+    "  * INTRA-FUNCTION INVARIANT: does the witness need a pointer to pass a "
+    "boundary that a PRECEDING loop in the same function already established?\n"
+    "  * CALLER-ESTABLISHED PRECONDITION: does the bug need a parameter value "
+    "every in-tree caller provably never passes? Verify by reading EVERY caller; "
+    "a single caller that doesn't establish it breaks the argument.\n"
+    "  * STRUCTURAL INVARIANT: is the offending value bounded by how a data "
+    "structure is constructed, or by a buffer deliberately over-allocated to "
+    "cover peek-ahead reads? Does NOT apply when the value comes from attacker "
+    "input.\n\n"
+    "These are reasoning aids, not a checklist to rubber-stamp.\n\n"
+    "After investigating, report the STRUCTURED JSON below (the verdict is "
+    "DERIVED from your answers — do not name a verdict). Translate what you "
+    "found:\n"
+    "  * An unbudgeted write reachable from a public caller -> real_defect=true, "
+    "defect_reachable_in_tree=true.\n"
+    "  * A reachability principle makes the precondition unreachable in-tree -> "
+    "defect_reachable_in_tree=false; then decide real_defect INDEPENDENTLY: a "
+    "genuine defect a future / adversarial / contract-violating caller would "
+    "trigger -> real_defect=true (derived LATENT); code correct under its real "
+    "contract (the 'missing' precondition is a legitimate invariant every valid "
+    "caller honors) -> real_defect=false (derived LIKELY_FP).\n"
+    "  * A stub more permissive than the real callee -> "
+    "witness_reproducible_as_is=false; a genuine underlying defect still counts "
+    "under real_defect.\n\n"
+    + _TRIAGE_OUTPUT_SCHEMA
+)
+
+# NONE: bare agent — tools + investigate directive + output contract, no FP
+# guidance at all (the 'unaided reasoning' end of the spectrum).
+_TOOLS_PROMPT_ADDENDUM_NONE = (
+    _TOOLS_HEADER
+    + "Use the tools to READ the real code — function bodies, callers, callees, "
+    "structs, headers — and judge from what you actually read, not from this "
+    "prompt. Then report the STRUCTURED JSON below (the verdict is DERIVED from "
+    "your answers — do not name a verdict).\n\n"
+    + _TRIAGE_OUTPUT_SCHEMA
+)
+
+import os as _os_scaffold
+# Scaffold level: full (default, current behavior) | distilled | none.
+_TRIAGE_SCAFFOLD = (_os_scaffold.environ.get("BMC_TRIAGE_SCAFFOLD") or "full").strip().lower()
+_TOOLS_PROMPT_ADDENDUM = {
+    "full": _TOOLS_PROMPT_ADDENDUM_FULL,
+    "distilled": _TOOLS_PROMPT_ADDENDUM_DISTILLED,
+    "none": _TOOLS_PROMPT_ADDENDUM_NONE,
+}.get(_TRIAGE_SCAFFOLD, _TOOLS_PROMPT_ADDENDUM_FULL)
 
 _SYSTEM_PROMPT_TOOLS = _BASE_SYSTEM_PROMPT + _TOOLS_PROMPT_ADDENDUM
 
