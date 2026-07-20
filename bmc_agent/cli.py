@@ -1603,7 +1603,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     # bugs — cargo-fuzz / future-caller risk, not an active crash path.
     latent_reports = getattr(pipeline, "latent_reports", None) or []
     if latent_reports:
-        print(f"\nLatent panics on pub API: {len(latent_reports)}")
+        import os as _oq
+        _lbl = ("Unknown (bounded / BMC-incompleteness)"
+                if _oq.environ.get("SVCOMP_PROP") == "unreach"
+                else "Latent panics on pub API")
+        print(f"\n{_lbl}: {len(latent_reports)}")
         print(
             "  (panic reachable via cargo-fuzz / future-caller, "
             "but no in-tree call site produces the state)"

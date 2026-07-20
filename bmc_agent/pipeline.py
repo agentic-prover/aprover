@@ -37,6 +37,13 @@ from bmc_agent.realism_checker import RealismChecker
 from bmc_agent.spec import Spec, SpecStatus
 from bmc_agent.spec_generator import SpecGenerator
 
+def _prop_is_reach():
+    """True iff the run's PROPERTY CLASS is reachability (reach_error).
+    Keyed on SVCOMP_PROP, the property-class token apply_plan sets for EVERY
+    run (real code -> "memsafety"); this is property-driven, NOT benchmark-gated."""
+    import os as _o
+    return _o.environ.get("SVCOMP_PROP") == "unreach"
+
 logger = get_logger("pipeline")
 
 
@@ -929,8 +936,9 @@ class AMCPipeline:
                     continue
                 confirmed_latent.add(_uw_lk)
                 logger.info("'%s' %s: unwinding-assertion artifact (persists at "
-                            "deeper unwind) -> latent, skipped LLM refine/triage",
-                            _fn, _uwc.failing_property)
+                            "deeper unwind) -> %s, skipped LLM refine/triage",
+                            _fn, _uwc.failing_property,
+                            "unknown (bounded)" if _prop_is_reach() else "latent")
                 latent_reports.append(
                     self._emit_unwind_artifact_latent(_fn, _uwc, driver_name))
             _deduped[_fn] = _kept_uw
@@ -1582,9 +1590,10 @@ class AMCPipeline:
                 )
         self._emit(type="phase", phase="report", status="complete", n_findings=len(bug_reports))
         logger.info(
-            "=== AMC Pipeline END: %d real bug(s), %d latent, %d unresolved ===",
+            "=== AMC Pipeline END: %d real bug(s), %d %s, %d unresolved ===",
             _n_real,
             len(latent_reports),
+            "unknown" if _prop_is_reach() else "latent",
             len(self.reporter._unresolved),
         )
         # Stash latent reports on the pipeline so the CLI can access them
@@ -2485,11 +2494,11 @@ class AMCPipeline:
                 f"harness input. This is a BMC-incompleteness signal (the loop is "
                 f"effectively unbounded relative to the symbolic input), NOT a "
                 f"property violation. Routed by the unwind-artifact filter (b) "
-                f"WITHOUT LLM refinement/triage; surfaced as latent so a bounded / "
+                f"WITHOUT LLM refinement/triage; surfaced so a bounded / "
                 f"NUL-terminated real caller remains visible."
             ),
-            confidence="likely",
-            cex_outcome=CExOutcome.LATENT,
+            confidence=("unknown" if _prop_is_reach() else "likely"),
+            cex_outcome=(CExOutcome.UNRESOLVED if _prop_is_reach() else CExOutcome.LATENT),
             triage={
                 "verdict": "likely_fp",
                 "confidence": "high",
