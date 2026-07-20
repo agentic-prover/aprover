@@ -558,16 +558,17 @@ def apply_plan(config, plan: "Plan"):
     else:
         for _v in ("BMC_FRAME_HAVOC", "BMC_BUGHUNT", "BMC_TRANSITIVE_INLINE", "BMC_FAITHFUL_MAIN"):
             os.environ.pop(_v, None)
-        # SV-COMP reachability tasks are judged by the solver, not by LLM-written
-        # contracts. In scope_from_entry the planner already picked the concrete
-        # entry and unwind; spending the Codex/Claude budget drafting caller-
-        # grounded specs for the entry closure can exhaust the wall clock before
-        # CBMC runs at all. Use deterministic permissive specs here so Codex mode
-        # reaches Phase 2. Keep this PlanAgent-owned: runners still pass only
-        # --plan --svcomp and never choose suite-specific strategy knobs.
+        # STRUCTURAL lean trigger (NOT benchmark-gated): scope_from_entry INLINES
+        # the property-reaching cone and does NOT stub callees, so per-function
+        # contracts are unused; and for an `unreach` (reach-an-assertion) property
+        # the solver decides the assertion directly, so LLM spec-gen / BMC-config
+        # add nothing. Skip them and use deterministic permissive specs. Driven by
+        # the verification PROBLEM (strategy + property class), independent of
+        # whether the input is SV-COMP -- no BMC_SVCOMP_MODE special-case. (Real
+        # code defaults to _prop_tok="memsafety", where spec-gen input-preconditions
+        # DO matter, so the guard does not fire there and the agent stays on.)
         if (
-            os.environ.get("BMC_SVCOMP_MODE")
-            and plan.strategy == "scope_from_entry"
+            plan.strategy == "scope_from_entry"
             and _prop_tok == "unreach"
             and config is not None
         ):
@@ -583,8 +584,9 @@ def apply_plan(config, plan: "Plan"):
             except Exception:
                 pass
             logger.info(
-                "apply_plan: SV-COMP unreach scope_from_entry lean mode "
-                "(permissive deterministic specs; no BMC-config/spec-gen LLM)"
+                "apply_plan: scope_from_entry + unreach -> contract-free lean mode "
+                "(inlined cone, no stubbed callees; deterministic specs, no "
+                "BMC-config/spec-gen LLM) [structural, not SV-COMP-gated]"
             )
     # Caller-side precondition checking (compositional caller-misuse detection).
     # In compositional mode callees are STUBBED, so by default a caller passing an
