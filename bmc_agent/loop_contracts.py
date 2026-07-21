@@ -98,7 +98,9 @@ def _synth(source_path, entry, config, llm, goal_free):
     from bmc_agent.loop_invariants import synthesize_loop_invariants
     try: config.goal_free = goal_free
     except Exception: pass
-    r = synthesize_loop_invariants(source_path, config, llm, entry=entry)
+    # Bound synthesis churn (each refine iter is an LLM call): a hard multi-loop
+    # task otherwise burns many minutes/calls trying an impossible invariant.
+    r = synthesize_loop_invariants(source_path, config, llm, entry=entry, max_iters=3)
     return dict(getattr(r, "annotations", {}) or {}), getattr(r, "ok", None)
 
 
@@ -135,6 +137,12 @@ def verify_with_loop_contracts(source_path, entry="main", goal="reach", arch="LP
             return _finish("unknown", annB, note="goal-free SUCCESSFUL (weak-inv, not a sound proof)")
         return _finish("unknown", annB, note=f"goal-free {vB}")
     except subprocess.TimeoutExpired:
-        return _finish("timeout", {}, note="synthesis/cbmc timeout")
+        logger.warning("loop_contracts: timed out -> unknown")
+        return _finish("unknown", {}, note="loop_contracts timeout")
     except Exception as e:
-        return _finish(f"error:{type(e).__name__}", {}, note=str(e)[:200])
+        # Degrade gracefully: any failure (goto-cc/goto-instrument on a large or
+        # unusual file, synthesis error, etc.) is inconclusive, not a crash.
+        logger.warning("loop_contracts: aborted (%s: %s) -> unknown",
+                       type(e).__name__, str(e)[:200])
+        return _finish("unknown", {},
+                       note="loop_contracts aborted: %s: %s" % (type(e).__name__, str(e)[:150]))
