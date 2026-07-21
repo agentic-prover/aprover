@@ -154,7 +154,7 @@ def test_svcomp_frame_havoc_bug_requires_scope_confirmation(monkeypatch):
     )
 
 
-def test_svcomp_frame_havoc_confirmation_is_narrow(monkeypatch):
+def test_svcomp_frame_havoc_confirmation_is_structural(monkeypatch):
     from bmc_agent.agents.plan_agent import Plan
     from bmc_agent.cli import _svcomp_frame_havoc_confirmation_strategy
 
@@ -181,6 +181,8 @@ def test_svcomp_frame_havoc_confirmation_is_narrow(monkeypatch):
         )
         is None
     )
+    # De-hardcoded (structural, not --svcomp-gated): a frame_havoc bug candidate on
+    # an unreach property triggers faithful re-confirmation regardless of the flag.
     assert (
         _svcomp_frame_havoc_confirmation_strategy(
             SimpleNamespace(svcomp=False),
@@ -188,7 +190,7 @@ def test_svcomp_frame_havoc_confirmation_is_narrow(monkeypatch):
             bug_reports=[object()],
             tried=["frame_havoc"],
         )
-        is None
+        == "scope_from_entry"
     )
     non_reach = Plan(
         strategy="frame_havoc",

@@ -44,10 +44,11 @@ def _svcomp_frame_havoc_confirmation_target(
     """
     if getattr(plan, "strategy", None) != "frame_havoc":
         return None
-    import os as _os
-
-    if not (getattr(args, "svcomp", False) or _os.environ.get("BMC_SVCOMP_MODE")):
-        return None
+    # STRUCTURAL (not --svcomp-gated): a frame_havoc bug candidate on an `unreach`
+    # (reach_error) property is an over-approximate signal that MUST be re-confirmed
+    # on the faithful (un-havoc\'d) closure before it counts as a real bug. Gate on
+    # the verification PROBLEM (frame_havoc + unreach), not the SV-COMP flag -- same
+    # axis as the lean-mode de-hardcode. (Real code uses memsafety -> unaffected.)
     prop = getattr(plan, "property_class", "")
     prop_tok = {"unreach-call": "unreach", "unreach": "unreach"}.get(prop, prop)
     if prop_tok != "unreach":
@@ -1440,6 +1441,59 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         while True:
             print(f"[PlanAgent] {_plan.rationale}")
             print(f"[PlanAgent] {_plan.summary()}")
+            if _plan.strategy in ("unwind_sweep", "llm_witness"):
+                import os as _os_bh
+                _arch_bh = _os_bh.environ.get("SVCOMP_ARCH", "LP64")
+                _goal_bh = {"unreach": "reach", "unreach-call": "reach",
+                            "memsafety": "memsafety", "all": "memsafety"}.get(_plan.property_class, "reach")
+                if _plan.strategy == "unwind_sweep":
+                    from bmc_agent.bug_hunt import faithful_unwind_sweep, llm_unwind_bounds
+                    from bmc_agent.llm import LLMClient as _LLMCu
+                    _uwb = llm_unwind_bounds(args.source, _LLMCu(config))   # LLM-guided bounds
+                    print(f"[unwind_sweep] LLM-proposed unwind bounds: {_uwb}")
+                    _bh = faithful_unwind_sweep(args.source, entry=_entry0, goal=_goal_bh, arch=_arch_bh, unwinds=tuple(_uwb))
+                    _lbl = "unwind_sweep"
+                else:
+                    from bmc_agent.bug_hunt import hunt_witness
+                    from bmc_agent.llm import LLMClient as _LLMCw
+                    _bh = hunt_witness(args.source, entry=_entry0, arch=_arch_bh, config=config, llm=_LLMCw(config))
+                    _lbl = "llm_witness"
+                print(f"[{_lbl}] verdict={_bh['verdict']} {_bh.get('note','')}")
+                _tried.append(_plan.strategy)
+                if _bh["verdict"] == "false":
+                    print(f"VERIFICATION FAILED ({_lbl}: sound reproducible witness)")
+                    bug_reports = []; break
+                _nx_bh = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
+                if _nx_bh:
+                    print(f"[{_lbl}] {_bh['verdict']}; re-planning -> '{_nx_bh[0]}'")
+                    _plan = _pa.plan_for_strategy(_nx_bh[0], entry=_entry0,
+                                                  property_class=_plan.property_class, template=_plan)
+                    continue
+                bug_reports = []; break
+            if _plan.strategy == "loop_contracts":
+                from bmc_agent.loop_contracts import verify_with_loop_contracts
+                from bmc_agent.llm import LLMClient as _LLMC
+                import os as _os_lc
+                _goal_lc = {"unreach": "reach", "unreach-call": "reach",
+                            "memsafety": "memsafety", "all": "memsafety"}.get(_plan.property_class, "reach")
+                _arch_lc = _os_lc.environ.get("SVCOMP_ARCH", "LP64")
+                _lc = verify_with_loop_contracts(args.source, entry=_entry0, goal=_goal_lc,
+                                                 arch=_arch_lc, config=config, llm=_LLMC(config))
+                print(f"[loop_contracts] verdict={_lc['verdict']} "
+                      f"mode={_lc.get('mode')} n_invariants={_lc.get('n_invariants')} "
+                      f"validated={_lc.get('validated')} note={_lc.get('note','')}")
+                _tried.append("loop_contracts")
+                if _lc["verdict"] == "true":
+                    print("VERIFICATION SUCCESSFUL"); bug_reports = []; break
+                if _lc["verdict"] == "false":
+                    print("VERIFICATION FAILED (loop-contract: property reachable)"); bug_reports = []; break
+                _next_lc = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
+                if _next_lc:
+                    print(f"[loop_contracts] {_lc['verdict']}; re-planning -> '{_next_lc[0]}'")
+                    _plan = _pa.plan_for_strategy(_next_lc[0], entry=_entry0,
+                                                  property_class=_plan.property_class, template=_plan)
+                    continue
+                bug_reports = []; break
             _scope_only = _ap(config, _plan)
             _tried.append(_plan.strategy)
             _phase2_confirm_next = _svcomp_frame_havoc_confirmation_target(
@@ -1462,6 +1516,19 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             _summ = getattr(pipeline, "last_verdict_summary", {}) or {}
             _no_bug = (not bug_reports) and _summ.get("bug_candidates", 0) == 0
             _FH_UNWIND_CAP = 3
+            # Loop-contract recovery: an attempt that hit only the UNWINDING WALL
+            # (no real bug, but latent/unknown unwinding-artifact reports) means a
+            # loop exceeded the bound -> try loop-invariant abstraction before other
+            # fallbacks. (The unwinding CEx counts as a bug_candidate in the Phase-2
+            # summary, so the generic _stalled check below would miss this case.)
+            _wall_next = [x for x in (_plan.fallback_ladder or [])
+                          if x in ("unwind_sweep", "loop_contracts", "llm_witness") and x not in _tried]
+            if _wall_next and not bug_reports and getattr(pipeline, "latent_reports", None):
+                print(f"[PlanAgent] hit unwinding wall (unknown/unwind-artifact); "
+                      f"re-planning -> '{_wall_next[0]}'")
+                _plan = _pa.plan_for_strategy(_wall_next[0], entry=_entry0,
+                                              property_class=_plan.property_class, template=_plan)
+                continue
             _next = [x for x in (_plan.fallback_ladder or []) if x not in _tried]
             _confirm_next = (
                 _svcomp_frame_havoc_bmc_confirmation_strategy(

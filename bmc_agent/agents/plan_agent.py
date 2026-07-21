@@ -424,7 +424,25 @@ class PlanAgent:
             logger.info("plan cost model: entry=%r closure=%d est_unwind=%d "
                         "inline_cost=%.0f budget=%.0f", entry, p["closure_size"],
                         _uw, _cost, _budget)
-            if _cost > _budget:
+            if _cost > _budget and property_class in ("memsafety", "all"):
+                # Complex program + LOCAL (memory-safety) property: prefer
+                # COMPOSITIONAL (stub callees by synthesized contracts; sound
+                # assume-guarantee via caller-side precondition asserts,
+                # BMC_ASSERT_BOUNDS_ONLY) over frame_havoc's nondet havoc of the
+                # off-cone callees, which is strictly less precise. The presence of
+                # a `main` does NOT force monolithic inline/havoc for a local property.
+                # (unreach stays frame_havoc: global reachability doesn't compose soundly.)
+                plan = Plan(
+                    strategy="compositional", entry=None, property_class=property_class,
+                    unwind=(self.config.cbmc_unwind if self.config else 4), targets=None,
+                    frame_havoc=False, bughunt=False,
+                    rationale=(f"entry '{entry}': inline cost {_cost:.0f} > budget {_budget:.0f} "
+                               f"(closure={p['closure_size']} fns) AND local memsafety property -> "
+                               f"per-function compositional (stub callees by contract; sound "
+                               f"assume-guarantee, more precise than havoc)"),
+                    fallback_ladder=["frame_havoc", "scope_from_entry"], est_cost=_cost,
+                )
+            elif _cost > _budget:
                 plan = Plan(
                     strategy="frame_havoc", entry=entry, property_class=property_class,
                     unwind=1, timeout=300, targets={entry}, frame_havoc=True, bughunt=True,
@@ -441,7 +459,7 @@ class PlanAgent:
                     rationale=(f"single entry '{entry}': estimated inline cost {_cost:.0f} <= "
                                f"budget {_budget:.0f} (closure={p['closure_size']} fns, "
                                f"unwind~{_uw}) -> inline the full call closure"),
-                    fallback_ladder=["frame_havoc"], est_cost=_cost,
+                    fallback_ladder=["unwind_sweep", "loop_contracts"], est_cost=_cost,
                 )
 
         if plan.property_class in ("memsafety", "all"):
@@ -480,9 +498,31 @@ class PlanAgent:
                         rationale=f"forced frame_havoc (re-plan; unwind={unwind if unwind is not None else 1})",
                         fallback_ladder=[])
             return self._inherit_plan_context(plan, template)
+        if strategy == "unwind_sweep":
+            plan = Plan(strategy="unwind_sweep", entry=entry, property_class=property_class,
+                        unwind=1, timeout=300, targets={entry}, frame_havoc=False, bughunt=True,
+                        rationale=("faithful adaptive unwind sweep (bug-finding: no havoc, no "
+                                   "unwinding-assertions; a FAILED is a sound bounded witness)"),
+                        fallback_ladder=["loop_contracts"])
+            return self._inherit_plan_context(plan, template)
+        if strategy == "llm_witness":
+            plan = Plan(strategy="llm_witness", entry=entry, property_class=property_class,
+                        unwind=1, timeout=300, targets={entry}, frame_havoc=False, bughunt=True,
+                        rationale=("LLM-guided concrete witness (agentic bug-finding: LLM proposes a "
+                                   "triggering input, concrete execution confirms -> sound witness)"),
+                        fallback_ladder=[])
+            return self._inherit_plan_context(plan, template)
+        if strategy == "loop_contracts":
+            plan = Plan(strategy="loop_contracts", entry=entry, property_class=property_class,
+                        unwind=1, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
+                        rationale=("loop-contract abstraction: synthesize loop invariants and apply "
+                                   "them as CBMC loop contracts (goto-instrument --apply-loop-contracts) "
+                                   "-> unbounded loop reasoning, no unrolling"),
+                        fallback_ladder=[])
+            return self._inherit_plan_context(plan, template)
         plan = Plan(strategy="scope_from_entry", entry=entry, property_class=property_class,
                     unwind=64, timeout=300, targets={entry}, frame_havoc=False, bughunt=False,
-                    rationale="forced scope_from_entry (re-plan fallback)", fallback_ladder=[])
+                    rationale="forced scope_from_entry (re-plan fallback)", fallback_ladder=["unwind_sweep", "loop_contracts"])
         return self._inherit_plan_context(plan, template)
 
     @staticmethod

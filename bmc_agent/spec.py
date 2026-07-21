@@ -38,6 +38,10 @@ class Spec:
     postcondition: str
     callee_specs: dict[str, "Spec"] = field(default_factory=dict)
     loop_invariants: list[str] = field(default_factory=list)
+    # Reachability summary (compositional reach): DSL condition on this function's
+    # inputs/state under which it reaches reach_error. "false" = error-free (default).
+    # Enables compositional analysis for the unreach-call property (not just memsafety).
+    reaches_error: str = "false"
     status: SpecStatus = SpecStatus.PENDING
     spec_disagreement: bool = False
     # PRE split: validity = caller's obligation (asserted at call sites);
@@ -74,6 +78,7 @@ class Spec:
             "postcondition": self.postcondition,
             "callee_specs": callee_dicts,
             "loop_invariants": self.loop_invariants,
+            "reaches_error": self.reaches_error,
             "status": self.status.value,
             "spec_disagreement": self.spec_disagreement,
             "pre_validity": self.pre_validity,
@@ -90,6 +95,7 @@ class Spec:
             function_name=d["function_name"],
             precondition=d["precondition"],
             postcondition=d["postcondition"],
+            reaches_error=d.get("reaches_error", "false"),
             callee_specs=callee_specs,
             loop_invariants=d.get("loop_invariants", []),
             status=SpecStatus(d.get("status", SpecStatus.PENDING.value)),
