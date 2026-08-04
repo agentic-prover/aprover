@@ -41,6 +41,21 @@ from bmc_agent.spec_generator import SpecGenerator
 logger = get_logger("pipeline")
 
 
+def _should_preprocess_source(source_file: str, config: Config) -> bool:
+    """Return whether this run should invoke ``cc -E`` itself.
+
+    Linux-driver mode commonly verifies an already-preprocessed ``.i``/``.ii``
+    translation unit while passing a compact analysis source only to the LLM.
+    Re-preprocessing those files can distort line markers, drop declarations,
+    and generate very long commands. Treat them as terminal preprocessor output.
+    """
+    return (
+        bool(config.preprocess)
+        and bool(config.include_dirs)
+        and Path(source_file).suffix not in {".i", ".ii"}
+    )
+
+
 def _cited_caller_is_fabricated(cited: str, func_source_file: str) -> bool:
     """Thin wrapper around ``agents.soundness.caller_is_fabricated`` (kept here
     for the soundness gate's call site + tests). True iff ``cited`` names a
@@ -585,7 +600,7 @@ class AMCPipeline:
 
         # Optionally preprocess with cc -E before parsing (multi-file mode)
         preprocessed_source: Optional[str] = None
-        if self.config.preprocess and self.config.include_dirs:
+        if _should_preprocess_source(source_file, self.config):
             from bmc_agent.preprocessor import preprocess
             self._phase_note("spec", "preprocessing source")
             logger.info("Preprocessing %s with include dirs: %s",

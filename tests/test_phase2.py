@@ -3897,6 +3897,35 @@ def test_strip_static_assert_replaces_runtime_condition():
     assert out.count('_Static_assert(1, "")') == 3
 
 
+def test_sanitize_kernel_compile_time_checks_rewrites_build_bug_and_func():
+    from bmc_agent.harness_generator import _sanitize_kernel_compile_time_checks
+
+    src = (
+        "int x = BUILD_BUG_ON_ZERO(sizeof(int) != 4);\n"
+        "const char *name = __func__;\n"
+        "int y = BUILD_BUG_ON_INVALID((x + (1 << 2)) > 9);\n"
+    )
+    out = _sanitize_kernel_compile_time_checks(src)
+
+    assert "BUILD_BUG_ON" not in out
+    assert "__func__" not in out
+    assert "int x = (0);" in out
+    assert 'const char *name = "";' in out
+    assert "int y = (0);" in out
+
+
+def test_pipeline_does_not_preprocess_already_preprocessed_kernel_sources():
+    from bmc_agent.config import Config
+    from bmc_agent.pipeline import _should_preprocess_source
+
+    cfg = Config(preprocess=True)
+    cfg.include_dirs = ["/tmp/include"]
+
+    assert _should_preprocess_source("driver.c", cfg) is True
+    assert _should_preprocess_source("driver.i", cfg) is False
+    assert _should_preprocess_source("driver.ii", cfg) is False
+
+
 def test_strip_static_assert_skips_string_literal_occurrences():
     """The Linux kernel's BUILD_BUG_ON macro family embeds the failing-
     condition source text inside ``__attribute__((__error__("...")))``

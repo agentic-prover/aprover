@@ -5311,7 +5311,11 @@ class HarnessGenerator:
             type_decls = _strip_aligned_attributes(type_decls)
         _intermediate = _strip_inline_asm(
             _strip_static_assert(
-                _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
+                _rewrite_auto_type(
+                    _sanitize_kernel_compile_time_checks(
+                        _strip_gcc_addr_space_quals(type_decls)
+                    )
+                )
             )
         )
         # Kernel TU: strip ALL static inlines defined in headers,
@@ -6784,6 +6788,75 @@ def _strip_static_assert(text: str) -> str:
     return ''.join(out)
 
 
+def _replace_balanced_macro_calls(text: str, macro_names: set[str], replacement: str) -> str:
+    """Replace selected function-like macro invocations while respecting nesting."""
+    if not text or not macro_names:
+        return text
+    name_re = re.compile(r"\b(" + "|".join(re.escape(n) for n in sorted(macro_names)) + r")\s*\(")
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        m = name_re.search(text, i)
+        if not m:
+            out.append(text[i:])
+            break
+        out.append(text[i:m.start()])
+        j = m.end() - 1
+        depth = 0
+        q: str | None = None
+        esc = False
+        k = j
+        while k < n:
+            c = text[k]
+            if q is not None:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == q:
+                    q = None
+                k += 1
+                continue
+            if c in {"'", '"'}:
+                q = c
+                k += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    out.append(replacement)
+                    i = k + 1
+                    break
+            k += 1
+        else:
+            out.append(text[m.start():])
+            break
+    return "".join(out)
+
+
+def _sanitize_kernel_compile_time_checks(text: str) -> str:
+    """Remove kernel compile-time-only constructs that confuse CBMC.
+
+    These macros are intended for GCC constant-folding and diagnostics, not for
+    runtime verification. In preprocessed Linux translation units CBMC can see
+    them after partial expansion and reject otherwise useful harnesses.
+    """
+    text = _replace_balanced_macro_calls(
+        text,
+        {
+            "BUILD_BUG_ON_ZERO",
+            "BUILD_BUG_ON_INVALID",
+            "__BUILD_BUG_ON_ZERO_MSG",
+            "__BUILD_BUG_ON_INVALID",
+        },
+        "(0)",
+    )
+    return re.sub(r"\b__func__\b", '""', text)
+
+
 def _rewrite_auto_type(text: str) -> str:
     """Rewrite GCC's ``__auto_type`` declarations into ``typeof()``
     equivalents. CBMC's parser (5.95) doesn't recognise ``__auto_type``
@@ -7301,7 +7374,11 @@ def _sanitize_harness_type_decls(
     intermediate = _strip_inline_asm(
         _strip_static_assert(
             _strip_kernel_dynamic_debug_blocks(
-                _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
+                _rewrite_auto_type(
+                    _sanitize_kernel_compile_time_checks(
+                        _strip_gcc_addr_space_quals(type_decls)
+                    )
+                )
             )
         )
     )

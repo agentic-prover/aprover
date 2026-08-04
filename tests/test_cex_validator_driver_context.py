@@ -56,9 +56,49 @@ def test_driver_lifecycle_reproducer_uses_context_packet_without_llm() -> None:
         parsed_file=parsed,
     )
 
-    assert "host C reproducer skipped for kernel-driver lifecycle harness" in reproducer
+    assert "host C reproducer skipped for kernel-driver context" in reproducer
     assert "manual unregister of devm-managed spi controller" in reproducer
     assert "devm_spi_register_controller" in reproducer
+    llm.complete.assert_not_called()
+
+
+def test_kernel_driver_callback_reproducer_does_not_call_llm() -> None:
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.cex_validator import CExValidator
+    from bmc_agent.config import Config
+    from bmc_agent.parser import parse_c_file
+
+    parsed = parse_c_file(str(EXAMPLE_C))
+    parsed.llm_context_packet = {
+        "case_id": "usb-demo",
+        "entrypoints": [{"name": "demo_probe", "kind": "callback:probe"}],
+        "kernel_api_contracts": [
+            {
+                "id": "usb-probe-cleanup",
+                "status": "candidate_triggered",
+                "matched_apis": ["usb_get_dev", "usb_put_dev"],
+            }
+        ],
+    }
+    cex = Counterexample(
+        failing_property="bmc_agent_usb_probe_cleanup.assertion.1",
+        variable_assignments={"ret": "-12"},
+        trace=[],
+    )
+    llm = MagicMock()
+    validator = object.__new__(CExValidator)
+    validator.config = Config()
+    validator.llm = llm
+
+    reproducer = validator._generate_system_entry_reproducer(
+        call_chain=["demo_probe"],
+        counterexample=cex,
+        all_funcs={},
+        parsed_file=parsed,
+    )
+
+    assert "kernel-driver context" in reproducer
+    assert "usb-probe-cleanup" in reproducer
     llm.complete.assert_not_called()
 
 

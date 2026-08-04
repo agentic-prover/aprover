@@ -148,6 +148,8 @@ def _driver_entrypoint_kind(func_name: str, parsed_file: ParsedCFile) -> str:
 
 
 def _is_kernel_driver_entrypoint(func_name: str, parsed_file: ParsedCFile) -> bool:
+    if func_name.startswith("bmc_agent_lifecycle_"):
+        return True
     kind = _driver_entrypoint_kind(func_name, parsed_file)
     return bool(
         kind
@@ -157,6 +159,20 @@ def _is_kernel_driver_entrypoint(func_name: str, parsed_file: ParsedCFile) -> bo
             or "public" in kind
         )
     )
+
+
+def _is_kernel_driver_context(parsed_file: ParsedCFile) -> bool:
+    packet = getattr(parsed_file, "llm_context_packet", None)
+    if isinstance(packet, dict) and (
+        packet.get("kernel_api_contracts")
+        or packet.get("entrypoints")
+        or packet.get("driver_functions")
+    ):
+        return True
+    if getattr(parsed_file, "bmc_agent_driver_entrypoints", None):
+        return True
+    path = str(getattr(parsed_file, "path", "") or "")
+    return path.endswith((".i", ".ii")) and "/drivers/" in path
 
 
 def _format_reproducer_state(
@@ -201,7 +217,7 @@ def _driver_context_reproducer_summary(
     if not isinstance(packet, dict):
         return ""
     entry_name = call_chain[0] if call_chain else ""
-    if not entry_name.startswith("bmc_agent_lifecycle_"):
+    if not entry_name.startswith("bmc_agent_lifecycle_") and not _is_kernel_driver_context(parsed_file):
         return ""
 
     failing_property = counterexample.failing_property or ""
@@ -221,8 +237,8 @@ def _driver_context_reproducer_summary(
         if c.get("status") == "candidate_triggered"
     ]
     lines = [
-        "// UNREPRODUCIBLE: host C reproducer skipped for kernel-driver lifecycle harness.",
-        "// BMC-Agent used a generated framework lifecycle harness rather than a user-space host replay.",
+        "// UNREPRODUCIBLE: host C reproducer skipped for kernel-driver context.",
+        "// BMC-Agent relies on kernel framework reachability/static evidence rather than a user-space host replay.",
         f"// case_id: {packet.get('case_id')}",
         f"// variant: {packet.get('variant')}",
         f"// entry: {entry_name}",
@@ -840,6 +856,23 @@ class CExValidator:
                     ),
                     outcome=CExOutcome.SPURIOUS,
                     system_entry_reached=True,
+                )
+            if _is_kernel_driver_context(parsed_file) and not _is_kernel_driver_entrypoint(func_name, parsed_file):
+                return ValidationResult(
+                    function_name=func_name,
+                    counterexample=counterexample,
+                    caller_path=[],
+                    system_entry_input=None,
+                    refinement_history=[],
+                    final_precondition=None,
+                    reasoning=(
+                        f"'{func_name}' has no in-scope caller in a Linux-driver "
+                        "context and is not a discovered driver entrypoint or "
+                        "generated lifecycle harness. Do not treat C external "
+                        "visibility as a public API for kernel code; manual "
+                        "entrypoint evidence is required."
+                    ),
+                    outcome=CExOutcome.UNRESOLVED,
                 )
             reproducer = self._generate_system_entry_reproducer(
                 call_chain=[func_name],
@@ -1727,15 +1760,19 @@ class CExValidator:
                         if __import__("os").environ.get("BMC_OVERREF_LATENT", "0") == "0"
                         else CExOutcome.LATENT
                     )
+                    fallback_label = (
+                        "UNRESOLVED"
+                        if fallback_outcome == CExOutcome.UNRESOLVED
+                        else "LATENT"
+                    )
                     reasoning = (
                         f"Over-refinement guard rejected at iteration {iteration + 1}: "
                         "could not tighten the precondition without excluding states "
                         "the precondition permits. Failing property is a structural "
                         "panic (e.g. OOB/underflow on a boundary input the contract "
-                        "allows). Classifying LATENT: a real panic reachable via the "
-                        "public API; in-tree callers may avoid it via a surrounding "
-                        "invariant, so it is surfaced (not silently dropped) but not "
-                        "asserted as a confirmed in-tree bug."
+                        f"allows). Classifying {fallback_label}: the finding is "
+                        "surfaced for review but is not asserted as a confirmed "
+                        "in-tree bug without entrypoint evidence."
                     )
                 over_result = ValidationResult(
                     function_name=func_name,
