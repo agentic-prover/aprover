@@ -119,6 +119,129 @@ def _is_publicly_callable(func) -> bool:
     return not bool(getattr(sig, "is_static", False))
 
 
+def _driver_entrypoint_kind(func_name: str, parsed_file: ParsedCFile) -> str:
+    """Return the kernel-driver wrapper entrypoint kind for ``func_name``.
+
+    The generic address-taken guard below is intentionally conservative for
+    qsort/pthread-style callbacks: a bare function pointer in a libc call does
+    not mean arbitrary inputs are system-reachable. Linux-driver mode has a
+    narrower source of truth: deterministic entrypoint discovery from callback
+    tables, exported symbols, and public driver-library functions. When that
+    wrapper annotates a parsed file with entrypoints, those functions should
+    remain eligible for normal system-entry validation even if kernel export
+    macros also take their address.
+    """
+    entries = getattr(parsed_file, "bmc_agent_driver_entrypoints", None) or []
+    for entry in entries:
+        if isinstance(entry, dict):
+            if entry.get("name") == func_name:
+                return str(entry.get("kind") or "")
+        elif getattr(entry, "name", None) == func_name:
+            return str(getattr(entry, "kind", "") or "")
+
+    packet = getattr(parsed_file, "llm_context_packet", None)
+    if isinstance(packet, dict):
+        for entry in packet.get("entrypoints") or []:
+            if isinstance(entry, dict) and entry.get("name") == func_name:
+                return str(entry.get("kind") or "")
+    return ""
+
+
+def _is_kernel_driver_entrypoint(func_name: str, parsed_file: ParsedCFile) -> bool:
+    kind = _driver_entrypoint_kind(func_name, parsed_file)
+    return bool(
+        kind
+        and (
+            "callback:" in kind
+            or kind in {"module_lifecycle", "exported_symbol", "public_function"}
+            or "public" in kind
+        )
+    )
+
+
+def _format_reproducer_state(
+    counterexample: Counterexample,
+    *,
+    max_entries: int = 80,
+    max_chars: int = 12000,
+) -> str:
+    if not counterexample.variable_assignments:
+        return "(no witness values recorded)"
+    parts: list[str] = []
+    total = 0
+    omitted = 0
+    for idx, (key, value) in enumerate(counterexample.variable_assignments.items()):
+        if idx >= max_entries:
+            omitted += 1
+            continue
+        item = f"{key} = {value}"
+        if total + len(item) > max_chars:
+            omitted += 1
+            continue
+        parts.append(item)
+        total += len(item) + 2
+    remaining = len(counterexample.variable_assignments) - len(parts)
+    if remaining > omitted:
+        omitted = remaining
+    if omitted:
+        parts.append(
+            f"... {omitted} witness assignment(s) omitted for prompt budget; "
+            "see cbmc_result.json for full state"
+        )
+    return ", ".join(parts)
+
+
+def _driver_context_reproducer_summary(
+    *,
+    call_chain: list[str],
+    counterexample: Counterexample,
+    parsed_file: ParsedCFile,
+) -> str:
+    packet = getattr(parsed_file, "llm_context_packet", None)
+    if not isinstance(packet, dict):
+        return ""
+    entry_name = call_chain[0] if call_chain else ""
+    if not entry_name.startswith("bmc_agent_lifecycle_"):
+        return ""
+
+    failing_property = counterexample.failing_property or ""
+    props = packet.get("candidate_properties") or []
+    selected = None
+    for prop in props:
+        if (
+            failing_property in str(prop.get("id", ""))
+            or failing_property in str(prop.get("property", ""))
+            or "spi_unregister_controller" in failing_property
+            and "spi_unregister_controller" in json.dumps(prop)
+        ):
+            selected = prop
+            break
+    contracts = [
+        c for c in (packet.get("kernel_api_contracts") or [])
+        if c.get("status") == "candidate_triggered"
+    ]
+    lines = [
+        "// UNREPRODUCIBLE: host C reproducer skipped for kernel-driver lifecycle harness.",
+        "// BMC-Agent used a generated framework lifecycle harness rather than a user-space host replay.",
+        f"// case_id: {packet.get('case_id')}",
+        f"// variant: {packet.get('variant')}",
+        f"// entry: {entry_name}",
+        f"// failing_property: {failing_property}",
+    ]
+    if selected:
+        lines.append(f"// candidate_property: {selected.get('property')}")
+    for contract in contracts[:4]:
+        apis = ", ".join(contract.get("matched_apis") or [])
+        lines.append(
+            f"// triggered_contract: {contract.get('id')} apis=[{apis}]"
+        )
+    lines.append(
+        "// static evidence: see analysis/context_packet.json and the CBMC harness "
+        "for probe-success-then-teardown reachability."
+    )
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -385,7 +508,15 @@ class CExValidator:
             # confirmed_dynamic SIGSEGV findings on qsort comparators
             # (iq1_sort_helper, iq2_compare_func, iq3_compare_func)
             # that are exactly this FP class.
-            if _is_address_taken(func_name, parsed_file):
+            if _is_address_taken(func_name, parsed_file) and _is_kernel_driver_entrypoint(func_name, parsed_file):
+                logger.info(
+                    "'%s' has no direct callers and its address is taken, but "
+                    "linux-driver mode discovered it as a driver entrypoint "
+                    "(kind=%s); continuing with system-entry validation",
+                    func_name,
+                    _driver_entrypoint_kind(func_name, parsed_file),
+                )
+            elif _is_address_taken(func_name, parsed_file):
                 # Check whether the address is taken in an IN-PROJECT
                 # function (i.e. one we've parsed). If yes, that
                 # function is the indirect caller for vtable-dispatch
@@ -603,12 +734,6 @@ class CExValidator:
                         ),
                         outcome=CExOutcome.UNRESOLVED,
                     )
-            reproducer = self._generate_system_entry_reproducer(
-                call_chain=[func_name],
-                counterexample=counterexample,
-                all_funcs=all_funcs,
-                parsed_file=parsed_file,
-            )
             # Entry function (no in-scope callers) + public API + structural
             # panic = LATENT or REAL_BUG depending on threat model.
             #
@@ -645,6 +770,12 @@ class CExValidator:
                     f"classified as LATENT — separate from REAL_BUG (which "
                     f"requires an in-tree-reachable call chain under non-security "
                     f"threat models)."
+                )
+                reproducer = self._generate_system_entry_reproducer(
+                    call_chain=[func_name],
+                    counterexample=counterexample,
+                    all_funcs=all_funcs,
+                    parsed_file=parsed_file,
                 )
                 result = ValidationResult(
                     function_name=func_name,
@@ -695,7 +826,7 @@ class CExValidator:
                     function_name=func_name,
                     counterexample=counterexample,
                     caller_path=[func_name],
-                    system_entry_input=reproducer,
+                    system_entry_input=None,
                     refinement_history=[],
                     final_precondition=None,
                     reasoning=(
@@ -710,6 +841,12 @@ class CExValidator:
                     outcome=CExOutcome.SPURIOUS,
                     system_entry_reached=True,
                 )
+            reproducer = self._generate_system_entry_reproducer(
+                call_chain=[func_name],
+                counterexample=counterexample,
+                all_funcs=all_funcs,
+                parsed_file=parsed_file,
+            )
             result = ValidationResult(
                 function_name=func_name,
                 counterexample=counterexample,
@@ -1103,6 +1240,13 @@ class CExValidator:
                 all_specs=all_specs,
                 callee_sig=callee_sig,
             )
+        if getattr(self.config, "disable_llm_fallbacks", False):
+            logger.info(
+                "LLM reachability fallback disabled; treating '%s' -> '%s' as not reachable",
+                caller.name,
+                callee_name,
+            )
+            return False
         else:
             return self._check_reachability_with_llm(
                 caller=caller,
@@ -1162,7 +1306,12 @@ class CExValidator:
                 "Reachability harness traceback for '%s' → '%s':",
                 caller.name, callee_name, exc_info=True,
             )
-            # Fall back to LLM
+            if getattr(self.config, "disable_llm_fallbacks", False):
+                logger.info(
+                    "LLM reachability fallback disabled after harness generation failure"
+                )
+                self._reach_errored = True
+                return False
             return self._check_reachability_with_llm(
                 caller=caller,
                 callee_name=callee_name,
@@ -1193,11 +1342,18 @@ class CExValidator:
                 pass
 
         if result.error:
+            self._reach_errored = True
+            if getattr(self.config, "disable_llm_fallbacks", False):
+                logger.warning(
+                    "CBMC reachability check error for '%s' → '%s': %s; "
+                    "LLM fallback disabled",
+                    caller.name, callee_name, result.error,
+                )
+                return False
             logger.warning(
                 "CBMC reachability check error for '%s' → '%s': %s; falling back to LLM",
                 caller.name, callee_name, result.error,
             )
-            self._reach_errored = True
             return self._check_reachability_with_llm(
                 caller=caller,
                 callee_name=callee_name,
@@ -1220,6 +1376,9 @@ class CExValidator:
         parsed_file: ParsedCFile,
     ) -> bool:
         """LLM-based fallback for reachability analysis."""
+        if getattr(self.config, "disable_llm_fallbacks", False):
+            logger.info("LLM reachability fallback disabled")
+            return False
         state_str = ", ".join(
             f"{k} = {v}"
             for k, v in counterexample.variable_assignments.items()
@@ -1399,6 +1558,21 @@ class CExValidator:
     ) -> ValidationResult:
         """Handle a spurious counterexample by refining the precondition."""
         func_name = func.name
+        if getattr(self.config, "skip_refinement", False):
+            return ValidationResult(
+                function_name=func_name,
+                counterexample=counterexample,
+                caller_path=[],
+                system_entry_input=None,
+                refinement_history=[],
+                final_precondition=spec.precondition,
+                reasoning=(
+                    "Counterexample classified as spurious under filtering-only "
+                    "mode; refinement was skipped."
+                ),
+                outcome=CExOutcome.SPURIOUS,
+            )
+
         refinement_history: list[dict] = []
         current_spec = spec
 
@@ -1550,7 +1724,7 @@ class CExValidator:
                     # recall on genuine boundary bugs without claiming confirmed.
                     fallback_outcome = (
                         CExOutcome.UNRESOLVED
-                        if __import__("os").environ.get("BMC_OVERREF_LATENT", "1") == "0"
+                        if __import__("os").environ.get("BMC_OVERREF_LATENT", "0") == "0"
                         else CExOutcome.LATENT
                     )
                     reasoning = (
@@ -1742,6 +1916,9 @@ class CExValidator:
         caller_reachable_states: str,
     ) -> str:
         """One refinement call, with a vacuous-output critique retry on K2."""
+        if getattr(self.config, "disable_llm_fallbacks", False):
+            logger.info("LLM refinement fallback disabled")
+            return ""
         try:
             response = self.llm.complete(system_prompt, user_prompt, role="refinement",
                                          cache_prefix=getattr(self.config, "domain_summary", ""),
@@ -2098,10 +2275,15 @@ class CExValidator:
             if _agent_src is not None:
                 return _agent_src
 
-        state_str = ", ".join(
-            f"{k} = {v}"
-            for k, v in counterexample.variable_assignments.items()
+        driver_summary = _driver_context_reproducer_summary(
+            call_chain=call_chain,
+            counterexample=counterexample,
+            parsed_file=parsed_file,
         )
+        if driver_summary:
+            return driver_summary
+
+        state_str = _format_reproducer_state(counterexample)
 
         # Build function signatures string
         sigs: list[str] = []

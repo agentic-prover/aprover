@@ -25,6 +25,7 @@ from bmc_agent.dynamic_validator import (
     DynamicOutcome,
     DynamicValidationResult,
     DynamicValidator,
+    _ensure_dynamic_compile_compat_typedefs,
     _looks_like_c_code,
     _wrap_reproducer_with_signal_handlers,
 )
@@ -383,6 +384,30 @@ def test_dynamic_validator_harness_generation_exception_returns_inconclusive():
 
     result = dv.validate(func, cex, _make_parsed_file(), {}, {})
     assert result.outcome == DynamicOutcome.INCONCLUSIVE
+
+
+def test_dynamic_compile_compat_injects_kernel_int128_typedefs_once():
+    src = "typedef __s128 s128;\ntypedef __u128 u128;\nint main(void){return 0;}\n"
+    out = _ensure_dynamic_compile_compat_typedefs(src)
+    assert "typedef signed __int128 __s128;" in out
+    assert "typedef unsigned __int128 __u128;" in out
+    assert out.count("typedef signed __int128 __s128;") == 1
+    assert out.count("typedef unsigned __int128 __u128;") == 1
+    assert _ensure_dynamic_compile_compat_typedefs(out) == out
+
+
+@pytest.mark.skipif(not GCC_AVAILABLE, reason="gcc not available")
+def test_dynamic_validator_compile_accepts_kernel_int128_aliases():
+    config = Config(enable_dynamic_validation=True, dynamic_cc_path="gcc")
+    dv = DynamicValidator(config, MagicMock())
+    src = "typedef __s128 s128;\ntypedef __u128 u128;\nint main(void){return 0;}\n"
+    binary_path, compile_err = dv._compile(src, "gcc")
+    try:
+        assert binary_path is not None
+        assert compile_err is None
+    finally:
+        if binary_path:
+            Path(binary_path).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

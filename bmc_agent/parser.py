@@ -65,6 +65,17 @@ class ParsedCFile:
     # stored here so harness generators can use it instead of re-reading the
     # original (unexpanded) file.
     preprocessed_source: Optional[str] = None
+    # Optional compact source context for LLM-facing analysis. When set, prompt
+    # builders should prefer this over ``preprocessed_source`` so large kernel
+    # translation units do not flood spec/realism prompts. Harness generation
+    # and CBMC-facing code must continue to use ``preprocessed_source``.
+    llm_context_source: Optional[str] = None
+    # Optional function bodies/definitions parsed from ``llm_context_source``.
+    # These are prompt-only views: they preserve the verifier's full TU while
+    # keeping spec-generation bodies close to the original source file instead
+    # of macro-expanded ``.i`` text.
+    llm_function_bodies: dict[str, str] = field(default_factory=dict)
+    llm_function_definitions: dict[str, str] = field(default_factory=dict)
     # cpp ``# N "filename"`` line directives let us tell which header (or
     # the original .c) each function body came from. Populated only when the
     # parser sees those directives in the input (i.e. a preprocessed ``.i``

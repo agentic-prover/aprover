@@ -177,6 +177,98 @@ def test_parse_uncertain_verdict():
     assert r.verdict == RealismVerdict.UNCERTAIN
 
 
+def test_driver_context_packet_replaces_large_source_context():
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.realism_checker import _format_source_file_context
+
+    parsed = parse_c_file(str(EXAMPLE_C))
+    parsed.llm_context_source = "X" * 100_000
+    parsed.llm_context_packet = {
+        "case_id": "driver-demo",
+        "variant": "buggy",
+        "source_rel": "drivers/demo/demo.c",
+        "module_path": "drivers/demo",
+        "kbuild_target": "demo.o",
+        "entrypoints": [
+            {
+                "name": "demo_probe",
+                "kind": "callback:probe",
+                "line": 10,
+                "evidence": ".probe = demo_probe",
+            }
+        ],
+        "candidate_properties": [
+            {
+                "id": "contract:demo",
+                "property": "demo resource lifetime violation",
+                "confidence": "high",
+                "evidence": {},
+            }
+        ],
+        "kernel_api_contracts": [
+            {
+                "id": "demo-contract",
+                "status": "candidate_triggered",
+                "matched_apis": ["demo_register", "demo_unregister"],
+                "contract": "register/unregister must be balanced",
+            }
+        ],
+        "resource_pairs": [],
+        "focused_source_snippets": [
+            {
+                "function": "demo_probe",
+                "line": 10,
+                "reasons": ["callback:probe"],
+                "source": "static int demo_probe(void) { return demo_register(); }",
+            }
+        ],
+    }
+
+    context = _format_source_file_context(parsed)
+
+    assert "DRIVER CONTEXT PACKET" in context
+    assert "demo resource lifetime violation" in context
+    assert "X" * 1000 not in context
+
+
+def test_counterexample_state_is_budgeted():
+    from bmc_agent.realism_checker import _format_cex_state
+
+    cex = _make_counterexample()
+    cex.variable_assignments = {f"v{i}": "A" * 100 for i in range(50)}
+
+    text = _format_cex_state(cex, max_entries=5, max_chars=400)
+
+    assert "v0" in text
+    assert "v4" not in text or "omitted" in text
+    assert "omitted" in text
+    assert len(text) < 700
+
+
+def test_lifecycle_harness_grounding_accepts_callback_lookup():
+    from bmc_agent.parser import parse_c_file
+    from bmc_agent.realism_checker import _tool_calls_ground_driver_target
+
+    parsed = parse_c_file(str(EXAMPLE_C))
+    parsed.llm_context_packet = {
+        "entrypoints": [
+            {"name": "demo_probe", "kind": "callback:probe"},
+            {"name": "demo_remove", "kind": "callback:remove"},
+        ]
+    }
+
+    assert _tool_calls_ground_driver_target(
+        "bmc_agent_lifecycle_demo_probe_then_demo_remove",
+        [("lookup_function", {"name": "demo_probe"})],
+        parsed,
+    )
+    assert not _tool_calls_ground_driver_target(
+        "ordinary_function",
+        [("lookup_function", {"name": "demo_probe"})],
+        parsed,
+    )
+
+
 def test_pipeline_skips_realism_when_dynamic_not_triggered_on_crash_property():
     """LEGACY (now opt-in) skip path: with ``realism_authoritative=False``
     Pipeline._make_report takes the shortcut and returns UNREALISTIC
@@ -783,6 +875,31 @@ def test_bug_report_downgraded_to_unlikely_for_unrealistic_high():
     report = reporter.create_report(vr, func, realism_check=realism)
     assert report.confidence == "unlikely"
     assert report.realism_check is realism
+
+
+def test_bug_report_downgraded_to_unlikely_for_unrealistic_numeric_confidence():
+    """UNREALISTIC + numeric tool-use confidence should also downgrade."""
+    from bmc_agent.bug_reporter import BugReporter
+    from bmc_agent.artifacts import ArtifactStore
+    from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
+    from bmc_agent.parser import parse_c_file
+
+    parsed = parse_c_file(str(EXAMPLE_C))
+    func = parsed.get_function_info("rb_write")
+    assert func is not None
+
+    store = ArtifactStore("/tmp/test_realism_artifacts_numeric")
+    reporter = BugReporter(store)
+    vr = _make_validation_result()
+
+    realism = RealismCheckResult(
+        verdict=RealismVerdict.UNREALISTIC,
+        reasoning="The candidate requires an impossible callback-table shape.",
+        key_concern="numeric confidence from tool-use realism",
+        llm_confidence="0.97",
+    )
+    report = reporter.create_report(vr, func, realism_check=realism)
+    assert report.confidence == "unlikely"
 
 
 def test_bug_report_not_downgraded_for_unrealistic_low_confidence():

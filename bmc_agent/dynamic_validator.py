@@ -37,6 +37,29 @@ if TYPE_CHECKING:
 logger = get_logger("dynamic_validator")
 
 
+_INT128_COMPAT_PRELUDE = (
+    "typedef signed __int128 __s128;\n"
+    "typedef unsigned __int128 __u128;\n"
+)
+
+
+def _ensure_dynamic_compile_compat_typedefs(source: str) -> str:
+    """Patch GCC-only compatibility typedefs needed by kernel harnesses.
+
+    Linux preprocessed sources can contain aliases such as
+    ``typedef __s128 s128;`` after the original ``__s128`` definition was
+    stripped elsewhere. GCC accepts ``__int128`` directly, so define the
+    missing primitive aliases before compiling the temporary dynamic harness.
+    """
+    needs_s128 = re.search(r"\b__s128\b", source) is not None
+    needs_u128 = re.search(r"\b__u128\b", source) is not None
+    has_s128 = re.search(r"typedef\s+signed\s+__int128\s+__s128\s*;", source) is not None
+    has_u128 = re.search(r"typedef\s+unsigned\s+__int128\s+__u128\s*;", source) is not None
+    if not ((needs_s128 and not has_s128) or (needs_u128 and not has_u128)):
+        return source
+    return _INT128_COMPAT_PRELUDE + source
+
+
 # ---------------------------------------------------------------------------
 # Link-flag detection from #include'd public headers
 # ---------------------------------------------------------------------------
@@ -932,6 +955,7 @@ class DynamicValidator:
         sources and the pipeline fails OPEN (a spurious boundary cex is never refuted and
         gets confirmed as a real bug -> Tier-A false alarms)."""
         import os as _os
+        harness_src = _ensure_dynamic_compile_compat_typedefs(harness_src)
         def _is_stub_libc_dir(d: str) -> bool:
             return any(_os.path.exists(_os.path.join(d, h))
                        for h in ("signal.h", "stdio.h", "stdlib.h"))

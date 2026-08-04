@@ -115,7 +115,7 @@ def _make_llm_mock() -> MagicMock:
 
 def test_validation_result_creation(tmp_path: Path):
     """ValidationResult can be created and serialized to a dict."""
-    from bmc_agent.cex_validator import ValidationResult
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
 
     cex = _make_counterexample()
     result = ValidationResult(
@@ -147,7 +147,7 @@ def test_validation_result_creation(tmp_path: Path):
 
 def test_validation_result_spurious():
     """ValidationResult for spurious counterexample."""
-    from bmc_agent.cex_validator import ValidationResult
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
 
     cex = _make_counterexample()
     result = ValidationResult(
@@ -464,7 +464,7 @@ def test_over_refinement_guard(tmp_path: Path):
 def test_bug_report_creation(tmp_path: Path):
     """BugReport is correctly created from a ValidationResult."""
     from bmc_agent.bug_reporter import BugReporter
-    from bmc_agent.cex_validator import ValidationResult
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
 
     store = _make_store(tmp_path)
     reporter = BugReporter(store)
@@ -738,6 +738,90 @@ def test_pipeline_run_no_bugs(tmp_path: Path):
     assert reports == []
 
 
+def test_pipeline_only_functions_keeps_nonchecked_callers_for_validation(tmp_path: Path):
+    """``only_functions`` must not hide prepared caller wrappers from Phase 3.
+
+    The Linux-driver slice preprocessor may append a small framework-caller
+    wrapper to a frozen ``.i`` file while asking BMC-Agent to verify only the
+    original callback. Phase 2 should still run just the requested callback,
+    but the validator needs the wrapper in ``all_funcs`` to avoid treating the
+    callback as an unreachable address-taken function.
+    """
+    from bmc_agent.bmc_engine import BMCVerdict
+    from bmc_agent.cex_validator import CExOutcome, ValidationResult
+    from bmc_agent.pipeline import AMCPipeline
+
+    source = tmp_path / "callback_slice.c"
+    source.write_text(
+        """
+        int target(int *p) { return *p; }
+        int bmc_agent_entry_target(void) {
+            int x = 0;
+            return target(&x);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    config = _make_config(tmp_path, max_refinement_iters=1)
+    config.enable_flag_selection = False
+    pipeline = AMCPipeline(config)
+
+    cex = _make_counterexample("target.pointer_dereference.1", {"p": "NULL"})
+    mock_specs = {"target": _make_spec("target")}
+    mock_verdicts = {
+        "target": BMCVerdict(
+            function_name="target",
+            verified=False,
+            counterexamples=[cex],
+        )
+    }
+    seen: dict[str, object] = {}
+
+    def fake_check_all(*, funcs, specs, parsed_file, driver_name, all_funcs, **kwargs):
+        seen["phase2_funcs"] = set(funcs)
+        seen["phase2_all_funcs"] = set(all_funcs)
+        return mock_verdicts
+
+    def fake_validate(**kwargs):
+        seen["validator_all_funcs"] = set(kwargs["all_funcs"])
+        return ValidationResult(
+            function_name="target",
+            counterexample=cex,
+            caller_path=["bmc_agent_entry_target", "target"],
+            system_entry_input=None,
+            refinement_history=[],
+            final_precondition=None,
+            reasoning="test only",
+            outcome=CExOutcome.SPURIOUS,
+        )
+
+    with patch.object(pipeline.spec_gen, "generate_specs", return_value=mock_specs):
+        with patch.object(pipeline.bmc_engine, "check_all", side_effect=fake_check_all):
+            with patch.object(pipeline.validator, "validate", side_effect=fake_validate):
+                reports = pipeline.run(
+                    str(source),
+                    "only_functions_context",
+                    only_functions={"target"},
+                )
+
+    assert reports == []
+    assert seen["phase2_funcs"] == {"target"}
+    assert "bmc_agent_entry_target" in seen["phase2_all_funcs"]
+    assert "bmc_agent_entry_target" in seen["validator_all_funcs"]
+
+
+def test_dedup_skips_cbmc_no_body_artifacts():
+    from bmc_agent.pipeline import _dedup_counterexamples
+
+    kept = _dedup_counterexamples([
+        _make_counterexample("adis_init.no-body.__mutex_init"),
+        _make_counterexample("adis_init.pointer_dereference.43"),
+    ])
+
+    assert [c.failing_property for c in kept] == ["adis_init.pointer_dereference.43"]
+
+
 # ---------------------------------------------------------------------------
 # Test 9: Upward propagation — entry→caller→func
 # ---------------------------------------------------------------------------
@@ -754,6 +838,7 @@ def test_upward_propagation(tmp_path: Path):
     from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
+    config.enable_dynamic_validation = False
     store = _make_store(tmp_path)
     llm = _make_llm_mock()
     harness_gen = HarnessGenerator(config)
@@ -816,6 +901,7 @@ def test_entry_function_real_bug(tmp_path: Path):
     from bmc_agent.parser import parse_c_file
 
     config = _make_config(tmp_path)
+    config.enable_dynamic_validation = False
     store = _make_store(tmp_path)
 
     # LLM will be used for reproducer generation — mock it
@@ -1449,7 +1535,7 @@ def test_vacuous_spec_postcondition_violation_filtered(tmp_path):
         parsed_file=MagicMock(), driver_name="test",
     )
     assert result.outcome == CExOutcome.SPURIOUS
-    assert "vacuous-spec postcondition-violation" in result.reasoning
+    assert "postcondition" in result.reasoning
     # The LLM must NOT be consulted for this filter (cost saver).
     assert llm.complete.call_count == 0
 

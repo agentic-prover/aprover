@@ -1365,6 +1365,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         config.enable_phase_3e_triage = False
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
+        config.skip_refinement = True
+        config.disable_llm_fallbacks = True
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
 
@@ -1395,6 +1397,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     domain_knowledge = _resolve_domain_knowledge(args.domain_knowledge) if (hasattr(args, "domain_knowledge") and args.domain_knowledge) else ""
 
     print(f"Full verification pipeline for: {args.source}")
+    if getattr(args, "analysis_source", ""):
+        print(f"Analysis source:  {args.analysis_source}")
     print(f"Driver: {args.driver}")
     print(f"Artifact dir: {config.artifact_dir}")
     if config.skip_refinement:
@@ -1456,6 +1460,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                     driver_name=args.driver,
                     domain_knowledge=domain_knowledge,
                     only_functions=_scope_only,
+                    analysis_source_file=getattr(args, "analysis_source", "") or None,
                 )
             finally:
                 config.confirm_frame_havoc_candidates_before_validation = _prev_phase2_confirm  # type: ignore[attr-defined]
@@ -1538,6 +1543,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             driver_name=args.driver,
             domain_knowledge=domain_knowledge,
             only_functions=_scope_only,
+            analysis_source_file=getattr(args, "analysis_source", "") or None,
         )
 
     # Filter out bug_reports whose realism check returned UNREALISTIC
@@ -1863,6 +1869,8 @@ def _cmd_verify_dir(args: argparse.Namespace) -> int:
         config.enable_phase_3e_triage = False
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
+        config.skip_refinement = True
+        config.disable_llm_fallbacks = True
     _apply_model_arg(config, args)
     _apply_provider_args(config, args)
 
@@ -2607,6 +2615,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run full pipeline: generate + check + validate (Phase 3)",
     )
     ver.add_argument("--source", required=True, help="Path to a C (.c/.h), Rust (.rs), or Java (.java) source file")
+    ver.add_argument(
+        "--analysis-source",
+        default="",
+        help=(
+            "Optional compact source context for LLM spec/realism prompts. "
+            "CBMC still verifies --source; use this with large preprocessed "
+            "kernel .i files to avoid flooding prompts with included headers."
+        ),
+    )
     ver.add_argument("--driver", required=True, help="Driver name")
     ver.add_argument("--output", default="artifacts", help="Artifact directory")
     ver.add_argument(

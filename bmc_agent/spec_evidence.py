@@ -206,15 +206,26 @@ def _enclosing_function_for_line(
     return None
 
 
-def harvest_callers(
+def _load_corpus_items(corpus_paths: list[Path]) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    for path in corpus_paths:
+        try:
+            text = Path(path).read_text(errors="replace")
+        except OSError:
+            continue
+        items.append((str(path), text))
+    return items
+
+
+def harvest_callers_from_texts(
     fn_name: str,
-    corpus_paths: list[Path],
+    corpus_items: list[tuple[str, str]],
     *,
     k: int = 5,
     context_radius: int = 8,
     candidate_fn_names: Optional[set[str]] = None,
 ) -> list[CallerEvidence]:
-    """Find up to ``k`` representative call sites of ``fn_name``.
+    """Find up to ``k`` representative call sites in in-memory source text.
 
     Selection priority:
       1. Sites in distinct files come first.
@@ -234,14 +245,10 @@ def harvest_callers(
     # (priority_tuple, file, line_idx, source_lines)
     hits: list[tuple[tuple, str, int, list[str]]] = []
 
-    for path in corpus_paths:
-        try:
-            text = Path(path).read_text(errors="replace")
-        except OSError:
-            continue
+    for file_label, text in corpus_items:
         source_lines = text.splitlines()
         in_block_comment = False
-        is_test = _is_test_path(str(path))
+        is_test = _is_test_path(file_label)
         brace_depth = 0  # tracks { } nesting at TU scope
         for idx, raw_line in enumerate(source_lines):
             line = raw_line
@@ -285,10 +292,10 @@ def harvest_callers(
                 continue
             prio = (
                 0 if not is_test else 1,   # non-test first
-                str(path),                  # then by file (stable distinct-file pref)
+                file_label,                 # then by file (stable distinct-file pref)
                 idx,                        # then by earliest line
             )
-            hits.append((prio, str(path), idx, source_lines))
+            hits.append((prio, file_label, idx, source_lines))
 
     if not hits:
         return []
@@ -330,6 +337,24 @@ def harvest_callers(
     return out
 
 
+def harvest_callers(
+    fn_name: str,
+    corpus_paths: list[Path],
+    *,
+    k: int = 5,
+    context_radius: int = 8,
+    candidate_fn_names: Optional[set[str]] = None,
+) -> list[CallerEvidence]:
+    """Find up to ``k`` representative call sites of ``fn_name``."""
+    return harvest_callers_from_texts(
+        fn_name,
+        _load_corpus_items(corpus_paths),
+        k=k,
+        context_radius=context_radius,
+        candidate_fn_names=candidate_fn_names,
+    )
+
+
 # ---------- vtable-registration (address-taken) harvest ---------------------
 
 # When a function is only reached via a function-pointer callback (e.g.
@@ -355,17 +380,29 @@ def harvest_address_taken_sites(
     differently. ``k`` defaults to 3 since the same function is rarely
     registered in many places.
     """
+    return harvest_address_taken_sites_from_texts(
+        fn_name,
+        _load_corpus_items(corpus_paths),
+        k=k,
+        context_radius=context_radius,
+    )
+
+
+def harvest_address_taken_sites_from_texts(
+    fn_name: str,
+    corpus_items: list[tuple[str, str]],
+    *,
+    k: int = 3,
+    context_radius: int = 6,
+) -> list[CallerEvidence]:
+    """Find address-taken sites in in-memory source text."""
     if not fn_name:
         return []
     # Word-boundary match for fn_name NOT followed by `(`.
     addr_rx = re.compile(rf"\b{re.escape(fn_name)}\b(?!\s*\()")
 
     hits: list[CallerEvidence] = []
-    for path in corpus_paths:
-        try:
-            text = Path(path).read_text(errors="replace")
-        except OSError:
-            continue
+    for file_label, text in corpus_items:
         source_lines = text.splitlines()
         in_block_comment = False
         for idx, raw_line in enumerate(source_lines):
@@ -391,7 +428,7 @@ def harvest_address_taken_sites(
             lo = max(0, idx - context_radius)
             hi = min(len(source_lines), idx + context_radius + 1)
             hits.append(CallerEvidence(
-                file=str(path),
+                file=file_label,
                 line=idx + 1,
                 enclosing_function=None,
                 context_lines=source_lines[lo:hi],
@@ -557,14 +594,19 @@ def parse_doc_annotations(
 
     Returns an empty list if no doc comment is present.
     """
-    fn_def = parsed_file.function_definitions.get(fn_name) if hasattr(
-        parsed_file, "function_definitions"
-    ) else None
+    llm_defs = getattr(parsed_file, "llm_function_definitions", {}) or {}
+    fn_def = llm_defs.get(fn_name)
+    if fn_def is None:
+        fn_def = parsed_file.function_definitions.get(fn_name) if hasattr(
+            parsed_file, "function_definitions"
+        ) else None
     if not fn_def:
         return []
     try:
-        source = parsed_file.preprocessed_source or Path(parsed_file.path).read_text(
-            errors="replace"
+        source = (
+            getattr(parsed_file, "llm_context_source", None)
+            or parsed_file.preprocessed_source
+            or Path(parsed_file.path).read_text(errors="replace")
         )
     except OSError:
         return []
@@ -687,22 +729,40 @@ def gather_evidence_bundle(
     file read per corpus_paths entry). For libarchive's 7-file working
     corpus, total cost per function is ~tens of milliseconds.
     """
-    callers = harvest_callers(
-        func_info.name,
-        corpus_paths,
-        k=k_callers,
-        context_radius=context_radius,
-        candidate_fn_names=candidate_fn_names,
-    )
+    llm_context = getattr(parsed_file, "llm_context_source", None)
+    if llm_context:
+        corpus_label = f"{Path(parsed_file.path).name}:analysis_context"
+        corpus_items = [(corpus_label, llm_context)]
+        callers = harvest_callers_from_texts(
+            func_info.name,
+            corpus_items,
+            k=k_callers,
+            context_radius=context_radius,
+            candidate_fn_names=candidate_fn_names,
+        )
+    else:
+        corpus_items = []
+        callers = harvest_callers(
+            func_info.name,
+            corpus_paths,
+            k=k_callers,
+            context_radius=context_radius,
+            candidate_fn_names=candidate_fn_names,
+        )
     # When no direct callers exist (vtable-dispatch case), fall back to
     # address-taken sites. Bookkeeping them separately lets the prompt
     # weight them differently — they show what the function is registered
     # AS, not what arguments will reach it.
     addr_sites: list[CallerEvidence] = []
     if not callers:
-        addr_sites = harvest_address_taken_sites(
-            func_info.name, corpus_paths, k=3, context_radius=context_radius
-        )
+        if corpus_items:
+            addr_sites = harvest_address_taken_sites_from_texts(
+                func_info.name, corpus_items, k=3, context_radius=context_radius
+            )
+        else:
+            addr_sites = harvest_address_taken_sites(
+                func_info.name, corpus_paths, k=3, context_radius=context_radius
+            )
     param_names = [n for _, n in func_info.signature.parameters if n]
     return EvidenceBundle(
         fn_name=func_info.name,

@@ -14,6 +14,7 @@ Component labeling per AMC architecture:
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -317,6 +318,12 @@ def _dedup_counterexamples(cexs: list, max_per_type: int = DEFAULT_DEDUP_PER_TYP
     counts: dict[str, int] = {}
     result = []
     for cex in cexs:
+        if _is_cbmc_no_body_artifact(cex.failing_property):
+            logger.debug(
+                "Skipping CBMC no-body artifact counterexample: %s",
+                cex.failing_property,
+            )
+            continue
         parts = cex.failing_property.split(".")
         prop_type = parts[-2] if len(parts) >= 2 else cex.failing_property
         if prop_type == "assertion":
@@ -342,6 +349,17 @@ def _prop_type(failing_property: str) -> str:
     """
     parts = failing_property.split(".")
     return parts[-2] if len(parts) >= 2 else failing_property
+
+
+def _is_cbmc_no_body_artifact(failing_property: str) -> bool:
+    """Return true for CBMC's missing-callee-body bookkeeping properties.
+
+    Properties such as ``adis_init.no-body.__mutex_init`` mean CBMC could not
+    see a body for a kernel/helper function. They are useful harness-quality
+    diagnostics, but they are not source-level driver bugs and should not spend
+    Phase 3 LLM/dynamic-validation budget.
+    """
+    return _prop_type(failing_property) == "no-body"
 
 
 @dataclass
@@ -536,6 +554,7 @@ class AMCPipeline:
         function_hints: dict[str, str] | None = None,
         only_functions: set[str] | None = None,
         display_name: str | None = None,
+        analysis_source_file: str | None = None,
     ) -> list[BugReport]:
         """
         Run the full AMC pipeline.
@@ -583,6 +602,42 @@ class AMCPipeline:
 
         self._phase_note("spec", "parsing source & call graph")
         parsed = parse_source_file(source_file, source_text=preprocessed_source)
+        analysis_source_text: str | None = None
+        if analysis_source_file:
+            try:
+                analysis_source_text = Path(analysis_source_file).read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                if hasattr(parsed, "llm_context_source"):
+                    parsed.llm_context_source = analysis_source_text
+                analysis_dir = Path(analysis_source_file).parent
+                prompt_packet_path = analysis_dir / "prompt_packet.json"
+                context_packet_path = analysis_dir / "context_packet.json"
+                context_packet_path = prompt_packet_path if prompt_packet_path.exists() else context_packet_path
+                if context_packet_path.exists():
+                    try:
+                        parsed.llm_context_packet = json.loads(
+                            context_packet_path.read_text(
+                                encoding="utf-8", errors="replace"
+                            )
+                        )
+                        logger.info(
+                            "Using driver context packet for LLM context: %s",
+                            context_packet_path,
+                        )
+                    except Exception as packet_exc:
+                        logger.warning(
+                            "Failed to read context_packet=%s: %s",
+                            context_packet_path,
+                            packet_exc,
+                        )
+                logger.info(
+                    "Using compact analysis source for LLM context: %s (%d bytes)",
+                    analysis_source_file,
+                    len(analysis_source_text.encode("utf-8")),
+                )
+            except Exception as exc:
+                logger.warning("Failed to read analysis_source_file=%s: %s", analysis_source_file, exc)
 
         # Swap in the language-appropriate verification backend in place
         # so that mocks attached to self.bmc_engine survive.  The default
@@ -653,41 +708,50 @@ class AMCPipeline:
                 driver_name=driver_name,
                 domain_knowledge=domain_knowledge,
                 source_text=preprocessed_source,
+                analysis_source_text=analysis_source_text,
                 cross_file_caller_contexts=cross_file_caller_contexts,
                 only_functions=only_functions,
                 progress_note=_spec_progress,
             )
             logger.info("Phase 1 complete: %d specs generated", len(specs))
         self._emit(type="phase", phase="spec", status="complete", n_functions=len(specs))
-        # Build all_funcs mapping
-        all_funcs: dict[str, FunctionInfo] = {}
-        for fn_name in specs:
-            fi = parsed.get_function_info(fn_name)
-            if fi is not None:
-                all_funcs[fn_name] = fi
 
-        if not all_funcs:
+        # Build the full in-scope function context independently from the
+        # functions that received specs. ``only_functions`` narrows the BMC
+        # worklist, but Phase 3 still needs non-checked callers/wrappers for
+        # reachability and realism checks.
+        all_funcs: dict[str, FunctionInfo] = {
+            fn_name: fi
+            for fn_name in parsed.functions
+            if (fi := parsed.get_function_info(fn_name)) is not None
+        }
+        spec_funcs: dict[str, FunctionInfo] = {}
+        for fn_name in specs:
+            fi = all_funcs.get(fn_name)
+            if fi is not None:
+                spec_funcs[fn_name] = fi
+
+        if not spec_funcs:
             logger.warning("No functions found in '%s'; aborting pipeline", source_file)
             return []
 
         # Build callee → callers reverse-dependency map
         callee_to_callers: dict[str, set[str]] = {}
-        for fn_name, finfo in all_funcs.items():
+        for fn_name, finfo in spec_funcs.items():
             for callee in finfo.callees:
                 callee_to_callers.setdefault(callee, set()).add(fn_name)
 
         # ------------------------------------------------------------------
         # Phase 2 scope (computed FIRST so flag selection can be scoped to it).
-        # ------------------------------------------------------------------
         # only_functions restricts WHICH functions get verified (CBMC +
         # refinement), while all_funcs stays complete so spec context and
         # cross-file reachability still see the whole call graph. This is how
         # the audit-flagged-function path (coaudit --check-functions) gets full
         # cross-file gen + refinement without verifying the whole file.
-        funcs_to_check = all_funcs
+        funcs_to_check = spec_funcs
         if only_functions:
-            funcs_to_check = {n: f for n, f in all_funcs.items() if n in only_functions}
-            missing = [n for n in only_functions if n not in all_funcs]
+            funcs_to_check = {n: f for n, f in spec_funcs.items() if n in only_functions}
+            missing = [n for n in only_functions if n not in spec_funcs]
             if missing:
                 logger.warning("only_functions not found in %s: %s", source_file, ", ".join(missing))
             logger.info("only_functions: restricting Phase 2 to %d of %d functions",
@@ -765,7 +829,6 @@ class AMCPipeline:
                         len(funcs_to_check))
             selector = FlagSelector(self.config, self.llm)
             flag_selections = selector.select_all(funcs_to_check)
-
         logger.info("--- Phase 2: Running BMC on %d functions ---", len(funcs_to_check))
         # Per-function LOC lets the ETA weight BMC sub-progress by function size
         # rather than count, so one large function advances the bar in proportion.
@@ -861,6 +924,12 @@ class AMCPipeline:
         latent_reports: list[BugReport] = []
         confirmed_latent: set[tuple[str, str]] = set()
         current_specs = dict(specs)  # may be updated by refinement
+        phase3_property_allowlist = set(getattr(self.config, "phase3_property_allowlist", ()) or ())
+        if phase3_property_allowlist:
+            logger.info(
+                "Phase 3 property allowlist active: %d exact failing_property value(s)",
+                len(phase3_property_allowlist),
+            )
         recheck_queue: set[str] = set()   # callers to re-check after refinement
         self_recheck_queue: set[str] = set()  # refined fns to re-check themselves
         # RQ3: maps caller_name → set of refined functions that queued it for recheck
@@ -903,6 +972,20 @@ class AMCPipeline:
             _deduped[_fn] = list(_dedup_counterexamples(
                 _vd.counterexamples, max_per_type=self.config.dedup_max_per_type,
             ))
+            if phase3_property_allowlist:
+                before = len(_deduped[_fn])
+                _deduped[_fn] = [
+                    _cex
+                    for _cex in _deduped[_fn]
+                    if _cex.failing_property in phase3_property_allowlist
+                ]
+                skipped = before - len(_deduped[_fn])
+                if skipped:
+                    logger.info(
+                        "Skipping %d counterexample(s) for '%s' outside Phase 3 property allowlist",
+                        skipped,
+                        _fn,
+                    )
             # (b) Route loop-unwinding / recursion-bound counterexamples OUT of the
             # expensive LLM validate()->refine->triage flow BEFORE precompute:
             # deepen the unwind bound once and decide drop / escalate / latent.
@@ -1034,6 +1117,15 @@ class AMCPipeline:
                         fn_name, cex.failing_property, _cleared_key[1],
                     )
                     continue
+                bug_key = (fn_name, _prop_type(cex.failing_property))
+                if bug_key in confirmed_real_bugs:
+                    logger.debug(
+                        "Skipping duplicate counterexample for '%s' before validation "
+                        "(property type '%s' already confirmed at non-downgraded confidence)",
+                        fn_name,
+                        bug_key[1],
+                    )
+                    continue
                 logger.info(
                     "Validating counterexample for '%s' (property=%s)",
                     fn_name, cex.failing_property,
@@ -1095,12 +1187,20 @@ class AMCPipeline:
                         bug_reports.append(report)
                         # Log post-audit outcome so the log shows what actually
                         # survived, not just the static tag.
+                        realism_check = getattr(report, "realism_check", None)
+                        realism_verdict = getattr(realism_check, "verdict", None)
+                        realism_value = getattr(realism_verdict, "value", realism_verdict)
                         if _spec_refined:
                             logger.info("'%s' → unlikely via triage-driven spec refinement "
                                         "(over-strict postcondition; verifies clean when relaxed, "
                                         "flags preserved) — not counted as confirmed", fn_name)
                         elif getattr(report, "confidence", None) == "unlikely":
                             logger.info("Realism downgraded '%s' → unlikely (not counted as confirmed)", fn_name)
+                        elif str(realism_value or "").lower() == "uncertain":
+                            logger.info(
+                                "Realism inconclusive for '%s'; retaining static tier %s",
+                                fn_name, getattr(report, "confidence", "?"),
+                            )
                         else:
                             logger.info("Realism upheld '%s' as %s", fn_name, getattr(report, "confidence", "?"))
                         # Only mark this property type as "done" if the report

@@ -833,6 +833,7 @@ class SpecGenerator:
         driver_name: str,
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
+        analysis_source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
         only_functions: Optional[set] = None,
         progress_note: Optional[Callable[..., None]] = None,
@@ -865,6 +866,8 @@ class SpecGenerator:
         """
         logger.info("Parsing source file: %s", source_file)
         parsed = parse_source_file(source_file, source_text=source_text)
+        if analysis_source_text and hasattr(parsed, "llm_context_source"):
+            parsed.llm_context_source = analysis_source_text
 
         # If the input was a preprocessed translation unit (cpp ``# N "..."``
         # line directives present), drop functions that originated in
@@ -1122,7 +1125,7 @@ class SpecGenerator:
         if not struct_names:
             return ""
 
-        source = parsed.preprocessed_source or ""
+        source = getattr(parsed, "llm_context_source", None) or parsed.preprocessed_source or ""
         parts: list[str] = []
 
         for sname in struct_names:

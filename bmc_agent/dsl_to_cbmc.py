@@ -335,6 +335,147 @@ def translate_atom(atom: str, context: str = "assume") -> Optional[str]:
     return f"/* condition: {_escape_for_c_comment(atom)} */"
 
 
+def _is_pointer_type(type_text: str) -> bool:
+    """Return True when a parsed C type string is definitely pointer-like."""
+    t = (type_text or "").strip()
+    if not t:
+        return False
+    # Parser field types include pointer-declarator suffixes in the type text
+    # (e.g. ``struct foo *`` or ``void (*)(int)``).
+    return "*" in t or "(*)" in t or re.search(r"\(\s*\*\s*\)", t) is not None
+
+
+def _struct_key_from_type(type_text: str, *, require_pointer: bool) -> Optional[str]:
+    """Recover the struct/typedef key used by ``ParsedCFile.struct_definitions``.
+
+    ``struct_definitions`` is keyed by struct tag or typedef alias.  This helper
+    accepts the parser's lightweight type strings, strips qualifiers/storage
+    words, optionally requires a pointer, and returns the likely key.
+    """
+    t = (type_text or "").strip()
+    if not t:
+        return None
+    if require_pointer and not _is_pointer_type(t):
+        return None
+    t = re.sub(r"\b(?:const|volatile|restrict|static|extern|inline|register)\b", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    t = t.replace("*", " ").strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    for prefix in ("struct ", "union "):
+        if t.startswith(prefix):
+            name = t[len(prefix):].strip()
+            return name or None
+    if t.startswith("enum "):
+        return None
+    return t or None
+
+
+def _lookup_field_type(
+    struct_key: str,
+    field_name: str,
+    struct_definitions: dict[str, list[tuple[str, str]]],
+) -> Optional[str]:
+    fields = struct_definitions.get(struct_key) or []
+    for ftype, fname in fields:
+        if fname == field_name:
+            return ftype
+    return None
+
+
+_FIELD_STEP_RE = re.compile(r"(->|\.)\s*([A-Za-z_]\w*)")
+
+
+def _resolve_member_expr_type(
+    expr: str,
+    *,
+    param_types: dict[str, str],
+    struct_definitions: dict[str, list[tuple[str, str]]],
+) -> Optional[str]:
+    """Resolve ``param->field(.field)*`` to a final field type if possible.
+
+    Returns None on any uncertainty.  The caller only uses a non-None result to
+    drop *definitely* invalid pointer predicates, so unknown shapes deliberately
+    fall back to historical behaviour.
+    """
+    if not expr or not param_types or not struct_definitions:
+        return None
+    s = _normalize_casts(_strip_outer_parens(expr)).strip()
+    s = re.sub(r"\s+", "", s)
+    m = re.match(r"^([A-Za-z_]\w*)", s)
+    if not m:
+        return None
+    root = m.group(1)
+    cur_type = param_types.get(root)
+    if cur_type is None:
+        return None
+    pos = m.end()
+    saw_field = False
+    while pos < len(s):
+        step = _FIELD_STEP_RE.match(s, pos)
+        if step is None:
+            return None
+        op, field_name = step.group(1), step.group(2)
+        struct_key = _struct_key_from_type(cur_type, require_pointer=(op == "->"))
+        if struct_key is None:
+            return None
+        field_type = _lookup_field_type(struct_key, field_name, struct_definitions)
+        if field_type is None:
+            return None
+        cur_type = field_type
+        saw_field = True
+        pos = step.end()
+    return cur_type if saw_field else None
+
+
+def _pointer_predicate_arg(atom: str) -> Optional[str]:
+    """Return the expression that a null/valid/owns-like predicate treats as a pointer."""
+    for name in ("valid_string", "valid"):
+        mm = _match_call(atom, name)
+        if mm is not None and len(mm[2]) >= 1:
+            return mm[2][0]
+    mm = _match_call(atom, "valid_range")
+    if mm is not None and len(mm[2]) == 3:
+        return mm[2][0]
+    mm = _match_call(atom, "owns")
+    if mm is not None and len(mm[2]) >= 1:
+        return mm[2][-1]
+    mm = _match_call(atom, "null")
+    if mm is not None and len(mm[2]) >= 1:
+        return mm[2][0]
+    return None
+
+
+def _drop_nonpointer_field_pointer_predicate(
+    atom: str,
+    *,
+    param_types: Optional[dict[str, str]] = None,
+    struct_definitions: Optional[dict[str, list[tuple[str, str]]]] = None,
+) -> Optional[str]:
+    """Comment out pointer predicates applied to fields known to be non-pointers.
+
+    LLM specs sometimes infer ``!null(p->field)`` from a dereference site even
+    when ``field`` is embedded by value, as Linux commonly does with
+    ``struct device dev``.  Translating that to ``p->field != NULL`` makes CBMC
+    fail before producing any verdict.  With type context, drop only the cases
+    we can prove are non-pointer fields; otherwise keep historical behaviour.
+    """
+    ptr_expr = _pointer_predicate_arg(atom)
+    if not ptr_expr or ("->" not in ptr_expr and "." not in ptr_expr):
+        return None
+    final_type = _resolve_member_expr_type(
+        ptr_expr,
+        param_types=param_types or {},
+        struct_definitions=struct_definitions or {},
+    )
+    if final_type is None or _is_pointer_type(final_type):
+        return None
+    return (
+        "/* dropped non-pointer field pointer predicate: "
+        f"{_escape_for_c_comment(atom)}; {ptr_expr} has type "
+        f"{_escape_for_c_comment(final_type)} */"
+    )
+
+
 def _escape_for_c_comment(text: str) -> str:
     """Make *text* safe to embed inside a ``/* ... */`` C comment.
 
@@ -659,7 +800,13 @@ def fully_parenthesize(expr: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def precond_to_assume(precondition: str, params: list[str]) -> list[str]:
+def precond_to_assume(
+    precondition: str,
+    params: list[str],
+    *,
+    param_types: Optional[dict[str, str]] = None,
+    struct_definitions: Optional[dict[str, list[tuple[str, str]]]] = None,
+) -> list[str]:
     """
     Convert a precondition string to a list of ``__CPROVER_assume()`` C statements.
 
@@ -680,7 +827,13 @@ def precond_to_assume(precondition: str, params: list[str]) -> list[str]:
     A list of C statement strings.
     """
     return _filter_tautological(
-        _condition_to_stmts(precondition, context="assume", params=params)
+        _condition_to_stmts(
+            precondition,
+            context="assume",
+            params=params,
+            param_types=param_types,
+            struct_definitions=struct_definitions,
+        )
     )
 
 
@@ -699,6 +852,9 @@ def postcond_to_assert(
     postcondition: str,
     params: list[str],
     return_var: str = "result",
+    *,
+    param_types: Optional[dict[str, str]] = None,
+    struct_definitions: Optional[dict[str, list[tuple[str, str]]]] = None,
 ) -> list[str]:
     """
     Convert a postcondition string to a list of ``assert()`` C statements.
@@ -719,7 +875,13 @@ def postcond_to_assert(
     # Replace \result with the actual return variable name
     post = re.sub(r"\\result\b", return_var, postcondition)
     return _filter_tautological(
-        _condition_to_stmts(post, context="assert", params=params)
+        _condition_to_stmts(
+            post,
+            context="assert",
+            params=params,
+            param_types=param_types,
+            struct_definitions=struct_definitions,
+        )
     )
 
 
@@ -1154,7 +1316,12 @@ def _atom_has_unbound_ident(stmt: str, bound: set[str]) -> Optional[str]:
 
 
 def _condition_to_stmts(
-    condition: str, context: str, params: Optional[list[str]] = None
+    condition: str,
+    context: str,
+    params: Optional[list[str]] = None,
+    *,
+    param_types: Optional[dict[str, str]] = None,
+    struct_definitions: Optional[dict[str, list[tuple[str, str]]]] = None,
 ) -> list[str]:
     """
     Split a condition string and translate each clause.
@@ -1219,6 +1386,14 @@ def _condition_to_stmts(
         # Strip outer parentheses
         part = _strip_outer_parens(part)
         if not part:
+            continue
+        nonptr_comment = _drop_nonpointer_field_pointer_predicate(
+            part,
+            param_types=param_types,
+            struct_definitions=struct_definitions,
+        )
+        if nonptr_comment:
+            stmts.append(nonptr_comment)
             continue
         stmt = translate_atom(part, context=context)
         if not stmt:

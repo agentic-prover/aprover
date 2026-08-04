@@ -752,9 +752,8 @@ class RealismChecker:
             func.name,
             tool_names_called or "(none)",
         )
-        looked_up_target = any(
-            n == "lookup_function" and arg.get("name") == func.name
-            for n, arg in tool_names_called
+        looked_up_target = _tool_calls_ground_driver_target(
+            func.name, tool_names_called, parsed_file
         )
 
         # Parse the grounding field added by the (c) hard requirement.
@@ -826,13 +825,26 @@ class RealismChecker:
         sig = _format_signature(func)
         body = func.body or "(body not available)"
         violated = _format_failing_property_with_location(counterexample)
-        cex_state = _format_cex_state(counterexample)
+        driver_context = _format_driver_context_packet(
+            parsed_file,
+            func_name=func.name,
+            failing_property=getattr(counterexample, "failing_property", ""),
+        )
+        cex_state = _format_cex_state(
+            counterexample,
+            max_entries=40 if driver_context else 120,
+            max_chars=6000 if driver_context else 16000,
+        )
         call_chain_str = " → ".join(validation_result.caller_path) if validation_result.caller_path else func.name
         caller_context = _format_caller_context(
             validation_result.caller_path, all_funcs, parsed_file
         )
         dynamic_result = _format_dynamic_result(validation_result)
-        harness_code = _format_harness_code(validation_result, cbmc_harness_path)
+        harness_code = _format_harness_code(
+            validation_result,
+            cbmc_harness_path,
+            max_chars=3500 if driver_context else 8000,
+        )
 
         call_site_analysis = _format_call_site_analysis(
             func.name, validation_result.caller_path, all_funcs, parsed_file
@@ -847,7 +859,10 @@ class RealismChecker:
                 failure_line = int(loc.get("line", "")) if loc.get("line") else None
             except (TypeError, ValueError):
                 failure_line = None
-        source_file_context = _format_source_file_context(parsed_file, mark_line=failure_line)
+        source_file_context = (
+            driver_context
+            or _format_source_file_context(parsed_file, mark_line=failure_line)
+        )
 
         # Active stub contracts — list every callee in func.callees that
         # the harness generated a contracted stub for, with a plain-English
@@ -909,7 +924,16 @@ class RealismChecker:
         sig = _format_signature(func)
         body = func.body or "(body not available)"
         violated = _format_failing_property_with_location(counterexample)
-        cex_state = _format_cex_state(counterexample)
+        driver_context = _format_driver_context_packet(
+            parsed_file,
+            func_name=func.name,
+            failing_property=getattr(counterexample, "failing_property", ""),
+        )
+        cex_state = _format_cex_state(
+            counterexample,
+            max_entries=30 if driver_context else 80,
+            max_chars=5000 if driver_context else 12000,
+        )
         call_chain_str = " → ".join(validation_result.caller_path) if validation_result.caller_path else func.name
         caller_context = _format_caller_context(
             validation_result.caller_path, all_funcs, parsed_file
@@ -924,7 +948,10 @@ class RealismChecker:
                 failure_line = int(loc.get("line", "")) if loc.get("line") else None
             except (TypeError, ValueError):
                 failure_line = None
-        source_file_context = _format_source_file_context(parsed_file, mark_line=failure_line)
+        source_file_context = (
+            driver_context
+            or _format_source_file_context(parsed_file, mark_line=failure_line)
+        )
         try:
             from bmc_agent.universal_stub_contracts import format_active_contracts
             active_stub_contracts = format_active_contracts(getattr(func, "callees", set())) or "(no registered contracts apply to this function's callees)"
@@ -948,6 +975,177 @@ class RealismChecker:
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
+
+
+def _driver_context_packet(parsed_file: "ParsedCFile") -> dict | None:
+    packet = getattr(parsed_file, "llm_context_packet", None)
+    return packet if isinstance(packet, dict) else None
+
+
+def _shorten(text: object, max_chars: int) -> str:
+    s = str(text or "")
+    if len(s) <= max_chars:
+        return s
+    marker = f"\n/* ... truncated {len(s) - max_chars} chars ... */"
+    return s[: max(0, max_chars - len(marker))].rstrip() + marker
+
+
+def _format_driver_context_packet(
+    parsed_file: "ParsedCFile",
+    *,
+    func_name: str = "",
+    failing_property: str = "",
+) -> str:
+    """Compact driver-package context for realism prompts.
+
+    Linux driver slices carry a deterministic ``analysis/context_packet.json``.
+    When present, it is a better realism context than a 3MB preprocessed TU or
+    a 900KB harness: it names framework callbacks, kernel API contracts, and
+    focused source snippets while preserving the input-boundary audit.
+    """
+    packet = _driver_context_packet(parsed_file)
+    if not packet:
+        return ""
+
+    lines: list[str] = [
+        "DRIVER CONTEXT PACKET (deterministic preprocessing; no LLM; no fixed-driver diff used)",
+        f"case_id: {packet.get('case_id')}",
+        f"variant: {packet.get('variant')}",
+        f"source_rel: {packet.get('source_rel')}",
+        f"module_path: {packet.get('module_path')}",
+        f"kbuild_target: {packet.get('kbuild_target')}",
+        "",
+        "Driver-mode realism rules:",
+        "- Treat Linux framework callbacks (probe/remove/shutdown/etc.) as the domain entrypoints.",
+        "- A generated bmc_agent_lifecycle_* function models a kernel device lifecycle, e.g. probe succeeds and the framework later invokes remove.",
+        "- A __CPROVER_assume(probe_ret == 0) in that lifecycle harness is not by itself a harness artifact; it restricts the analysis to devices that successfully bound.",
+        "- bmc_agent_* functions are synthetic kernel-contract wrappers inserted around real kernel APIs; judge the property by the real callback source and matched contract evidence below.",
+        "- For devm-managed resources, devres cleanup normally runs after driver remove returns; teardown inside remove can therefore be a real lifecycle ordering defect even without a userspace-triggered byte input.",
+        "",
+        "Entrypoints / framework callbacks:",
+    ]
+    for entry in (packet.get("entrypoints") or [])[:12]:
+        line = entry.get("line") or "?"
+        lines.append(f"- {entry.get('name')} [{entry.get('kind')}] line {line}: {_shorten(entry.get('evidence'), 260)}")
+    if not packet.get("entrypoints"):
+        lines.append("- (none discovered)")
+
+    lines.extend(["", "Candidate properties from kernel API contracts:"])
+    props = packet.get("candidate_properties") or []
+    matched_props = [
+        prop for prop in props
+        if failing_property and (
+            failing_property in str(prop.get("id", ""))
+            or failing_property in str(prop.get("property", ""))
+        )
+    ]
+    props_to_show = matched_props or props
+    for prop in props_to_show[:8]:
+        lines.append(
+            f"- {prop.get('id')} confidence={prop.get('confidence')}: "
+            f"{prop.get('property')}"
+        )
+        evidence = prop.get("evidence") or {}
+        if isinstance(evidence, dict):
+            for api, calls in list(evidence.items())[:4]:
+                for call in (calls or [])[:2]:
+                    lines.append(
+                        f"  evidence {api}: {call.get('function')} line "
+                        f"{call.get('line')}: {_shorten(call.get('snippet'), 260)}"
+                    )
+    if not props:
+        lines.append("- (none)")
+
+    lines.extend(["", "Matched kernel API contracts:"])
+    contracts = packet.get("kernel_api_contracts") or []
+    prioritized_contracts = sorted(
+        contracts,
+        key=lambda c: 0 if c.get("status") == "candidate_triggered" else 1,
+    )
+    for contract in prioritized_contracts[:10]:
+        apis = ", ".join(contract.get("matched_apis") or [])
+        lines.append(
+            f"- {contract.get('id')} status={contract.get('status')} "
+            f"apis=[{apis}]: {_shorten(contract.get('contract'), 320)}"
+        )
+    if not contracts:
+        lines.append("- (none)")
+
+    lines.extend(["", "Resource-pair summary:"])
+    for pair in (packet.get("resource_pairs") or [])[:10]:
+        releases = ", ".join(pair.get("release") or [])
+        lines.append(
+            f"- {pair.get('resource')} status={pair.get('status')} "
+            f"acquire={pair.get('acquire')} release=[{releases}]"
+        )
+    if not packet.get("resource_pairs"):
+        lines.append("- (none)")
+
+    snippets = packet.get("focused_source_snippets") or []
+    preferred: list[dict] = []
+    seen: set[str] = set()
+    for snippet in snippets:
+        name = str(snippet.get("function") or "")
+        reasons = " ".join(str(r) for r in (snippet.get("reasons") or []))
+        if name == func_name or "probe" in name or "remove" in name or "register" in reasons:
+            preferred.append(snippet)
+            seen.add(name)
+    for snippet in snippets:
+        name = str(snippet.get("function") or "")
+        if len(preferred) >= 6:
+            break
+        if name not in seen:
+            preferred.append(snippet)
+            seen.add(name)
+
+    lines.extend(["", "Focused source snippets:"])
+    for snippet in preferred[:6]:
+        reasons = ", ".join(snippet.get("reasons") or [])
+        lines.append(
+            f"\n--- {snippet.get('function')} line {snippet.get('line')} "
+            f"reasons=[{reasons}] ---"
+        )
+        lines.append(_shorten(snippet.get("source"), 2600))
+    if not snippets:
+        lines.append("(none)")
+
+    return "\n".join(lines)
+
+
+def _tool_calls_ground_driver_target(
+    func_name: str,
+    tool_names_called: list[tuple[str, dict]],
+    parsed_file: "ParsedCFile",
+) -> bool:
+    """Whether tool-use evidence grounded the reported target.
+
+    For ordinary functions, grounding still means lookup_function(target).
+    For generated Linux-driver lifecycle harnesses, the meaningful source is
+    the framework callbacks inside the harness (for example probe/remove), not
+    the synthetic wrapper name. In that mode, lookup_function() on a packet
+    entrypoint is source-grounded enough for the audit.
+    """
+    if any(
+        n == "lookup_function" and arg.get("name") == func_name
+        for n, arg in tool_names_called
+    ):
+        return True
+    if not func_name.startswith("bmc_agent_lifecycle_"):
+        return False
+    packet = _driver_context_packet(parsed_file)
+    if not packet:
+        return False
+    entry_names = {
+        str(entry.get("name"))
+        for entry in (packet.get("entrypoints") or [])
+        if entry.get("name")
+    }
+    if not entry_names:
+        return False
+    return any(
+        n == "lookup_function" and str(arg.get("name")) in entry_names
+        for n, arg in tool_names_called
+    )
 
 
 def _extract_call_sites(
@@ -1124,16 +1322,27 @@ def _build_pass2_prompt(
         ", ".join(sorted(set(callers_in_file))) if callers_in_file
         else "(no direct callers found in this file — may be a vtable callback or external entry)"
     )
-    # The same source file context is appended later; here we focus
-    # on the directive.
-    src = getattr(parsed_file, "preprocessed_source", None)
-    if not src:
-        try:
-            with open(getattr(parsed_file, "path", ""), "r", encoding="utf-8", errors="replace") as f:
-                src = f.read()
-        except Exception:
-            src = "(source unavailable)"
-    src_excerpt = src[:120000] if src else "(source unavailable)"
+    driver_context = _format_driver_context_packet(
+        parsed_file,
+        func_name=fn_name,
+        failing_property=getattr(counterexample, "failing_property", ""),
+    )
+    if driver_context:
+        src_excerpt = driver_context
+    else:
+        # The same source file context is appended later; here we focus
+        # on the directive.
+        src = (
+            getattr(parsed_file, "llm_context_source", None)
+            or getattr(parsed_file, "preprocessed_source", None)
+        )
+        if not src:
+            try:
+                with open(getattr(parsed_file, "path", ""), "r", encoding="utf-8", errors="replace") as f:
+                    src = f.read()
+            except Exception:
+                src = "(source unavailable)"
+        src_excerpt = src[:120000] if src else "(source unavailable)"
 
     return f"""\
 PASS 2: EXHAUSTIVE CALLER-ENUMERATION CHECK
@@ -1160,7 +1369,7 @@ FUNCTION UNDER TEST: {fn_name}
 VIOLATED PROPERTY: {counterexample.failing_property}
 
 COUNTEREXAMPLE STATE (key witness assignments):
-{chr(10).join(f"  {k} = {v}" for k, v in list((counterexample.variable_assignments or {}).items())[:30])}
+{_format_cex_state(counterexample, max_entries=30, max_chars=5000)}
 
 DIRECT CALLERS in this file (from the parsed call graph):
   {callers_str}
@@ -1490,7 +1699,10 @@ def _function_registered_as_usb_serial_callback(
     """
     if not parsed_file or not func_name:
         return None
-    source = getattr(parsed_file, "preprocessed_source", None)
+    source = (
+        getattr(parsed_file, "llm_context_source", None)
+        or getattr(parsed_file, "preprocessed_source", None)
+    )
     if source is None:
         # Fall back to concatenated bodies — unlikely to catch top-level
         # dispatch tables, but cheap if preprocessed_source is unset.
@@ -1629,7 +1841,10 @@ def _function_registered_as_phy_driver_callback(
     """
     if not parsed_file or not func_name:
         return None
-    source = getattr(parsed_file, "preprocessed_source", None)
+    source = (
+        getattr(parsed_file, "llm_context_source", None)
+        or getattr(parsed_file, "preprocessed_source", None)
+    )
     if source is None:
         source = "\n".join((parsed_file.function_bodies or {}).values())
     if not source:
@@ -1759,7 +1974,10 @@ def _file_registers_netdev_ops(parsed_file: "ParsedCFile") -> bool:
     """
     if not parsed_file:
         return False
-    source = getattr(parsed_file, "preprocessed_source", None)
+    source = (
+        getattr(parsed_file, "llm_context_source", None)
+        or getattr(parsed_file, "preprocessed_source", None)
+    )
     if source is None:
         source = "\n".join((parsed_file.function_bodies or {}).values())
     if not source:
@@ -1969,10 +2187,35 @@ def _format_failing_property_with_location(cex: "Counterexample") -> str:
     return " ".join(parts)
 
 
-def _format_cex_state(cex: "Counterexample") -> str:
+def _format_cex_state(
+    cex: "Counterexample",
+    *,
+    max_entries: int = 120,
+    max_chars: int = 16000,
+) -> str:
     if not cex.variable_assignments:
         return "(no witness values recorded)"
-    lines = [f"  {k} = {v}" for k, v in cex.variable_assignments.items()]
+    lines: list[str] = []
+    omitted = 0
+    total_chars = 0
+    for idx, (k, v) in enumerate(cex.variable_assignments.items()):
+        if idx >= max_entries:
+            omitted += 1
+            continue
+        line = f"  {k} = {v}"
+        if total_chars + len(line) > max_chars:
+            omitted += 1
+            continue
+        lines.append(line)
+        total_chars += len(line) + 1
+    remaining = len(cex.variable_assignments) - len(lines)
+    if remaining > omitted:
+        omitted = remaining
+    if omitted > 0:
+        lines.append(
+            f"  ... {omitted} witness assignment(s) omitted for prompt budget; "
+            "see bug_report.json/cbmc_result.json for full state"
+        )
     return "\n".join(lines)
 
 
@@ -2140,7 +2383,14 @@ def _format_source_file_context(parsed_file: "ParsedCFile", mark_line: int | Non
     Cap at 50k chars to stay within prompt budget; most libxml2 / curl /
     OpenSSL leaf-parser files are 2k-30k chars.
     """
-    src = getattr(parsed_file, "preprocessed_source", None)
+    driver_context = _format_driver_context_packet(parsed_file)
+    if driver_context:
+        return driver_context
+
+    src = (
+        getattr(parsed_file, "llm_context_source", None)
+        or getattr(parsed_file, "preprocessed_source", None)
+    )
     if not src:
         # Read the original file from disk.
         try:
@@ -2253,7 +2503,12 @@ def _format_dynamic_result(vr: "ValidationResult") -> str:
     return f"{outcome.upper()} (signal={sig}). {reasoning}"
 
 
-def _format_harness_code(vr: "ValidationResult", cbmc_harness_path: str = "") -> str:
+def _format_harness_code(
+    vr: "ValidationResult",
+    cbmc_harness_path: str = "",
+    *,
+    max_chars: int = 8000,
+) -> str:
     """Return the harness source for the realism prompt.
 
     Preference order:
@@ -2268,16 +2523,16 @@ def _format_harness_code(vr: "ValidationResult", cbmc_harness_path: str = "") ->
     """
     if cbmc_harness_path:
         try:
-            return open(cbmc_harness_path, "r").read()[:8000]
+            return open(cbmc_harness_path, "r").read()[:max_chars]
         except OSError:
             pass
     reproducer = vr.system_entry_input
     dyn = getattr(vr, "dynamic_result", None)
     harness_src = getattr(dyn, "harness_source", None) if dyn else None
     if harness_src:
-        return harness_src[:8000]
+        return harness_src[:max_chars]
     if reproducer:
-        return reproducer[:8000]
+        return reproducer[:max_chars]
     return "(harness code not available)"
 
 

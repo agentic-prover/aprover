@@ -383,6 +383,68 @@ def test_orchestrator_happy_path_with_valid_llm_response(tmp_path):
     assert llm.complete.call_count == 1
 
 
+def test_orchestrator_lite_mode_skips_llm(tmp_path):
+    """v2 honors lite_mode just like v1: no spec-generation LLM call."""
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    cfg.lite_mode = True
+    gen = SpecGeneratorV2(cfg, llm, store)
+
+    from bmc_agent.parser import FunctionInfo, FunctionSignature
+    fi = FunctionInfo(
+        name="target",
+        signature=FunctionSignature(
+            name="target", return_type="int", parameters=[("int *", "p")],
+        ),
+        body="int target(int *p) { return p ? *p : 0; }",
+        callees=set(),
+        source_file="",
+    )
+    spec = gen._generate_one(
+        func_info=fi,
+        parsed=_minimal_parsed_file("target", fi.signature),
+        all_specs_so_far={},
+        corpus_paths=[],
+    )
+    assert spec.function_name == "target"
+    assert spec.status == SpecStatus.GENERATED
+    assert llm.complete.call_count == 0
+
+
+def test_generate_specs_uses_analysis_source_body_for_prompt(tmp_path):
+    """analysis_source_text replaces macro-expanded .i bodies in LLM prompts."""
+    cfg, llm, store = _mock_pipeline_env(tmp_path)
+    llm.complete.return_value = """
+    {
+      "pre_validity": [],
+      "pre_protocol": [],
+      "postcondition": [],
+      "loop_invariants": [],
+      "spec_disagreement": false,
+      "uncertainty_notes": ""
+    }
+    """
+    gen = SpecGeneratorV2(cfg, llm, store)
+    source_file = tmp_path / "slice.i"
+
+    huge_expanded = "int target(int *p) {\n" + "\n".join(
+        f"  int expanded_macro_line_{i} = {i};" for i in range(300)
+    ) + "\n  return p ? *p : 0;\n}\n"
+    compact = "int target(int *p) {\n  return p ? *p : 0;\n}\n"
+
+    gen.generate_specs(
+        str(source_file),
+        "driver",
+        source_text=huge_expanded,
+        analysis_source_text=compact,
+        only_functions={"target"},
+    )
+
+    assert llm.complete.call_count == 1
+    prompt = llm.complete.call_args.args[1]
+    assert "return p ? *p : 0;" in prompt
+    assert "expanded_macro_line_299" not in prompt
+
+
 def test_orchestrator_falls_back_to_seed_on_parse_failure(tmp_path):
     """LLM returns garbage twice → fall back to seed-only spec."""
     cfg, llm, store = _mock_pipeline_env(tmp_path)

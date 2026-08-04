@@ -21,6 +21,10 @@ from bmc_agent.realism_checker import RealismCheckResult, RealismVerdict
 
 logger = get_logger("bug_reporter")
 
+MAX_STATE_SUMMARY_ITEMS = 10
+MAX_STATE_KEY_CHARS = 70
+MAX_STATE_VALUE_CHARS = 80
+
 
 # ---------------------------------------------------------------------------
 # Bug type classification
@@ -62,6 +66,50 @@ def _classify_bug_type(failing_property: str) -> str:
         if pattern in prop_lower:
             return bug_type
     return "semantic"
+
+
+def _realism_confidence_allows_downgrade(confidence: str) -> bool:
+    """True when an UNREALISTIC realism verdict is confident enough to gate.
+
+    Older realism prompts return labels (``high`` / ``medium`` / ``low``).
+    Tool-use realism may return numeric strings such as ``0.97``. Treat
+    numeric confidence >= 0.5 as at least medium confidence.
+    """
+    c = (confidence or "").strip().lower()
+    if c in {"high", "medium"}:
+        return True
+    try:
+        return float(c.rstrip("%")) >= (50.0 if c.endswith("%") else 0.5)
+    except ValueError:
+        return False
+
+
+def _compact_state(assignments: dict, *, max_items: int = MAX_STATE_SUMMARY_ITEMS) -> str:
+    """Compact counterexample assignments for human-readable summaries.
+
+    The full assignment map remains in ``BugReport.to_dict()`` under
+    ``counterexample.variable_assignments``. This only keeps terminal output
+    and reasoning trails readable for large kernel harness states.
+    """
+    if not assignments:
+        return ""
+    parts: list[str] = []
+    items = list(assignments.items())
+    for key, value in items[:max_items]:
+        key_s = str(key)
+        if len(key_s) > MAX_STATE_KEY_CHARS:
+            keep = MAX_STATE_KEY_CHARS - 15
+            head = keep // 2
+            tail = keep - head
+            key_s = key_s[:head].rstrip() + "...<truncated>..." + key_s[-tail:].lstrip()
+        value_s = str(value)
+        if len(value_s) > MAX_STATE_VALUE_CHARS:
+            value_s = value_s[: MAX_STATE_VALUE_CHARS - 15].rstrip() + "...<truncated>"
+        parts.append(f"{key_s}={value_s}")
+    omitted = len(items) - max_items
+    if omitted > 0:
+        parts.append(f"... {omitted} more assignment(s) omitted; see bug_report.json for full state")
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +292,7 @@ class BugReporter:
         if (
             realism_check is not None
             and realism_check.verdict == RealismVerdict.UNREALISTIC
-            and realism_check.llm_confidence in ("high", "medium")
+            and _realism_confidence_allows_downgrade(realism_check.llm_confidence)
             and not _immune
         ):
             confidence = "unlikely"
@@ -267,10 +315,20 @@ class BugReporter:
             f"Validation reasoning: {validation_result.reasoning}",
         ]
         if cex.variable_assignments:
-            va_str = ", ".join(f"{k}={v}" for k, v in cex.variable_assignments.items())
+            va_str = _compact_state(cex.variable_assignments)
             reasoning_parts.append(f"Counterexample state: {va_str}")
         if cex.trace:
             reasoning_parts.append(f"Trace (first 5 steps):\n  " + "\n  ".join(cex.trace[:5]))
+        if realism_check is not None:
+            verdict = getattr(realism_check.verdict, "value", realism_check.verdict)
+            concern = (realism_check.key_concern or realism_check.reasoning or "").strip()
+            if concern:
+                concern = concern[:240]
+            reasoning_parts.append(
+                "Realism check: "
+                f"{verdict or 'unknown'}"
+                + (f" ({concern})" if concern else "")
+            )
 
         reasoning_trail = "\n".join(reasoning_parts)
 
@@ -365,10 +423,7 @@ class BugReporter:
                 if r.call_chain:
                     lines.append(f"  Call chain: {' → '.join(r.call_chain)}")
                 if r.counterexample.variable_assignments:
-                    va = ", ".join(
-                        f"{k}={v}"
-                        for k, v in r.counterexample.variable_assignments.items()
-                    )
+                    va = _compact_state(r.counterexample.variable_assignments)
                     lines.append(f"  State: {va}")
                 if r.reproducer:
                     snippet = r.reproducer[:200].replace("\n", " ")

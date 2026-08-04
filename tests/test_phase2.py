@@ -1437,6 +1437,39 @@ def test_translate_atom_null():
     assert "ptr == NULL" in stmt
 
 
+def test_precond_to_assume_drops_nonpointer_field_null_with_type_context():
+    """Field-level null predicates must not type-break embedded struct fields.
+
+    Linux commonly embeds framework objects by value (for example
+    ``struct usb_interface { struct device dev; }``).  A v2 spec may infer
+    ``!null(usbif->dev)`` from source evidence, but translating it to
+    ``usbif->dev != NULL`` is invalid C because ``dev`` is not a pointer.
+    With parser type context, drop only the definitely non-pointer field
+    predicate and keep true pointer-field predicates intact.
+    """
+    from bmc_agent.dsl_to_cbmc import precond_to_assume
+
+    structs = {
+        "usb_interface": [
+            ("struct device", "dev"),
+            ("struct usb_device *", "udev"),
+        ],
+    }
+    param_types = {"usbif": "struct usb_interface *"}
+
+    stmts = precond_to_assume(
+        "!null(usbif) && !null(usbif->dev) && !null(usbif->udev)",
+        ["usbif"],
+        param_types=param_types,
+        struct_definitions=structs,
+    )
+    joined = "\n".join(stmts)
+    assert "usbif != NULL" in joined
+    assert "dropped non-pointer field pointer predicate" in joined
+    assert "usbif->dev != NULL" not in joined
+    assert "usbif->udev != NULL" in joined
+
+
 def test_translate_atom_locked_is_comment():
     """locked(x) is a ghost predicate — should produce a comment."""
     from bmc_agent.dsl_to_cbmc import translate_atom
@@ -3929,6 +3962,67 @@ def test_rewrite_auto_type_leaves_unrelated_text_alone():
     # Same word fragment but no ``__auto_type``: no rewrite.
     out = _rewrite_auto_type(src)
     assert out == src
+
+
+def test_reachability_and_feasibility_harnesses_rewrite_auto_type_in_type_decls():
+    from bmc_agent.cbmc import Counterexample
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.parser import FunctionInfo, FunctionSignature, ParsedCFile
+    from bmc_agent.spec import Spec
+
+    source = """
+static inline void memset16(void) { const __auto_type s0 = 0; (void)s0; }
+void callee(int x) { (void)x; }
+void caller(int x) { callee(x); }
+"""
+    caller = FunctionInfo(
+        name="caller",
+        signature=FunctionSignature(return_type="void", name="caller", parameters=[("int", "x")]),
+        body="{ callee(x); }",
+        source_file="auto_type.c",
+        callees={"callee"},
+    )
+    callee = FunctionInfo(
+        name="callee",
+        signature=FunctionSignature(return_type="void", name="callee", parameters=[("int", "x")]),
+        body="{ (void)x; }",
+        source_file="auto_type.c",
+        callees=set(),
+    )
+    parsed = ParsedCFile(
+        path="auto_type.c",
+        functions={"caller": caller.signature, "callee": callee.signature},
+        call_graph={"caller": {"callee"}, "callee": set()},
+        function_bodies={"caller": caller.body, "callee": callee.body},
+        preprocessed_source=source,
+    )
+    gen = HarnessGenerator(Config())
+    spec = Spec(function_name="caller", precondition="true", postcondition="true")
+    cex = Counterexample(
+        failing_property="callee.pointer_dereference.1",
+        variable_assignments={"x": "0"},
+        trace=[],
+    )
+
+    reach = gen.generate_reachability_harness(
+        caller=caller,
+        callee_name="callee",
+        counterexample=cex,
+        caller_spec=spec,
+        parsed_file=parsed,
+        all_specs={"caller": spec},
+    )
+    feas = gen.generate_feasibility_harness(
+        func=caller,
+        spec=spec,
+        counterexample=cex,
+        parsed_file=parsed,
+        all_specs={"caller": spec},
+    )
+
+    assert "__auto_type" not in reach
+    assert "__auto_type" not in feas
 
 
 def test_kernel_mode_skips_system_and_glibc_typedef_strips():

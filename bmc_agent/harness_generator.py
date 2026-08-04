@@ -944,6 +944,7 @@ def _generate_stub(
 
     if callee_spec and callee_spec.precondition.strip() not in ("true", "", "1"):
         param_names = [pname for _, pname in params]
+        param_types = {pname: ptype for ptype, pname in params if pname}
         import os as _os
         _bounds_only = _os.environ.get("BMC_ASSERT_BOUNDS_ONLY", "") in ("1", "true")
         if _bounds_only or _os.environ.get("BMC_ASSERT_CALLEE_PRECOND", "") in ("1", "true"):
@@ -967,7 +968,12 @@ def _generate_stub(
                     else:
                         lines.append(f"    {stmt}")
         else:
-            assume_stmts = precond_to_assume(callee_spec.precondition, param_names)
+            assume_stmts = precond_to_assume(
+                callee_spec.precondition,
+                param_names,
+                param_types=param_types,
+                struct_definitions=getattr(parsed_file, "struct_definitions", None),
+            )
             if assume_stmts:
                 lines.append("    /* Assume callee precondition */")
                 for stmt in assume_stmts:
@@ -1054,6 +1060,7 @@ def _generate_stub(
                 lines.extend(f"    {c}" for c in inferred)
             elif callee_spec and callee_spec.postcondition.strip() not in ("true", "", "1"):
                 param_names = [pname for _, pname in params]
+                param_types = {pname: ptype for ptype, pname in params if pname}
                 # Propagate a CLEAN FUNCTIONAL postcondition (C boolean over
                 # params+result) as a real assume, so the contract reaches the
                 # caller. Fires when EITHER:
@@ -1072,7 +1079,12 @@ def _generate_stub(
                     lines.append("    /* [assume_callee_postcondition] functional contract */")
                     lines.append(f"    __CPROVER_assume({direct});")
                 else:
-                    assert_stmts = postcond_to_assert(callee_spec.postcondition, param_names)
+                    assert_stmts = postcond_to_assert(
+                        callee_spec.postcondition,
+                        param_names,
+                        param_types=param_types,
+                        struct_definitions=getattr(parsed_file, "struct_definitions", None),
+                    )
                     if assert_stmts:
                         lines.append("    /* Havoc return value subject to postcondition */")
                         for stmt in assert_stmts:
@@ -2419,7 +2431,7 @@ def _substitute_callee_calls(body: str, callees: set[str]) -> str:
             f"{callee}_stub(",
             result,
         )
-    return result
+    return _strip_kernel_dynamic_debug_blocks(result)
 
 
 # ---------------------------------------------------------------------------
@@ -4018,12 +4030,7 @@ def _generate_nd_decls(
                     # into a smaller fixed buffer can overflow (else baked-in
                     # length <= cbmc_unwind hides the bug). Width = the resolved
                     # destination size (or default cap), per plan_copy_source_widening.
-                    # (a) Headroom under the unwind bound: a NUL-terminated string
-                    # of length L needs L+1 guard checks in a `while(*s)` loop, so
-                    # bound L at cbmc_unwind-1 to keep the traversal provably within
-                    # `--unwind cbmc_unwind`. Without this, the loop-unwinding
-                    # assertion trips as an artifact (see (b) _recheck_unwind_artifact).
-                    str_max = max(1, cbmc_unwind - 1)
+                    str_max = max(1, cbmc_unwind)
                     if copy_param_maxlen.get(pname, 0) > str_max:
                         str_max = copy_param_maxlen[pname]
                         lines.append(f"    /* copy-sink source '{pname}': widened to {str_max} chars to expose fixed-buffer overflow */")
@@ -4241,7 +4248,8 @@ def _generate_nd_decls(
             # HOLDS instead of tripping as an artifact. Gated on loop-bound use so an
             # arithmetic-only length (n*size overflow candidate) is NOT constrained and
             # overflow bugs are preserved. Bounded analysis; residual off-by-one -> (b).
-            _lb_body = getattr(func, "body", "") or ""
+            _lb_body_raw = getattr(func, "body", "") or ""
+            _lb_body = _lb_body_raw if isinstance(_lb_body_raw, str) else ""
             import re as _re_lb
             _is_loop_bound = bool(_re_lb.search(
                 r'(?:<=?|!=)\s*' + _re_lb.escape(pname) + r'\b'
@@ -4321,7 +4329,13 @@ class HarnessGenerator:
             if parsed_file.preprocessed_source is not None
             else _read_source(caller.source_file)
         )
-        type_decls = _extract_type_declarations(source_text, parsed_file)
+        type_decls = _sanitize_harness_type_decls(
+            _extract_type_declarations(source_text, parsed_file),
+            parsed_file=parsed_file,
+            source_file=caller.source_file,
+            config=self.config,
+            strip_cbmc_builtin_typedefs=True,
+        )
 
         # --- 2. Identify callees that are defined in the parsed file ---
         defined_callees = caller.callees & set(parsed_file.functions.keys())
@@ -4391,7 +4405,13 @@ class HarnessGenerator:
 
         # --- 6. Precondition assumptions ---
         param_names = [pname for _, pname in sig.parameters if pname]
-        assume_stmts = precond_to_assume(caller_spec.precondition, param_names)
+        param_types = {pname: ptype for ptype, pname in sig.parameters if pname}
+        assume_stmts = precond_to_assume(
+            caller_spec.precondition,
+            param_names,
+            param_types=param_types,
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
+        )
 
         # --- 7. Call arguments ---
         # Filter lone "void" params — `f(void)` means no params in C.
@@ -4494,7 +4514,7 @@ class HarnessGenerator:
             + harness_main
         )
 
-        return "\n\n".join(sections) + "\n"
+        return _rewrite_auto_type("\n\n".join(sections) + "\n")
 
     def _generate_reachability_stub(
         self,
@@ -4629,7 +4649,13 @@ class HarnessGenerator:
             if parsed_file.preprocessed_source is not None
             else _read_source(func.source_file)
         )
-        type_decls = _extract_type_declarations(source_text, parsed_file)
+        type_decls = _sanitize_harness_type_decls(
+            _extract_type_declarations(source_text, parsed_file),
+            parsed_file=parsed_file,
+            source_file=func.source_file,
+            config=self.config,
+            strip_cbmc_builtin_typedefs=True,
+        )
 
         # --- 1. Transitive local call closure ---
         # All functions reachable from func that are defined in parsed_file.
@@ -4746,7 +4772,13 @@ class HarnessGenerator:
 
         # --- 7. Postcondition assertions ---
         param_names = [pn for _, pn in real_params if pn]
-        assert_stmts = postcond_to_assert(spec.postcondition, param_names)
+        param_types = {pname: ptype for ptype, pname in sig.parameters if pname}
+        assert_stmts = postcond_to_assert(
+            spec.postcondition,
+            param_names,
+            param_types=param_types,
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
+        )
         ret_type = sig.return_type.strip()
         call_args = ", ".join(pn for _, pn in real_params if pn)
 
@@ -4826,7 +4858,7 @@ class HarnessGenerator:
             "void main(void) {\n" + "\n".join(harness_lines) + "\n}"
         )
 
-        return "\n\n".join(sections) + "\n"
+        return _rewrite_auto_type("\n\n".join(sections) + "\n")
 
     def generate_dynamic_harness(
         self,
@@ -5294,13 +5326,14 @@ class HarnessGenerator:
         _intermediate = _strip_static_inline_defs(_intermediate)
         _session_typedefs2 = set(getattr(self.config, "session_strip_typedefs", None) or [])
         _session_structs2 = set(getattr(self.config, "session_strip_structs", None) or [])
-        # Kernel-TU detection: a kernel/CIL translation unit (ldv) has NO glibc
-        # stdio internals. `_preprocessed` is False for pre-preprocessed .i inputs,
-        # so it is NOT a reliable kernel signal. Use the absence of glibc `_IO_FILE`:
-        # kernel TUs must NOT have their `__`-prefixed structs/typedefs stripped
-        # (those are real kernel internals, e.g. __raw_tickets -> arch_spinlock),
-        # while userspace TUs (AWS, with _IO_FILE) still strip glibc bodies.
-        _is_kernel_tu = ("_IO_FILE" not in source_text)
+        _suffix = Path(func.source_file).suffix
+        _is_kernel_tu = (
+            _preprocessed
+            or _suffix in {".i", ".ii"}
+            or bool(re.search(r"#\s*include\s*<linux/", source_text))
+            or "__KERNEL__" in source_text
+            or "MODULE_LICENSE" in source_text
+        )
         _km = _preprocessed or _is_kernel_tu
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_struct_bodies(
@@ -5741,7 +5774,13 @@ class HarnessGenerator:
 
         # --- 6. Precondition assumptions ---
         param_names = [pname for _, pname in sig.parameters if pname]
-        assume_stmts = precond_to_assume(spec.precondition, param_names)
+        param_types = {pname: ptype for ptype, pname in sig.parameters if pname}
+        assume_stmts = precond_to_assume(
+            spec.precondition,
+            param_names,
+            param_types=param_types,
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
+        )
 
         # --- 7. Function call and postcondition assertions ---
         # Filter out lone "void" params — `f(void)` means no params in C.
@@ -5767,7 +5806,12 @@ class HarnessGenerator:
                 f'{_callee}_stub(',
                 postcond_for_assert,
             )
-        assert_stmts = postcond_to_assert(postcond_for_assert, param_names)
+        assert_stmts = postcond_to_assert(
+            postcond_for_assert,
+            param_names,
+            param_types=param_types,
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
+        )
 
         # --- 8. Assemble the harness ---
         sections: list[str] = []
@@ -5787,7 +5831,11 @@ class HarnessGenerator:
         # bare-struct stripping can't safely remove.  CBMC's
         # __CPROVER_assume/__CPROVER_assert intrinsics don't need any
         # of these headers themselves.
-        preprocessed = (parsed_file.preprocessed_source is not None) or _is_kernel_tu  # kernel/.i TU -> minimal libc includes (avoid dev_t/sys-types redef)
+        preprocessed = (
+            parsed_file.preprocessed_source is not None
+            or _is_kernel_tu
+            or Path(func.source_file).suffix in {".i", ".ii"}
+        )
         if preprocessed:
             inc_lines: list[str] = []
             # The kernel preprocessor expands ``NULL`` to ``((void *)0)``
@@ -6332,7 +6380,13 @@ class HarnessGenerator:
 
         # Precondition assume + postcondition assert via existing DSL.
         param_names = [pname for _, pname in sig.parameters if pname]
-        assume_stmts = precond_to_assume(spec.precondition, param_names)
+        param_types = {pname: ptype for ptype, pname in sig.parameters if pname}
+        assume_stmts = precond_to_assume(
+            spec.precondition,
+            param_names,
+            param_types=param_types,
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
+        )
         # Name-collision guard for the return-value variable: if the
         # function has a parameter literally named ``result``
         # (libarchive isint/isint_w take a ``int *result`` output
@@ -6345,7 +6399,11 @@ class HarnessGenerator:
         if any(pn == _ret_var for _, pn in sig.parameters):
             _ret_var = "_amc_ret"
         assert_stmts = postcond_to_assert(
-            spec.postcondition, param_names, return_var=_ret_var,
+            spec.postcondition,
+            param_names,
+            return_var=_ret_var,
+            param_types=param_types,
+            struct_definitions=getattr(parsed_file, "struct_definitions", None),
         )
 
         # Filter out lone "void" params — `f(void)` means no params in C.
@@ -6845,6 +6903,93 @@ def _rewrite_auto_type(text: str) -> str:
     return ''.join(out)
 
 
+def _strip_kernel_dynamic_debug_blocks(text: str) -> str:
+    """Remove Linux dynamic-debug metadata statements from preprocessed code."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        start = text.find("do", i)
+        if start == -1:
+            out.append(text[i:])
+            break
+        if (
+            (start > 0 and (text[start - 1].isalnum() or text[start - 1] == "_"))
+            or start + 2 >= n
+            or (text[start + 2].isalnum() or text[start + 2] == "_")
+        ):
+            out.append(text[i:start + 2])
+            i = start + 2
+            continue
+        j = start + 2
+        while j < n and text[j].isspace():
+            j += 1
+        if j >= n or text[j] != "{":
+            out.append(text[i:start + 2])
+            i = start + 2
+            continue
+
+        k = j
+        depth = 0
+        quote: str | None = None
+        while k < n:
+            ch = text[k]
+            if quote is not None:
+                if ch == "\\" and k + 1 < n:
+                    k += 2
+                    continue
+                if ch == quote:
+                    quote = None
+                k += 1
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+                k += 1
+                continue
+            if ch == "/" and k + 1 < n and text[k + 1] == "*":
+                end = text.find("*/", k + 2)
+                k = n if end == -1 else end + 2
+                continue
+            if ch == "/" and k + 1 < n and text[k + 1] == "/":
+                end = text.find("\n", k + 2)
+                k = n if end == -1 else end
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    k += 1
+                    break
+            k += 1
+        if depth != 0:
+            out.append(text[i:start + 2])
+            i = start + 2
+            continue
+
+        m = k
+        while m < n and text[m].isspace():
+            m += 1
+        if not text.startswith("while", m):
+            out.append(text[i:start + 2])
+            i = start + 2
+            continue
+        semi = text.find(";", m)
+        if semi == -1:
+            out.append(text[i:start + 2])
+            i = start + 2
+            continue
+        stmt = text[start:semi + 1]
+        if "struct _ddebug" in stmt and "__UNIQUE_ID_ddebug" in stmt:
+            out.append(text[i:start])
+            out.append("/* kernel dynamic debug statement removed */;")
+            i = semi + 1
+        else:
+            out.append(text[i:start + 2])
+            i = start + 2
+    return ''.join(out)
+
+
 # GCC named address-space qualifiers used by the x86_64 Linux kernel to
 # place data in the GS/FS segment (per-CPU areas). They're emitted as
 # bare keywords surviving preprocessing (not macros), and CBMC's frontend
@@ -7130,6 +7275,61 @@ def _strip_static_inline_defs(
             result.append('/* static inline removed */')
             i = body_end
     return ''.join(result)
+
+
+def _sanitize_harness_type_decls(
+    type_decls: str,
+    *,
+    parsed_file: ParsedCFile,
+    source_file: str,
+    config: Config,
+    strip_cbmc_builtin_typedefs: bool = False,
+) -> str:
+    """Normalize extracted declarations before embedding them in CBMC harnesses.
+
+    Phase-2, reachability, and feasibility harnesses all splice extracted
+    declarations into a fresh temporary translation unit. Keep their
+    kernel/preprocessed-source cleanup identical so Phase-3 does not reintroduce
+    typedef conflicts that the main harness already avoided.
+    """
+    preprocessed = (
+        parsed_file.preprocessed_source is not None
+        or Path(source_file).suffix in {".i", ".ii"}
+    )
+    if preprocessed:
+        type_decls = _strip_aligned_attributes(type_decls)
+    intermediate = _strip_inline_asm(
+        _strip_static_assert(
+            _strip_kernel_dynamic_debug_blocks(
+                _rewrite_auto_type(_strip_gcc_addr_space_quals(type_decls))
+            )
+        )
+    )
+    # Header static inlines are generally infrastructure, not the function under
+    # test. Direct callees are represented through generated stubs or explicit
+    # local closure bodies, while unresolved external calls remain nondet.
+    intermediate = _strip_static_inline_defs(intermediate)
+    session_typedefs = set(getattr(config, "session_strip_typedefs", None) or [])
+    if strip_cbmc_builtin_typedefs:
+        # CBMC's built-in environment provides these POSIX typedefs even when
+        # the temporary Phase-3 harness does not include libc/sys headers, so
+        # preprocessed Linux typedefs for them collide. Do not blanket-strip every
+        # POSIX-shaped typedef here: some, such as sa_family_t, are still needed
+        # by kernel network declarations in the extracted type section.
+        session_typedefs.update({"dev_t", "nlink_t", "timer_t", "blkcnt_t", "sigset_t", "fd_set"})
+    session_structs = set(getattr(config, "session_strip_structs", None) or [])
+    return _strip_stdlib_decls(
+        _strip_glibc_internal_struct_bodies(
+            _strip_glibc_internal_typedefs(
+                intermediate,
+                kernel_mode=preprocessed,
+                extra_strip=session_typedefs or None,
+            ),
+            kernel_mode=preprocessed,
+            extra_strip=session_structs or None,
+        ),
+        kernel_mode=preprocessed,
+    )
 
 
 def _replace_function_bodies_with_stubs(
@@ -7651,6 +7851,34 @@ def _strip_glibc_internal_struct_bodies(
     # embeds one of these BY VALUE becomes an incomplete-type error once the
     # member's body is gone, so it must be stripped too.
     stripped_struct_names: set[str] = set()
+    stripped_tags = stripped_struct_names
+    preserve_stripped_aliases = {
+        "siginfo_t",
+        "kernel_siginfo_t",
+        "sigevent_t",
+    }
+
+    def _drop_result_suffix(literal: str) -> bool:
+        if not literal:
+            return True
+        needed = len(literal)
+        tail_chunks: list[str] = []
+        total = 0
+        idx = len(result) - 1
+        while idx >= 0 and total < needed:
+            tail_chunks.append(result[idx])
+            total += len(result[idx])
+            idx -= 1
+        if ''.join(reversed(tail_chunks)).endswith(literal) is False:
+            return False
+        while needed > 0 and result:
+            chunk = result.pop()
+            if len(chunk) <= needed:
+                needed -= len(chunk)
+                continue
+            result.append(chunk[:-needed])
+            needed = 0
+        return True
 
     # Strip struct definitions whose names match either:
     #   * A glibc-internal prefix (_IO_, __, _G_), OR
@@ -7817,10 +8045,8 @@ def _strip_glibc_internal_struct_bodies(
                     _peek_m += 1
                 if _peek_depth == 0:
                     _body = text[k:_peek_m]
-                    # (a) typedef cascade: body references a stripped typedef.
-                    if cascade_stripped and (
-                        set(re.findall(r'\b\w+\b', _body)) & cascade_stripped
-                    ):
+                    _body_tokens = set(re.findall(r'\b\w+\b', _body))
+                    if _body_tokens & (cascade_stripped | stripped_tags):
                         should_strip = True
                     # (b) struct-name cascade: body has a BY-VALUE member of a
                     # struct/union whose body we already stripped. ``struct X
@@ -7894,8 +8120,30 @@ def _strip_glibc_internal_struct_bodies(
             # Body-redefinition vs CBMC's built-in libc is avoided either
             # way — CBMC sees the harness's forward decl and is free to
             # pin its own body.
-            result.append(f"{kw} {name}; /* glibc-internal body stripped */")
-            stripped_struct_names.add(name)
+            marker = "glibc-internal" if _struct_name_is_glibc(name) else "cascade-dependent"
+            stmt_start = text.rfind(';', 0, i) + 1
+            typedef_prefix = text[stmt_start:i]
+            in_typedef = re.fullmatch(r'\s*typedef\s+', typedef_prefix) is not None
+            if in_typedef:
+                _drop_result_suffix(typedef_prefix)
+            replacement = f"{kw} {name}; /* {marker} body stripped */"
+            if in_typedef:
+                alias_text = text[m:tail].strip().rstrip(';').strip()
+                aliases = []
+                for alias in re.findall(r'\b(\w+)\b', alias_text):
+                    if alias in preserve_stripped_aliases:
+                        aliases.append(alias)
+                    elif (
+                        marker == "cascade-dependent"
+                        and alias not in _SYSTEM_TYPEDEF_NAMES
+                        and not alias.startswith("__")
+                    ):
+                        aliases.append(alias)
+                for alias in aliases:
+                    replacement += f"\ntypedef {kw} {name} {alias};"
+                    stripped_tags.add(alias)
+            result.append(replacement + "\n")
+            stripped_tags.add(name)
             i = tail
             continue
         result.append(text[i])
@@ -8044,10 +8292,15 @@ def _strip_glibc_internal_typedefs(
         # that can fill in ``size_t``, ``__sighandler_t``, etc.
         strip = False
         reason = ""
-        if not kernel_mode and target and (
-            (target.startswith('__') and not _KERNEL_PRIMITIVE_PAT.match(target))
-            or target in _SYSTEM_TYPEDEF_NAMES
-            or (extra_strip is not None and target in extra_strip)
+        if target and (
+            (extra_strip is not None and target in extra_strip)
+            or (
+                not kernel_mode
+                and (
+                    (target.startswith('__') and not _KERNEL_PRIMITIVE_PAT.match(target))
+                    or target in _SYSTEM_TYPEDEF_NAMES
+                )
+            )
         ):
             strip = True
             reason = "removed"

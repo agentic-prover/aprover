@@ -17,8 +17,8 @@ against. Bottom-up topological ordering ensures callees have real specs
 before callers draft.
 
 Interface matches v1's SpecGenerator.generate_specs so pipeline.py can
-swap by changing the constructor call. Falls back to v1 behavior for
-configurations v2 doesn't yet support (lite_mode, Rust, Kani backend).
+swap by changing the constructor call. Unsupported language/backend
+configurations fall back through the normal pipeline selection.
 """
 
 from __future__ import annotations
@@ -559,6 +559,7 @@ class SpecGeneratorV2:
         driver_name: str,
         domain_knowledge: str = "",
         source_text: Optional[str] = None,
+        analysis_source_text: Optional[str] = None,
         cross_file_caller_contexts: Optional[dict] = None,
         only_functions: Optional[set] = None,
         progress_note: Optional[Callable[..., None]] = None,
@@ -606,6 +607,20 @@ class SpecGeneratorV2:
 
         logger.info("v2 spec-gen parsing %s", source_file)
         parsed = _parse(source_file, source_text=source_text)
+        if analysis_source_text and hasattr(parsed, "llm_context_source"):
+            parsed.llm_context_source = analysis_source_text
+            try:
+                analysis_parsed = _parse(source_file, source_text=analysis_source_text)
+                if hasattr(parsed, "llm_function_bodies"):
+                    parsed.llm_function_bodies = dict(analysis_parsed.function_bodies)
+                if hasattr(parsed, "llm_function_definitions"):
+                    parsed.llm_function_definitions = dict(analysis_parsed.function_definitions)
+                logger.info(
+                    "v2: parsed compact analysis source for %d prompt-only function bodies",
+                    len(getattr(parsed, "llm_function_bodies", {}) or {}),
+                )
+            except Exception as exc:
+                logger.debug("v2: failed to parse compact analysis source: %r", exc)
 
         # Trim header-inlined helpers if this is a preprocessed TU.
         primary = getattr(parsed, "primary_source", None)
@@ -957,6 +972,33 @@ class SpecGeneratorV2:
         """
         fn_name = func_info.name
 
+        llm_bodies = getattr(parsed, "llm_function_bodies", {}) or {}
+        llm_body = llm_bodies.get(fn_name) or func_info.body
+        prompt_func_info = func_info
+        if llm_body != func_info.body:
+            try:
+                from bmc_agent.parser import FunctionInfo
+                prompt_func_info = FunctionInfo(
+                    name=func_info.name,
+                    signature=func_info.signature,
+                    body=llm_body,
+                    callees=func_info.callees,
+                    source_file=func_info.source_file,
+                )
+            except Exception:
+                prompt_func_info = func_info
+
+        if bool(getattr(self.config, "lite_mode", False)):
+            from bmc_agent.spec_generator import _permissive_spec
+            with_contracts = bool(getattr(self.config, "lite_with_contracts", True))
+            return _permissive_spec(
+                fn_name,
+                func_info=prompt_func_info,
+                with_contracts=with_contracts,
+                struct_definitions=getattr(parsed, "struct_definitions", None),
+                cbmc_unwind=int(getattr(self.config, "cbmc_unwind", 4)),
+            )
+
         # Step 1: canonical short-circuit (free, authoritative).
         try:
             from bmc_agent.universal_stub_contracts import canonical_signature
@@ -1006,7 +1048,7 @@ class SpecGeneratorV2:
         # Conservative — only fires when we can validate the pair
         # against ``parsed_file.struct_definitions`` (avoids
         # over-tightening when the struct body isn't visible).
-        paired = _infer_paired_field_invariant(func_info, parsed)
+        paired = _infer_paired_field_invariant(prompt_func_info, parsed)
         if paired is not None:
             param, count_field, array_field = paired
             logger.info(
@@ -1021,7 +1063,7 @@ class SpecGeneratorV2:
         # Step 3: gather evidence.
         from bmc_agent.spec_evidence import gather_evidence_bundle
         bundle = gather_evidence_bundle(
-            func_info=func_info,
+            func_info=prompt_func_info,
             parsed_file=parsed,
             corpus_paths=corpus_paths,
             k_callers=self.k_callers,
@@ -1041,7 +1083,7 @@ class SpecGeneratorV2:
         fn_sig_str = f"{sig.return_type} {sig.name}({params_str})"
         prompt = render_caller_grounded_spec_prompt(
             fn_signature=fn_sig_str,
-            fn_body=func_info.body,
+            fn_body=prompt_func_info.body,
             callers=bundle.callers,
             address_taken_sites=bundle.address_taken_sites,
             doc_annotations=bundle.doc_annotations,
