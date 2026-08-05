@@ -2155,6 +2155,11 @@ def run_bmc(discovery: Discovery, args: argparse.Namespace) -> int:
         config.enable_inlining_advisor = False
         config.enable_spec_gen_tools = False
         config.enable_realism_tools = False
+        config.enable_bmc_config_agent = False
+        config.enable_reproducer_agent = False
+        config.enable_agentic_harness = False
+        config.enable_agentic_harness_repair = False
+        config.enable_split_spec_gen = False
         config.skip_refinement = True
         config.disable_llm_fallbacks = True
     elif args.lite_mode:

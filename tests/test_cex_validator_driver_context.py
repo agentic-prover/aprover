@@ -102,6 +102,98 @@ def test_kernel_driver_callback_reproducer_does_not_call_llm() -> None:
     llm.complete.assert_not_called()
 
 
+def test_kernel_driver_minimal_disables_agentic_fallbacks(tmp_path: Path, monkeypatch) -> None:
+    import importlib.util
+    import sys
+
+    from bmc_agent.config import Config
+    import bmc_agent.pipeline as pipeline_mod
+
+    script = (
+        REPO_ROOT
+        / "experiments"
+        / "linux_driver_kernel_mode"
+        / "kernel_driver_mode.py"
+    )
+    spec = importlib.util.spec_from_file_location("kernel_driver_mode_minimal_test_mod", script)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    package = tmp_path / "demo" / "base"
+    (package / "slice").mkdir(parents=True)
+    (package / "analysis").mkdir()
+    (package / "slice" / "demo.i").write_text("int demo_probe(void) { return 0; }\n", encoding="utf-8")
+    (package / "analysis" / "analysis_context.c").write_text(
+        "int demo_probe(void) { return 0; }\n",
+        encoding="utf-8",
+    )
+
+    cfg = Config(artifact_dir=str(tmp_path / "artifacts"))
+    cfg.enable_bmc_config_agent = True
+    cfg.enable_reproducer_agent = True
+    cfg.enable_agentic_harness = True
+    cfg.enable_agentic_harness_repair = True
+    cfg.enable_split_spec_gen = True
+
+    captured: dict[str, Config] = {}
+
+    class FakePipeline:
+        def __init__(self, config: Config) -> None:
+            captured["config"] = config
+
+        def run(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(Config, "from_env", classmethod(lambda cls: cfg))
+    monkeypatch.setattr(pipeline_mod, "AMCPipeline", FakePipeline)
+
+    discovery = mod.Discovery(
+        package=str(package),
+        source_i=str(package / "slice" / "demo.i"),
+        analysis_source=str(package / "analysis" / "analysis_context.c"),
+        driver_functions=["demo_probe"],
+        entrypoints=[
+            mod.EntryPoint(
+                name="demo_probe",
+                kind="callback:probe",
+                evidence=".probe = demo_probe",
+                score=100,
+            )
+        ],
+        driver_closure=["demo_probe"],
+        external_symbols=[],
+    )
+    args = SimpleNamespace(
+        output=str(tmp_path / "run"),
+        driver="demo",
+        minimal=True,
+        lite_mode=False,
+        no_dynamic_validation=False,
+        no_realism_check=False,
+        phase3_property_allowlist="",
+        threat_model="security",
+        lifecycle_harness=False,
+        check_scope="entrypoints",
+        max_entrypoints=1,
+        entrypoint_policy="lifecycle",
+        max_functions=1,
+        no_suffix_fallback=False,
+        dry_run=False,
+    )
+
+    assert mod.run_bmc(discovery, args) == 0
+
+    used = captured["config"]
+    assert used.disable_llm_fallbacks is True
+    assert used.enable_bmc_config_agent is False
+    assert used.enable_reproducer_agent is False
+    assert used.enable_agentic_harness is False
+    assert used.enable_agentic_harness_repair is False
+    assert used.enable_split_spec_gen is False
+
+
 def test_reproducer_state_is_budgeted() -> None:
     from bmc_agent.cbmc import Counterexample
     from bmc_agent.cex_validator import _format_reproducer_state
