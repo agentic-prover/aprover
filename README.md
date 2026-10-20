@@ -3,74 +3,124 @@
   <img alt="AProver" src="assets/logo.svg" height="80">
 </picture>
 
-### 🌐 [**Try AProver live → www.aprover.ai**](https://www.aprover.ai)
+**Agentic formal verification for AI-generated and human-written code.**
 
-Point the **workbench** at a public repo (or a subdirectory / single file), choose a scope, and watch BMC-Agent generate specs, run CBMC, classify counterexamples, and report confirmed bugs with evidence tiers — with live token/$ spend, pause, and granular recovery — right in your browser, no install. Bring your own API key (it stays in your browser).
+[Try AProver](https://www.aprover.ai) · [Paper](https://arxiv.org/abs/2605.21434) · [Quick start](#quick-start) · [Accepted Linux fixes](#linux-fixes-accepted-upstream)
 
----
+AProver combines LLM agents with formal verification tools. Its first agent,
+**BMC-Agent**, generates function contracts, checks code with bounded model
+checking, and uses counterexamples to refine specifications and investigate
+potential bugs. It supports **C with CBMC**, **Rust with Kani**, and **Java with
+JBMC**. The agentic function-contract pipeline applies to C and Rust; Java
+currently uses whole-program verification.
 
-**AProver — Agentic Prover for AI-Generated Code** — is a suite of LLM-driven formal verification agents. The first agent — **BMC-Agent** — is a prototype of *agentic model checking*: an architecture that pairs an LLM agent (for specification generation, counterexample classification, and spec refinement) with a sound bounded model checking backend. The agent handles semantic reasoning; the solver provides formal guarantees within the unwinding bound.
+## Linux fixes accepted upstream
 
-> 📄 **Paper:** [*Agentic Model Checking*](https://arxiv.org/abs/2605.21434) — Youcheng Sun, Jiawen Liu, Daniel Kroening, Jason Xue (arXiv:2605.21434, 2026). This is the reference for the ideas implemented here; please [cite it](#citation) if you use AProver / BMC-Agent in your work.
+**13 BMC-Agent-assisted Linux driver fixes have been accepted upstream:
+8 in mainline and 5 in linux-next**, as verified on **October 20, 2026**.
+The findings were reviewed and the fixes submitted by Jiawen Liu, with
+revisions following maintainer feedback.
 
-BMC-Agent supports three source languages with three solver backends, selected automatically by the source file's extension: **C** via CBMC, **Rust** via Kani, and **Java** via JBMC. The pipeline, classifier, refinement loop, and confidence tiers are shared; the parser and harness generator dispatch per language. (Java/JBMC currently runs as whole-program verification; the agentic per-function spec pipeline applies to C and Rust.)
+Selected fixes:
 
-The design principle is *agents propose, conventional tools dispose*: every soundness-relevant decision the LLM produces passes through a conventional check (CBMC query, SMT soundness guard, or runtime confirmation) before affecting the verification verdict.
+| Driver | Fix | Status | Commit |
+| --- | --- | --- | --- |
+| Hisilicon hix5hd2 GMAC | Remove premature, redundant NAPI deletion during teardown | Mainline | [f307a7dc3209](https://github.com/torvalds/linux/commit/f307a7dc32097c11413178fca437a10d20890bc2) |
+| NXP/Freescale DSPI | Unwind failed suspend and resume operations | Mainline | [2543355f3da5](https://github.com/torvalds/linux/commit/2543355f3da56a297e3803ccb5d29f4dce5f18f1) |
+| StarFive crypto | Handle clock-enable failures during probe | linux-next | [5358248961ae](https://github.com/external-mirrors/linux-next/commit/5358248961ae23f7253d010ddfde1cfd2556ce22) |
+| Exynos FIMD | Release the bus clock when resume fails | linux-next | [d04392ce52d3](https://github.com/external-mirrors/linux-next/commit/d04392ce52d33bce4d532bd8b965151ed4ce8670) |
+| Amphion VPU | Remove an extra runtime-PM put on probe failure | linux-next | [0cabf27cf1e6](https://github.com/external-mirrors/linux-next/commit/0cabf27cf1e6f7ee5f3c5893c0f1930814d949af) |
 
-The same architecture runs in reverse as a **specification synthesizer**: given a program annotated with assertions, it proposes function contracts and loop invariants and discharges them with a deductive oracle — CBMC for bounded checks, or Frama-C/WP for unbounded loops and quantified/overflow-rigorous contracts. See [Specification synthesis](#specification-synthesis).
+<details>
+<summary><strong>View all 13 accepted fixes</strong></summary>
 
-## How it works
+| Subsystem | Driver | Fix | Status | Commit |
+| --- | --- | --- | --- | --- |
+| SPI | [bcm63xx](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-bcm63xx-suspend_finding.md) | Propagate controller-suspend failure before clock teardown | Mainline | [bbbc1ef5b353](https://github.com/torvalds/linux/commit/bbbc1ef5b35341c5122418a14f8924688a4bb954) |
+| SPI | [bcm63xx-hsspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-bcm63xx-hsspi-suspend_finding.md) | Preserve PLL and controller clocks when suspension fails | Mainline | [3b5414d76a03](https://github.com/torvalds/linux/commit/3b5414d76a0381db77b9694537254af7acfa187a) |
+| SPI | [bcm-qspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-bcm-qspi-suspend_finding.md) | Stop hardware teardown when controller suspension fails | Mainline | [44d09ef0ba69](https://github.com/torvalds/linux/commit/44d09ef0ba690ac46d17eb05c12a47a5dd75e231) |
+| SPI | [atcspi200](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-atcspi200-suspend_finding.md) | Return controller-suspend errors before disabling the clock | Mainline | [f4b14e67baff](https://github.com/torvalds/linux/commit/f4b14e67baffd2c879765275bda998a183594e8b) |
+| SPI | [bcmbca-hsspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-bcmbca-hsspi-suspend_finding.md) | Preserve clocks when controller suspension fails | Mainline | [faa878d4805c](https://github.com/torvalds/linux/commit/faa878d4805ca375738294bc52eae310eb287b16) |
+| SPI | [fsl-dspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-fsl-dspi-pm-unwind_finding.md) | Unwind failed suspend and resume operations | Mainline | [2543355f3da5](https://github.com/torvalds/linux/commit/2543355f3da56a297e3803ccb5d29f4dce5f18f1) |
+| SPI | [nxp-fspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-nxp-fspi-probe-pm_finding.md) | Disable runtime PM and balance probe-failure cleanup | Mainline | [5d14285d60ba](https://github.com/torvalds/linux/commit/5d14285d60ba95561609a293064654a0c7d7d928) |
+| Networking | [hix5hd2_gmac](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/hix5hd2-gmac-napi-teardown_finding.md) | Remove premature, redundant NAPI deletion during teardown | Mainline | [f307a7dc3209](https://github.com/torvalds/linux/commit/f307a7dc32097c11413178fca437a10d20890bc2) |
+| Crypto | StarFive jh7110-cryp | Handle clock-enable failures and unwind partial acquisition | linux-next | [5358248961ae](https://github.com/external-mirrors/linux-next/commit/5358248961ae23f7253d010ddfde1cfd2556ce22) |
+| DRM | Exynos FIMD | Release the bus clock when LCD-clock enable fails during resume | linux-next | [d04392ce52d3](https://github.com/external-mirrors/linux-next/commit/d04392ce52d33bce4d532bd8b965151ed4ce8670) |
+| Memory | Exynos5422 DMC | Check clock-enable failures and release the first clock if the second fails | linux-next | [cce46902ea9f](https://github.com/external-mirrors/linux-next/commit/cce46902ea9fcd585cd200fffa3166f63bc571f1) |
+| SPI | Rockchip SFC | Add runtime-PM teardown to the remove callback | linux-next | [34e32e9ade58](https://github.com/external-mirrors/linux-next/commit/34e32e9ade58e32daf933974c9b697d066fc5aaa) |
+| Media | Amphion VPU | Remove an extra runtime-PM put after failed resume-and-get in probe | linux-next | [0cabf27cf1e6](https://github.com/external-mirrors/linux-next/commit/0cabf27cf1e6f7ee5f3c5893c0f1930814d949af) |
 
-```
-Phase 1    Spec Generator        [AGENTIC]       LLM generates pre/postconditions top-down per function
-Phase 2    BMC Engine            [CONVENTIONAL]  Checks each function against its spec via CBMC (C) or Kani (Rust)
-Phase 3 S1 CEx Classifier        [AGENTIC]       LLM + CBMC: REAL_BUG / SPURIOUS / UNRESOLVED
-Phase 3 S2 Feasibility check     [CONVENTIONAL]  Re-verifies violation with real callee bodies inlined
-Phase 3 S3 Dynamic validation    [CONVENTIONAL]  Compiles + runs GCC harness to confirm fault at runtime
-Phase 3 S4 Realism Checker       [AGENTIC]       LLM audits every REAL_BUG finding for realistic exploitability
-Phase 3b   Spec Refiner          [AGENTIC]       Refines preconditions on spurious counterexamples
-Phase 3c   Caller propagation    [CONVENTIONAL]  Re-verifies callers after spec refinement
-Phase 4    Spec Quality          [AGENTIC]       Coverage / mutation / consistency checks (optional)
-```
+### Status definitions
 
-Each function is verified in isolation: callees are replaced with stubs constrained by their LLM-generated postconditions via `__CPROVER_assume`. The BMC backend then checks the function against its spec and those stubs. Cross-file callers are tracked via a two-pass global call-graph construction so that functions are not misclassified as system entry points.
+- **Mainline:** the fix is in Linus Torvalds’s Linux history. This does not by itself identify the first released kernel containing it.
+- **linux-next:** the fix has been accepted into a subsystem tree and appears in linux-next; it is tracked separately from mainline. Commit links use the public linux-next mirror.
 
-Confirmed real bugs are assigned one of four evidence tiers:
+The table records upstream acceptance. Individual findings distinguish solver evidence, source review, and runtime reproduction.
 
-| Tier | Meaning |
-|---|---|
-| `confirmed_dynamic` | Runtime fault (SIGSEGV/SIGABRT/SIGILL) directly observed in a GCC-compiled harness |
-| `confirmed_system_entry` | Full call chain traced back to a function with no callers anywhere in the corpus |
-| `confirmed_bmc` | Input reachability confirmed from at least one immediate caller via CBMC |
-| `likely` | Over-refinement guard triggered |
-| `unlikely` | Finding downgraded by the realism checker (verdict: UNREALISTIC) |
+</details>
 
-The **realism checker** (Phase 3 S4) runs an LLM audit on every `REAL_BUG` finding after dynamic validation. It asks whether real program execution could produce the counterexample's input state. Findings rated `UNREALISTIC` are downgraded to `unlikely` rather than discarded, preserving the full audit trail.
+## Other case studies
 
-## Requirements
+| Target | Scope | Reported result |
+| --- | --- | --- |
+| [VibeOS](https://github.com/agentic-prover/aprover/tree/main/findings/vibeos) | 37 kernel modules, 675 functions | 13 documented bug findings, including 5 crashes confirmed by runtime harnesses |
+| [llm.c](https://github.com/agentic-prover/aprover/tree/main/findings/llm_c) | 30 functions in `train_gpt2.c` | 22/30 functions verified for memory safety at scaled-down sizes, up from a 4/30 baseline |
 
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv)
-- [CBMC](https://github.com/diffblue/cbmc) on `PATH` (for C input)
-- [Kani](https://github.com/model-checking/kani) on `PATH` (for Rust input; optional if you only verify C)
-- [JBMC](https://github.com/diffblue/cbmc) + a JDK (`javac`) on `PATH` (for Java input; optional otherwise)
-- [Frama-C](https://frama-c.com/) + an SMT prover (e.g. Alt-Ergo) on `PATH` (optional; only for `--oracle frama-c` specification synthesis)
+The llm.c results use `B = T = C = NH = V = Vp = OC = 4`.
+The linked reports provide the per-finding evidence and per-function scorecards.
 
-> The Nix devshell and the `aprover-web` service provision all of these
-> automatically — including JBMC and Kani, which are built from source (nixpkgs
-> ships CBMC with `-DWITH_JBMC=OFF` and does not package Kani). See
-> [`nix/tools.nix`](nix/tools.nix). Outside Nix, install the tools yourself.
-- An Anthropic API key (`ANTHROPIC_API_KEY`)
+## Quick start
 
-## Installation
+For C verification, install **Python 3.12+**, [uv](https://github.com/astral-sh/uv),
+and [CBMC](https://github.com/diffblue/cbmc), with `cbmc` on your `PATH`.
+The example below uses an Anthropic API key.
 
 ```bash
 git clone https://github.com/agentic-prover/aprover
 cd aprover
 uv sync
+
+export ANTHROPIC_API_KEY=your_key_here
+
+uv run bmc-agent verify \
+  --source examples/simple_driver.c \
+  --driver simple_driver \
+  --output artifacts/
 ```
 
-## Usage
+Inspect generated specifications, verification harnesses, solver results, and
+bug reports under `artifacts/`. For a browser-based run, use the
+[online workbench](https://www.aprover.ai) with your own API key.
+
+See the [usage and configuration guide](#usage-and-configuration) for directory scans,
+Rust inputs, other LLM providers, and specification synthesis. Rust requires
+Kani; Java requires JBMC and a JDK. Frama-C/WP is optional for deductive
+specification synthesis.
+
+## How it works
+
+1. **Generate specifications.** An LLM agent proposes function contracts from source context.
+2. **Check with a solver.** CBMC or Kani checks functions against their contracts and produces counterexamples when properties fail.
+3. **Investigate and refine.** The pipeline classifies counterexamples, checks feasibility, and refines contracts to reduce spurious findings. Runtime validation and realism review provide additional evidence when enabled.
+4. **Keep the evidence.** Reports retain specifications, harnesses, counterexamples, and validation results for inspection.
+
+The principle is **agents propose, conventional tools check**. Verification
+results depend on the contracts, environment models, and solver bounds;
+reports distinguish solver evidence from runtime confirmation.
+AProver is an active research prototype.
+
+## Usage and configuration
+
+<details>
+<summary>Expand CLI examples, provider settings, specification synthesis, and configuration</summary>
+
+Commands below are run from the repository root.
+
+### Requirements
+
+Python 3.12+ and uv are required. Install CBMC for C, Kani for Rust, or JBMC and a JDK for Java. Frama-C and an SMT prover are optional for deductive specification synthesis. Configure an LLM API provider or a supported local CLI provider as described below.
+
+### Usage
 
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
@@ -124,7 +174,7 @@ uv run bmc-agent verify-dir \
 
 Artifacts — generated specs, CBMC harnesses, raw solver output, counterexample classifications, and bug reports — are written under `--output` and can be inspected or diffed.
 
-### Web chat (no setup)
+#### Web chat (no setup)
 
 For a zero-configuration experience, `web/` contains a chat front-end that lets visitors run AProver by talking to it. The page streams pipeline progress (parse → spec → CBMC → classify → report) live as the agent works.
 
@@ -135,7 +185,7 @@ ANTHROPIC_API_KEY=sk-... uv run uvicorn web.server:app --port 7860
 
 Deploy as a Hugging Face Space with `web/deploy_to_space.sh` — see `web/README.md` for the full guide.
 
-### Agentic mode and post-hoc components
+#### Agentic mode and post-hoc components
 
 `--agentic` makes every LLM step an investigating agent (Claude Code by default;
 re-point any one with `BMC_AGENT_LLM_<ROLE>_PROVIDER`), while the conventional core
@@ -164,7 +214,7 @@ after the fact (and pick the backend per the same role env vars):
 | Realism audit | `uv run python scripts/rerun_realism.py …` |
 | Triage (UNRESOLVED CExs) | `uv run python scripts/triage_unresolved.py --sweep-dir OUT --driver d …` |
 
-## Specification synthesis
+### Specification synthesis
 
 Instead of hunting bugs, BMC-Agent can synthesize the **specifications** that make a program's assertions provable. Given a file whose goals are written as `//@ assert`, `assert(...)`, `static_assert`, or `__VERIFIER_assert`, the `--specs-bench` preset auto-dispatches by program content and emits ACSL:
 
@@ -178,7 +228,7 @@ uv run bmc-agent verify --source prog.c --driver prog.c --agentic --specs-bench 
 
 `--specs-bench` turns on `--math-ints` (the mathematical-integer semantics these benchmarks assume). Overflow-rigor is on by default: a math-int result is re-verified with RTE on and reported as either machine-int **sound** or **math-int only** when the body genuinely overflows (`--no-overflow-rigor` to opt out). `--oracle cbmc` (the default off-preset) handles bounded loops; `--oracle frama-c` handles unbounded loops and quantified/overflow contracts.
 
-## Configuration
+### Configuration
 
 All settings are available as environment variables or `Config` dataclass fields.
 
@@ -228,7 +278,7 @@ All settings are available as environment variables or `Config` dataclass fields
 
 `BMC_AGENT_SKIP_REFINEMENT=true` is the FilteringOnly ablation: running the same input with and without this flag measures whether the refinement loop adds value beyond simple counterexample filtering.
 
-## Specification DSL
+### Specification DSL
 
 Specs are expressed in a small DSL that is reliably emittable by an LLM and directly translatable to CBMC constructs without interpreter intervention.
 
@@ -244,59 +294,24 @@ Specs are expressed in a small DSL that is reliably emittable by an LLM and dire
 
 Return values use `\result`. Arithmetic operators and C comparisons are translated directly. Natural language conditions that don't match any pattern are emitted as `/* comments */`.
 
-## Evaluation
 
-**VibeOS** ([repo](https://github.com/kaansenol5/VibeOS/tree/main)) — a ~15,000-line bare-metal ARM64 hobby OS written with substantial LLM assistance. `verify-dir` over all 37 kernel modules (675 functions), every tier on, confirmed **13 realistic bugs** (after the realism filter dropped 48 unrealistic counterexamples) — dynamically-reproduced crashes (`net_get_mac` null deref, `stbtt__h_prefilter` stack OOB write, `stbtt_PackEnd` double-free) and `confirmed_system_entry` flaws (`vfs_lookup` deep-path stack overflow, `vfs_open_handle` `strcpy` overflow, `vfs_close_handle` use-after-free). A separate `calloc` integer overflow (CWE-190) cross-validates [VibeOS issue #26](https://github.com/kaansenol5/VibeOS/issues/26).
+For configuration fields beyond the table above, see [`bmc_agent/config.py`](https://github.com/agentic-prover/aprover/blob/main/bmc_agent/config.py). The [Nix development environment](https://github.com/agentic-prover/aprover/blob/main/nix/tools.nix) provisions the verification tools.
 
-**llm.c** ([repo](https://github.com/karpathy/llm.c)) — Karpathy's `train_gpt2.c`, the full GPT-2 forward+backward pass (~1100 lines, no LLM assistance). With the M1–M2 milestones (`--infer-field-validity`, `--infer-array-param-bounds`, `--scale-down`, `--safety-only`), BMC-Agent verifies **22 of 30 functions clean** at scaled-down sizes (`B=T=C=NH=V=Vp=OC=4`), up from 4/30 — including `softmax_forward`, `layernorm_forward/backward`, and `matmul_forward/backward`. To our knowledge this is the first application of bounded model checking to a real ML training program. Full scorecard in [`findings/llm_c/`](findings/llm_c/).
+</details>
 
-## Examples
+## Documentation
 
-| File | Description |
-|---|---|
-| `simple_driver.c` | Ring-buffer device — off-by-one in `rb_write` |
-| `sensor_hub.c` | CEGAR demo: spurious counterexample → refinement → real bug |
-| `block_device.c` | Integer overflow in `blk_seek` |
-| `memory_allocator.c` | Null dereference in `alloc_free` |
-| `cross_file_demo/` | Cross-file `confirmed_system_entry`: null fn-pointer in `libmath.c` traced to `system_entry` in `main.c` |
-| `vibeos/repo/kernel/` | Full VibeOS kernel — 13 confirmed realistic bugs (see table above) |
+- [Usage and configuration](#usage-and-configuration): CLI examples, providers, specification synthesis, and the specification DSL.
+- [Accepted Linux fixes](#linux-fixes-accepted-upstream): the complete table with upstream commit links.
+- [Pipeline details](https://github.com/agentic-prover/aprover/blob/main/PIPELINE.md): verification stages and implementation.
+- [Web interface](https://github.com/agentic-prover/aprover/blob/main/web/README.md): local hosting and deployment.
 
-## Running tests
-
-```bash
-uv run pytest tests/ -q
-```
-
-## Project structure
-
-```
-bmc_agent/
-  pipeline.py · config.py · spec.py · llm.py     orchestrator, config, spec model, LLM client
-  spec_generator.py · spec_quality.py            Phase 1 spec gen; Phase 4 quality checks
-  bmc_engine.py · cbmc.py · kani.py · backends/  Phase 2 solver runners (CBMC / Kani)
-  cex_validator.py · dynamic_validator.py        Phase 3 classification, feasibility, runtime confirm
-  realism_checker.py · bug_reporter.py           Phase 3 realism audit; confidence-tier reporting
-  harness_generator.py · dsl_to_cbmc.py          harness synthesis; spec-DSL → CBMC translation
-  parser.py · rust_parser.py · source_parser.py  tree-sitter C/Rust parsers + dispatch
-  feedback_loop.py · flag_selector.py · domain_analyzer.py · preprocessor.py   optional stages
-  evaluation/                                    baselines, metrics, corpus, reports
-examples/   synthetic + real-world C / Rust targets
-tests/      unit and integration tests
-```
-
-## Status
-
-BMC-Agent is an active research prototype; the pipeline and all confidence tiers are stable.
-
-**Working:** full C (CBMC) and Rust (Kani) pipelines with backend dispatch by extension; whole-codebase `verify-dir` with cross-file call-graph construction; the Phase 3 classification → feasibility → dynamic-validation → realism stack with five-tier confidence reporting; CEGAR refinement with callee-stub postconditions and the FilteringOnly ablation (`--skip-refinement`); wire-format C support (`--real-libc`/`--strict-dsl`/`--raw-bytes`, validated on OpenSSL ASN.1, libxml2, jq, protobuf upb); a broad Rust harness generator (slices, `Vec`/`Option`/`&str`, generics, `unsafe fn`, cargo workspaces); the self-improvement feedback loop (`--enable-feedback-loop`); and specification synthesis (`--specs-bench`) of function contracts and loop invariants via CBMC or Frama-C/WP.
-
-**Partial / planned:** spec-quality analysis at scale; evaluation corpus beyond VibeOS / llm.c; manual precision audit of sampled findings; constructor-pattern precondition inference for ML-kernel targets.
+For development, run `uv run pytest tests/ -q`.
 
 ## Citation
 
-If you use AProver or BMC-Agent in academic work, please cite the paper that introduces *agentic model checking*:
-
-> Youcheng Sun, Jiawen Liu, Daniel Kroening, and Jason Xue. **Agentic Model Checking.** arXiv:2605.21434, 2026. <https://arxiv.org/abs/2605.21434>
+If you use AProver or BMC-Agent in research, please cite
+[*Agentic Model Checking*](https://arxiv.org/abs/2605.21434).
 
 ```bibtex
 @article{sun2026agentic,
