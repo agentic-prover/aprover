@@ -58,7 +58,7 @@ def test_saved_solver_envelope_keeps_abstract_candidate_distinct(tmp_path):
     collect = load("collect").collect
     manifest = {"profile": "rq1-ldv", "pilot": True, "execution_kind": "fresh_generation",
                 "source": {"commit": "test"}, "trials": 1,
-                "settings": {"kind": "rq1", "strategy": "frame_havoc"},
+                "settings": {"kind": "rq1", "strategy": "public_ldv_fallback"},
                 "cases": [{"name": "task", "expected_verdict": "false"}]}
     (tmp_path / "run_manifest.json").write_text(json.dumps(manifest))
     (tmp_path / "execution.json").write_text(json.dumps([{"name": "task", "wall_s": 2, "returncode": 0}]))
@@ -90,3 +90,35 @@ def test_inspected_plan_can_execute_without_changing_configuration(tmp_path, mon
     assert run.main() == 0
     executed = json.loads((tmp_path / "run_manifest.json").read_text())["fingerprint"]
     assert planned == executed
+
+
+def test_verifier_replay_rejects_changed_proof_input(tmp_path):
+    replay = load("replay_verifiers")
+    source = tmp_path / "Accepted.java"
+    source.write_text("class Accepted {}")
+    row = {"source": str(source), "files_sha256": {source.name: replay.digest(source)}}
+    source.write_text("class Accepted { void changed() {} }")
+    import pytest
+    with pytest.raises(ValueError, match="missing or changed"):
+        replay.checked_sources(row, "jml")
+
+
+def test_zero_wp_goals_cannot_reproduce_an_accepted_proof():
+    replay = load("replay_verifiers")
+    assert not replay.wp_result("[wp] Proved goals: 0 / 0", 0, False)["passed"]
+    assert not replay.wp_result("[wp] Proved goals: 8 / 8", 0, True)["passed"]
+    assert not replay.wp_result("[wp] Proved goals: 7 / 8", 0, False)["passed"]
+
+
+def test_archived_relative_log_is_resolved_from_its_run_root(tmp_path):
+    audit = load("audit_published")
+    root = tmp_path / "relocated_run"
+    log = root / "cases/task/postcheck_framac.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("[wp] Proved goals: 2 / 2")
+    assert audit.evidence_path("artifacts/relocated_run/cases/task/postcheck_framac.log", root) == log
+    # An old absolute path must not hide a missing file in the archive being audited.
+    old = tmp_path / "old/relocated_run/cases/task/missing.log"
+    old.parent.mkdir(parents=True)
+    old.write_text("stale evidence")
+    assert audit.evidence_path(str(old), root) == log.parent / "missing.log"

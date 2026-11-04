@@ -19,6 +19,16 @@ The design principle is *agents propose, conventional tools dispose*: every soun
 
 The same architecture runs in reverse as a **specification synthesizer**: given a program annotated with assertions, it proposes function contracts and loop invariants and discharges them with a deductive oracle — CBMC for bounded checks, or Frama-C/WP for unbounded loops and quantified/overflow-rigorous contracts. See [Specification synthesis](#specification-synthesis).
 
+## Paper experiments: RQ1 and RQ3
+
+The [reproduction guide](experiments/paper_reproduction/README.md) provides one
+checkout with explicit benchmark, model, budget and toolchain profiles, recovered
+experiment runners, provenance, and scripts for auditing archived results and
+replaying verification without API calls. This branch is a reproduction candidate:
+RQ3 has recorded-result and targeted compatibility checks; the original LDV
+frame-summary/refinement implementation remains unavailable, so the public LDV
+fallback does not establish reproduction of the paper's 18/29 result.
+
 ## How it works
 
 ```

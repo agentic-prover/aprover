@@ -14,9 +14,9 @@
     },
     {
       "experiment": "RQ1 LDV29",
-      "candidate": "June 28 private /home/syc/AProver_cegar snapshot; public 44a3cbf/149177d are later compatibility candidates",
-      "confidence": "medium for architecture; no exact public revision",
-      "reason": "lock-writer CEGAR markers appear in archived logs; BMC_FRAME_HAVOC first appears in public reachable history on July 5; no matching lock-writer log string was found"
+      "candidate": "June 28 private AProver_cegar snapshot with unrecovered global-write frame summaries and lock-writer CEGAR; public 149177d is an explicitly different fallback",
+      "confidence": "original mechanism evidenced by logs; executable historical implementation missing",
+      "reason": "BMC_FRAME_HAVOC in public code only skips spec generation; no equivalent frame summaries/refinement recovered; BMC_TRANSITIVE_INLINE=0 is truthy"
     },
     {
       "experiment": "RQ3 ACSL251",
@@ -304,7 +304,7 @@
   "known_gaps": [
     "Original AWS exact revision/local patch was not recorded.",
     "Original LDV lock-writer CEGAR changes have not been recovered; public proxy results are not automatically the paper result.",
-    "GPT-3.5 Turbo 1106 absent from the OpenRouter model catalog checked on 2026-11-04.",
+    "New GPT-3.5-1106 runs deferred at user request; OpenRouter endpoint probes confirmed the snapshot is no longer served.",
     "Full benchmark counts have not been rerun; cross-module compatibility evidence is limited to the measured cases and inspected code paths.",
     "Private remote refresh was unavailable; local complete clone used."
   ],
@@ -345,5 +345,102 @@
         "pipeline_report_count": 2
       }
     ]
+  },
+  "recorded_rq3_audit": {
+    "kind": "historical evidence audit, not fresh generation",
+    "all_recorded_counts_match": true,
+    "no_passing_evidence_errors": true,
+    "acsl": {
+      "cases_total": 251,
+      "cases_passed": 209,
+      "trial_total": 1255,
+      "trial_passes": 990
+    },
+    "jml": {
+      "specgenbench_bmc_jml_claude46_temp04_10trial_20260623": {
+        "cases_total": 120,
+        "cases_passed": 112,
+        "trial_total": 1200,
+        "trial_passes": 1057
+      },
+      "specgenbench_bmc_jml_gpt35_temp04_10trial_20260623": {
+        "cases_total": 120,
+        "cases_passed": 103,
+        "trial_total": 1200,
+        "trial_passes": 960
+      },
+      "svcomp_java_bmc_jml_claude46_temp04_10trial_20260623": {
+        "cases_total": 265,
+        "cases_passed": 227,
+        "trial_total": 2650,
+        "trial_passes": 2172
+      },
+      "svcomp_java_bmc_jml_gpt35_temp04_10trial_20260623": {
+        "cases_total": 265,
+        "cases_passed": 202,
+        "trial_total": 2650,
+        "trial_passes": 1839
+      }
+    },
+    "unique_accepted_acsl_inputs": 378,
+    "unique_accepted_jml_inputs": 2042,
+    "missing_failure_records": 4
+  },
+  "additional_verifier_replay": {
+    "jml": {
+      "kind": "historical_verifier_replay",
+      "model_calls": 0,
+      "fresh_generation": false,
+      "inputs": 3,
+      "passed": 3
+    },
+    "acsl": {
+      "kind": "historical_verifier_replay",
+      "model_calls": 0,
+      "fresh_generation": false,
+      "inputs": 3,
+      "passed": 3
+    }
+  },
+  "ldv_implementation_gap": {
+    "historical_ldv_implementation_recovered": false,
+    "local_repositories_checked": 22,
+    "distinct_ref_heads": 30,
+    "bytecode_files_checked": 40,
+    "inspection_findings": [
+      "BMC_FRAME_HAVOC only skips specification generation in the inspected public code.",
+      "The public harness stub emitter has no archived global-write frame summaries or lock-writer CEGAR loop.",
+      "BMC_TRANSITIVE_INLINE uses a nonempty-string condition; the value 0 enables transitive inlining."
+    ],
+    "pilot_harnesses": [
+      {
+        "path": "artifacts/pilot_20261104/rq1-ldv/cases/32_7_cilled_const_ok_linux-32_1-drivers--isdn--capi--kernelcapi.ko-ldv_main3_sequence_infinite_withcheck_stateful.cil.out/artifacts/agdrv/main/harness.c",
+        "bytes": 187611,
+        "inlined_callees": 30,
+        "stub_functions": 0,
+        "sibling_placeholders": 0,
+        "cprover_havoc_calls": 0
+      }
+    ],
+    "historical_score": {
+      "paper": 18,
+      "artifact_catch_rows": 14,
+      "tasks": 29
+    },
+    "limitation": "Counts from distinct runs must not be unioned and presented as one reproduced result.",
+    "owner_response": "User does not know the location of the original checkout or a backup; do not repeat equivalent local searches."
+  },
+  "validation": {
+    "tests_passed": 365,
+    "tests_skipped": 1,
+    "suites": [
+      "test_paper_reproduction",
+      "test_jml_specs",
+      "test_specgen_compare_runner",
+      "test_loop_invariants",
+      "test_frama_c"
+    ],
+    "additional_model_calls_this_continuation": 0,
+    "additional_verifier_replay_inputs": 6
   }
 }

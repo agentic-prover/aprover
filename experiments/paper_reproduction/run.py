@@ -95,7 +95,7 @@ def child_environment(profile: dict, args) -> tuple[dict, dict]:
         settings.update(SVCOMP_PROP="unreach", SVCOMP_ARCH=profile["arch"],
                         SVCOMP_UNWIND=str(profile["unwind"]),
                         SVCOMP_TIMEOUT=str(profile["solver_timeout"]))
-        if profile["strategy"] == "frame_havoc":
+        if profile["strategy"] == "public_ldv_fallback":
             settings.update(BMC_FRAME_HAVOC="1", BMC_BUGHUNT="1",
                             BMC_FAITHFUL_MAIN="0", BMC_TRANSITIVE_INLINE="0",
                             BMC_AGENT_ENABLE_BMC_CONFIG_AGENT="false",

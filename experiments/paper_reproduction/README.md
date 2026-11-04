@@ -19,7 +19,7 @@ archive, not the code that generated it.
 | Experiment | Execution / original archival evidence | Historical implementation | Confidence and reproduction status |
 | --- | --- | --- | --- |
 | RQ1 AWS, 27 tasks | Logs: 2026-06-29 03:23–05:19; private archive `15e3d34`, committed 2026-06-29 18:35 +04:00 | `4569fa1` (June 24) introduces the exact scope-from-entry CLI marker found in all 27 logs. Original runner uses `/home/syc/AProver_cegar`. | Medium confidence in the code family; exact SHA/local patch unrecorded. This branch fixes LP64, unreach-call, unwind 64, solver 400 s, task 800 s. |
-| RQ1 LDV, 29 tasks | 13 saved attempts on mousedev: 2026-06-28 14:41–17:37; same June 29 archive | Private `AProver_cegar` checkout, including lock-writer CEGAR changes. Public `44a3cbf`/`149177d` on July 5 provide a later compatible frame-havoc implementation. | No exact public revision established. Do not label July 5 as the June 28 execution version. This branch fixes ILP32, unwind 1, solver 300 s, task 900 s, manual lean frame-havoc. |
+| RQ1 LDV, 29 tasks | 13 saved attempts on mousedev: 2026-06-28 14:41–17:37; same June 29 archive | Private `AProver_cegar` checkout, including global-write frame summaries and lock-writer CEGAR changes. Public `44a3cbf`/`149177d` on July 5 do not establish an equivalent implementation. | Original implementation remains missing. The `rq1-ldv` profile is explicitly a public fallback, preserving the archived environment and ILP32/unwind 1/300 s solver/900 s task budgets; it is not the historical algorithm. |
 | RQ3 ACSL, 251 cases, five trials | Private archive `7210967`, 2026-06-23 15:21 +04:00; explicit toolchain metadata | `1528d0dcd9faecbc5b3fd40dc203aec38453af89`, plus untracked batch/base/postcheck helpers recovered locally | Explicit core SHA; helpers are now tracked and portable. All 251 current inputs match both the public AutoSpec archive and the original run's saved attempt-1 sources. |
 | RQ3 JML, two suites × two models, ten trials | Private archive `9bc9a1c`, 2026-06-23 14:47 +04:00; original worktree, prompt/cache evidence | `fcad091a344645f1e4930f31ce7b63507653187e` plus local patch, including temperature 0.4 | High-confidence reconstructed snapshot. The JML module and runner are byte-identical between that base and `149177d` before applying the same patch. Claude route checked with fresh trials; GPT-3.5-1106 requires the original model to be available at the chosen endpoint. |
 
@@ -39,13 +39,22 @@ numbering difference.
 * The JML source and experiment runner are byte-identical from `fcad091` through
   `149177d`. The LLM client changes in this interval add an unused Codex provider;
   the OpenAI-compatible transport used by these runs is unchanged.
-* RQ1 frame-havoc and faithful-main modes, model routing, architecture, property
-  selection and budgets are fixed by the profiles. PlanAgent is not invoked;
+* RQ1 faithful-main and public LDV fallback settings, model routing, architecture,
+  property selection and budgets are fixed by the profiles. PlanAgent is not invoked;
   this prevents a later default plan from silently replacing those parameters.
 * Commit titles alone are insufficient. `221c611` is titled “web: revamp
   implementation” but also changes the pipeline, LLM client, engine, validator,
   preprocessor and specification generator. Later planning, triage and unwind
   changes can affect RQ1, even if Java/JML generation remains unchanged.
+
+The public LDV implementation needs particular care. `BMC_FRAME_HAVOC` skips
+specification generation; the harness does not implement the archived global-write
+frame summaries or lock-writer refinement loop. In addition,
+`BMC_TRANSITIVE_INLINE=0` is a nonempty string and therefore enables transitive
+inlining in this code. The fallback preserves this actual behavior explicitly;
+it does not silently reinterpret the archived environment as a different strategy.
+Searching reachable histories in 22 local repositories (30 distinct reference
+heads) and 40 cached bytecode files did not recover the missing LDV implementation.
 
 The complete local history audit is produced by `audit_history.py` below.
 Module equality supports compatibility; it is not a proof that all possible
@@ -56,7 +65,7 @@ inputs, model responses and verifier environments give identical outcomes.
 | Profile | Inputs | Default model | Trials |
 | --- | ---: | --- | ---: |
 | `rq1-aws` | 27 | Claude Sonnet 4.5 | 1 |
-| `rq1-ldv` | 29 | Claude Sonnet 4.5 | 1 |
+| `rq1-ldv` (public fallback; historical match unestablished) | 29 | Claude Sonnet 4.5 | 1 |
 | `rq3-acsl` | 251 | Claude Sonnet 4.6 | 5 |
 | `rq3-jml-specgen-claude` | 120 | Claude Sonnet 4.6 | 10 |
 | `rq3-jml-specgen-gpt35` | 120 | GPT-3.5 Turbo 1106 | 10 |
@@ -138,7 +147,7 @@ Each execution writes `run_manifest.json` (commit, source hashes, input hashes,
 explicit environment, tool versions and commands), `execution.json`, logs,
 solver artifacts, and `metrics.json`. Existing outputs with a different
 code/configuration fingerprint are rejected. Execution timeout or an empty
-report list is not interpreted as safety. Frame-havoc counterexamples are
+report list is not interpreted as safety. LDV fallback counterexamples are
 reported separately as abstract candidates, with pipeline report counts retained.
 
 ## Model accounting and controlled replay
@@ -167,7 +176,7 @@ the model output held fixed, not for estimating current model performance.
 
 ## Checks completed on 2026-11-04
 
-* 362 relevant unit tests passed, one skipped.
+* 365 relevant unit tests passed, one skipped.
 * Full task discovery: 27 AWS, 29 LDV, 251 ACSL, 120 SpecGenBench and 265 SV-COMP
   Java inputs; five/ten-trial defaults are preserved.
 * Fresh one-trial runs: ACSL `arrays_and_loops/1.c` (WP 3/3) and Code2Inv `1.c`
@@ -186,6 +195,17 @@ the model output held fixed, not for estimating current model performance.
   matching the recorder exactly. Historical response replays added no API cost.
 * No full benchmark was rerun. These checks target module compatibility and
   executable packaging, not a new estimate of the paper's aggregate scores.
+* A per-trial evidence audit recomputes the recorded RQ3 totals exactly: ACSL
+  209/251 cases and 990/1255 trials; Claude JML 112/120 and 1057/1200 on
+  SpecGenBench, 227/265 and 2172/2650 on SV-COMP. All passing records have their
+  verification evidence and final inputs. Four failed historical GPT trials lack
+  their individual trial JSON; they are not counted as passes. New GPT calls are
+  deferred.
+* Three additional archived JML proofs (`BinarySearch`, `SelectionSortDesc`,
+  `assert3`) pass fresh OpenJML execution after relocation, including the SV-COMP
+  support source. Three archived ACSL proofs (`fib_46/26`, mutable-array doubling,
+  and the large-constant SV-COMP case) also pass fresh Frama-C execution with the
+  original goal counts. These six verifier replays make zero model calls.
 
 The local evidence is in `artifacts/audit_20261104/history.json`,
 `artifacts/audit_20261104/benchmark_input_check.json`, and
@@ -208,10 +228,40 @@ Private remote refresh could not be performed in this session (GitHub connector
 Public AProver main was checked at `b6ac080`; it changes only README relative to
 `b9314c7`, so those two commits have identical pipeline code.
 
+## Audit recorded RQ3 results and replay verification
+
+The audit checks each original trial, its accepted proof log/result, and its saved
+verification input. It returns a nonzero status for a count mismatch or missing
+passing evidence, and emits hash-locked, deduplicated verifier manifests (378 C
+inputs and 2,042 Java input bundles across the original model settings).
+
+```sh
+python experiments/paper_reproduction/audit_published.py \
+  --jml-runs-root /path/to/aprover_jml_optimize/artifacts \
+  --acsl-run /path/to/original/autospec_251_bmc_agent_acsl_rerun_20260622 \
+  --artifact-root /path/to/BMC_ICSE --output artifacts/recorded-audit
+
+python experiments/paper_reproduction/replay_verifiers.py jml \
+  --manifest artifacts/recorded-audit/jml_accepted_replay_manifest.json \
+  --tool /path/to/SpecGen-Artifact/openjml/openjml \
+  --run-contains claude46 --cases BinarySearch SelectionSortDesc assert3 \
+  --one-per-case --output artifacts/proof-replay/jml --execute
+
+python experiments/paper_reproduction/replay_verifiers.py acsl \
+  --manifest artifacts/recorded-audit/acsl_accepted_replay_manifest.json \
+  --tool experiments/paper_reproduction/tools/frama-c \
+  --limit 3 --output artifacts/proof-replay/acsl --execute
+```
+
+Replay copies sources to the new output directory, verifies their hashes, checks
+the historical tool version, and preserves the original verifier flags. It never
+modifies the original artifacts or calls a model. Replaying accepted proofs does
+not reproduce generation success rates or replace a full fresh RQ3 experiment.
+
 ## Remaining decisions
 
-1. Recover the original remote LDV CEGAR changes or evaluate this explicit public
-   replacement and update the RQ1 numbers. A previous public `149177d` plan rerun
+1. Recover the original remote LDV frame-summary/CEGAR changes or evaluate the
+   explicitly different public fallback and update the RQ1 numbers. A previous public `149177d` plan rerun
    caught 14/29, not the paper's 18/29; its artifact TSV also contains 14 `CATCH`
    rows. Do not explain the discrepancy solely by unrelated commits.
 2. Resolve LDV's paper LP64 statement versus the artifact's ILP32 configuration.

@@ -11,7 +11,10 @@
     "model": "anthropic/claude-sonnet-4.5", "trials": 1,
     "arch": "ILP32", "unwind": 1, "solver_timeout": 300,
     "case_timeout": 900, "memory_kib": 42000000,
-    "strategy": "frame_havoc", "historical_candidate": "4569fa1-era checkout + unavailable lock-writer CEGAR changes"
+    "strategy": "public_ldv_fallback",
+    "historical_match": "unestablished; original write-frame summaries and lock-writer CEGAR unavailable",
+    "legacy_environment_note": "BMC_TRANSITIVE_INLINE=0 is truthy in this public implementation; transitive inlining remains enabled",
+    "historical_candidate": "4569fa1-era checkout + unavailable lock-writer CEGAR changes"
   },
   "rq3-acsl": {
     "kind": "acsl", "tasks": 251, "trials": 5,

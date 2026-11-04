@@ -39,7 +39,7 @@ def collect(output: Path) -> dict:
             elif execution["returncode"] in (124, 137):
                 verdict = "timeout"
             elif candidates:
-                verdict = ("abstract_bug_candidate" if manifest["settings"]["strategy"] == "frame_havoc"
+                verdict = ("abstract_bug_candidate" if manifest["settings"]["strategy"] in ("frame_havoc", "public_ldv_fallback")
                            else "reach_error_counterexample")
             elif errors:
                 verdict = "solver_error"
