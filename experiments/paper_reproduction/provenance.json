@@ -1,0 +1,349 @@
+{
+  "purpose": "One BMC-Agent checkout for RQ1/RQ3; candidate, not an assertion of full numerical reproduction.",
+  "candidate_base": "149177dead29443bcef96f8be194e2638d875fd9",
+  "public_main_checked": "b6ac080f67d46eb5eb595eb9093278f2d326188e",
+  "private_artifact_snapshot": "1d12b534908cf3cd81cc722859229afba9666a3c",
+  "anonymous_artifact_snapshot": "402ac82ce0ff3a6a696ae95a0703d66f1e6b11fc",
+  "mapping": [
+    {
+      "experiment": "RQ1 AWS27",
+      "candidate": "4569fa1-era scope-from-entry implementation, possibly with private CEGAR changes",
+      "confidence": "medium for code family; exact SHA unrecorded",
+      "archive_commit": "15e3d3424988d919f6413afba7e482ca63f1d3dc",
+      "reason": "June 29 logs contain scope-from-entry; first reachable public implementation is June 24 4569fa1; original runner uses /home/syc/AProver_cegar"
+    },
+    {
+      "experiment": "RQ1 LDV29",
+      "candidate": "June 28 private /home/syc/AProver_cegar snapshot; public 44a3cbf/149177d are later compatibility candidates",
+      "confidence": "medium for architecture; no exact public revision",
+      "reason": "lock-writer CEGAR markers appear in archived logs; BMC_FRAME_HAVOC first appears in public reachable history on July 5; no matching lock-writer log string was found"
+    },
+    {
+      "experiment": "RQ3 ACSL251",
+      "candidate": "1528d0dcd9faecbc5b3fd40dc203aec38453af89 + recovered untracked experiment helpers",
+      "confidence": "explicit artifact metadata",
+      "archive_commit": "7210967598ef07a7f00e2da52c990451a51a71cb"
+    },
+    {
+      "experiment": "RQ3 JML four settings",
+      "candidate": "fcad091a344645f1e4930f31ce7b63507653187e + recovered local changes",
+      "confidence": "high, from original worktree/cache/prompt evidence; not a pristine commit",
+      "archive_commit": "9bc9a1c9f7ee36aafd2f4b0b64efb980008461c9"
+    }
+  ],
+  "relevant_archival_commits": [
+    {
+      "commit": "15e3d3424988d919f6413afba7e482ca63f1d3dc",
+      "author_date": "2026-06-29T18:25:29+04:00",
+      "committer_date": "2026-06-29T18:35:07+04:00",
+      "subject": "Add RQ1 artifact: SV-COMP SoftwareSystems (aws-c-common + ldv-linux) data, results, runners"
+    },
+    {
+      "commit": "7210967598ef07a7f00e2da52c990451a51a71cb",
+      "author_date": "2026-06-23T15:21:07+04:00",
+      "committer_date": "2026-06-23T15:21:07+04:00",
+      "subject": "Add RQ2 ACSL AutoSpec artifacts"
+    },
+    {
+      "commit": "9bc9a1c9f7ee36aafd2f4b0b64efb980008461c9",
+      "author_date": "2026-06-23T14:47:00+04:00",
+      "committer_date": "2026-06-23T14:47:00+04:00",
+      "subject": "Add RQ2 JML experiment artifacts"
+    },
+    {
+      "commit": "4b38c1b36bb4607f0255209dbb2f051b1902759a",
+      "author_date": "2026-07-08T14:58:23+04:00",
+      "committer_date": "2026-07-08T14:58:23+04:00",
+      "subject": "Add anonymized RQ1 artifacts"
+    },
+    {
+      "commit": "d29c25eeda6a4d7c8852dbbc169513a4f5ac3e88",
+      "author_date": "2026-06-30T19:03:51+04:00",
+      "committer_date": "2026-06-30T19:04:22+04:00",
+      "subject": "Add anonymized RQ2 and RQ3 artifacts"
+    }
+  ],
+  "acsl_comparison": [
+    {
+      "path": "bmc_agent/jml_specs.py",
+      "byte_identical": true,
+      "base_sha256": "46aeeee9d505a56b9b7c04d450088e6bb08d7753ec4bbbc0596ef44226b8efda",
+      "head_sha256": "46aeeee9d505a56b9b7c04d450088e6bb08d7753ec4bbbc0596ef44226b8efda",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "experiments/specgen_compare/run_bmc_jml_specgen.py",
+      "byte_identical": true,
+      "base_sha256": "dd64f5bfa92c1b4e28271a2be826924329cfab3eaf068aaaa4ab788815b52a78",
+      "head_sha256": "dd64f5bfa92c1b4e28271a2be826924329cfab3eaf068aaaa4ab788815b52a78",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/loop_invariants.py",
+      "byte_identical": false,
+      "base_sha256": "63ceb37b945fa20ec2e9118ab7f79497f0e2ce0e8e45549778bf4222283fe01e",
+      "head_sha256": "9a9f0c14a63258b80663ee0120d53760a399b9ca31b1b006f6a8f70c04246b2d",
+      "changed_functions": [
+        "build_havoc_abstraction"
+      ],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/assert_driven_specs.py",
+      "byte_identical": true,
+      "base_sha256": "d13ebdfe6668f1ed678e87dba2451dd906075d2711b7dd09077857bea9cfde6c",
+      "head_sha256": "d13ebdfe6668f1ed678e87dba2451dd906075d2711b7dd09077857bea9cfde6c",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/frama_c.py",
+      "byte_identical": true,
+      "base_sha256": "613be51921d776693cb80f6d6781be3ef4f1f890780f5e5a5760a97dc8fee26a",
+      "head_sha256": "613be51921d776693cb80f6d6781be3ef4f1f890780f5e5a5760a97dc8fee26a",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/acsl.py",
+      "byte_identical": true,
+      "base_sha256": "30eb08c3a138f06902da5448a4711674410d2e9214c464606dda13c330ad2adb",
+      "head_sha256": "30eb08c3a138f06902da5448a4711674410d2e9214c464606dda13c330ad2adb",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/dsl_to_cbmc.py",
+      "byte_identical": false,
+      "base_sha256": "95d0800e5f5a1b9266a9b1032def7e1b939a22e27f741582f78139fbbdaa8b37",
+      "head_sha256": "266e0b3d810bec46c3ccf84442111769667c18539c4feb2c9048afc180852bd7",
+      "changed_functions": [
+        "_filter_tautological",
+        "_sanitize_condition"
+      ],
+      "added_functions": [
+        "_clause_has_illegal_construct",
+        "precond_to_assert"
+      ],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/cli.py",
+      "byte_identical": false,
+      "base_sha256": "06068a4cc41550f7e68b6dd4181e3fbd839da025cad7c7ca63e4cc1933177d9a",
+      "head_sha256": "f46b8d3f46aaaba4a8684c0d1e8794253065d788b512908d6a5b81d2a53a0dd7",
+      "changed_functions": [
+        "_apply_provider_args",
+        "_cmd_verify",
+        "_format_round_summary",
+        "_summarize_autonomous_round",
+        "build_parser"
+      ],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/llm.py",
+      "byte_identical": false,
+      "base_sha256": "bfb60c37aa5cc5eeae8379e7b693f3a94bd03df5b53c04aacab9dcfafae88358",
+      "head_sha256": "49ed8e740e10869a9864cbad5be5afbd7c155e1ea5c76ae7e3ee445417c64396",
+      "changed_functions": [
+        "LLMClient",
+        "LLMClient.complete"
+      ],
+      "added_functions": [
+        "LLMClient._complete_codex"
+      ],
+      "removed_functions": []
+    }
+  ],
+  "jml_comparison": [
+    {
+      "path": "bmc_agent/jml_specs.py",
+      "byte_identical": true,
+      "base_sha256": "46aeeee9d505a56b9b7c04d450088e6bb08d7753ec4bbbc0596ef44226b8efda",
+      "head_sha256": "46aeeee9d505a56b9b7c04d450088e6bb08d7753ec4bbbc0596ef44226b8efda",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "experiments/specgen_compare/run_bmc_jml_specgen.py",
+      "byte_identical": true,
+      "base_sha256": "dd64f5bfa92c1b4e28271a2be826924329cfab3eaf068aaaa4ab788815b52a78",
+      "head_sha256": "dd64f5bfa92c1b4e28271a2be826924329cfab3eaf068aaaa4ab788815b52a78",
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "path": "bmc_agent/llm.py",
+      "byte_identical": false,
+      "base_sha256": "bfb60c37aa5cc5eeae8379e7b693f3a94bd03df5b53c04aacab9dcfafae88358",
+      "head_sha256": "49ed8e740e10869a9864cbad5be5afbd7c155e1ea5c76ae7e3ee445417c64396",
+      "changed_functions": [
+        "LLMClient",
+        "LLMClient.complete"
+      ],
+      "added_functions": [
+        "LLMClient._complete_codex"
+      ],
+      "removed_functions": []
+    }
+  ],
+  "input_check": {
+    "cases": 251,
+    "public_archive_mismatches": [],
+    "historical_input_mismatches": [],
+    "historical_attempt_1_missing": [],
+    "lock_file": "experiments/paper_reproduction/benchmark_inputs.json"
+  },
+  "targeted_paired_check": {
+    "candidate_base": "149177d",
+    "control_base": "1528d0d (JML module also identical to fcad091 before the same temperature patch)",
+    "model": "anthropic/claude-sonnet-4.6",
+    "fresh_cases": 4,
+    "fresh_trials_per_case": 1,
+    "control_model_calls_to_upstream": 0,
+    "rows": [
+      {
+        "profile": "rq3-acsl",
+        "case": "code2inv_133__1",
+        "candidate": {
+          "status": "pass",
+          "trial_passes": 1,
+          "trial_total": 1,
+          "postcheck_proved": 10,
+          "postcheck_total": 10
+        },
+        "historical_control": {
+          "status": "pass",
+          "trial_passes": 1,
+          "trial_total": 1,
+          "postcheck_proved": 10,
+          "postcheck_total": 10
+        },
+        "output_path_normalization": false,
+        "generated_artifact_byte_identical": true,
+        "candidate_artifact_sha256": "19c362311759b0eff6d81d22116d2d3460595491ec35c03543508e032b977a62",
+        "control_artifact_sha256": "19c362311759b0eff6d81d22116d2d3460595491ec35c03543508e032b977a62"
+      },
+      {
+        "profile": "rq3-acsl",
+        "case": "frama-c-problems__arrays_and_loops__1",
+        "candidate": {
+          "status": "pass",
+          "trial_passes": 1,
+          "trial_total": 1,
+          "postcheck_proved": 3,
+          "postcheck_total": 3
+        },
+        "historical_control": {
+          "status": "pass",
+          "trial_passes": 1,
+          "trial_total": 1,
+          "postcheck_proved": 3,
+          "postcheck_total": 3
+        },
+        "output_path_normalization": true,
+        "generated_artifact_byte_identical": true,
+        "candidate_artifact_sha256": "e310e10ac0c96d69c27ca6c01b6d3aaf8586553cd224c8598229581b2bdb267a",
+        "control_artifact_sha256": "e310e10ac0c96d69c27ca6c01b6d3aaf8586553cd224c8598229581b2bdb267a"
+      },
+      {
+        "profile": "rq3-jml-specgen-claude",
+        "case": "AbsSeq",
+        "candidate": {
+          "status": "passed",
+          "passed": true,
+          "trial_passes": null,
+          "trials": 1
+        },
+        "historical_control": {
+          "status": "passed",
+          "passed": true,
+          "trial_passes": null,
+          "trials": 1
+        },
+        "output_path_normalization": false,
+        "generated_artifact_byte_identical": true,
+        "candidate_artifact_sha256": "600192daa6bff5a19207239b8c06dcef9a992de23b357acedef9bc522abf9aa4",
+        "control_artifact_sha256": "600192daa6bff5a19207239b8c06dcef9a992de23b357acedef9bc522abf9aa4"
+      },
+      {
+        "profile": "rq3-jml-svcomp-claude",
+        "case": "Addition",
+        "candidate": {
+          "status": "passed",
+          "passed": true,
+          "trial_passes": null,
+          "trials": 1
+        },
+        "historical_control": {
+          "status": "passed",
+          "passed": true,
+          "trial_passes": null,
+          "trials": 1
+        },
+        "output_path_normalization": false,
+        "generated_artifact_byte_identical": true,
+        "candidate_artifact_sha256": "972bcbfe56ab8ded4a84267b5bde41152374b2ca57af656324e93f91069eb344",
+        "control_artifact_sha256": "972bcbfe56ab8ded4a84267b5bde41152374b2ca57af656324e93f91069eb344"
+      }
+    ],
+    "limit": "Targeted compatibility evidence, not a statistical reproduction of full paper scores. One non-loop ACSL prompt differs only in an output-directory string, explicitly normalized for response matching."
+  },
+  "known_gaps": [
+    "Original AWS exact revision/local patch was not recorded.",
+    "Original LDV lock-writer CEGAR changes have not been recovered; public proxy results are not automatically the paper result.",
+    "GPT-3.5 Turbo 1106 absent from the OpenRouter model catalog checked on 2026-11-04.",
+    "Full benchmark counts have not been rerun; cross-module compatibility evidence is limited to the measured cases and inspected code paths.",
+    "Private remote refresh was unavailable; local complete clone used."
+  ],
+  "pilot_accounting": {
+    "calls": 145,
+    "billed_cost_usd": 2.5797466499999993,
+    "prompt_tokens": 794129,
+    "completion_tokens": 36532,
+    "cached_tokens": 131263,
+    "status_counts": {
+      "200": 145
+    },
+    "notes": [
+      "Seven fresh benchmark cases in total: two AWS, one LDV, two ACSL, two Claude/JML.",
+      "Historical controls used saved responses and incurred no model charges."
+    ]
+  },
+  "pilot_rq1_results": {
+    "rq1-aws": [
+      {
+        "case": "aws_add_size_saturating_harness",
+        "expected": "true",
+        "verdict": "bounded_no_violation",
+        "pipeline_report_count": 0
+      },
+      {
+        "case": "aws_array_eq_c_str_harness-1",
+        "expected": "false",
+        "verdict": "reach_error_counterexample",
+        "pipeline_report_count": 1
+      }
+    ],
+    "rq1-ldv": [
+      {
+        "case": "32_7_cilled_const_ok_linux-32_1-drivers--isdn--capi--kernelcapi.ko-ldv_main3_sequence_infinite_withcheck_stateful.cil.out",
+        "expected": "false",
+        "verdict": "abstract_bug_candidate",
+        "pipeline_report_count": 2
+      }
+    ]
+  }
+}

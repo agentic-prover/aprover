@@ -5900,7 +5900,7 @@ def run_jml_specs_bench(
             _initial_system_prompt(),
             user_prompt,
             max_tokens=8192,
-            temperature=0.1,
+            temperature=float(getattr(config, "jml_llm_temperature", 0.1)),
             role="spec_gen",
         )
         current_annotated = complete_standard_imports(

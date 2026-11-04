@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Historical Frama-C/WP image, pinned by repository digest.
+set -eu
+exec docker run --rm --cpus "${AUTOSPEC_DOCKER_CPUS:-2}" \
+  -v "${PWD}:/work" -w /work \
+  framac/frama-c@sha256:bda451103345fdd1e2e57262bf3c6ff36090ce819a03c163b24f637d4dd8e053 \
+  frama-c "$@"

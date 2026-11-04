@@ -76,6 +76,7 @@ class CaseRow:
     model: str = ""
     provider: str = ""
     base_url: str = ""
+    temperature: str = ""
     prompt_examples: str = "none"
     oracle_source_status: str = "not_checked"
     oracle_source_diff_path: str = ""
@@ -1133,6 +1134,8 @@ def configure(args: argparse.Namespace) -> Config:
         config.llm_provider = args.provider
     if args.base_url:
         config.llm_base_url = args.base_url
+    if getattr(args, "temperature", None) is not None:
+        config.jml_llm_temperature = float(args.temperature)
     if args.openjml_path:
         config.openjml_path = args.openjml_path
     else:
@@ -1150,6 +1153,7 @@ def run_metadata(args: argparse.Namespace, config: Config) -> dict[str, str]:
         "model": str(getattr(config, "llm_model", "")),
         "provider": str(provider),
         "base_url": str(getattr(config, "llm_base_url", "")),
+        "temperature": str(getattr(config, "jml_llm_temperature", "")),
         "prompt_examples": str(getattr(args, "prompt_examples", "none") or "none"),
     }
 
@@ -1699,12 +1703,82 @@ def aggregate_trial_rows(case: SpecGenCase, trials: list[CaseRow]) -> CaseRow:
         model=representative.model,
         provider=representative.provider,
         base_url=representative.base_url,
+        temperature=representative.temperature,
         prompt_examples=representative.prompt_examples,
         source_preflight_status=representative.source_preflight_status,
         source_preflight_assert_failure=representative.source_preflight_assert_failure,
         source_preflight_output_path=representative.source_preflight_output_path,
         source_preflight_failure_reason=representative.source_preflight_failure_reason,
     )
+
+
+def _trial_number(path: Path) -> int:
+    match = re.search(r"trial_(\d+)", str(path.parent))
+    return int(match.group(1)) if match else 0
+
+
+def case_row_from_trial_artifact(case: SpecGenCase, args: argparse.Namespace, path: Path) -> CaseRow:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    iterations = data.get("iterations") or []
+    if isinstance(iterations, list):
+        iteration_count = len(iterations)
+        last_iteration = iterations[-1] if iterations and isinstance(iterations[-1], dict) else {}
+    else:
+        iteration_count = int(iterations or 0)
+        last_iteration = {}
+    return CaseRow(
+        case=case.name,
+        source=str(data.get("source") or case.source),
+        oracle=case.oracle,
+        status=str(data.get("status") or "runner_error"),
+        passed=bool(data.get("passed")),
+        iterations=iteration_count,
+        runtime_s=float(data.get("runtime_s") or 0.0),
+        final_annotated_path=str(data.get("final_annotated_path") or ""),
+        report_path=str(data.get("report_path") or path),
+        openjml_output_path=str(data.get("openjml_output_path") or last_iteration.get("openjml_output_path") or ""),
+        error=str(data.get("error") or ""),
+        jml_clause_counts=data.get("jml_clause_counts") or {},
+        attempts=1,
+        trials=1,
+        model=str(data.get("model") or getattr(args, "model", "") or ""),
+        provider=str(data.get("provider") or getattr(args, "provider", "") or ""),
+        base_url=str(getattr(args, "base_url", "") or ""),
+        temperature=str(getattr(args, "temperature", "") or ""),
+        prompt_examples=str(getattr(args, "prompt_examples", "") or "none"),
+    )
+
+
+def cmd_recover_trials(args: argparse.Namespace) -> int:
+    bench_root = Path(args.bench_root)
+    oracle_root = Path(args.oracle_root) if args.oracle_root else None
+    output = Path(args.output)
+    cases = select_cases(discover_cases(bench_root, oracle_root), args.cases, args.limit)
+    rows: list[CaseRow] = []
+    expected_trials = max(1, int(args.trials))
+    incomplete: list[str] = []
+
+    for case in cases:
+        case_dir = output / "cases" / case.name
+        trial_paths = sorted(case_dir.glob("trial_*/jml_result.json"), key=_trial_number)
+        if not trial_paths:
+            continue
+        if len(trial_paths) < expected_trials:
+            incomplete.append(f"{case.name}:{len(trial_paths)}/{expected_trials}")
+            if not args.include_partial:
+                continue
+        trial_rows = [case_row_from_trial_artifact(case, args, path) for path in trial_paths[:expected_trials]]
+        rows.append(aggregate_trial_rows(case, trial_rows))
+
+    write_report(output, rows)
+    summary = summarize(rows)
+    print(f"recovered {len(rows)} case row(s) from {output / 'cases'}")
+    if incomplete:
+        print(f"incomplete cases: {', '.join(incomplete[:20])}" + (" ..." if len(incomplete) > 20 else ""))
+    print(f"summary: {summary}")
+    print(f"report: {output / 'report.json'}")
+    print(f"summary_md: {output / 'summary.md'}")
+    return 0 if rows else 1
 
 
 def interrupted_run(output: Path, rows: dict[str, CaseRow], total: int) -> int:
@@ -2090,6 +2164,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--openjml-timeout", type=int, default=30, help="OpenJML timeout per unannotated source.")
     sp.set_defaults(func=cmd_source_preflight)
 
+    rec = sub.add_parser(
+        "recover-trials",
+        help="Rebuild report.json from completed per-trial jml_result.json artifacts without rerunning LLM/OpenJML.",
+    )
+    add_common(rec)
+    rec.add_argument("--trials", type=int, default=10, help="Expected trials per case.")
+    rec.add_argument(
+        "--include-partial",
+        action="store_true",
+        help="Include cases with fewer than --trials completed trial artifacts in the recovered report.",
+    )
+    rec.add_argument("--model", default="", help="Model label to record when trial artifacts do not contain one.")
+    rec.add_argument("--provider", default="", help="Provider label to record when trial artifacts do not contain one.")
+    rec.add_argument("--base-url", default="", help="Base URL label to record in recovered rows.")
+    rec.add_argument("--temperature", default="", help="Temperature label to record in recovered rows.")
+    rec.add_argument("--prompt-examples", default="none", help="Prompt examples label to record in recovered rows.")
+    rec.set_defaults(func=cmd_recover_trials)
+
     r = sub.add_parser("run", help="Run BMC-Agent JML generation on selected cases.")
     add_common(r)
     r.add_argument("--openjml-path", default="", help="Path to OpenJML binary.")
@@ -2133,6 +2225,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--model", default="", help="Override BMC_AGENT_LLM_MODEL.")
     r.add_argument("--provider", default="", help="Override BMC_AGENT_LLM_PROVIDER.")
     r.add_argument("--base-url", default="", help="Override BMC_AGENT_LLM_BASE_URL.")
+    r.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Override JML spec-generation temperature; default keeps BMC-Agent's configured value.",
+    )
     r.set_defaults(func=cmd_run)
     return parser
 

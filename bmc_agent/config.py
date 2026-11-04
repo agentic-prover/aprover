@@ -248,6 +248,9 @@ class Config:
     jml_max_iterations: int = field(
         default_factory=lambda: int(os.environ.get("BMC_AGENT_JML_MAX_ITERATIONS", "3"))
     )
+    jml_llm_temperature: float = field(
+        default_factory=lambda: float(os.environ.get("BMC_AGENT_JML_TEMPERATURE", "0.1"))
+    )
     # Per-function TOTAL CBMC wall-clock budget (seconds, 0 = unlimited). The
     # per-CALL timeout (cbmc_timeout, raised up to 600s by the flag-selector)
     # does NOT bound a function's total time: auto-retry doubling + Phase-3c
@@ -1017,4 +1020,5 @@ class Config:
             openjml_path=os.environ.get("BMC_AGENT_OPENJML_PATH", "openjml"),
             openjml_timeout=int(os.environ.get("BMC_AGENT_OPENJML_TIMEOUT", "200")),
             jml_max_iterations=int(os.environ.get("BMC_AGENT_JML_MAX_ITERATIONS", "3")),
+            jml_llm_temperature=float(os.environ.get("BMC_AGENT_JML_TEMPERATURE", "0.1")),
         )
