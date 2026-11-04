@@ -113,13 +113,15 @@ def main() -> int:
     parser.add_argument("--one-per-case", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--fail-fast", action="store_true", help="Stop after the first batch with an unverified input.")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if args.workers < 1 or args.limit is not None and args.limit < 1:
         parser.error("workers and limit must be positive")
     rows = json.loads(args.manifest.read_text())
     if args.run_contains:
-        rows = [r for r in rows if any(args.run_contains in c.get("run", "") for c in r["covers"])]
+        rows = [{**r, "covers": [c for c in r["covers"] if args.run_contains in c.get("run", "")]}
+                for r in rows if any(args.run_contains in c.get("run", "") for c in r["covers"])]
     if args.cases:
         missing = set(args.cases) - {r["case"] for r in rows}
         if missing:
@@ -160,13 +162,21 @@ def main() -> int:
         raise ValueError(f"expected verifier {expected}; got {version_output[:300]}")
     plan["tool_version"] = version_output
     (output / "replay_plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+    results = []
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(lambda row: replay(row, args.kind, tool, output), rows))
-    report = {"kind": "historical_verifier_replay", "model_calls": 0, "fresh_generation": False,
-              "inputs": len(results), "passed": sum(r["passed"] for r in results), "rows": results}
-    (output / "replay_results.json").write_text(json.dumps(report, indent=2) + "\n")
+        for start in range(0, len(rows), args.workers):
+            batch = list(pool.map(lambda row: replay(row, args.kind, tool, output), rows[start:start + args.workers]))
+            results.extend(batch)
+            report = {"kind": "historical_verifier_replay", "model_calls": 0, "fresh_generation": False,
+                      "requested_inputs": len(rows), "complete": len(results) == len(rows),
+                      "inputs": len(results), "passed": sum(r["passed"] for r in results), "rows": results}
+            checkpoint = output / "replay_results.json.tmp"
+            checkpoint.write_text(json.dumps(report, indent=2) + "\n")
+            checkpoint.replace(output / "replay_results.json")
+            if args.fail_fast and any(not r["passed"] for r in batch):
+                break
     print(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=2))
-    return 0 if all(r["passed"] for r in results) else 1
+    return 0 if report["complete"] and all(r["passed"] for r in results) else 1
 
 
 if __name__ == "__main__":
