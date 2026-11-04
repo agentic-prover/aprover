@@ -306,7 +306,9 @@
     "Original LDV lock-writer CEGAR changes have not been recovered; public proxy results are not automatically the paper result.",
     "New GPT-3.5-1106 runs deferred at user request; OpenRouter endpoint probes confirmed the snapshot is no longer served.",
     "Full benchmark counts have not been rerun; cross-module compatibility evidence is limited to the measured cases and inspected code paths.",
-    "Private remote refresh was unavailable; local complete clone used."
+    "Private remote refresh was unavailable; local complete clone used.",
+    "AWS reproducer tool labeled ASan shadow-reservation failure as reproduced SIGABRT under address-space limits; this diagnostic is not runtime proof. Reported AWS evidence here is the faithful CBMC counterexample.",
+    "Shared CBMC engine/harness changes in assertion-driven ACSL synthesis still need paired-data coverage; full accepted-proof replay alone does not prove generation-path equivalence."
   ],
   "pilot_accounting": {
     "calls": 145,
@@ -431,17 +433,28 @@
     "owner_response": "User does not know the location of the original checkout or a backup; do not repeat equivalent local searches."
   },
   "validation": {
-    "tests_passed": 369,
+    "tests_passed": 465,
     "tests_skipped": 1,
     "suites": [
       "test_paper_reproduction",
       "test_jml_specs",
       "test_specgen_compare_runner",
       "test_loop_invariants",
-      "test_frama_c"
+      "test_frama_c",
+      "test_split_spec_gen",
+      "test_spec_generator_v2",
+      "test_harness_static_void_fix",
+      "test_copy_unwind_floor_from_harness",
+      "test_harness_repair_fallback"
     ],
-    "additional_model_calls_this_continuation": 0,
-    "additional_verifier_replay_inputs": 6
+    "accepted_proof_validation_unique_inputs": 1310,
+    "paid_pilots": {
+      "successful_calls": 231,
+      "billed_usd": 3.7579851,
+      "latest_two_aws_calls": 86,
+      "latest_two_aws_billed_usd": 1.17823845,
+      "gpt_calls": 0
+    }
   },
   "configuration_audit_20261104": {
     "effective_unwind_fix": "Use SVCOMP_UNWIND floor plus BMC_UNWIND_CAP; ordinary default 4 otherwise overrides a floor of 1. AWS retains agent-facing default 4; LDV config default is 1.",
@@ -495,5 +508,216 @@
     },
     "mousedev_ilp32_result": "timeout after 300 s; configuration correction alone did not recover the catch",
     "earlier_ldv_pilot_limitation": "kernelcapi paid pilot was before exact-unwind fix, with config default 4; not validation of the corrected profile"
+  },
+  "complete_acsl_proof_validation": {
+    "distinct_inputs": 378,
+    "passed": 378,
+    "complete": true,
+    "accepted_trials": 990,
+    "accepted_cases": 209,
+    "model_calls": 0,
+    "goal_counts_all_match": true,
+    "limitation": "Archived accepted proof validation, not fresh generation success rates."
+  },
+  "seeded_aws_pilot": {
+    "generation_source_commit": "92cb15cc8a014ff0950f950638add0cb6fbfc706",
+    "fresh_cases": 2,
+    "fresh_usage": {
+      "calls": 86,
+      "prompt_tokens": 310602,
+      "completion_tokens": 26085,
+      "cached_tokens": 55049,
+      "billed_cost_usd": 1.17823845,
+      "usage_complete": true,
+      "http_status_counts": {
+        "200": 86
+      }
+    },
+    "actual_solver_configuration": {
+      "invocations": 3,
+      "observed": [
+        {
+          "unwind": 64,
+          "arch": "LP64"
+        },
+        {
+          "unwind": 64,
+          "arch": "LP64"
+        },
+        {
+          "unwind": 64,
+          "arch": "LP64"
+        }
+      ],
+      "matches_profile": true
+    },
+    "replay_fidelity": {
+      "calls": 86,
+      "cache_hits": 86,
+      "cache_misses": 0,
+      "verified": true
+    },
+    "diagnostic_normalization": "Explicit ASan PIDs and compiler temporary C filenames only, in addition to output-directory prefixes.",
+    "harnesses_byte_identical": true,
+    "official_usage_increment": 1.1782384499999998,
+    "official_increment_matches_recorder": true,
+    "no_claim_from_failed_replay_attempts": true
+  },
+  "acsl_helper_ast_comparison": [
+    {
+      "original": "/mnt/disk7/jw_bmc/aprover_main_latest_run_20260620/artifacts/autospec_251_after_wp_fixes_20260609/run_autospec_251.py",
+      "candidate": "experiments/spec_quality_compare/_autospec_251_base.py",
+      "shared_functions": 15,
+      "changed_functions": [
+        "build_postcheck_target",
+        "run_attempt"
+      ],
+      "added_functions": [],
+      "removed_functions": []
+    },
+    {
+      "original": "/mnt/disk7/jw_bmc/aprover_main_latest_run_20260620/artifacts/framac_problems_spec_only_20260606_attempt5/postcheck_framac_modes.py",
+      "candidate": "experiments/spec_quality_compare/_autospec_postcheck.py",
+      "shared_functions": 7,
+      "changed_functions": [],
+      "added_functions": [],
+      "removed_functions": []
+    }
+  ],
+  "rq3_shared_change_gates": {
+    "kernel_transitive_inline_short_circuit": "inactive: transitive-inline env overrides removed for ACSL",
+    "buffer_extent_canonicalization": "Agentic preset enables split generation. Explicit canonicalize_spec_buffer_extents=False restores the June-22 contract-precondition return; the normal verification default stays true.",
+    "spec_evidence_module": "byte-identical 1528d0d..149177d",
+    "caller_grounded_prompt_function": "AST-identical 1528d0d..149177d",
+    "dsl_filters": "Historical policy restores all 220 recorded translations (14 differed under current defaults).",
+    "c_harness_assembly": "Historical policy disables the later no-glibc kernel heuristic and faithful-main assembly; 215 paired captured engine queries agree exactly after only temporary/output path normalization."
+  },
+  "jml_recorded_input_links": {
+    "checked": 3229,
+    "mismatches": []
+  },
+  "complete_claude_jml_proof_validation": {
+    "distinct_inputs": 932,
+    "passed": 932,
+    "complete": true,
+    "SpecGenBench": {
+      "accepted_cases": 112,
+      "accepted_trials": 1057
+    },
+    "SVCOMP": {
+      "accepted_cases": 227,
+      "accepted_trials": 2172
+    },
+    "model_calls": 0,
+    "limitation": "Archived accepted proof validation, not fresh generation success rates."
+  },
+  "generation_compatibility_policy": {
+    "rq3_acsl_canonicalize_spec_buffer_extents": false,
+    "normal_verification_default": true,
+    "reason": "Explicit RQ3-only policy restores the original split-PRE return, implication/clause filtering, declaration and sibling-stub assembly, and main wrapper behavior on archived ACSL inputs. Ordinary verification defaults remain current.",
+    "rq3_acsl_dsl_filter_policy": "2026-06-22",
+    "rq3_acsl_c_harness_policy": "2026-06-22"
+  },
+  "recorded_active_scope_audit": {
+    "scope": "claude",
+    "all_recorded_counts_match": true,
+    "no_evidence_errors": true,
+    "unique_accepted_jml_inputs": 932,
+    "unique_accepted_acsl_inputs": 378
+  },
+  "deferred_gpt_stricter_audit": {
+    "status": "deferred; no new model calls",
+    "source_text_mismatches": [
+      {
+        "run": "svcomp_java_bmc_jml_gpt35_temp04_10trial_20260623",
+        "errors": [
+          {
+            "case": "BellmanFord",
+            "trial": 10,
+            "reason": "saved verifier input differs from recorded successful source"
+          },
+          {
+            "case": "StaticCharMethods01",
+            "trial": 5,
+            "reason": "saved verifier input differs from recorded successful source"
+          },
+          {
+            "case": "StaticCharMethods01",
+            "trial": 9,
+            "reason": "saved verifier input differs from recorded successful source"
+          },
+          {
+            "case": "StaticCharMethods02",
+            "trial": 5,
+            "reason": "saved verifier input differs from recorded successful source"
+          },
+          {
+            "case": "StaticCharMethods02",
+            "trial": 6,
+            "reason": "saved verifier input differs from recorded successful source"
+          },
+          {
+            "case": "StaticCharMethods02",
+            "trial": 7,
+            "reason": "saved verifier input differs from recorded successful source"
+          }
+        ]
+      }
+    ],
+    "note": "Original aggregate trial JSON counts remain recorded; six accepted GPT/SVCOMP saved files differ from their successful annotated_source strings. No original files were modified."
+  },
+  "acsl_generation_pairing": {
+    "parser_cases_checked": 251,
+    "identical_parser_results": 251,
+    "recorded_conditions_checked": 220,
+    "current_default_differing_translations": 14,
+    "historical_policy_differing_translations": 0,
+    "captured_engine_queries": {
+      "recorded_trials": 115,
+      "assertion_cases": 22,
+      "assertion_trials": 110,
+      "queries": 215,
+      "engine_eligible_queries": 147,
+      "differing_queries": 0,
+      "differing_eligible_queries": 0,
+      "model_calls": 0,
+      "solver_calls": 0,
+      "errors": 0,
+      "contexts_unavailable": 0,
+      "normalization": "Only exact translated temporary TU filename and exact output-root prefix. Comments, declarations, statements, conditions and solver parameters were compared.",
+      "limitation": "Captured solver inputs with recorded final contracts; not a generation trajectory or solver verdict replay. Queries include hypothetical soundness checks; eligibility indicates the final-contract C-expression gate.",
+      "capture_script": "experiments/paper_reproduction/capture_acsl_queries.py",
+      "capture_script_sha256": "005572a21a43add7626b5a9901d7d2d0bede516e4fc8e589a03eb4f9c9ee1ce3"
+    }
+  },
+  "aws_checker_replay": {
+    "kind": "AWS scoring-definition audit",
+    "strict_counts": {
+      "true": 17,
+      "false": 7,
+      "unknown": 3
+    },
+    "bounded_counts": {
+      "true": 18,
+      "false": 7,
+      "unknown": 2
+    },
+    "all_27_match_archive_under_bounded_interpretation": true,
+    "incomplete_unwinding_cases": [
+      "memset_using_uint64_harness"
+    ],
+    "historical_log_evidence": {
+      "case": "memset_using_uint64_harness",
+      "verified": false,
+      "failing_property": "memset_impl.unwind.0",
+      "pipeline_summary": "0 real bug(s), 1 latent, 0 unresolved",
+      "scoreboard_verdict": "true"
+    },
+    "limitation": "Checker-only audit. No generation or LLM filtering rerun for all 27 cases; incomplete unwinding is not a complete safe proof.",
+    "input_harnesses_identical_to_current_faithful_main": 27,
+    "model_calls": 0,
+    "backend": "CBMC 5.95.1; LP64; unwind 64 with unwinding assertions; 400 s per solver; 800 s task; 28000000 KiB address space",
+    "receipt": "artifacts/recovery_20261104/aws27_scoring_definition_audit.json",
+    "receipt_sha256": "4c0d43006b59ab627bc8ade4e2ea5616a6fe7c9b85223c88a258d26bbbafcaab"
   }
 }

@@ -8,6 +8,7 @@ C statements using __CPROVER_assume() and assert().
 from __future__ import annotations
 
 import re
+import os
 from typing import Optional
 
 
@@ -821,6 +822,10 @@ def _strip_wrapper(stmt: str) -> str | None:
 
 _CIL_TEMP_RE = re.compile(r'\b(?:__cil_tmp\w*|tmp___\w*|__cil_\w+)\b')
 
+def _historical_filter_policy() -> bool:
+    """June-22 RQ3 synthesis predates the later verifier clause filters."""
+    return os.environ.get("BMC_AGENT_DSL_FILTER_POLICY", "current") == "2026-06-22"
+
 def _clause_has_illegal_construct(inner: str) -> str | None:
     """Return a short reason if a translated assume/assert EXPR would
     fail to compile, else None.
@@ -898,7 +903,7 @@ def _filter_tautological(stmts: list[str]) -> list[str]:
         new_lines: list[str] = []
         for line in lines:
             inner = _strip_wrapper(line.strip())
-            _bad = _clause_has_illegal_construct(inner) if inner is not None else None
+            _bad = _clause_has_illegal_construct(inner) if inner is not None and not _historical_filter_policy() else None
             if _bad is not None:
                 import logging as _logging2
                 _logging2.getLogger("bmc_agent").warning(
@@ -991,9 +996,10 @@ def _sanitize_condition(condition: str) -> str:
         # on safe code (verified: aws_array_eq asserted `len_a==len_b`). The single
         # arrow `=>` was previously unrecognized (only ==>/<==> were). Drop the
         # whole implication clause. (Checked widest-first so ==> isn't split as =>.)
-        for _impl in ("<==>", "==>", "=>"):
-            if len(_top_level_split(text, _impl)) > 1:
-                return _comment_out(text)
+        if not _historical_filter_policy():
+            for _impl in ("<==>", "==>", "=>"):
+                if len(_top_level_split(text, _impl)) > 1:
+                    return _comment_out(text)
 
         for p in parts:
             ps = p.strip()

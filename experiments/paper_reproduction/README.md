@@ -39,6 +39,28 @@ numbering difference.
 * The JML source and experiment runner are byte-identical from `fcad091` through
   `149177d`. The LLM client changes in this interval add an unused Codex provider;
   the OpenAI-compatible transport used by these runs is unchanged.
+* The other `SpecGeneratorV2` changes between `1528d0d` and `149177d` are a
+  kernel/transitive-inline short circuit and buffer-extent canonicalization in
+  split-precondition generation. The ACSL profile clears transitive-inline
+  overrides. Its original `--agentic` preset enables split generation, so the
+  later canonicalization would otherwise be active: the explicit
+  `canonicalize_spec_buffer_extents=False` profile restores the original return
+  of the contract-only precondition without tightening `n + k` to `n`.
+  `spec_evidence.py` and the caller-grounded spec prompt function are unchanged.
+  All seven functions in the recovered WP postcheck helper are AST-identical to
+  the original helper; the batch helper changes only its helper location and
+  Python invocation.
+* Two other shared changes reach assertion-driven synthesis: DSL clause filtering
+  and the later kernel-TU/main harness rules. The ACSL profile explicitly selects
+  `dsl_filter_policy=2026-06-22` and `c_harness_policy=2026-06-22`. With these
+  settings, all 220 recorded conditions translate identically to June 22, and
+  215 captured engine queries from 110 archived trials / 22 assertion cases have
+  identical harnesses and solver parameters after replacing only temporary TU
+  names and output paths. Of these queries, 147 pass the final-contract
+  C-expression gate; the rest were captured as hypothetical engine checks.
+  These comparisons hold final recorded contracts fixed, rather than replaying
+  every intermediate generation/refinement decision. Ordinary verification keeps
+  the current DSL and harness defaults.
 * RQ1 faithful-main and public LDV fallback settings, model routing, architecture,
   property selection and budgets are fixed by the profiles. PlanAgent is not invoked;
   this prevents a later default plan from silently replacing those parameters.
@@ -59,6 +81,13 @@ heads) and 40 cached bytecode files did not recover the missing LDV implementati
 The complete local history audit is produced by `audit_history.py` below.
 Module equality supports compatibility; it is not a proof that all possible
 inputs, model responses and verifier environments give identical outcomes.
+
+`capture_acsl_queries.py --checkout /path/to/checkout --recorded-root
+/path/to/original/cases --output /path/to/new/capture` repeats the assertion-engine
+input capture against either checkout. It intercepts CBMC after the harness is
+written and forbids model calls. Its synthetic successful return only advances
+input capture and is never verifier evidence. Compare the resulting `queries.json`
+rows and normalized harnesses; capture preserves all code and conditions.
 
 ## Fixed profiles
 
@@ -188,10 +217,14 @@ the model output held fixed, not for estimating current model performance.
 Pass `--replay --replay-log /path/to/replay_calls.jsonl` to the run command.
 Any cache miss invalidates the controlled replay, even if the pipeline subsequently
 finishes using fallback specifications or classifications.
+The opt-in `--normalize-diagnostic-identifiers` proxy option also normalizes ASan
+diagnostic PIDs and temporary C filenames in compiler diagnostics. Program values,
+source code, diagnostic categories and diagnostic text remain part of matching.
+The replay log records whether this option was enabled.
 
 ## Checks completed on 2026-11-04
 
-* 369 relevant unit tests passed, one skipped.
+* 465 relevant unit tests passed, one skipped, including C harness regressions.
 * Full task discovery: 27 AWS, 29 LDV, 251 ACSL, 120 SpecGenBench and 265 SV-COMP
   Java inputs; five/ten-trial defaults are preserved.
 * Fresh one-trial runs: ACSL `arrays_and_loops/1.c` (WP 3/3) and Code2Inv `1.c`
@@ -210,14 +243,15 @@ finishes using fallback specifications or classifications.
 * The seven fresh cases made 145 model calls, using 794,129 prompt tokens and
   36,532 completion tokens. OpenRouter's actual billed usage was $2.57974665,
   matching the recorder exactly. Historical response replays added no API cost.
-* No full benchmark was rerun. These checks target module compatibility and
+* No full fresh-generation benchmark was rerun. These checks target compatibility and
   executable packaging, not a new estimate of the paper's aggregate scores.
 * A per-trial evidence audit recomputes the recorded RQ3 totals exactly: ACSL
   209/251 cases and 990/1255 trials; Claude JML 112/120 and 1057/1200 on
-  SpecGenBench, 227/265 and 2172/2650 on SV-COMP. All passing records have their
-  verification evidence and final inputs. Four failed historical GPT trials lack
-  their individual trial JSON; they are not counted as passes. New GPT calls are
-  deferred.
+  SpecGenBench, 227/265 and 2172/2650 on SV-COMP. All passing ACSL and Claude/JML
+  records have their verification evidence, final inputs and matching recorded
+  source text. GPT work is deferred; the optional stricter audit of its files
+  found six source-text mismatches and four missing failed-trial JSON records,
+  retained separately for later investigation.
 * Three additional archived JML proofs (`BinarySearch`, `SelectionSortDesc`,
   `assert3`) pass fresh OpenJML execution after relocation, including the SV-COMP
   support source. Three archived ACSL proofs (`fib_46/26`, mutable-array doubling,
@@ -229,11 +263,46 @@ finishes using fallback specifications or classifications.
   no-plan counterpart retained at least unwind 4 and an unrecognized property
   path instead of the required `unreach` token; neither is a full run of the
   corrected profile.
+* Complete ACSL proof validation passed for all 378 distinct accepted inputs,
+  covering all 990 recorded successful trials and 209 cases. Every WP goal count
+  matches the corresponding original record. This validates archived accepted
+  proofs, rather than a fresh 1,255-trial generation experiment.
+* Complete Claude/JML proof validation passed for all 932 distinct accepted input
+  bundles: 1,057 successful trials / 112 cases on SpecGenBench and 2,172 trials /
+  227 cases on SV-COMP. All 3,229 accepted source files also match the successful
+  annotated-source text recorded in their original trial JSON. These checks make
+  zero model calls and do not re-estimate generation rates.
+* After fixing the Python hash seed, two fresh AWS cases again produced one
+  bounded no-violation result and one `reach_error` result with one pipeline
+  report. All three actual solver invocations use unwind 64 and LP64. Their
+  controlled replay matches all 86 cached requests after explicit output-path
+  and diagnostic-identifier normalization; both final harnesses are byte-identical.
+  The 86 fresh calls cost $1.17823845, exactly matching the official key usage
+  increment. Together with the earlier pilot, measured fresh-call cost is
+  $3.75798510. Failed replay attempts remain in the audit artifacts and are not
+  compatibility evidence.
+* Checker-only replay covers all 27 exact AWS inputs, with no model calls:
+  17 verifier successes, seven `reach_error` counterexamples and three unknowns.
+  `memset_using_uint64_harness` fails an unwinding assertion at bound 64. Its
+  original log also records `verified=False`, despite a `true` scoreboard row.
+  Counting no `reach_error` within bound 64 instead gives 18/7/2, matching all
+  27 archived rows. The collector retains both metrics and does not turn
+  incomplete unwinding into a safe proof. This is solver replay, not a full
+  rerun of the LLM validation/filtering pipeline.
+
+The AWS reproducer-tool transcript contains an ASan shadow-memory reservation
+failure under the task's address-space limit, which the old tool labeled
+`OK: reproduced SIGABRT`. That invocation is an infrastructure failure and is not
+runtime confirmation of a program defect. The AWS result above is supported by
+its faithful CBMC `reach_error` counterexample; no runtime-confirmation claim is
+made from that diagnostic.
 
 The local evidence is in `artifacts/audit_20261104/history.json`,
 `artifacts/audit_20261104/benchmark_input_check.json`, and
 `artifacts/pilot_20261104/paired_comparison.json`. Pilot logs and billing records
-are under `artifacts/pilot_20261104/` and are intentionally excluded from Git.
+are under `artifacts/pilot_20261104/` and `artifacts/recovery_20261104/`,
+intentionally excluded from Git. The latter also contains complete accepted-proof
+replays, the 27-task AWS scoring audit, and paired ACSL translation/harness checks.
 
 To repeat the history audit against available local clones:
 
@@ -256,7 +325,8 @@ Public AProver main was checked at `b6ac080`; it changes only README relative to
 The audit checks each original trial, its accepted proof log/result, and its saved
 verification input. It returns a nonzero status for a count mismatch or missing
 passing evidence, and emits hash-locked, deduplicated verifier manifests (378 C
-inputs and 2,042 Java input bundles across the original model settings).
+inputs and 932 Claude/Java input bundles). The default `--model-scope claude`
+follows the active scope; `--model-scope all` also checks the deferred GPT records.
 
 ```sh
 python experiments/paper_reproduction/audit_published.py \
@@ -281,18 +351,38 @@ the historical tool version, and preserves the original verifier flags. It never
 modifies the original artifacts or calls a model. Replaying accepted proofs does
 not reproduce generation success rates or replace a full fresh RQ3 experiment.
 
+Once complete proof validation has finished, `package_proofs.py` exports the
+validated sources, flags, hashes and original trial coverage in a portable archive:
+
+```sh
+python experiments/paper_reproduction/package_proofs.py \
+  --acsl-run artifacts/proof-validation/acsl \
+  --jml-run artifacts/proof-validation/claude-jml \
+  --output artifacts/rq3-accepted-proofs.tar.gz
+```
+
+The packager rejects incomplete or failed validation runs. The exported manifests
+use paths relative to the bundle, so the original experiment directories are not
+needed for subsequent solver replay. Historical failed trials and model generation
+are outside this accepted-proof bundle's coverage.
+
 ## Remaining decisions
 
-1. Recover the original remote LDV frame-summary/CEGAR changes or evaluate the
-   explicitly different public fallback and update the RQ1 numbers. A previous public `149177d` plan rerun
-   caught 14/29, not the paper's 18/29; its artifact TSV also contains 14 `CATCH`
-   rows. Do not explain the discrepancy solely by unrelated commits.
+1. Recover the original LDV frame-summary/CEGAR changes or evaluate the
+   explicitly different public fallback and update the RQ1 numbers. The owner
+   does not know of a surviving checkout. A previous public `149177d` plan rerun
+   contains 14/29 raw `reach_error` candidates, including two timed-out processes;
+   the original artifact TSV also contains 14 `CATCH` rows. Neither establishes
+   the paper's 18 concrete witnesses. Do not union catches from different runs.
 2. Resolve LDV's paper LP64 statement versus the artifact's ILP32 configuration.
    This candidate follows the artifact and records ILP32 explicitly.
-3. Decide how to handle unavailable GPT-3.5-1106. Preserve the historical result
+3. Resolve AWS's safe-proof versus bounded-no-violation wording and align the
+   baseline's unwinding-assertion policy and budgets. The paper's 18/7/2 count
+   includes the incomplete-unwinding `memset` row; strict replay gives 17/7/3.
+4. GPT work is deferred. Eventually decide how to handle unavailable GPT-3.5-1106. Preserve the historical result
    and environment description, or rerun a matched comparison using an available
    model; do not relabel a substitute model as the original experiment.
-4. After these decisions, run only the full experiments whose outcomes are needed
+5. After these decisions, run only the full experiments whose outcomes are needed
    to validate the chosen release and paper claims. Pilot compatibility alone is
    not a basis for asserting exact aggregate reproduction.
 

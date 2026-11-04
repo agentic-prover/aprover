@@ -70,6 +70,7 @@ def test_saved_solver_envelope_keeps_abstract_candidate_distinct(tmp_path):
         {"failing_property": "reach_error.assertion.1"}]}}))
     result = collect(tmp_path)
     assert result["rows"][0]["verdict"] == "abstract_bug_candidate"
+    assert result["rows"][0]["unwinding_complete"] is None
 
 
 def test_inspected_plan_can_execute_without_changing_configuration(tmp_path, monkeypatch):
@@ -188,3 +189,54 @@ def test_replay_cache_miss_invalidates_compatibility_evidence(tmp_path):
     result = collect(tmp_path)
     assert not result["replay_fidelity"]["verified"]
     assert result["replay_fidelity"]["cache_misses"] == 1
+
+
+def test_unwinding_failure_is_not_a_safe_proof_even_with_no_reports(tmp_path):
+    collect = load("collect").collect
+    manifest = {"profile": "rq1-aws", "pilot": True, "execution_kind": "fresh_generation",
+                "source": {"commit": "test"}, "trials": 1,
+                "settings": {"kind": "rq1", "strategy": "faithful_main", "unwind": 64, "arch": "LP64"},
+                "cases": [{"name": "memset", "expected_verdict": "true"}]}
+    (tmp_path / "run_manifest.json").write_text(json.dumps(manifest))
+    (tmp_path / "execution.json").write_text(json.dumps([{"name": "memset", "returncode": 0, "wall_s": 1}]))
+    case = tmp_path / "cases/memset"
+    path = case / "artifacts/agdrv/main/cbmc_result.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"result": {"verified": False, "counterexamples": [
+        {"failing_property": "memset_impl.unwind.0"}]}}))
+    (case / "run.log").write_text("Pipeline END: 0 real bug(s), 1 latent, 0 unresolved\n")
+    row = collect(tmp_path)["rows"][0]
+    assert row["verdict"] == "unknown"
+    assert row["bounded_property_status"] == "no_reach_error_within_bound_incomplete_unwinding"
+    assert not row["unwinding_complete"]
+
+
+def test_rq3_historical_filter_policy_preserves_recorded_clause_translation(monkeypatch):
+    from bmc_agent.dsl_to_cbmc import postcond_to_assert
+    condition = r"arr[n1] == \old(arr[n2]) && arr[n2] == \old(arr[n1]) && forall i, (0 <= i && i < n && i != n1 && i != n2) ==> arr[i] == \old(arr[i])"
+    monkeypatch.setenv("BMC_AGENT_DSL_FILTER_POLICY", "2026-06-22")
+    original = postcond_to_assert(condition, ["arr", "n1", "n2", "n"])
+    assert original[:2] == ["assert(arr[n1] == arr[n2]);", "assert(arr[n2] == arr[n1]);"]
+    monkeypatch.delenv("BMC_AGENT_DSL_FILTER_POLICY")
+    modern = postcond_to_assert(condition, ["arr", "n1", "n2", "n"])
+    assert modern != original
+
+
+def test_historical_acsl_harness_keeps_compositional_assembly(monkeypatch, tmp_path):
+    from bmc_agent.config import Config
+    from bmc_agent.harness_generator import HarnessGenerator
+    from bmc_agent.source_parser import parse_source_file
+    from bmc_agent.spec import Spec
+    source = "void sibling(void) {}\nvoid main(void) {}\n"
+    path = tmp_path / "example.c"
+    path.write_text(source)
+    parsed = parse_source_file(str(path), source_text=source)
+    func = parsed.get_function_info("main")
+    monkeypatch.delenv("BMC_FAITHFUL_MAIN", raising=False)
+    modern = HarnessGenerator(Config()).generate_harness(func, Spec("main", "true", "true"), parsed)
+    assert modern == parsed.preprocessed_source
+    monkeypatch.setenv("BMC_AGENT_C_HARNESS_POLICY", "2026-06-22")
+    historical = HarnessGenerator(Config.from_env()).generate_harness(func, Spec("main", "true", "true"), parsed)
+    assert "Sibling placeholder (referenced by TU-scope dispatch table): sibling" in historical
+    assert "/* --- Harness entry point --- */" in historical
+    assert historical != modern

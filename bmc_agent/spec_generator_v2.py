@@ -868,6 +868,8 @@ class SpecGeneratorV2:
         pre = data.get("pre_validity")
         if not isinstance(pre, str) or not pre.strip():
             return None
+        if not getattr(self.config, "canonicalize_spec_buffer_extents", True):
+            return pre.strip()
         _pnames = [n for _t, n in func_info.signature.parameters]
         _canon = _canonicalize_buffer_extents(pre.strip(), _pnames)
         if _canon != pre.strip():

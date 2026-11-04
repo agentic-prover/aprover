@@ -119,6 +119,8 @@ def main() -> int:
     if args.workers < 1 or args.limit is not None and args.limit < 1:
         parser.error("workers and limit must be positive")
     rows = json.loads(args.manifest.read_text())
+    rows = [{**r, "source": str((args.manifest.parent / r["source"]).resolve())}
+            if not Path(r["source"]).is_absolute() else r for r in rows]
     if args.run_contains:
         rows = [{**r, "covers": [c for c in r["covers"] if args.run_contains in c.get("run", "")]}
                 for r in rows if any(args.run_contains in c.get("run", "") for c in r["covers"])]

@@ -75,6 +75,9 @@ def audit_jml(run_root: Path, artifact: Path, leaf: str) -> tuple[dict, list]:
                 if not path.is_file() or not final or not final.get("source_preserved") or not final.get("openjml", {}).get("passed"):
                     errors.append({"case": row["case"], "trial": number, "reason": "accepted proof/source evidence incomplete"})
                     continue
+                if final.get("annotated_source") != path.read_text():
+                    errors.append({"case": row["case"], "trial": number, "reason": "saved verifier input differs from recorded successful source"})
+                    continue
                 accepted.append({"case": row["case"], "trial": number,
                                  **verifier_snapshot(path, final["openjml"]["command"])})
                 passes += 1
@@ -135,9 +138,12 @@ def main():
     parser.add_argument("--acsl-run", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-scope", choices=["claude", "all"], default="claude",
+                        help="GPT work is deferred by default; all also audits its historical files.")
     args = parser.parse_args()
     reports, unique = [], {}
-    for name, leaf in JML_RUNS:
+    selected_runs = JML_RUNS if args.model_scope == "all" else [r for r in JML_RUNS if "claude46" in r[0]]
+    for name, leaf in selected_runs:
         report, accepted = audit_jml(args.jml_runs_root / name,
                                      args.artifact_root / "artifacts/rq3/jml/bmc_agent", leaf)
         reports.append(report)
@@ -153,7 +159,7 @@ def main():
         if key not in acsl_unique:
             acsl_unique[key] = {**row, "fingerprint": key, "covers": []}
         acsl_unique[key]["covers"].append({"case": row["case"], "trial": row["trial"]})
-    result = {"kind": "recorded_evidence_audit", "jml": reports, "acsl": acsl,
+    result = {"kind": "recorded_evidence_audit", "model_scope": args.model_scope, "jml": reports, "acsl": acsl,
               "unique_accepted_jml_inputs": len(unique),
               "unique_accepted_acsl_inputs": len(acsl_unique),
               "all_recorded_counts_match": all(x["counts_match"] for x in reports + [acsl]),

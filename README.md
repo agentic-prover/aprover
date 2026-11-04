@@ -25,8 +25,11 @@ The [reproduction guide](experiments/paper_reproduction/README.md) provides one
 checkout with explicit benchmark, model, budget and toolchain profiles, recovered
 experiment runners, provenance, and scripts for auditing archived results and
 replaying verification without API calls. This branch is a reproduction candidate:
-RQ3 has recorded-result and targeted compatibility checks; the original LDV
-frame-summary/refinement implementation remains unavailable, so the public LDV
+RQ3 has complete validation of archived accepted proofs and targeted generation
+compatibility checks. AWS checker replay matches all archived rows under the
+bounded-result definition, with one incomplete-unwinding result requiring a
+different label from a safe proof. The original LDV frame-summary/refinement
+implementation remains unavailable, so the public LDV
 fallback does not establish reproduction of the paper's 18/29 result.
 
 ## How it works

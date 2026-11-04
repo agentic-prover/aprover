@@ -7,6 +7,7 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import re
 import threading
 
 
@@ -17,11 +18,16 @@ def main():
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--normalize-prefix", action="append", default=[],
                         help="Replace only these machine-local output path prefixes with <RUN_OUTPUT> before matching.")
+    parser.add_argument("--normalize-diagnostic-identifiers", action="store_true",
+                        help="Normalize ASan diagnostic PIDs and compiler diagnostic temporary C filenames; keep code, values and diagnostic text unchanged.")
     args = parser.parse_args()
     def normalize(value):
         if isinstance(value, str):
             for prefix in sorted(args.normalize_prefix, key=len, reverse=True):
                 value = value.replace(prefix, "<RUN_OUTPUT>")
+            if args.normalize_diagnostic_identifiers:
+                value = re.sub(r"==\d+==(?=(?:ERROR: AddressSanitizer|ReserveShadowMemoryRange))", "==PID==", value)
+                value = re.sub(r"/tmp/tmp[A-Za-z0-9_]+\.c(?=:\d+(?::\d+)?:)", "/tmp/<DIAGNOSTIC_SOURCE>.c", value)
             return value
         if isinstance(value, list):
             return [normalize(v) for v in value]
@@ -78,6 +84,7 @@ def main():
                 with args.log.open("a") as log:
                     log.write(json.dumps({"path": self.path, "request_sha256": key,
                                           "match_sha256": match_key, "normalized_output_paths": bool(args.normalize_prefix),
+                                          "normalized_diagnostic_identifiers": args.normalize_diagnostic_identifiers,
                                           "status": status}) + "\n")
             self.reply(status, body)
 

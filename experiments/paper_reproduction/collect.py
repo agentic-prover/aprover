@@ -34,7 +34,7 @@ def collect(output: Path) -> dict:
             case_dir = output / "cases" / case["name"]
             log = (case_dir / "run.log").read_text(errors="replace") if (case_dir / "run.log").exists() else ""
             execution = next((e for e in executions if e["name"] == case["name"]), {})
-            candidates, clean, errors = [], False, []
+            candidates, clean, errors, failed_properties = [], False, [], []
             for path in (case_dir / "artifacts").rglob("*cbmc_result.json"):
                 data = json.loads(path.read_text())
                 data = data.get("result", data)
@@ -43,6 +43,7 @@ def collect(output: Path) -> dict:
                 if data.get("verified") is True and not data.get("error"):
                     clean = True
                 for cex in data.get("counterexamples", []):
+                    failed_properties.append(cex.get("failing_property", ""))
                     if "reach_error" in cex.get("failing_property", ""):
                         candidates.append(cex["failing_property"])
             counts = re.findall(r"Pipeline END: (\d+) real bug", log)
@@ -61,10 +62,25 @@ def collect(output: Path) -> dict:
                            else "bounded_no_violation")
             else:
                 verdict = "unknown"
+            bounded_status = None
+            if manifest["settings"]["strategy"] == "faithful_main":
+                if verdict == "reach_error_counterexample":
+                    bounded_status = "reach_error_counterexample"
+                elif verdict == "bounded_no_violation":
+                    bounded_status = "no_reach_error_within_bound"
+                elif (execution.get("returncode") == 0 and not errors and failed_properties
+                      and all(".unwind." in name for name in failed_properties)):
+                    bounded_status = "no_reach_error_within_bound_incomplete_unwinding"
             rows.append({"case": case["name"], "expected": case["expected_verdict"], "verdict": verdict,
+                         "bounded_property_status": bounded_status,
+                         "unwinding_complete": (None if manifest["settings"]["strategy"] != "faithful_main"
+                                                else False if any(".unwind." in name for name in failed_properties)
+                                                else True if (clean or failed_properties) and not errors else None),
                          "pipeline_report_count": report_count, "reach_error_properties": sorted(set(candidates)),
                          "solver_errors": errors, **execution})
         result.update(rows=rows, verdict_counts=dict(Counter(r["verdict"] for r in rows)))
+        if manifest["settings"]["strategy"] == "faithful_main":
+            result["bounded_property_counts"] = dict(Counter(r["bounded_property_status"] or "unknown" for r in rows))
     else:
         report = output / "results/report.json"
         if report.exists():

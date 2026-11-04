@@ -78,3 +78,27 @@ def test_split_pass2_failure_keeps_original(monkeypatch):
     s = _spec()
     out = g._maybe_split_precondition(s, _Func(), _Bundle())
     assert out.precondition == s.precondition   # unchanged on pass-2 failure
+
+
+def test_historical_acsl_policy_preserves_length_expression():
+    """June-22 synthesis must not acquire later verification-only tightening."""
+    from types import SimpleNamespace
+    g = _gen(enable=True)
+    g.llm = SimpleNamespace(complete=lambda *args, **kwargs: '{"pre_validity":"valid_range(b, 0, n + 1)"}')
+    g._spec_system_prompt = "spec"
+    func = _Func(signature=_Sig(parameters=(("char *", "b"), ("unsigned long", "n"))))
+    g.config.canonicalize_spec_buffer_extents = False
+    assert g._contract_precondition(func, _Bundle()) == "valid_range(b, 0, n + 1)"
+    g.config.canonicalize_spec_buffer_extents = True
+    assert g._contract_precondition(func, _Bundle()) == "valid_range(b, 0, n)"
+
+
+def test_agentic_preset_keeps_explicit_historical_extent_policy(monkeypatch):
+    from types import SimpleNamespace
+    from bmc_agent.config import Config
+    from bmc_agent.cli import _apply_provider_args
+    monkeypatch.setenv("BMC_AGENT_CANONICALIZE_SPEC_BUFFER_EXTENTS", "false")
+    config = Config.from_env()
+    _apply_provider_args(config, SimpleNamespace(agentic=True))
+    assert config.enable_split_spec_gen
+    assert not config.canonicalize_spec_buffer_extents

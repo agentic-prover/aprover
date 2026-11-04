@@ -108,6 +108,10 @@ def child_environment(profile: dict, args) -> tuple[dict, dict]:
                             BMC_AGENT_ENABLE_FLAG_SELECTION="false")
     if args.autospec_root:
         settings["AUTOSPEC_BENCHMARK_ROOT"] = str(Path(args.autospec_root).resolve())
+    if profile["kind"] == "acsl":
+        settings["BMC_AGENT_CANONICALIZE_SPEC_BUFFER_EXTENTS"] = str(profile["canonicalize_spec_buffer_extents"]).lower()
+        settings["BMC_AGENT_DSL_FILTER_POLICY"] = profile["dsl_filter_policy"]
+        settings["BMC_AGENT_C_HARNESS_POLICY"] = profile["c_harness_policy"]
     bin_dirs = [str(Path(p).resolve().parent) for p in (args.cbmc_path, args.frama_c_path) if p]
     settings["PATH"] = os.pathsep.join(bin_dirs + [env.get("PATH", "")])
     env.update(settings)
@@ -363,8 +367,10 @@ def main() -> int:
         print(f"running {job['name']}", flush=True)
         results.append(run_job(job, env))
         write_json(args.output / "execution.json", results)
-    from collect import collect
-    metrics = collect(args.output)
+    collector_spec = importlib.util.spec_from_file_location("paper_result_collection", HERE / "collect.py")
+    collector = importlib.util.module_from_spec(collector_spec)
+    collector_spec.loader.exec_module(collector)
+    metrics = collector.collect(args.output)
     write_json(args.output / "metrics.json", metrics)
     if args.replay and not metrics["replay_fidelity"]["verified"]:
         print("saved-response replay was not verified: inspect cache misses in the replay log", file=sys.stderr)

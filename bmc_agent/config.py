@@ -639,6 +639,11 @@ class Config:
     # boundary / handle-contract short-circuits are left untouched. Opt-in;
     # turned on by --agentic. Toggle: ``BMC_AGENT_SPEC_GEN_SPLIT``.
     enable_split_spec_gen: bool = False
+    # Later buffer-extent tightening is enabled for ordinary verification.
+    # RQ3's June-22 protocol preserves the original contract-only PRE verbatim.
+    canonicalize_spec_buffer_extents: bool = True
+    # Scope historical C harness assembly to the archived ACSL protocol.
+    c_harness_policy: str = "current"
     # When the judge rules a CEx UNREALISTIC and the agentic harness is on,
     # hand the verdict reasoning + harness + witness back to the agentic
     # generator so it can rewrite the harness. Bounded by this round count.
@@ -1013,6 +1018,9 @@ class Config:
             in ("1", "true", "yes"),
             enable_split_spec_gen=os.environ.get("BMC_AGENT_SPEC_GEN_SPLIT", "false").lower()
             in ("1", "true", "yes"),
+            canonicalize_spec_buffer_extents=os.environ.get("BMC_AGENT_CANONICALIZE_SPEC_BUFFER_EXTENTS", "true").lower()
+            in ("1", "true", "yes"),
+            c_harness_policy=os.environ.get("BMC_AGENT_C_HARNESS_POLICY", "current"),
             agentic_refine_rounds=int(os.environ.get("BMC_AGENT_AGENTIC_REFINE_ROUNDS", "0") or "0"),
             threat_model=(os.environ.get("BMC_AGENT_THREAT_MODEL") or os.environ.get("AMC_THREAT_MODEL") or "security").lower(),
             threat_model_context=(os.environ.get("BMC_AGENT_THREAT_MODEL_CONTEXT") or "").strip(),

@@ -5113,6 +5113,7 @@ class HarnessGenerator:
 
         fn_name = func.name
         sig = func.signature
+        historical_acsl = getattr(self.config, "c_harness_policy", "current") == "2026-06-22"
 
         # Complete-harness mode: when the function under test IS the program's
         # `main` (e.g. an SV-COMP harness that already sets up bounded inputs,
@@ -5125,7 +5126,7 @@ class HarnessGenerator:
         # real code (exactly as --standalone does); the agentic cex / realism /
         # dynamic-validation layer still runs on the result.
         import os as _os_fm
-        if fn_name == "main" and _os_fm.environ.get("BMC_FAITHFUL_MAIN", "1") != "0":
+        if not historical_acsl and fn_name == "main" and _os_fm.environ.get("BMC_FAITHFUL_MAIN", "1") != "0":
             _full_src = (
                 parsed_file.preprocessed_source
                 if parsed_file.preprocessed_source is not None
@@ -5192,7 +5193,10 @@ class HarnessGenerator:
         # kernel TUs must NOT have their `__`-prefixed structs/typedefs stripped
         # (those are real kernel internals, e.g. __raw_tickets -> arch_spinlock),
         # while userspace TUs (AWS, with _IO_FILE) still strip glibc bodies.
-        _is_kernel_tu = ("_IO_FILE" not in source_text)
+        # The later absence-of-glibc heuristic also classifies small ACSL C
+        # examples as kernel TUs. Their historical path used parsed declarations
+        # and sibling placeholders instead of raw-kernel declaration assembly.
+        _is_kernel_tu = not historical_acsl and ("_IO_FILE" not in source_text)
         _km = _preprocessed or _is_kernel_tu
         type_decls = _strip_stdlib_decls(
             _strip_glibc_internal_struct_bodies(
@@ -5870,8 +5874,9 @@ class HarnessGenerator:
                 # already declare the right shape.
                 ""
 
-                + ("/* atomic_t model (source lacks its own) */\n"
-                 "typedef struct { int counter; } atomic_t;\n"
+                + (("/* atomic_t is a small struct; CBMC's nondet handles it. */\n"
+                    if historical_acsl else "/* atomic_t model (source lacks its own) */\n")
+                 + "typedef struct { int counter; } atomic_t;\n"
                  "typedef struct { long long counter; } atomic64_t;\n"
                  "void atomic_set(atomic_t *v, int i);\n"
                 "int  atomic_read(const atomic_t *v);\n"
@@ -5882,10 +5887,11 @@ class HarnessGenerator:
                 "void atomic64_set(atomic64_t *v, long long i);\n"
                  "long long atomic64_read(const atomic64_t *v);\n"
                  if not _has_atomic_t else "")
-                + "/* get_current / task_tgid_nr stubs (kernel current-task helpers).\n"
+                + ("/* get_current / task_tgid_nr stubs (kernel current-task helpers). */\n"
+                   if historical_acsl else "/* get_current / task_tgid_nr stubs (kernel current-task helpers).\n"
                 " * Each is injected ONLY when the source does not already declare it\n"
                 " * (CIL TUs define get_current returning struct task_struct* -> our\n"
-                " * void* prototype would collide: 'redefined with a different type'). */\n"
+                " * void* prototype would collide: 'redefined with a different type'). */\n")
                 + ("void *get_current(void);\n" if not _has_get_current else "")
                 + ("int task_tgid_nr(void *task);\n" if not _has_task_tgid_nr else "")
                 + ("int task_pid_nr(void *task);\n" if not _has_task_pid_nr else "")
@@ -6087,7 +6093,7 @@ class HarnessGenerator:
         # real main -> CBMC "function symbol 'main' redefined" CONVERSION ERROR
         # -> the task silently returns "no bug". Verify the existing main
         # directly instead (no synthesized wrapper).
-        if fn_name != "main":
+        if fn_name != "main" or historical_acsl:
             harness_main = (
                 "void main(void) {\n"
                 + "\n".join(harness_body_lines)

@@ -21,7 +21,10 @@
   "rq3-acsl": {
     "kind": "acsl", "tasks": 251, "trials": 5,
     "model": "anthropic/claude-sonnet-4.6", "case_timeout": 900,
-    "postcheck_timeout": 180, "historical_candidate": "1528d0dcd9faecbc5b3fd40dc203aec38453af89"
+    "postcheck_timeout": 180, "canonicalize_spec_buffer_extents": false,
+    "dsl_filter_policy": "2026-06-22",
+    "c_harness_policy": "2026-06-22",
+    "historical_candidate": "1528d0dcd9faecbc5b3fd40dc203aec38453af89"
   },
   "rq3-jml-specgen-claude": {
     "kind": "jml", "suite": "SpecGenBench", "tasks": 120, "trials": 10,
