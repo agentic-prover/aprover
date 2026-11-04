@@ -2,14 +2,16 @@
   "rq1-aws": {
     "kind": "rq1", "suite": "aws-c-common", "tasks": 27,
     "model": "anthropic/claude-sonnet-4.5", "trials": 1,
-    "arch": "LP64", "unwind": 64, "solver_timeout": 400,
+    "arch": "LP64", "unwind": 64, "config_unwind": 4, "solver_timeout": 400,
+    "solver_timeout_semantics": "minimum per solver call; bounded by the hard case timeout",
     "case_timeout": 800, "memory_kib": 28000000,
     "strategy": "faithful_main", "historical_candidate": "4569fa1 + unrecorded local changes possible"
   },
   "rq1-ldv": {
     "kind": "rq1", "suite": "ldv-linux-3.4-simple", "tasks": 29,
     "model": "anthropic/claude-sonnet-4.5", "trials": 1,
-    "arch": "ILP32", "unwind": 1, "solver_timeout": 300,
+    "arch": "ILP32", "unwind": 1, "config_unwind": 1, "solver_timeout": 300,
+    "solver_timeout_semantics": "minimum per solver call; bounded by the hard case timeout",
     "case_timeout": 900, "memory_kib": 42000000,
     "strategy": "public_ldv_fallback",
     "historical_match": "unestablished; original write-frame summaries and lock-writer CEGAR unavailable",

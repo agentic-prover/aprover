@@ -431,7 +431,7 @@
     "owner_response": "User does not know the location of the original checkout or a backup; do not repeat equivalent local searches."
   },
   "validation": {
-    "tests_passed": 365,
+    "tests_passed": 369,
     "tests_skipped": 1,
     "suites": [
       "test_paper_reproduction",
@@ -442,5 +442,58 @@
     ],
     "additional_model_calls_this_continuation": 0,
     "additional_verifier_replay_inputs": 6
+  },
+  "configuration_audit_20261104": {
+    "effective_unwind_fix": "Use SVCOMP_UNWIND floor plus BMC_UNWIND_CAP; ordinary default 4 otherwise overrides a floor of 1. AWS retains agent-facing default 4; LDV config default is 1.",
+    "hash_seed": "0; original seed unrecorded; cached request diffs show callee-contract reordering between processes",
+    "argv_recording": "transparent tools/cbmc-record exec wrapper; records harness SHA256 and effective argv without environment",
+    "replay_gate": "Cache misses invalidate compatibility evidence, regardless of subsequent pipeline fallback success.",
+    "historical_public_runs": {
+      "kind": "historical rerun protocol audit",
+      "configurations": [
+        {
+          "config": "paper_plan",
+          "tasks": 29,
+          "raw_reach_error_tasks": 14,
+          "catches_with_nonzero_process_exit": [
+            "drivers-net-wireless-mwl8k",
+            "mtd--chips--cfi_cmdset_0001"
+          ],
+          "svcomp_prop_input": "path to unreach-call.prp",
+          "effective_property_token": "unreach",
+          "effective_arch": "LP64 from Plan default",
+          "effective_unwind": 1,
+          "source_commit": "149177dead29443bcef96f8be194e2638d875fd9"
+        },
+        {
+          "config": "paper_noagentic",
+          "tasks": 29,
+          "raw_reach_error_tasks": 4,
+          "catches_with_nonzero_process_exit": [
+            "drivers-mtd-chips-cfi_cmdset_0001",
+            "drivers-staging-media-dt3155v4l-dt3155v4l",
+            "drivers-usb-image-microtek"
+          ],
+          "svcomp_prop_input": "path to unreach-call.prp",
+          "effective_property_token": "unrecognized path; defaults not scoped to unreach",
+          "effective_arch": "ILP32 from cbmc wrapper default",
+          "effective_unwind": "at least 4: SVCOMP_UNWIND=1 is a floor, config default is 4",
+          "source_commit": "149177dead29443bcef96f8be194e2638d875fd9"
+        }
+      ],
+      "conclusion": "Prior full reruns do not implement the newly pinned ILP32/unreach/exact-unwind-1 profile. Their counts cannot prove reproduction or nonreproduction of this profile."
+    },
+    "mousedev_ilp32_probe": {
+      "kind": "fixed_historical_harness_probe",
+      "arch": "ILP32",
+      "unwind": 1,
+      "solver_timeout": 300,
+      "harness": "/mnt/disk7/jw_bmc/rebuttal_icse27/runs/paper_plan/input--mousedev/artifacts/agdrv/main/harness.c",
+      "harness_sha256": "832380f52ddfe389b181e4c9ffccfc696924b2cfd8d671567214220d597b3adb",
+      "model_calls": 0,
+      "wall_s": 300.153
+    },
+    "mousedev_ilp32_result": "timeout after 300 s; configuration correction alone did not recover the catch",
+    "earlier_ldv_pilot_limitation": "kernelcapi paid pilot was before exact-unwind fix, with config default 4; not validation of the corrected profile"
   }
 }

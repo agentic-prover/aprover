@@ -78,7 +78,7 @@ def child_environment(profile: dict, args) -> tuple[dict, dict]:
                    or env.get("BMC_AGENT_LLM_API_KEY") or "")
     # Do not inherit strategy, role routing, or experimental knobs from other work.
     for key in list(env):
-        if key.startswith(("BMC_", "AMC_", "SVCOMP_", "K2THINK_")):
+        if key.startswith(("BMC_", "AMC_", "SVCOMP_", "K2THINK_", "PAPER_REPRO_")):
             del env[key]
     settings = {
         "BMC_AGENT_LLM_DEFAULT_PROVIDER": "openai",
@@ -88,13 +88,19 @@ def child_environment(profile: dict, args) -> tuple[dict, dict]:
         "BMC_AGENT_ENABLE_PHASE_3E_TRIAGE": "false",
         "BMC_AGENT_C_PROMPT_EXAMPLES": "4",
         "PYTHONPATH": str(ROOT),
+        "PYTHONHASHSEED": "0",
     }
-    if args.cbmc_path:
-        settings["BMC_AGENT_CBMC_PATH"] = str(Path(args.cbmc_path).resolve())
+    if profile["kind"] in ("rq1", "acsl"):
+        requested_cbmc = str(args.cbmc_path or "cbmc")
+        settings["PAPER_REPRO_CBMC_REAL"] = str(Path(shutil.which(requested_cbmc) or requested_cbmc).resolve())
+        settings["PAPER_REPRO_CBMC_LOG"] = str(args.output.resolve() / "cbmc_invocations.jsonl")
+        settings["BMC_AGENT_CBMC_PATH"] = str(HERE / "tools/cbmc-record")
     if profile["kind"] == "rq1":
         settings.update(SVCOMP_PROP="unreach", SVCOMP_ARCH=profile["arch"],
                         SVCOMP_UNWIND=str(profile["unwind"]),
-                        SVCOMP_TIMEOUT=str(profile["solver_timeout"]))
+                        SVCOMP_TIMEOUT=str(profile["solver_timeout"]),
+                        BMC_AGENT_CBMC_UNWIND=str(profile["config_unwind"]),
+                        BMC_UNWIND_CAP=str(profile["unwind"]))
         if profile["strategy"] == "public_ldv_fallback":
             settings.update(BMC_FRAME_HAVOC="1", BMC_BUGHUNT="1",
                             BMC_FAITHFUL_MAIN="0", BMC_TRANSITIVE_INLINE="0",
@@ -304,10 +310,13 @@ def main() -> int:
     parser.add_argument("--batch-timeout", type=int, default=604800)
     parser.add_argument("--call-log", type=Path, help="Recording proxy llm_calls.jsonl, for billed token/cost totals.")
     parser.add_argument("--replay", action="store_true", help="Label a loopback-only saved-response replay.")
+    parser.add_argument("--replay-log", type=Path, help="Replay proxy JSONL log; unmatched requests invalidate a controlled replay.")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if args.replay and not re.match(r"^http://(?:127\.0\.0\.1|localhost):\d+/", args.base_url):
         parser.error("--replay requires a loopback replay endpoint")
+    if args.replay and not args.replay_log:
+        parser.error("--replay requires --replay-log to audit exact request matching")
     if any(x is not None and x < 1 for x in (args.limit, args.trials, args.workers, args.batch_timeout)):
         parser.error("limits, trials, workers and timeouts must be positive")
     profile = PROFILES[args.profile]
@@ -329,6 +338,7 @@ def main() -> int:
                 "tool_versions": versions,
                 "execution_kind": "saved_response_replay" if args.replay else "fresh_generation",
                 "call_log": str(args.call_log.resolve()) if args.call_log else "",
+                "replay_log": str(args.replay_log.resolve()) if args.replay_log else "",
                 "pilot": len(cases) != profile["tasks"] or (args.trials or profile["trials"]) != profile["trials"]}
     fingerprint_data = {k: v for k, v in manifest.items() if k != "tool_versions"}
     fingerprint = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()
@@ -354,7 +364,14 @@ def main() -> int:
         results.append(run_job(job, env))
         write_json(args.output / "execution.json", results)
     from collect import collect
-    write_json(args.output / "metrics.json", collect(args.output))
+    metrics = collect(args.output)
+    write_json(args.output / "metrics.json", metrics)
+    if args.replay and not metrics["replay_fidelity"]["verified"]:
+        print("saved-response replay was not verified: inspect cache misses in the replay log", file=sys.stderr)
+        return 2
+    if profile["kind"] == "rq1" and not metrics["solver_configuration"]["matches_profile"]:
+        print("effective CBMC configuration was not verified against this profile", file=sys.stderr)
+        return 2
     return 0 if all(r["returncode"] == 0 for r in results) else 1
 
 

@@ -1,6 +1,8 @@
 """Guards for scientific configuration isolation and honest result collection."""
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,14 +18,14 @@ def load(name):
     return module
 
 
-def test_aws_profile_cannot_inherit_ldv_strategy_or_role_routing(monkeypatch):
+def test_aws_profile_cannot_inherit_ldv_strategy_or_role_routing(monkeypatch, tmp_path):
     run = load("run")
     monkeypatch.setenv("BMC_FRAME_HAVOC", "1")
     monkeypatch.setenv("SVCOMP_ARCH", "ILP32")
     monkeypatch.setenv("BMC_AGENT_LLM_SPEC_GEN_MODEL", "unrelated-model")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     args = SimpleNamespace(base_url="http://127.0.0.1:8794/openrouter/aws/api/v1", model="",
-                           cbmc_path=None, frama_c_path=None, autospec_root=None)
+                           cbmc_path=None, frama_c_path=None, autospec_root=None, output=tmp_path)
     env, recorded = run.child_environment(run.PROFILES["rq1-aws"], args)
     assert "BMC_FRAME_HAVOC" not in env
     assert "BMC_AGENT_LLM_SPEC_GEN_MODEL" not in env
@@ -86,6 +88,7 @@ def test_inspected_plan_can_execute_without_changing_configuration(tmp_path, mon
     monkeypatch.setattr(sys, "argv", argv)
     assert run.main() == 0
     planned = json.loads((tmp_path / "run_manifest.json").read_text())["fingerprint"]
+    (tmp_path / "cbmc_invocations.jsonl").write_text(json.dumps({"command": ["cbmc", "harness.c", "--unwind", "64"]}) + "\n")
     monkeypatch.setattr(sys, "argv", argv + ["--execute"])
     assert run.main() == 0
     executed = json.loads((tmp_path / "run_manifest.json").read_text())["fingerprint"]
@@ -122,3 +125,66 @@ def test_archived_relative_log_is_resolved_from_its_run_root(tmp_path):
     old.parent.mkdir(parents=True)
     old.write_text("stale evidence")
     assert audit.evidence_path(str(old), root) == log.parent / "missing.log"
+
+
+def test_ldv_profile_controls_effective_solver_unwind(monkeypatch, tmp_path):
+    from bmc_agent.cbmc import run_cbmc
+    run = load("run")
+    args = SimpleNamespace(base_url="http://127.0.0.1:8794/openrouter/ldv/api/v1", model="",
+                           cbmc_path="/bin/true", frama_c_path=None, autospec_root=None,
+                           output=tmp_path)
+    env, _ = run.child_environment(run.PROFILES["rq1-ldv"], args)
+    for key in ("SVCOMP_PROP", "SVCOMP_ARCH", "SVCOMP_UNWIND", "SVCOMP_TIMEOUT", "BMC_UNWIND_CAP", "BMC_BUGHUNT"):
+        monkeypatch.setenv(key, env[key])
+    captured = []
+    def solver(command, **kwargs):
+        captured.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    monkeypatch.setattr("bmc_agent.cbmc.subprocess.run", solver)
+    run_cbmc(tmp_path / "harness.c", unwind=64, cbmc_path="/bin/true")
+    command, options = captured[0]
+    assert command[command.index("--unwind") + 1] == "1"
+    assert "--32" in command
+    assert options["timeout"] == 300
+
+
+def test_cbmc_recorder_preserves_solver_pid_arguments_and_exit(tmp_path):
+    wrapper = ROOT / "experiments/paper_reproduction/tools/cbmc-record"
+    fake = tmp_path / "fake cbmc"
+    fake.write_text(f"#!{sys.executable}\nimport os,sys\nprint(os.getpid())\nprint(repr(sys.argv[1:]))\nsys.exit(7)\n")
+    fake.chmod(0o755)
+    source = tmp_path / "input with spaces.c"
+    source.write_text("int main() { return 0; }")
+    log = tmp_path / "calls.jsonl"
+    env = {**os.environ, "PAPER_REPRO_CBMC_REAL": str(fake), "PAPER_REPRO_CBMC_LOG": str(log)}
+    proc = subprocess.run([str(wrapper), str(source), "--unwind", "1"], env=env, text=True, capture_output=True)
+    recorded = json.loads(log.read_text())
+    assert proc.returncode == 7
+    assert int(proc.stdout.splitlines()[0]) == recorded["pid"]
+    assert recorded["command"] == [str(fake), str(source), "--unwind", "1"]
+
+
+def test_result_audit_detects_effective_unwind_drift(tmp_path):
+    collect = load("collect").collect
+    manifest = {"profile": "rq1-ldv", "pilot": True, "execution_kind": "fresh_generation",
+                "source": {"commit": "test"}, "trials": 1,
+                "settings": {"kind": "rq1", "strategy": "public_ldv_fallback", "unwind": 1, "arch": "ILP32"},
+                "cases": []}
+    (tmp_path / "run_manifest.json").write_text(json.dumps(manifest))
+    (tmp_path / "cbmc_invocations.jsonl").write_text(json.dumps({"command": ["cbmc", "harness.c", "--unwind", "4", "--32"]}) + "\n")
+    result = collect(tmp_path)
+    assert not result["solver_configuration"]["matches_profile"]
+
+
+def test_replay_cache_miss_invalidates_compatibility_evidence(tmp_path):
+    collect = load("collect").collect
+    replay_log = tmp_path / "replay.jsonl"
+    replay_log.write_text(json.dumps({"path": "/openrouter/test/api/v1/chat/completions", "status": 409}) + "\n")
+    manifest = {"profile": "rq3-jml-specgen-claude", "pilot": True,
+                "execution_kind": "saved_response_replay", "source": {"commit": "test"},
+                "trials": 1, "settings": {"kind": "jml"}, "cases": [], "replay_log": str(replay_log),
+                "environment": {"BMC_AGENT_LLM_DEFAULT_BASE_URL": "http://127.0.0.1:8796/openrouter/test/api/v1"}}
+    (tmp_path / "run_manifest.json").write_text(json.dumps(manifest))
+    result = collect(tmp_path)
+    assert not result["replay_fidelity"]["verified"]
+    assert result["replay_fidelity"]["cache_misses"] == 1

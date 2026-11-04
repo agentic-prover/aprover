@@ -83,6 +83,15 @@ rejects a changed input instead of silently evaluating another benchmark.
 Ambient `BMC_*`, `AMC_*`, `SVCOMP_*` and role-routing overrides are removed from
 the child environment before explicit profile settings are applied.
 
+The runner fixes `PYTHONHASHSEED=0`: unsorted callee sets otherwise change the
+order of contract summaries in model prompts across identical source checkouts.
+The original runs did not record this seed. RQ1 uses both an unwind floor and cap
+to enforce the listed solver bound. AWS retains the original agent-facing default
+of 4 (the actual solver bound is 64); LDV sets the configuration and solver bound
+to 1. A floor alone does not enforce unwind 1 because the ordinary configuration
+default is 4. Solver timeout values remain per-call minima as in the archived
+runner; the outer task timeout is the hard wall-clock budget.
+
 ## Environment
 
 Use Python 3.12 and the repository's dependencies (`uv sync --frozen`).
@@ -145,7 +154,10 @@ in the local public-input provenance check.
 
 Each execution writes `run_manifest.json` (commit, source hashes, input hashes,
 explicit environment, tool versions and commands), `execution.json`, logs,
-solver artifacts, and `metrics.json`. Existing outputs with a different
+solver artifacts, and `metrics.json`. `cbmc_invocations.jsonl` records the actual
+solver argv and harness hash through a transparent exec wrapper. RQ1 execution
+returns an error if those arguments do not match the profile's unwind and data
+model. Existing outputs with a different
 code/configuration fingerprint are rejected. Execution timeout or an empty
 report list is not interpreted as safety. LDV fallback counterexamples are
 reported separately as abstract candidates, with pipeline report counts retained.
@@ -173,10 +185,13 @@ the complete request body; optional `--normalize-prefix` values normalize only
 explicitly listed machine-local output paths. Replay calls and fresh calls must
 be reported separately. Replay is useful for checking code compatibility with
 the model output held fixed, not for estimating current model performance.
+Pass `--replay --replay-log /path/to/replay_calls.jsonl` to the run command.
+Any cache miss invalidates the controlled replay, even if the pipeline subsequently
+finishes using fallback specifications or classifications.
 
 ## Checks completed on 2026-11-04
 
-* 365 relevant unit tests passed, one skipped.
+* 369 relevant unit tests passed, one skipped.
 * Full task discovery: 27 AWS, 29 LDV, 251 ACSL, 120 SpecGenBench and 265 SV-COMP
   Java inputs; five/ten-trial defaults are preserved.
 * Fresh one-trial runs: ACSL `arrays_and_loops/1.c` (WP 3/3) and Code2Inv `1.c`
@@ -189,7 +204,9 @@ the model output held fixed, not for estimating current model performance.
 * RQ1: `aws_add_size_saturating_harness` produced a bounded no-violation result;
   `aws_array_eq_c_str_harness-1` rediscovered `reach_error` and retained one
   pipeline report. LDV `kernelcapi` produced an abstract `reach_error` candidate
-  and two pipeline reports; this is not a faithful-program witness proof.
+  and two pipeline reports before the exact-unwind correction (its configuration
+  still used the default 4). This does not validate the corrected unwind-1 profile
+  and is not a faithful-program witness proof.
 * The seven fresh cases made 145 model calls, using 794,129 prompt tokens and
   36,532 completion tokens. OpenRouter's actual billed usage was $2.57974665,
   matching the recorder exactly. Historical response replays added no API cost.
@@ -206,6 +223,12 @@ the model output held fixed, not for estimating current model performance.
   support source. Three archived ACSL proofs (`fib_46/26`, mutable-array doubling,
   and the large-constant SV-COMP case) also pass fresh Frama-C execution with the
   original goal counts. These six verifier replays make zero model calls.
+* A fixed historical `mousedev` harness still timed out after 300 s under ILP32
+  and exact unwind 1. Correcting the data model alone did not recover this
+  historical catch. The prior full public `--plan` rerun used LP64, while its
+  no-plan counterpart retained at least unwind 4 and an unrecognized property
+  path instead of the required `unreach` token; neither is a full run of the
+  corrected profile.
 
 The local evidence is in `artifacts/audit_20261104/history.json`,
 `artifacts/audit_20261104/benchmark_input_check.json`, and

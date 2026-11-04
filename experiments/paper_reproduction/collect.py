@@ -6,6 +6,7 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 
 def collect(output: Path) -> dict:
@@ -16,6 +17,18 @@ def collect(output: Path) -> dict:
               "selected_cases": len(manifest["cases"]), "trials_per_case": manifest["trials"],
               "wall_s_sum": sum(e["wall_s"] for e in executions), "process_returncodes": [e["returncode"] for e in executions]}
     if manifest["settings"]["kind"] == "rq1":
+        invocation_log = output / "cbmc_invocations.jsonl"
+        observed = []
+        for line in invocation_log.read_text().splitlines() if invocation_log.exists() else []:
+            command = json.loads(line)["command"]
+            if "--unwind" not in command:
+                continue  # e.g. a version probe
+            observed.append({"unwind": int(command[command.index("--unwind") + 1]),
+                             "arch": "ILP32" if "--32" in command else "LP64"})
+        expected = manifest["settings"]
+        matches = bool(observed) and all(r["unwind"] == expected.get("unwind") and r["arch"] == expected.get("arch") for r in observed)
+        result["solver_configuration"] = {"invocations": len(observed), "observed": observed,
+                                          "matches_profile": matches}
         rows = []
         for case in manifest["cases"]:
             case_dir = output / "cases" / case["name"]
@@ -44,7 +57,8 @@ def collect(output: Path) -> dict:
             elif errors:
                 verdict = "solver_error"
             elif clean:
-                verdict = "bounded_no_violation"
+                verdict = ("abstract_no_violation" if manifest["settings"]["strategy"] in ("frame_havoc", "public_ldv_fallback")
+                           else "bounded_no_violation")
             else:
                 verdict = "unknown"
             rows.append({"case": case["name"], "expected": case["expected_verdict"], "verdict": verdict,
@@ -59,6 +73,13 @@ def collect(output: Path) -> dict:
             result["reported_cases"] = len(data.get("rows", []))
     if manifest["execution_kind"] == "saved_response_replay":
         result["billed_cost_usd"] = 0.0
+        log = Path(manifest.get("replay_log") or "")
+        calls = [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
+        prefix = urlsplit(manifest["environment"]["BMC_AGENT_LLM_DEFAULT_BASE_URL"]).path.rstrip("/") + "/"
+        calls = [c for c in calls if c["path"].startswith(prefix)]
+        result["replay_fidelity"] = {"calls": len(calls), "cache_hits": sum(c["status"] == 200 for c in calls),
+                                     "cache_misses": sum(c["status"] != 200 for c in calls),
+                                     "verified": bool(calls) and all(c["status"] == 200 for c in calls)}
     elif manifest.get("call_log") and Path(manifest["call_log"]).exists():
         url = manifest["environment"]["BMC_AGENT_LLM_DEFAULT_BASE_URL"]
         match = re.search(r"/openrouter/([^/]+)/", url)
