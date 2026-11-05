@@ -1,0 +1,14 @@
+// libc++ 13 predates std::bit_cast (added in libc++ 14), which Lean's
+// runtime/object.cpp uses. clang 13 has the builtin, so this is the real
+// operation and not an approximation. Everything else in <bit> comes from
+// libc++ itself via include_next.
+#ifndef LEAN_KLEE_BIT_SHIM
+#define LEAN_KLEE_BIT_SHIM
+#include_next <bit>
+namespace std {
+template <class To, class From>
+constexpr To bit_cast(const From &from) noexcept {
+  return __builtin_bit_cast(To, from);
+}
+}
+#endif

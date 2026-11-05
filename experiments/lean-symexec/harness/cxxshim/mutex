@@ -1,0 +1,61 @@
+// Single-threaded model of <mutex> for symbolic execution under KLEE.
+// KLEE's libc++ is built without thread support, so <mutex> is unavailable, but
+// Lean's runtime/thread.h needs the lock tag types and a mutex type. KLEE runs
+// one thread, so every lock operation is a no-op. Recorded as a model, see docs/PROTOCOL.md.
+#ifndef LEAN_KLEE_MUTEX_SHIM
+#define LEAN_KLEE_MUTEX_SHIM
+namespace std {
+struct adopt_lock_t  { explicit adopt_lock_t()  = default; };
+struct defer_lock_t  { explicit defer_lock_t()  = default; };
+struct try_to_lock_t { explicit try_to_lock_t() = default; };
+constexpr adopt_lock_t  adopt_lock{};
+constexpr defer_lock_t  defer_lock{};
+constexpr try_to_lock_t try_to_lock{};
+class mutex {
+public:
+  constexpr mutex() noexcept = default;
+  mutex(const mutex &) = delete;
+  mutex &operator=(const mutex &) = delete;
+  void lock()     noexcept {}
+  bool try_lock() noexcept { return true; }
+  void unlock()   noexcept {}
+};
+class recursive_mutex : public mutex {};
+class shared_mutex : public mutex {
+public:
+  void lock_shared()     noexcept {}
+  bool try_lock_shared() noexcept { return true; }
+  void unlock_shared()   noexcept {}
+};
+template <class M> class lock_guard {
+public:
+  explicit lock_guard(M &)              noexcept {}
+  lock_guard(M &, adopt_lock_t)         noexcept {}
+  ~lock_guard() = default;
+  lock_guard(const lock_guard &) = delete;
+};
+template <class M> class unique_lock {
+public:
+  unique_lock()                         noexcept {}
+  explicit unique_lock(M &)             noexcept {}
+  unique_lock(M &, adopt_lock_t)        noexcept {}
+  unique_lock(M &, defer_lock_t)        noexcept {}
+  unique_lock(M &, try_to_lock_t)       noexcept {}
+  ~unique_lock() = default;
+  void lock()     noexcept {}
+  bool try_lock() noexcept { return true; }
+  void unlock()   noexcept {}
+  bool owns_lock() const noexcept { return true; }
+  explicit operator bool() const noexcept { return true; }
+};
+template <class M> class shared_lock : public unique_lock<M> {
+public:
+  shared_lock() noexcept {}
+  explicit shared_lock(M &m) noexcept : unique_lock<M>(m) {}
+};
+struct once_flag { bool __done = false; };
+template <class F, class... A> void call_once(once_flag &f, F &&fn, A &&...a) {
+  if (!f.__done) { f.__done = true; fn(a...); }
+}
+}
+#endif

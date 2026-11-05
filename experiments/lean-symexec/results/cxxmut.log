@@ -1,0 +1,14 @@
+mutated C++ kernel written to /w/mutant/level_mut.cpp
+mutated kernel/level.cpp compiled
+=================== C++ kernel: orig ===================
+  KLEE: done: total instructions = 1193232059
+  KLEE: done: completed paths = 104822
+  KLEE: done: generated tests = 104836
+  CONTRACT VIOLATIONS : 0
+  all error files     : 0
+=================== C++ kernel: mut ===================
+  KLEE: done: total instructions = 1205637512
+  KLEE: done: completed paths = 101430
+  KLEE: done: generated tests = 101446
+  CONTRACT VIOLATIONS : 0
+  all error files     : 0

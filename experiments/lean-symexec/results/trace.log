@@ -1,0 +1,11 @@
+=========== orig ===========
+      320 TRACE END
+      425 TRACE built
+      340 TRACE reached H3
+  contract: 0  paths: completed paths = 105
+=========== mim ===========
+      318 TRACE END
+      425 TRACE built
+        2 TRACE isEquiv(a,b) TRUE
+      340 TRACE reached H3
+  contract: 0  paths: completed paths = 107

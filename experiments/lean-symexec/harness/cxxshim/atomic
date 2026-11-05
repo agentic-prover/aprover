@@ -1,0 +1,88 @@
+// Single-threaded model of <atomic> for symbolic execution under KLEE.
+//
+// KLEE's libc++ is built with _LIBCPP_HAS_NO_THREADS, so its <atomic> refuses to
+// compile, and Lean's lean.h needs <atomic> for reference counting. KLEE executes
+// one thread, so plain reads and writes are an exact model of sequentially
+// consistent atomics on a single thread. Recorded as a model per docs/PROTOCOL.md.
+//
+// This provides exactly the subset Lean uses: atomic<T>, the four
+// *_explicit free functions, the memory_order enum, fences and atomic_flag.
+#ifndef LEAN_KLEE_ATOMIC_SHIM
+#define LEAN_KLEE_ATOMIC_SHIM
+#include <stddef.h>
+#include <stdint.h>
+namespace std {
+// C++20 spells this as a scoped enum (std::memory_order::relaxed) while keeping
+// the old unscoped names (std::memory_order_relaxed) as constants. Lean uses both.
+enum class memory_order : int {
+  relaxed, consume, acquire, release, acq_rel, seq_cst
+};
+inline constexpr memory_order memory_order_relaxed = memory_order::relaxed;
+inline constexpr memory_order memory_order_consume = memory_order::consume;
+inline constexpr memory_order memory_order_acquire = memory_order::acquire;
+inline constexpr memory_order memory_order_release = memory_order::release;
+inline constexpr memory_order memory_order_acq_rel = memory_order::acq_rel;
+inline constexpr memory_order memory_order_seq_cst = memory_order::seq_cst;
+template <class T> struct atomic {
+  T __v;
+  atomic() noexcept : __v() {}
+  constexpr atomic(T d) noexcept : __v(d) {}
+  T load(memory_order = memory_order_seq_cst) const volatile noexcept { return __v; }
+  T load(memory_order = memory_order_seq_cst) const noexcept { return __v; }
+  void store(T d, memory_order = memory_order_seq_cst) volatile noexcept { __v = d; }
+  void store(T d, memory_order = memory_order_seq_cst) noexcept { __v = d; }
+  T exchange(T d, memory_order = memory_order_seq_cst) noexcept { T o = __v; __v = d; return o; }
+  T fetch_add(T d, memory_order = memory_order_seq_cst) noexcept { T o = __v; __v = (T)(o + d); return o; }
+  T fetch_sub(T d, memory_order = memory_order_seq_cst) noexcept { T o = __v; __v = (T)(o - d); return o; }
+  T fetch_or (T d, memory_order = memory_order_seq_cst) noexcept { T o = __v; __v = (T)(o | d); return o; }
+  T fetch_and(T d, memory_order = memory_order_seq_cst) noexcept { T o = __v; __v = (T)(o & d); return o; }
+  bool compare_exchange_strong(T &e, T d, memory_order = memory_order_seq_cst) noexcept {
+    if (__v == e) { __v = d; return true; } e = __v; return false; }
+  bool compare_exchange_strong(T &e, T d, memory_order, memory_order) noexcept {
+    return compare_exchange_strong(e, d); }
+  bool compare_exchange_weak(T &e, T d, memory_order = memory_order_seq_cst) noexcept {
+    return compare_exchange_strong(e, d); }
+  bool compare_exchange_weak(T &e, T d, memory_order, memory_order) noexcept {
+    return compare_exchange_strong(e, d); }
+  // C++20 atomic waiting. These are only reachable from Lean's multi-threaded
+  // task scheduler. KLEE runs one thread, which never blocks on another, so
+  // wait returns immediately and the notifies are no-ops. Recorded as a model, see docs/PROTOCOL.md.
+  void wait(T, memory_order = memory_order_seq_cst) const noexcept {}
+  void notify_one() noexcept {}
+  void notify_all() noexcept {}
+  operator T() const noexcept { return __v; }
+  T operator=(T d) noexcept { __v = d; return d; }
+  T operator++()    noexcept { return (T)(fetch_add((T)1) + 1); }
+  T operator++(int) noexcept { return fetch_add((T)1); }
+  T operator--()    noexcept { return (T)(fetch_sub((T)1) - 1); }
+  T operator--(int) noexcept { return fetch_sub((T)1); }
+  T operator+=(T d) noexcept { return (T)(fetch_add(d) + d); }
+  T operator-=(T d) noexcept { return (T)(fetch_sub(d) - d); }
+};
+template <class T> T    atomic_load_explicit(const atomic<T> *a, memory_order) noexcept { return a->__v; }
+template <class T> T    atomic_load_explicit(const volatile atomic<T> *a, memory_order) noexcept { return a->__v; }
+template <class T, class U> void atomic_store_explicit(atomic<T> *a, U d, memory_order) noexcept { a->__v = (T)d; }
+template <class T, class U> void atomic_store_explicit(volatile atomic<T> *a, U d, memory_order) noexcept { a->__v = (T)d; }
+template <class T, class U> T atomic_fetch_add_explicit(atomic<T> *a, U d, memory_order) noexcept { T o = a->__v; a->__v = (T)(o + (T)d); return o; }
+template <class T, class U> T atomic_fetch_sub_explicit(atomic<T> *a, U d, memory_order) noexcept { T o = a->__v; a->__v = (T)(o - (T)d); return o; }
+template <class T, class U> T atomic_fetch_or_explicit (atomic<T> *a, U d, memory_order) noexcept { T o = a->__v; a->__v = (T)(o | (T)d); return o; }
+template <class T, class U> T atomic_fetch_and_explicit(atomic<T> *a, U d, memory_order) noexcept { T o = a->__v; a->__v = (T)(o & (T)d); return o; }
+inline void atomic_thread_fence(memory_order) noexcept {}
+inline void atomic_signal_fence(memory_order) noexcept {}
+struct atomic_flag {
+  bool __v;
+  atomic_flag() noexcept : __v(false) {}
+  bool test_and_set(memory_order = memory_order_seq_cst) noexcept { bool o = __v; __v = true; return o; }
+  void clear(memory_order = memory_order_seq_cst) noexcept { __v = false; }
+};
+typedef atomic<bool>     atomic_bool;
+typedef atomic<char>     atomic_char;
+typedef atomic<int>      atomic_int;
+typedef atomic<unsigned> atomic_uint;
+typedef atomic<long>     atomic_long;
+typedef atomic<unsigned long>      atomic_ulong;
+typedef atomic<long long>          atomic_llong;
+typedef atomic<unsigned long long> atomic_ullong;
+typedef atomic<size_t>   atomic_size_t;
+}
+#endif

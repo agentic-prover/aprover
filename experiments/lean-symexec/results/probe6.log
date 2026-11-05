@@ -1,0 +1,13 @@
+=========== orig ===========
+  REACHED END
+  W: geq(a,b) = FALSE
+  W: geq(b,a) = true
+  W: isEquiv(imax 0 0, succ(imax 0 0)) = false
+  errors: 0
+=========== mim ===========
+  REACHED END
+  W: H3 WOULD FIRE
+  W: geq(a,b) = FALSE
+  W: geq(b,a) = true
+  W: isEquiv(imax 0 0, succ(imax 0 0)) = TRUE
+  errors: 0

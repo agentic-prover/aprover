@@ -1,0 +1,106 @@
+compiled
+linked 10
+=================== free_orig ===================
+  KLEE: done: total instructions = 1681708754
+  KLEE: done: completed paths = 16900
+  KLEE: done: generated tests = 16901
+  CONTRACT VIOLATIONS : 0
+  other errors        : 1
+=================== free_mim ===================
+  KLEE: done: total instructions = 1693600667
+  KLEE: done: completed paths = 16892
+  KLEE: done: generated tests = 16894
+  CONTRACT VIOLATIONS : 1
+  other errors        : 1
+  --- V_free_mim/test005823.contract ---
+    Error: equivalent levels not mutually geq
+    Stack: 
+    	#000047950 in __user_main()
+    	#100010529 in __uClibc_main(139827665698816, 1, 139844302929920, 0, 0, 0, 0) at libc/misc/internals/__uClibc_main.c:401
+  --- WITNESS ---
+    ktest file : 'V_free_mim/test005823.ktest'
+    args       : ['E_free_mim.bc']
+    num objects: 1
+    object 0: name: 'lv'
+    object 0: size: 16
+    object 0: data: b'\x03\x00\x03\x00\xff\xff\xff\xff\x01\x03\x00\x03\xff\xff\xff\xff'
+    object 0: hex : 0x03000300ffffffff01030003ffffffff
+    object 0: text: ................
+=================== focus_orig ===================
+  KLEE: done: total instructions = 129992694
+  KLEE: done: completed paths = 2028
+  KLEE: done: generated tests = 2029
+  CONTRACT VIOLATIONS : 0
+  other errors        : 1
+=================== focus_mim ===================
+  KLEE: done: total instructions = 131228997
+  KLEE: done: completed paths = 2024
+  KLEE: done: generated tests = 2026
+  CONTRACT VIOLATIONS : 1
+  other errors        : 1
+  --- V_focus_mim/test001729.contract ---
+    Error: equivalent levels not mutually geq
+    Stack: 
+    	#000047964 in __user_main()
+    	#100010529 in __uClibc_main(139978096508928, 1, 139994733740032, 0, 0, 0, 0) at libc/misc/internals/__uClibc_main.c:401
+  --- WITNESS ---
+    ktest file : 'V_focus_mim/test001729.ktest'
+    args       : ['E_focus_mim.bc']
+    num objects: 1
+    object 0: name: 'lv'
+    object 0: size: 16
+    object 0: data: b'\x03\x00\x03\x00\xff\xff\xff\xff\x01\x03\x00\x03\xff\xff\xff\xff'
+    object 0: hex : 0x03000300ffffffff01030003ffffffff
+    object 0: text: ................
+=================== nmfree_orig ===================
+  KLEE: done: total instructions = 65169682
+  KLEE: done: completed paths = 1849
+  KLEE: done: generated tests = 1849
+  CONTRACT VIOLATIONS : 0
+  other errors        : 0
+=================== nmfree_mim ===================
+  KLEE: done: total instructions = 66462111
+  KLEE: done: completed paths = 1843
+  KLEE: done: generated tests = 1844
+  CONTRACT VIOLATIONS : 1
+  other errors        : 0
+  --- V_nmfree_mim/test000892.contract ---
+    Error: equivalent levels not mutually geq
+    Stack: 
+    	#000047950 in __user_main()
+    	#100010529 in __uClibc_main(140167626620928, 1, 140184263852032, 0, 0, 0, 0) at libc/misc/internals/__uClibc_main.c:401
+  --- WITNESS ---
+    ktest file : 'V_nmfree_mim/test000892.ktest'
+    args       : ['E_nmfree_mim.bc']
+    num objects: 1
+    object 0: name: 'lv'
+    object 0: size: 16
+    object 0: data: b'\x02\x00\x02\x00\xff\xff\xff\xff\x01\x02\x00\x02\xff\xff\xff\xff'
+    object 0: hex : 0x02000200ffffffff01020002ffffffff
+    object 0: text: ................
+=================== nmfocus_orig ===================
+  KLEE: done: total instructions = 13911042
+  KLEE: done: completed paths = 425
+  KLEE: done: generated tests = 425
+  CONTRACT VIOLATIONS : 0
+  other errors        : 0
+=================== nmfocus_mim ===================
+  KLEE: done: total instructions = 14191149
+  KLEE: done: completed paths = 422
+  KLEE: done: generated tests = 423
+  CONTRACT VIOLATIONS : 1
+  other errors        : 0
+  --- V_nmfocus_mim/test000347.contract ---
+    Error: equivalent levels not mutually geq
+    Stack: 
+    	#000047964 in __user_main()
+    	#100010529 in __uClibc_main(140579970744320, 1, 140596607975424, 0, 0, 0, 0) at libc/misc/internals/__uClibc_main.c:401
+  --- WITNESS ---
+    ktest file : 'V_nmfocus_mim/test000347.ktest'
+    args       : ['E_nmfocus_mim.bc']
+    num objects: 1
+    object 0: name: 'lv'
+    object 0: size: 16
+    object 0: data: b'\x03\x00\x02\x00\xff\xff\xff\xff\x01\x02\x00\x02\xff\xff\xff\xff'
+    object 0: hex : 0x03000200ffffffff01020002ffffffff
+    object 0: text: ................

@@ -1,0 +1,43 @@
+Processing triggers for libc-bin (2.35-0ubuntu3.1) ...
+deps: gmp= uv=/usr/include/uv.h
+/w/harness/native.sh: line 18: /tmp/rtlist.txt: No such file or directory
+runtime+kernel objects: 59 of 
+kernel level.o present: /w/native/rt/kernel_level.o
+stdlib objects: 2628 of 2629
+archives: librt.a=2381356 libstd.a=363932282
+orig: linked OK
+mim: linked OK
+=========== NATIVE REPLAY, witness 03000300ffffffff01030003ffffffff
+--- orig ---
+    a = imax(0,imax(0,0))
+    b = succ(imax(0,imax(0,0)))
+    isEquiv(a,b) = 0
+    geq(a,b)     = 0
+    geq(b,a)     = 1
+    H3 (equivalent levels mutually geq): holds
+    exit=0
+--- mim ---
+    a = imax(0,imax(0,0))
+    b = succ(imax(0,imax(0,0)))
+    isEquiv(a,b) = 1
+    geq(a,b)     = 0
+    geq(b,a)     = 1
+    H3 (equivalent levels mutually geq): VIOLATED
+    exit=1
+=========== NATIVE REPLAY, witness 03000200ffffffff01020002ffffffff --nomax
+--- orig ---
+    a = imax(0,imax(0,0))
+    b = succ(imax(0,imax(0,0)))
+    isEquiv(a,b) = 0
+    geq(a,b)     = 0
+    geq(b,a)     = 1
+    H3 (equivalent levels mutually geq): holds
+    exit=0
+--- mim ---
+    a = imax(0,imax(0,0))
+    b = succ(imax(0,imax(0,0)))
+    isEquiv(a,b) = 1
+    geq(a,b)     = 0
+    geq(b,a)     = 1
+    H3 (equivalent levels mutually geq): VIOLATED
+    exit=1

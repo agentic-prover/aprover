@@ -1,0 +1,25 @@
+faithful normalize mimic written to /w/mutant/level_norm_mut.cpp
+native level objects: 2/2
+Lean-side Level.o: 1/1
+orig: linked OK
+mimic: linked OK
+
+########## NATIVE REPLAY, experiment 2 witness: lvl=0x36ffffffffff02360103ffff sigma=0x0000
+---- orig ----
+    a = u
+    b = max(u,succ(imax(0,0)))
+    sigma: u=0 v=0
+    eval(a) = 0
+    eval(b) = 1
+    kernel is_equivalent(a,b) = false
+    ORACLE (equivalent => same denotation): holds
+    exit=0
+---- mimic ----
+    a = u
+    b = max(u,succ(imax(0,0)))
+    sigma: u=0 v=0
+    eval(a) = 0
+    eval(b) = 1
+    kernel is_equivalent(a,b) = true
+    ORACLE (equivalent => same denotation): VIOLATED
+    exit=1

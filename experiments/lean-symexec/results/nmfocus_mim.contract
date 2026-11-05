@@ -1,0 +1,5 @@
+Error: equivalent levels not mutually geq
+Stack: 
+	#000047964 in __user_main()
+	#100010529 in __uClibc_main(140579970744320, 1, 140596607975424, 0, 0, 0, 0) at libc/misc/internals/__uClibc_main.c:401
+	#200010701 in main(1, 140596607975424)

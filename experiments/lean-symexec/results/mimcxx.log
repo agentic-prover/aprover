@@ -1,0 +1,32 @@
+faithful normalize mimic written to /w/mutant/level_norm_mut.cpp
+mimic (normalize offset dropped) compiled
+param harnesses compiled
+rm: cannot remove 'MC_focus_mimic': Directory not empty
+=========== free / orig ===========
+  KLEE: done: total instructions = 1225933765
+  KLEE: done: completed paths = 44318
+  KLEE: done: partially completed paths = 22
+  CONTRACT VIOLATIONS : 0
+  other errors        : 0
+=========== free / mimic ===========
+  KLEE: done: total instructions = 1241004120
+  KLEE: done: completed paths = 42644
+  KLEE: done: partially completed paths = 4779
+  CONTRACT VIOLATIONS : 1
+  other errors        : 0
+  --- MC_free_mimic/test000205.contract
+     Error: levels called equivalent denote different universes
+     Stack: 
+  --- WITNESS
+     object 0: hex : 0x36ffffffffff02360103ffff
+     object 1: hex : 0x0000
+=========== focus / orig ===========
+  KLEE: done: total instructions = 433008679
+  KLEE: done: completed paths = 16440
+  KLEE: done: partially completed paths = 0
+  CONTRACT VIOLATIONS : 0
+  other errors        : 0
+=========== focus / mimic ===========
+grep: MC_focus_mimic.out: binary file matches
+  CONTRACT VIOLATIONS : 0
+  other errors        : 0

@@ -1,0 +1,20 @@
+mutated C++ kernel written to /w/mutant/level_mut.cpp
+mutated kernel/level.cpp compiled
+=================== C++ kernel: orig ===================
+  KLEE: done: total instructions = 153339119
+  KLEE: done: completed paths = 2806
+  KLEE: done: generated tests = 2806
+  CONTRACT VIOLATIONS : 0
+  all error files     : 0
+=================== C++ kernel: mut ===================
+  KLEE: done: total instructions = 155530360
+  KLEE: done: completed paths = 2802
+  KLEE: done: generated tests = 2803
+  CONTRACT VIOLATIONS : 1
+  all error files     : 0
+  --- CX_mut/test002359.contract
+     Error: equivalent levels are not mutually >=
+     Stack: 
+     	#000113939 in __klee_posix_wrapped_main()
+  --- WITNESS
+     object 0: hex : 0x03000300ffff01030003ffff
