@@ -325,4 +325,4 @@ If you use AProver or BMC-Agent in research, please cite
 
 ## License
 
-4-clause BSD. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
