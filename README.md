@@ -59,6 +59,13 @@ The table records upstream acceptance. Individual findings distinguish solver ev
 
 </details>
 
+## Upstream-accepted findings in other projects
+
+| Project | BMC-Agent finding | Upstream status | Advisory |
+| --- | --- | --- | --- |
+| jq | Undefined pointer arithmetic in `jvp_utf8_next` | Fixed in jq 1.8.2 | [GHSA-ggc9-rpv2-xgpm](https://github.com/jqlang/jq/security/advisories/GHSA-ggc9-rpv2-xgpm) |
+| jq | Undefined pointer arithmetic in `jvp_utf8_backtrack` | Fixed in jq 1.8.2 | [GHSA-gvwx-xj9r-3frq](https://github.com/jqlang/jq/security/advisories/GHSA-gvwx-xj9r-3frq) |
+
 ## Other case studies
 
 | Target | Scope | Reported result |
