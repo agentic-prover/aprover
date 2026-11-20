@@ -1,0 +1,150 @@
+[
+  {
+    "method": "specgen",
+    "benchmark": "specgenbench",
+    "model": "claude_sonnet_4_6",
+    "model_label": "Claude 4.6",
+    "temperature": "0.4",
+    "cases_passed": 116,
+    "cases_total": 120,
+    "trial_passes": 1019,
+    "trial_total": 1200,
+    "success_probability": 0.8491666666666666,
+    "source_artifact_dir": "${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_specgenbench_claude46_10trial_20260620_035707",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json",
+      "trial_report.json"
+    ]
+  },
+  {
+    "method": "specgen",
+    "benchmark": "specgenbench",
+    "model": "gpt_3_5_turbo_1106",
+    "model_label": "GPT-3.5",
+    "temperature": "0.4",
+    "cases_passed": 109,
+    "cases_total": 120,
+    "trial_passes": 834,
+    "trial_total": 1200,
+    "success_probability": 0.695,
+    "source_artifact_dir": "${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_specgenbench_gpt35_10trial_20260620_035707",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json",
+      "trial_report.json"
+    ]
+  },
+  {
+    "method": "specgen",
+    "benchmark": "svcomp_java",
+    "model": "claude_sonnet_4_6",
+    "model_label": "Claude 4.6",
+    "temperature": "0.4",
+    "cases_passed": 245,
+    "cases_total": 265,
+    "trial_passes": 2068,
+    "trial_total": 2650,
+    "success_probability": 0.780377358490566,
+    "source_artifact_dir": "${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_svcomp_claude46_10trial_20260620_035707",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json",
+      "trial_report.json"
+    ]
+  },
+  {
+    "method": "specgen",
+    "benchmark": "svcomp_java",
+    "model": "gpt_3_5_turbo_1106",
+    "model_label": "GPT-3.5",
+    "temperature": "0.4",
+    "cases_passed": 212,
+    "cases_total": 265,
+    "trial_passes": 1349,
+    "trial_total": 2650,
+    "success_probability": 0.5090566037735849,
+    "source_artifact_dir": "${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_svcomp_gpt35_10trial_20260620_035707",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json",
+      "trial_report.json"
+    ]
+  },
+  {
+    "method": "bmc_agent",
+    "benchmark": "specgenbench",
+    "model": "claude_sonnet_4_6",
+    "model_label": "Claude 4.6",
+    "temperature": "0.4",
+    "cases_passed": 112,
+    "cases_total": 120,
+    "trial_passes": 1057,
+    "trial_total": 1200,
+    "success_probability": 0.8808333333333334,
+    "source_artifact_dir": "${APROVER_ROOT}/artifacts/specgenbench_bmc_jml_claude46_temp04_10trial_20260623",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json"
+    ]
+  },
+  {
+    "method": "bmc_agent",
+    "benchmark": "specgenbench",
+    "model": "gpt_3_5_turbo_1106",
+    "model_label": "GPT-3.5",
+    "temperature": "0.4",
+    "cases_passed": 103,
+    "cases_total": 120,
+    "trial_passes": 960,
+    "trial_total": 1200,
+    "success_probability": 0.8,
+    "source_artifact_dir": "${APROVER_ROOT}/artifacts/specgenbench_bmc_jml_gpt35_temp04_10trial_20260623",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json"
+    ]
+  },
+  {
+    "method": "bmc_agent",
+    "benchmark": "svcomp_java",
+    "model": "claude_sonnet_4_6",
+    "model_label": "Claude 4.6",
+    "temperature": "0.4",
+    "cases_passed": 227,
+    "cases_total": 265,
+    "trial_passes": 2172,
+    "trial_total": 2650,
+    "success_probability": 0.819622641509434,
+    "source_artifact_dir": "${APROVER_ROOT}/artifacts/svcomp_java_bmc_jml_claude46_temp04_10trial_20260623",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json"
+    ]
+  },
+  {
+    "method": "bmc_agent",
+    "benchmark": "svcomp_java",
+    "model": "gpt_3_5_turbo_1106",
+    "model_label": "GPT-3.5",
+    "temperature": "0.4",
+    "cases_passed": 202,
+    "cases_total": 265,
+    "trial_passes": 1839,
+    "trial_total": 2650,
+    "success_probability": 0.6939622641509434,
+    "source_artifact_dir": "${APROVER_ROOT}/artifacts/svcomp_java_bmc_jml_gpt35_temp04_10trial_20260623",
+    "copied_files": [
+      "report.json",
+      "summary.md",
+      "manifest.json"
+    ]
+  }
+]

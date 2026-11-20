@@ -1,0 +1,19 @@
+{
+  "method": "specgen",
+  "benchmark": "svcomp_java",
+  "model": "claude_sonnet_4_6",
+  "model_label": "Claude 4.6",
+  "temperature": "0.4",
+  "cases_passed": 245,
+  "cases_total": 265,
+  "trial_passes": 2068,
+  "trial_total": 2650,
+  "success_probability": 0.780377358490566,
+  "source_artifact_dir": "${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_svcomp_claude46_10trial_20260620_035707",
+  "copied_files": [
+    "report.json",
+    "summary.md",
+    "manifest.json",
+    "trial_report.json"
+  ]
+}

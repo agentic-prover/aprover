@@ -1,0 +1,54 @@
+ver	cfg	mod	function	property	confidence	realism	cex_outcome	label	match	labeled_prop
+main	floor	elf	elf_calc_size	elf_calc_size.overflow.1	confirmed_system_entry	none	real_bug	confirmed	exact	elf_calc_size.overflow.1
+main	floor	elf	elf_calc_size	elf_calc_size.pointer_dereference.23	confirmed_system_entry	none	real_bug	conditional	loose	elf_validate.pointer_dereference.1
+main	floor	elf	elf_calc_size	elf_calc_size.pointer_arithmetic.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	elf	elf_load	elf_load.precondition_instance.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	elf	elf_load	elf_load.pointer_arithmetic.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	elf	elf_load	elf_load.pointer_dereference.23	confirmed_system_entry	none	real_bug	conditional	loose	elf_validate.pointer_dereference.1
+main	floor	elf	elf_load_at	elf_load_at.overflow.1	confirmed_system_entry	none	real_bug	confirmed	exact	elf_load_at.overflow.1
+main	floor	elf	elf_load_at	elf_load_at.precondition_instance.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	elf	elf_load_at	elf_load_at.pointer_arithmetic.5	confirmed_system_entry	none	real_bug	confirmed	loose	elf_load_at.pointer_arithmetic.4
+main	floor	elf	elf_load_at	elf_load_at.pointer_dereference.29	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	fb	fb_draw_string	fb_draw_string.overflow.1	confirmed_system_entry	none	real_bug	confirmed	exact	fb_draw_string.overflow.1
+main	floor	fb	fb_flip	fb_flip.pointer_arithmetic.1	confirmed_system_entry	none	real_bug	not_counted	exact	fb_flip.pointer_arithmetic.1
+main	floor	fb	fb_get_backbuffer	fb_get_backbuffer.pointer_arithmetic.1	confirmed_system_entry	none	real_bug	not_counted	exact	fb_get_backbuffer.pointer_arithmetic.1
+main	floor	fb	fb_init	fb_init.overflow.1	confirmed_system_entry	none	real_bug	conditional	loose	fb_init.overflow.3
+main	floor	fb	fb_init	fb_init.pointer_dereference.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	memory	calloc	calloc.pointer_arithmetic.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	memory	calloc	calloc.pointer_dereference.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	memory	malloc	malloc.overflow.1	confirmed_system_entry	none	real_bug	confirmed	exact	malloc.overflow.1
+main	floor	memory	realloc	realloc.pointer_arithmetic.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	memory	realloc	realloc.pointer_dereference.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	string	memmove	memmove.pointer.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	string	memset	memset.overflow.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	string	memset32	memset32.pointer_arithmetic.11	confirmed_system_entry	none	real_bug	not_counted	loose	memset32.pointer_arithmetic.1
+main	floor	string	memset32	memset32.pointer_dereference.5	confirmed_system_entry	none	real_bug	not_counted	loose	memset32.pointer_dereference.1
+main	floor	string	strcat	strcat.pointer_dereference.17	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	string	strcat	strcat.pointer_arithmetic.11	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	string	strdup	strdup.overflow.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	floor	string	strncmp	strncmp.overflow.2	confirmed_system_entry	none	real_bug	UNLABELED		
+main	full	elf	elf_calc_size	elf_calc_size.overflow.1	confirmed_system_entry	realistic	real_bug	confirmed	exact	elf_calc_size.overflow.1
+main	full	elf	elf_calc_size	elf_calc_size.pointer_dereference.23	confirmed_system_entry	realistic	real_bug	conditional	loose	elf_validate.pointer_dereference.1
+main	full	elf	elf_calc_size	elf_calc_size.pointer_arithmetic.5	confirmed_system_entry	realistic	real_bug	UNLABELED		
+main	full	elf	elf_load	elf_load.precondition_instance.1	confirmed_system_entry	realistic	real_bug	UNLABELED		
+main	full	elf	elf_load	elf_load.pointer_dereference.5	confirmed_system_entry	realistic	real_bug	conditional	loose	elf_validate.pointer_dereference.1
+main	full	elf	elf_load	memcpy.pointer_arithmetic.5	confirmed_system_entry	realistic	real_bug	UNLABELED		
+main	full	elf	elf_load_at	elf_load_at.precondition_instance.1	confirmed_system_entry	realistic	real_bug	UNLABELED		
+main	full	elf	elf_load_at	elf_load_at.pointer_arithmetic.5	confirmed_system_entry	realistic	real_bug	confirmed	loose	elf_load_at.pointer_arithmetic.4
+main	full	elf	elf_load_at	elf_load_at.pointer_dereference.29	confirmed_system_entry	realistic	real_bug	UNLABELED		
+main	full	elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_bmc	realistic	latent	confirmed	exact	elf_process_relocations.pointer_dereference.5
+main	full	elf	elf_process_relocations	elf_process_relocations.pointer_arithmetic.5	confirmed_bmc	realistic	latent	confirmed	exact	elf_process_relocations.pointer_arithmetic.5
+main	full	elf	elf_process_relocations	elf_process_relocations.overflow.1	confirmed_bmc	realistic	latent	confirmed	exact	elf_process_relocations.overflow.1
+main	full	fb	fb_draw_char	fb_draw_char.pointer_dereference.7	confirmed_bmc	realistic	latent	confirmed	exact	fb_draw_char.pointer_dereference.7
+main	full	fb	fb_draw_char	fb_draw_char.pointer_arithmetic.3	confirmed_bmc	realistic	latent	UNLABELED		
+main	full	fb	fb_flip	fb_flip.pointer_arithmetic.1	confirmed_system_entry	realistic	real_bug	not_counted	exact	fb_flip.pointer_arithmetic.1
+main	full	fb	fb_get_backbuffer	fb_get_backbuffer.pointer_arithmetic.1	confirmed_system_entry	realistic	real_bug	not_counted	exact	fb_get_backbuffer.pointer_arithmetic.1
+main	norealism	elf	elf_load	elf_load.precondition_instance.2	confirmed_system_entry	none	real_bug	UNLABELED		
+main	norealism	elf	elf_load	elf_load.pointer_arithmetic.5	confirmed_system_entry	none	real_bug	UNLABELED		
+main	norealism	elf	elf_load	elf_load.pointer_arithmetic.17	confirmed_system_entry	none	real_bug	UNLABELED		
+main	norealism	elf	elf_load_at	elf_load_at.precondition_instance.1	confirmed_system_entry	none	real_bug	UNLABELED		
+main	norealism	elf	elf_load_at	elf_load_at.pointer_dereference.29	confirmed_system_entry	none	real_bug	UNLABELED		
+main	norealism	elf	elf_load_at	elf_load_at.pointer_arithmetic.17	confirmed_system_entry	none	real_bug	confirmed	loose	elf_load_at.pointer_arithmetic.4
+main	norealism	elf	elf_process_relocations	elf_process_relocations.pointer_dereference.11	confirmed_bmc	none	latent	confirmed	loose	elf_process_relocations.pointer_dereference.5
+main	norealism	fb	fb_init	fb_init.pointer_dereference.2	confirmed_system_entry	none	real_bug	UNLABELED		
+main	norealism	string	memmove	memmove.pointer.1	confirmed_system_entry	none	real_bug	UNLABELED		

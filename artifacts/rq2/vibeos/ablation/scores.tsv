@@ -1,0 +1,13 @@
+ver	cfg	mod	status	wall_s	functions	M1_nonvacuous	no_checks	vcc_simplified_away	parse_fail	timeout	other_err	M2_raw_cex_last_round	cex_all_rounds	cex_all_rounds_dedup	validated	real	spurious	unresolved	stage2_caller_can	stage2_caller_cannot	overrefine_rejected	other_outcomes	bugreports	unwind_artifacts	latent_reports	nonreal_reports	realism_filtered	M2_final	M4_confirmed_hit	conditional_hit	M5_notcounted_hit	unlabeled_final	ref_iters	ref_acc/rej	stage2_depth(real)	M6_calls	M6_cost	prompt_tok	compl_tok
+main	floor	elf	rc=0	805	6	5	1	0	0	0	0	111	111	41	36	27	0	0	0	9	9	latent:9	10	0	0	0	0	10	3/6	1/5	0/0	5	0:27;1:9	0/9	1:27	97	2.53	182309	132281
+main	floor	fb	rc=0	518	10	5	4	0	0	0	1	133	125	14	22	14	0	0	0	8	8	latent:8	5	0	0	0	0	5	1/3	1/1	2/2	1	0:14;1:8	0/8	1:14	81	1.19	143307	50469
+main	floor	memory	rc=0	151	11	3	7	0	0	0	1	10	0	0	8	8	0	0	2	0	0		5	0	0	0	0	5	1/2	0/0	0/0	4	0:8	0/0	1:7;2:1	44	0.51	94397	15041
+main	floor	string	rc=0	121	20	19	0	0	0	0	1	18	0	0	13	13	0	0	0	0	0		8	0	0	0	0	8	0/0	0/0	2/7	6	0:13	0/0	1:13	79	0.91	164628	28008
+main	full	elf	rc=0	2558	6	5	1	0	0	0	0	106	106	41	36	27	0	0	0	9	9	latent:9	12	0	3	0	0	12	5/6	1/5	0/0	5	0:27;1:9	0/9	1:27	497	12.13	3400813	302059
+main	full	fb	rc=0	2457	10	4	3	1	0	0	2	39	127	15	22	13	1	0	0	9	9	latent:9	7	0	2	1	2	4	1/3	0/1	2/2	1	0:13;1:9	0/9	1:13	407	8.31	2404917	198683
+main	full	memory	rc=0	1261	11	2	7	1	0	0	1	2	0	0	4	4	2	0	2	0	0		3	0	0	2	1	0	0/2	0/0	0/0	0	0:4	0/0	1:3;2:1	183	3.57	988482	94094
+main	full	string	rc=0	3135	20	18	1	0	0	0	1	15	0	0	13	13	1	0	0	0	2		8	1	0	1	6	0	0/0	0/0	0/7	0	0:13	0/0	1:13	386	9.44	2381067	270067
+main	norealism	elf	rc=0	5506	6	3	1	0	0	2	0	7	111	41	36	27	3	0	0	10	10	latent:9	10	0	1	3	0	7	2/6	0/5	0/0	5	0:27;1:9	0/9	1:27	667	16.24	3904414	507395
+main	norealism	fb	rc=0	4627	10	2	3	3	0	0	2	33	127	15	23	14	0	0	0	9	9	latent:9	1	0	0	0	0	1	0/3	0/1	0/2	1	0:14;1:9	0/9	1:14	502	10.8	2356972	398794
+main	norealism	memory	rc=0	1558	11	3	7	0	0	0	1	17	0	0	8	8	0	0	2	0	0		0	0	0	0	0	0	0/2	0/0	0/0	0	0:8	0/0	1:7;2:1	254	4.57	1395166	116275
+main	norealism	string	rc=0	1409	20	18	1	0	0	0	1	16	0	0	9	9	0	0	0	0	0		1	0	0	0	0	1	0/0	0/0	0/7	1	0:9	0/0	1:9	271	4.75	1429778	120857

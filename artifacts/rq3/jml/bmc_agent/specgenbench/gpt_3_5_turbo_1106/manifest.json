@@ -1,0 +1,602 @@
+[
+  {
+    "name": "Abs",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Abs/Abs.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Abs/Abs.java"
+  },
+  {
+    "name": "AbsSeq",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/AbsSeq/AbsSeq.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/AbsSeq/AbsSeq.java"
+  },
+  {
+    "name": "Absolute",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Absolute/Absolute.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Absolute/Absolute.java"
+  },
+  {
+    "name": "AddLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/AddLoop/AddLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/AddLoop/AddLoop.java"
+  },
+  {
+    "name": "AddLoopFor",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/AddLoopFor/AddLoopFor.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/AddLoopFor/AddLoopFor.java"
+  },
+  {
+    "name": "AddTwoLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/AddTwoLoop/AddTwoLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/AddTwoLoop/AddTwoLoop.java"
+  },
+  {
+    "name": "Biggest",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Biggest/Biggest.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Biggest/Biggest.java"
+  },
+  {
+    "name": "BinarySearch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/BinarySearch/BinarySearch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/BinarySearch/BinarySearch.java"
+  },
+  {
+    "name": "BubbleSort",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/BubbleSort/BubbleSort.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/BubbleSort/BubbleSort.java"
+  },
+  {
+    "name": "BubbleSortDesc",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/BubbleSortDesc/BubbleSortDesc.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/BubbleSortDesc/BubbleSortDesc.java"
+  },
+  {
+    "name": "Calculator",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Calculator/Calculator.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Calculator/Calculator.java"
+  },
+  {
+    "name": "CalculatorShuffled",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/CalculatorShuffled/CalculatorShuffled.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/CalculatorShuffled/CalculatorShuffled.java"
+  },
+  {
+    "name": "CanWinNim",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/CanWinNim/CanWinNim.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/CanWinNim/CanWinNim.java"
+  },
+  {
+    "name": "ChangeCase",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ChangeCase/ChangeCase.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ChangeCase/ChangeCase.java"
+  },
+  {
+    "name": "CheckABeforeB",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/CheckABeforeB/CheckABeforeB.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/CheckABeforeB/CheckABeforeB.java"
+  },
+  {
+    "name": "CompareArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/CompareArray/CompareArray.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/CompareArray/CompareArray.java"
+  },
+  {
+    "name": "ComputeArea",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ComputeArea/ComputeArea.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ComputeArea/ComputeArea.java"
+  },
+  {
+    "name": "ComputeAreaBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ComputeAreaBranch/ComputeAreaBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ComputeAreaBranch/ComputeAreaBranch.java"
+  },
+  {
+    "name": "ComputeOverlap",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ComputeOverlap/ComputeOverlap.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ComputeOverlap/ComputeOverlap.java"
+  },
+  {
+    "name": "ComputeOverlapBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ComputeOverlapBranch/ComputeOverlapBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ComputeOverlapBranch/ComputeOverlapBranch.java"
+  },
+  {
+    "name": "Conjunction",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Conjunction/Conjunction.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Conjunction/Conjunction.java"
+  },
+  {
+    "name": "ContainsDuplicate",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ContainsDuplicate/ContainsDuplicate.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ContainsDuplicate/ContainsDuplicate.java"
+  },
+  {
+    "name": "ConvertTemperature",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ConvertTemperature/ConvertTemperature.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ConvertTemperature/ConvertTemperature.java"
+  },
+  {
+    "name": "ConvertToFahrenheit",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ConvertToFahrenheit/ConvertToFahrenheit.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ConvertToFahrenheit/ConvertToFahrenheit.java"
+  },
+  {
+    "name": "ConvertToKelvin",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ConvertToKelvin/ConvertToKelvin.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ConvertToKelvin/ConvertToKelvin.java"
+  },
+  {
+    "name": "ConvertToTitle",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ConvertToTitle/ConvertToTitle.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ConvertToTitle/ConvertToTitle.java"
+  },
+  {
+    "name": "CopyArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/CopyArray/CopyArray.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/CopyArray/CopyArray.java"
+  },
+  {
+    "name": "DigitRoot",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/DigitRoot/DigitRoot.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/DigitRoot/DigitRoot.java"
+  },
+  {
+    "name": "Disjunction",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Disjunction/Disjunction.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Disjunction/Disjunction.java"
+  },
+  {
+    "name": "DivisorGame",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/DivisorGame/DivisorGame.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/DivisorGame/DivisorGame.java"
+  },
+  {
+    "name": "DominantIndex",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/DominantIndex/DominantIndex.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/DominantIndex/DominantIndex.java"
+  },
+  {
+    "name": "EchoIntLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/EchoIntLoop/EchoIntLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/EchoIntLoop/EchoIntLoop.java"
+  },
+  {
+    "name": "Fibonacci",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Fibonacci/Fibonacci.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Fibonacci/Fibonacci.java"
+  },
+  {
+    "name": "FindClosestNum",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/FindClosestNum/FindClosestNum.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/FindClosestNum/FindClosestNum.java"
+  },
+  {
+    "name": "FindFirstZero",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/FindFirstZero/FindFirstZero.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/FindFirstZero/FindFirstZero.java"
+  },
+  {
+    "name": "FizzBuzz",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/FizzBuzz/FizzBuzz.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/FizzBuzz/FizzBuzz.java"
+  },
+  {
+    "name": "FizzBuzzSeq",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/FizzBuzzSeq/FizzBuzzSeq.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/FizzBuzzSeq/FizzBuzzSeq.java"
+  },
+  {
+    "name": "GCD",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/GCD/GCD.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/GCD/GCD.java"
+  },
+  {
+    "name": "IntCube",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IntCube/IntCube.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IntCube/IntCube.java"
+  },
+  {
+    "name": "IntSquare",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IntSquare/IntSquare.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IntSquare/IntSquare.java"
+  },
+  {
+    "name": "Inverse",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Inverse/Inverse.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Inverse/Inverse.java"
+  },
+  {
+    "name": "IsAllUnique",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsAllUnique/IsAllUnique.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsAllUnique/IsAllUnique.java"
+  },
+  {
+    "name": "IsAscending",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsAscending/IsAscending.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsAscending/IsAscending.java"
+  },
+  {
+    "name": "IsBoomerang",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsBoomerang/IsBoomerang.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsBoomerang/IsBoomerang.java"
+  },
+  {
+    "name": "IsCommonFactor",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsCommonFactor/IsCommonFactor.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsCommonFactor/IsCommonFactor.java"
+  },
+  {
+    "name": "IsCommonFactorBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsCommonFactorBranch/IsCommonFactorBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsCommonFactorBranch/IsCommonFactorBranch.java"
+  },
+  {
+    "name": "IsCommonMultiple",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsCommonMultiple/IsCommonMultiple.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsCommonMultiple/IsCommonMultiple.java"
+  },
+  {
+    "name": "IsCommonMultipleBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsCommonMultipleBranch/IsCommonMultipleBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsCommonMultipleBranch/IsCommonMultipleBranch.java"
+  },
+  {
+    "name": "IsDescending",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsDescending/IsDescending.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsDescending/IsDescending.java"
+  },
+  {
+    "name": "IsMonotonic",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsMonotonic/IsMonotonic.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsMonotonic/IsMonotonic.java"
+  },
+  {
+    "name": "IsOneBitCharacter",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsOneBitCharacter/IsOneBitCharacter.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsOneBitCharacter/IsOneBitCharacter.java"
+  },
+  {
+    "name": "IsPalindrome",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsPalindrome/IsPalindrome.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsPalindrome/IsPalindrome.java"
+  },
+  {
+    "name": "IsPrefix",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsPrefix/IsPrefix.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsPrefix/IsPrefix.java"
+  },
+  {
+    "name": "IsSubsequence",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsSubsequence/IsSubsequence.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsSubsequence/IsSubsequence.java"
+  },
+  {
+    "name": "IsSuffix",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/IsSuffix/IsSuffix.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/IsSuffix/IsSuffix.java"
+  },
+  {
+    "name": "JewelsInStones",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/JewelsInStones/JewelsInStones.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/JewelsInStones/JewelsInStones.java"
+  },
+  {
+    "name": "LCM",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/LCM/LCM.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/LCM/LCM.java"
+  },
+  {
+    "name": "LargestPerimeter",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/LargestPerimeter/LargestPerimeter.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/LargestPerimeter/LargestPerimeter.java"
+  },
+  {
+    "name": "LeapYear",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/LeapYear/LeapYear.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/LeapYear/LeapYear.java"
+  },
+  {
+    "name": "LeapYearSeq",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/LeapYearSeq/LeapYearSeq.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/LeapYearSeq/LeapYearSeq.java"
+  },
+  {
+    "name": "LinearSearch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/LinearSearch/LinearSearch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/LinearSearch/LinearSearch.java"
+  },
+  {
+    "name": "MatrixAdd",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MatrixAdd/MatrixAdd.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MatrixAdd/MatrixAdd.java"
+  },
+  {
+    "name": "MatrixMul",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MatrixMul/MatrixMul.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MatrixMul/MatrixMul.java"
+  },
+  {
+    "name": "MaxInArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MaxInArray/MaxInArray.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MaxInArray/MaxInArray.java"
+  },
+  {
+    "name": "MinInArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MinInArray/MinInArray.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MinInArray/MinInArray.java"
+  },
+  {
+    "name": "MoveZeroes",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MoveZeroes/MoveZeroes.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MoveZeroes/MoveZeroes.java"
+  },
+  {
+    "name": "MulLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MulLoop/MulLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MulLoop/MulLoop.java"
+  },
+  {
+    "name": "MulNested",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MulNested/MulNested.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MulNested/MulNested.java"
+  },
+  {
+    "name": "MyPower",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MyPower/MyPower.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MyPower/MyPower.java"
+  },
+  {
+    "name": "MySqrt",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/MySqrt/MySqrt.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/MySqrt/MySqrt.java"
+  },
+  {
+    "name": "NegAbs",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NegAbs/NegAbs.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NegAbs/NegAbs.java"
+  },
+  {
+    "name": "NextGreaterElem",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NextGreaterElem/NextGreaterElem.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NextGreaterElem/NextGreaterElem.java"
+  },
+  {
+    "name": "NotCommonFactor",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NotCommonFactor/NotCommonFactor.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NotCommonFactor/NotCommonFactor.java"
+  },
+  {
+    "name": "NotCommonFactorBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NotCommonFactorBranch/NotCommonFactorBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NotCommonFactorBranch/NotCommonFactorBranch.java"
+  },
+  {
+    "name": "NotCommonMultiple",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NotCommonMultiple/NotCommonMultiple.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NotCommonMultiple/NotCommonMultiple.java"
+  },
+  {
+    "name": "NumberOfCuts",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NumberOfCuts/NumberOfCuts.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NumberOfCuts/NumberOfCuts.java"
+  },
+  {
+    "name": "NumberOfCutsSeq",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/NumberOfCutsSeq/NumberOfCutsSeq.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/NumberOfCutsSeq/NumberOfCutsSeq.java"
+  },
+  {
+    "name": "OddEven",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/OddEven/OddEven.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/OddEven/OddEven.java"
+  },
+  {
+    "name": "PassPillow",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PassPillow/PassPillow.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PassPillow/PassPillow.java"
+  },
+  {
+    "name": "PassPillowBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PassPillowBranch/PassPillowBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PassPillowBranch/PassPillowBranch.java"
+  },
+  {
+    "name": "Perimeter",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Perimeter/Perimeter.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Perimeter/Perimeter.java"
+  },
+  {
+    "name": "PowerOfFour",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfFour/PowerOfFour.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfFour/PowerOfFour.java"
+  },
+  {
+    "name": "PowerOfFourBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfFourBranch/PowerOfFourBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfFourBranch/PowerOfFourBranch.java"
+  },
+  {
+    "name": "PowerOfFourLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfFourLoop/PowerOfFourLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfFourLoop/PowerOfFourLoop.java"
+  },
+  {
+    "name": "PowerOfThree",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfThree/PowerOfThree.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfThree/PowerOfThree.java"
+  },
+  {
+    "name": "PowerOfTwo",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfTwo/PowerOfTwo.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfTwo/PowerOfTwo.java"
+  },
+  {
+    "name": "PowerOfTwoBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfTwoBranch/PowerOfTwoBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfTwoBranch/PowerOfTwoBranch.java"
+  },
+  {
+    "name": "PowerOfTwoLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PowerOfTwoLoop/PowerOfTwoLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PowerOfTwoLoop/PowerOfTwoLoop.java"
+  },
+  {
+    "name": "PrimeCheck",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PrimeCheck/PrimeCheck.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PrimeCheck/PrimeCheck.java"
+  },
+  {
+    "name": "PrimeNumbers",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/PrimeNumbers/PrimeNumbers.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/PrimeNumbers/PrimeNumbers.java"
+  },
+  {
+    "name": "ReLU",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ReLU/ReLU.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ReLU/ReLU.java"
+  },
+  {
+    "name": "ReLUSeq",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ReLUSeq/ReLUSeq.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ReLUSeq/ReLUSeq.java"
+  },
+  {
+    "name": "RepeatedChar",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/RepeatedChar/RepeatedChar.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/RepeatedChar/RepeatedChar.java"
+  },
+  {
+    "name": "RepeatedCharNested",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/RepeatedCharNested/RepeatedCharNested.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/RepeatedCharNested/RepeatedCharNested.java"
+  },
+  {
+    "name": "RepeatedNumNested",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/RepeatedNumNested/RepeatedNumNested.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/RepeatedNumNested/RepeatedNumNested.java"
+  },
+  {
+    "name": "Return100",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Return100/Return100.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Return100/Return100.java"
+  },
+  {
+    "name": "Return100Nested",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Return100Nested/Return100Nested.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Return100Nested/Return100Nested.java"
+  },
+  {
+    "name": "ReverseArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ReverseArray/ReverseArray.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ReverseArray/ReverseArray.java"
+  },
+  {
+    "name": "ReverseString",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ReverseString/ReverseString.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ReverseString/ReverseString.java"
+  },
+  {
+    "name": "RotateArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/RotateArray/RotateArray.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/RotateArray/RotateArray.java"
+  },
+  {
+    "name": "SelectionSort",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SelectionSort/SelectionSort.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SelectionSort/SelectionSort.java"
+  },
+  {
+    "name": "SelectionSortDesc",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SelectionSortDesc/SelectionSortDesc.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SelectionSortDesc/SelectionSortDesc.java"
+  },
+  {
+    "name": "SetZero",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SetZero/SetZero.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SetZero/SetZero.java"
+  },
+  {
+    "name": "Smallest",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Smallest/Smallest.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Smallest/Smallest.java"
+  },
+  {
+    "name": "SmallestEvenMul",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SmallestEvenMul/SmallestEvenMul.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SmallestEvenMul/SmallestEvenMul.java"
+  },
+  {
+    "name": "SmallestEvenMulBranch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SmallestEvenMulBranch/SmallestEvenMulBranch.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SmallestEvenMulBranch/SmallestEvenMulBranch.java"
+  },
+  {
+    "name": "SolveQuadraticEquation",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SolveQuadraticEquation/SolveQuadraticEquation.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SolveQuadraticEquation/SolveQuadraticEquation.java"
+  },
+  {
+    "name": "SortLibrary",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SortLibrary/SortLibrary.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SortLibrary/SortLibrary.java"
+  },
+  {
+    "name": "StrPalindrome",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/StrPalindrome/StrPalindrome.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/StrPalindrome/StrPalindrome.java"
+  },
+  {
+    "name": "SubLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/SubLoop/SubLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/SubLoop/SubLoop.java"
+  },
+  {
+    "name": "Swap",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Swap/Swap.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Swap/Swap.java"
+  },
+  {
+    "name": "Temperatures",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/Temperatures/Temperatures.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/Temperatures/Temperatures.java"
+  },
+  {
+    "name": "ThreeConsecutiveOdds",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/ThreeConsecutiveOdds/ThreeConsecutiveOdds.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/ThreeConsecutiveOdds/ThreeConsecutiveOdds.java"
+  },
+  {
+    "name": "TransposeMatrix",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/TransposeMatrix/TransposeMatrix.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/TransposeMatrix/TransposeMatrix.java"
+  },
+  {
+    "name": "TwoSum",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/TwoSum/TwoSum.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/TwoSum/TwoSum.java"
+  },
+  {
+    "name": "UglyNum",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/UglyNum/UglyNum.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/UglyNum/UglyNum.java"
+  },
+  {
+    "name": "UglyNumLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/UglyNumLoop/UglyNumLoop.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/UglyNumLoop/UglyNumLoop.java"
+  },
+  {
+    "name": "UniqueCharNested",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/UniqueCharNested/UniqueCharNested.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/UniqueCharNested/UniqueCharNested.java"
+  },
+  {
+    "name": "UniqueNumNested",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/UniqueNumNested/UniqueNumNested.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/UniqueNumNested/UniqueNumNested.java"
+  },
+  {
+    "name": "XOR",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/common/XOR/XOR.java",
+    "oracle": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SpecGenBench/oracle/XOR/XOR.java"
+  }
+]

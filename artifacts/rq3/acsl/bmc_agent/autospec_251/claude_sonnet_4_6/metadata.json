@@ -1,0 +1,24 @@
+{
+  "method": "bmc_agent",
+  "benchmark": "autospec_251",
+  "model": "anthropic/claude-sonnet-4.6",
+  "model_label": "Claude Sonnet 4.6",
+  "temperature": "BMC-Agent default for this path; current code uses 0.2 for LLMClient.complete unless call-site overrides it",
+  "trials": 5,
+  "workers": 32,
+  "cases_passed": 209,
+  "cases_total": 251,
+  "trial_passes": 990,
+  "trial_total": 1255,
+  "success_probability": 0.7888446215139442,
+  "source_artifact_dir": "${BMC_AGENT_AUTOSPEC_RUN_DIR}",
+  "code_commit": "1528d0dcd9faecbc5b3fd40dc203aec38453af89",
+  "code_commit_oneline": "1528d0d Improve ACSL specs-bench helper handling",
+  "verifier": "Frama-C/WP 26.0 through Docker wrapper",
+  "cbmc": "6.9.0",
+  "copied_files": [
+    "manifest.json",
+    "report.json",
+    "summary.md"
+  ]
+}

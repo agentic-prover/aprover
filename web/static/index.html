@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AProver — agentic prover for AI-generated code</title>
+<link rel="icon" type="image/svg+xml" href="/assets/logo-icon.svg" />
+<link rel="preconnect" href="https://rsms.me/" />
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <a class="logo-link" href="/" aria-label="AProver">
+      <picture>
+        <source srcset="/assets/logo-dark.svg" media="(prefers-color-scheme: dark)" />
+        <img src="/assets/logo.svg" alt="AProver" class="logo-img" />
+      </picture>
+    </a>
+    <span class="agent-status" id="agent-status">
+      <span class="status-dot idle"></span>
+      <span class="status-text">idle</span>
+    </span>
+  </div>
+  <a class="repo-link" href="https://github.com/agentic-prover/aprover" target="_blank" rel="noopener">github ↗</a>
+</header>
+
+<main id="chat" aria-live="polite">
+  <section id="hero">
+    <img src="/assets/logo-icon.svg" alt="" class="hero-mark" aria-hidden="true" />
+    <div class="hero-tag">agentic prover · for AI-generated code</div>
+    <h1>Verify your code by chatting<span class="cursor">▮</span></h1>
+    <p class="hero-sub">
+      AProver is a suite of LLM-driven verification agents.
+      The live demo runs <span class="kbd">BMC-Agent</span> — Claude generates function specs,
+      <span class="kbd">CBMC</span> proves or refutes them, the agent classifies counterexamples,
+      and confirmed bugs come back with evidence tiers. Today: C. On the roadmap: Rust (Kani) and beyond.
+    </p>
+
+    <div class="hero-demo" id="hero-demo" role="button" tabindex="0"
+         aria-label="Live pipeline preview — click to load this demo into the composer">
+      <div class="hero-demo-tag">
+        <span class="hd-pulse"></span>
+        <span>live preview · click to run it yourself</span>
+      </div>
+      <div class="demo-grid">
+        <div class="demo-code">
+          <div class="demo-code-head">
+            <span class="demo-file">demo.c</span>
+            <span class="demo-lang">C</span>
+          </div>
+<pre class="demo-src"><span class="ln">1</span> <span class="kw">#include</span> <span class="str">&lt;stdint.h&gt;</span>
+<span class="ln">2</span> <span class="kw">int</span> <span class="fn">add</span>(<span class="kw">int</span> a, <span class="kw">int</span> b) {
+<span class="ln">3</span>     <span class="kw">return</span> a + b;
+<span class="ln">4</span> }</pre>
+          <div class="demo-caret"></div>
+        </div>
+        <div class="demo-pipe">
+          <div class="demo-phases" aria-hidden="true">
+            <div class="demo-phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
+            <div class="phase-line"></div>
+            <div class="demo-phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
+            <div class="phase-line"></div>
+            <div class="demo-phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
+            <div class="phase-line"></div>
+            <div class="demo-phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+          </div>
+          <div class="demo-now">
+            <span class="now-icon"></span>
+            <span class="demo-now-text">parsing source…</span>
+          </div>
+          <div class="demo-result" hidden>
+            <span class="demo-verdict">▲ real bug · signed overflow</span>
+            <span class="demo-detail">a = INT_MAX, b = 1 &nbsp;⟶&nbsp; <code>a + b</code> overflows</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="quick-actions">
+      <button class="chip" data-prompt="show me a demo">
+        <span class="chip-key">▶</span> run a demo bug
+      </button>
+      <button class="chip" data-prompt="explain how AProver works">
+        <span class="chip-key">▣</span> how it works
+      </button>
+      <button class="chip" data-prompt="I want to verify a public file at this URL: ">
+        <span class="chip-key">↗</span> verify from URL
+      </button>
+    </div>
+
+    <div class="cap-grid">
+      <div class="cap">
+        <div class="cap-h">paste source</div>
+        <div class="cap-d">self-contained file, ≤64KB · today: C</div>
+      </div>
+      <div class="cap">
+        <div class="cap-h">fetch http(s) URLs</div>
+        <div class="cap-d">github blob URLs auto-rewrite to raw</div>
+      </div>
+      <div class="cap">
+        <div class="cap-h">target a function</div>
+        <div class="cap-d">or verify the whole file at once</div>
+      </div>
+      <div class="cap">
+        <div class="cap-h">live phase progress</div>
+        <div class="cap-d">spec → bmc → classify → report</div>
+      </div>
+    </div>
+  </section>
+
+  <div id="thread"></div>
+</main>
+
+<form id="composer" autocomplete="off">
+  <div class="composer-wrap">
+    <textarea
+      id="input"
+      rows="1"
+      placeholder="paste C, drop a github URL, or just chat…"
+      spellcheck="false"></textarea>
+    <button id="send" type="submit" aria-label="Send">
+      <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M2 10l16-7-7 16-2-7z"/></svg>
+    </button>
+  </div>
+  <div class="composer-key">
+    <input
+      id="api-key"
+      type="password"
+      placeholder="your Anthropic API key (sk-ant-…)"
+      autocomplete="off"
+      spellcheck="false" />
+    <span class="key-note" id="key-note">🔒 stored only in your browser · sent only with your requests · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">get a key ↗</a></span>
+  </div>
+  <div class="composer-hint">
+    <span>⏎ send · ⇧⏎ newline</span>
+    <span class="composer-host">claude · cbmc · 64KB cap</span>
+  </div>
+</form>
+
+<template id="msg-tpl">
+  <div class="msg">
+    <div class="role"></div>
+    <div class="body"></div>
+  </div>
+</template>
+
+<template id="run-tpl">
+  <div class="msg run">
+    <div class="role">aprover</div>
+    <div class="body">
+      <div class="run-head">
+        <div class="phases">
+          <div class="phase" data-phase="spec"><span class="phase-dot"></span><span>spec</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" data-phase="bmc"><span class="phase-dot"></span><span>bmc</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" data-phase="classify"><span class="phase-dot"></span><span>classify</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" data-phase="report"><span class="phase-dot"></span><span>report</span></div>
+        </div>
+        <div class="run-elapsed"><span class="run-elapsed-num">0.0</span><span class="run-elapsed-unit">s</span></div>
+      </div>
+      <div class="now-line">
+        <span class="now-icon"></span>
+        <span class="now-text">starting…</span>
+      </div>
+      <details class="log-disc">
+        <summary>pipeline log</summary>
+        <ol class="run-log"></ol>
+      </details>
+    </div>
+  </div>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

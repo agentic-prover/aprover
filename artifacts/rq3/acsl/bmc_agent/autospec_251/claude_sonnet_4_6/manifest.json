@@ -1,0 +1,2010 @@
+[
+  {
+    "benchmark": "frama-c-problems",
+    "family": "arrays_and_loops",
+    "relative_path": "arrays_and_loops/1.c",
+    "case_id": "frama-c-problems__arrays_and_loops__1",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/arrays_and_loops/1.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "arrays_and_loops",
+    "relative_path": "arrays_and_loops/2.c",
+    "case_id": "frama-c-problems__arrays_and_loops__2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/arrays_and_loops/2.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "arrays_and_loops",
+    "relative_path": "arrays_and_loops/3.c",
+    "case_id": "frama-c-problems__arrays_and_loops__3",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/arrays_and_loops/3.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "arrays_and_loops",
+    "relative_path": "arrays_and_loops/4.c",
+    "case_id": "frama-c-problems__arrays_and_loops__4",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/arrays_and_loops/4.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "arrays_and_loops",
+    "relative_path": "arrays_and_loops/5.c",
+    "case_id": "frama-c-problems__arrays_and_loops__5",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/arrays_and_loops/5.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/absolute_value.c",
+    "case_id": "frama-c-problems__general_wp_problems__absolute_value",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/absolute_value.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/add.c",
+    "case_id": "frama-c-problems__general_wp_problems__add",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/add.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/ani.c",
+    "case_id": "frama-c-problems__general_wp_problems__ani",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/ani.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/diff.c",
+    "case_id": "frama-c-problems__general_wp_problems__diff",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/diff.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/gcd.c",
+    "case_id": "frama-c-problems__general_wp_problems__gcd",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/gcd.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/max_of_2.c",
+    "case_id": "frama-c-problems__general_wp_problems__max_of_2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/max_of_2.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/power.c",
+    "case_id": "frama-c-problems__general_wp_problems__power",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/power.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/simple_interest.c",
+    "case_id": "frama-c-problems__general_wp_problems__simple_interest",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/simple_interest.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/swap.c",
+    "case_id": "frama-c-problems__general_wp_problems__swap",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/swap.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/triangle_angles.c",
+    "case_id": "frama-c-problems__general_wp_problems__triangle_angles",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/triangle_angles.c",
+    "entry": "check_validity"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/triangle_sides.c",
+    "case_id": "frama-c-problems__general_wp_problems__triangle_sides",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/triangle_sides.c",
+    "entry": "test"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "general_wp_problems",
+    "relative_path": "general_wp_problems/wp1.c",
+    "case_id": "frama-c-problems__general_wp_problems__wp1",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/general_wp_problems/wp1.c",
+    "entry": "function"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/array_sum.c",
+    "case_id": "frama-c-problems__immutable_arrays__array_sum",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/array_sum.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/binary_search.c",
+    "case_id": "frama-c-problems__immutable_arrays__binary_search",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/binary_search.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/check_evens_in_array.c",
+    "case_id": "frama-c-problems__immutable_arrays__check_evens_in_array",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/check_evens_in_array.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/max.c",
+    "case_id": "frama-c-problems__immutable_arrays__max",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/max.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/occurences_of_x.c",
+    "case_id": "frama-c-problems__immutable_arrays__occurences_of_x",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/occurences_of_x.c",
+    "entry": "func"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/sample.c",
+    "case_id": "frama-c-problems__immutable_arrays__sample",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/sample.c",
+    "entry": "fun"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/search.c",
+    "case_id": "frama-c-problems__immutable_arrays__search",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/search.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "immutable_arrays",
+    "relative_path": "immutable_arrays/search_2.c",
+    "case_id": "frama-c-problems__immutable_arrays__search_2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/immutable_arrays/search_2.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/1.c",
+    "case_id": "frama-c-problems__loops__1",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/1.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/2.c",
+    "case_id": "frama-c-problems__loops__2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/2.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/3.c",
+    "case_id": "frama-c-problems__loops__3",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/3.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/4.c",
+    "case_id": "frama-c-problems__loops__4",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/4.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/fact.c",
+    "case_id": "frama-c-problems__loops__fact",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/fact.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/mult.c",
+    "case_id": "frama-c-problems__loops__mult",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/mult.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/sum_digits.c",
+    "case_id": "frama-c-problems__loops__sum_digits",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/sum_digits.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "loops",
+    "relative_path": "loops/sum_even.c",
+    "case_id": "frama-c-problems__loops__sum_even",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/loops/sum_even.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "miscellaneous",
+    "relative_path": "miscellaneous/array_find.c",
+    "case_id": "frama-c-problems__miscellaneous__array_find",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/miscellaneous/array_find.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "miscellaneous",
+    "relative_path": "miscellaneous/array_max_advanced.c",
+    "case_id": "frama-c-problems__miscellaneous__array_max_advanced",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/miscellaneous/array_max_advanced.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "miscellaneous",
+    "relative_path": "miscellaneous/array_swap.c",
+    "case_id": "frama-c-problems__miscellaneous__array_swap",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/miscellaneous/array_swap.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "miscellaneous",
+    "relative_path": "miscellaneous/increment_arr.c",
+    "case_id": "frama-c-problems__miscellaneous__increment_arr",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/miscellaneous/increment_arr.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "miscellaneous",
+    "relative_path": "miscellaneous/max_of_2.c",
+    "case_id": "frama-c-problems__miscellaneous__max_of_2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/miscellaneous/max_of_2.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "more_arrays",
+    "relative_path": "more_arrays/equal_arrays.c",
+    "case_id": "frama-c-problems__more_arrays__equal_arrays",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/more_arrays/equal_arrays.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "more_arrays",
+    "relative_path": "more_arrays/replace_evens.c",
+    "case_id": "frama-c-problems__more_arrays__replace_evens",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/more_arrays/replace_evens.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "more_arrays",
+    "relative_path": "more_arrays/reverse_array.c",
+    "case_id": "frama-c-problems__more_arrays__reverse_array",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/more_arrays/reverse_array.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "mutable_arrays",
+    "relative_path": "mutable_arrays/array_double.c",
+    "case_id": "frama-c-problems__mutable_arrays__array_double",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/mutable_arrays/array_double.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "mutable_arrays",
+    "relative_path": "mutable_arrays/bubble_sort.c",
+    "case_id": "frama-c-problems__mutable_arrays__bubble_sort",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/mutable_arrays/bubble_sort.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/add_pointers.c",
+    "case_id": "frama-c-problems__pointers__add_pointers",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/add_pointers.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/add_pointers_3_vars.c",
+    "case_id": "frama-c-problems__pointers__add_pointers_3_vars",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/add_pointers_3_vars.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/div_rem.c",
+    "case_id": "frama-c-problems__pointers__div_rem",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/div_rem.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/incr_a_by_b.c",
+    "case_id": "frama-c-problems__pointers__incr_a_by_b",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/incr_a_by_b.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/max_pointers.c",
+    "case_id": "frama-c-problems__pointers__max_pointers",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/max_pointers.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/order_3.c",
+    "case_id": "frama-c-problems__pointers__order_3",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/order_3.c",
+    "entry": "test"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/reset_1st.c",
+    "case_id": "frama-c-problems__pointers__reset_1st",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/reset_1st.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "frama-c-problems",
+    "family": "pointers",
+    "relative_path": "pointers/swap.c",
+    "case_id": "frama-c-problems__pointers__swap",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/frama-c-problems/pointers/swap.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "01.c",
+    "case_id": "fib_46__01",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/01.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "02.c",
+    "case_id": "fib_46__02",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/02.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "03.c",
+    "case_id": "fib_46__03",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/03.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "04.c",
+    "case_id": "fib_46__04",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/04.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "05.c",
+    "case_id": "fib_46__05",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/05.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "06.c",
+    "case_id": "fib_46__06",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/06.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "07.c",
+    "case_id": "fib_46__07",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/07.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "08.c",
+    "case_id": "fib_46__08",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/08.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "09.c",
+    "case_id": "fib_46__09",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/09.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "10.c",
+    "case_id": "fib_46__10",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/10.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "11.c",
+    "case_id": "fib_46__11",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/11.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "12.c",
+    "case_id": "fib_46__12",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/12.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "13.c",
+    "case_id": "fib_46__13",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/13.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "14.c",
+    "case_id": "fib_46__14",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/14.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "15.c",
+    "case_id": "fib_46__15",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/15.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "16.c",
+    "case_id": "fib_46__16",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/16.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "17.c",
+    "case_id": "fib_46__17",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/17.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "18.c",
+    "case_id": "fib_46__18",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/18.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "19.c",
+    "case_id": "fib_46__19",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/19.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "20.c",
+    "case_id": "fib_46__20",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/20.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "21.c",
+    "case_id": "fib_46__21",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/21.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "22.c",
+    "case_id": "fib_46__22",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/22.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "23.c",
+    "case_id": "fib_46__23",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/23.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "24.c",
+    "case_id": "fib_46__24",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/24.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "25.c",
+    "case_id": "fib_46__25",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/25.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "26.c",
+    "case_id": "fib_46__26",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/26.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "27.c",
+    "case_id": "fib_46__27",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/27.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "28.c",
+    "case_id": "fib_46__28",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/28.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "29.c",
+    "case_id": "fib_46__29",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/29.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "30.c",
+    "case_id": "fib_46__30",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/30.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "31.c",
+    "case_id": "fib_46__31",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/31.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "32.c",
+    "case_id": "fib_46__32",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/32.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "33.c",
+    "case_id": "fib_46__33",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/33.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "34.c",
+    "case_id": "fib_46__34",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/34.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "35.c",
+    "case_id": "fib_46__35",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/35.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "36.c",
+    "case_id": "fib_46__36",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/36.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "37.c",
+    "case_id": "fib_46__37",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/37.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "38.c",
+    "case_id": "fib_46__38",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/38.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "39.c",
+    "case_id": "fib_46__39",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/39.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "40.c",
+    "case_id": "fib_46__40",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/40.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "41.c",
+    "case_id": "fib_46__41",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/41.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "42.c",
+    "case_id": "fib_46__42",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/42.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "43.c",
+    "case_id": "fib_46__43",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/43.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "44.c",
+    "case_id": "fib_46__44",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/44.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "45.c",
+    "case_id": "fib_46__45",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/45.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "fib_46",
+    "family": "fib_46",
+    "relative_path": "46.c",
+    "case_id": "fib_46__46",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/fib_46_benchmark/46.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier/array_true-unreach-call1/array_true-unreach-call1.c",
+    "case_id": "svcomp__quantifier__array_true-unreach-call1__array_true-unreach-call1",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier/array_true-unreach-call1/array_true-unreach-call1.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier/array_true-unreach-call2/array_true-unreach-call2.c",
+    "case_id": "svcomp__quantifier__array_true-unreach-call2__array_true-unreach-call2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier/array_true-unreach-call2/array_true-unreach-call2.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/afnp2014_true-unreach-call/afnp2014_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__afnp2014_true-unreach-call__afnp2014_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/afnp2014_true-unreach-call/afnp2014_true-unreach-call.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/bhmr2007/bhmr2007_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__bhmr2007__bhmr2007_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/bhmr2007/bhmr2007_true-unreach-call.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/cggmp2005_true-unreach-call/cggmp2005_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__cggmp2005_true-unreach-call__cggmp2005_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/cggmp2005_true-unreach-call/cggmp2005_true-unreach-call.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/count_up_down/count_up_down_true-unreach-call_true-termination.c",
+    "case_id": "svcomp__quantifier-free__count_up_down__count_up_down_true-unreach-call_true-termination",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/count_up_down/count_up_down_true-unreach-call_true-termination.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/css2003_true-unreach-call/css2003_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__css2003_true-unreach-call__css2003_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/css2003_true-unreach-call/css2003_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/ddlm2013_true-unreach-call/ddlm2013_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__ddlm2013_true-unreach-call__ddlm2013_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/ddlm2013_true-unreach-call/ddlm2013_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/down_true-unreach-call/down_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__down_true-unreach-call__down_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/down_true-unreach-call/down_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/half_2_true-unreach-call/half_2_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__half_2_true-unreach-call__half_2_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/half_2_true-unreach-call/half_2_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/hhk2008/hhk2008_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__hhk2008__hhk2008_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/hhk2008/hhk2008_true-unreach-call.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/jm2006/jm2006_variant_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__jm2006__jm2006_variant_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/jm2006/jm2006_variant_true-unreach-call.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/jm2006_true_unreach_call/jm2006_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__jm2006_true_unreach_call__jm2006_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/jm2006_true_unreach_call/jm2006_true-unreach-call.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/large_const_true-unreach-call/large_const_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__large_const_true-unreach-call__large_const_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/large_const_true-unreach-call/large_const_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/nest-if3_true-unreach-call/nest-if3_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__nest-if3_true-unreach-call__nest-if3_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/nest-if3_true-unreach-call/nest-if3_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/nested6_true-unreach-call/nested6_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__nested6_true-unreach-call__nested6_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/nested6_true-unreach-call/nested6_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/nested9_true-unreach-call/nested9_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__nested9_true-unreach-call__nested9_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/nested9_true-unreach-call/nested9_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/seq_true-unreach-call/seq_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__seq_true-unreach-call__seq_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/seq_true-unreach-call/seq_true-unreach-call.c",
+    "entry": "foon"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/sum01/sum01_true-unreach-call_true-termination.c",
+    "case_id": "svcomp__quantifier-free__sum01__sum01_true-unreach-call_true-termination",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/sum01/sum01_true-unreach-call_true-termination.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/terminator03/terminator_03_true-unreach-call_true-termination.c",
+    "case_id": "svcomp__quantifier-free__terminator03__terminator_03_true-unreach-call_true-termination",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/terminator03/terminator_03_true-unreach-call_true-termination.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "svcomp",
+    "family": "svcomp",
+    "relative_path": "quantifier-free/up_true-unreach-call/up_true-unreach-call.c",
+    "case_id": "svcomp__quantifier-free__up_true-unreach-call__up_true-unreach-call",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/SVCOMP/quantifier-free/up_true-unreach-call/up_true-unreach-call.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "1.c",
+    "case_id": "code2inv_133__1",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/1.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "10.c",
+    "case_id": "code2inv_133__10",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/10.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "100.c",
+    "case_id": "code2inv_133__100",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/100.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "101.c",
+    "case_id": "code2inv_133__101",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/101.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "102.c",
+    "case_id": "code2inv_133__102",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/102.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "103.c",
+    "case_id": "code2inv_133__103",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/103.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "104.c",
+    "case_id": "code2inv_133__104",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/104.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "105.c",
+    "case_id": "code2inv_133__105",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/105.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "106.c",
+    "case_id": "code2inv_133__106",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/106.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "107.c",
+    "case_id": "code2inv_133__107",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/107.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "108.c",
+    "case_id": "code2inv_133__108",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/108.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "109.c",
+    "case_id": "code2inv_133__109",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/109.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "11.c",
+    "case_id": "code2inv_133__11",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/11.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "110.c",
+    "case_id": "code2inv_133__110",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/110.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "111.c",
+    "case_id": "code2inv_133__111",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/111.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "112.c",
+    "case_id": "code2inv_133__112",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/112.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "113.c",
+    "case_id": "code2inv_133__113",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/113.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "114.c",
+    "case_id": "code2inv_133__114",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/114.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "115.c",
+    "case_id": "code2inv_133__115",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/115.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "116.c",
+    "case_id": "code2inv_133__116",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/116.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "117.c",
+    "case_id": "code2inv_133__117",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/117.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "118.c",
+    "case_id": "code2inv_133__118",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/118.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "119.c",
+    "case_id": "code2inv_133__119",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/119.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "12.c",
+    "case_id": "code2inv_133__12",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/12.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "120.c",
+    "case_id": "code2inv_133__120",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/120.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "121.c",
+    "case_id": "code2inv_133__121",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/121.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "122.c",
+    "case_id": "code2inv_133__122",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/122.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "123.c",
+    "case_id": "code2inv_133__123",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/123.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "124.c",
+    "case_id": "code2inv_133__124",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/124.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "125.c",
+    "case_id": "code2inv_133__125",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/125.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "126.c",
+    "case_id": "code2inv_133__126",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/126.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "127.c",
+    "case_id": "code2inv_133__127",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/127.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "128.c",
+    "case_id": "code2inv_133__128",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/128.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "129.c",
+    "case_id": "code2inv_133__129",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/129.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "13.c",
+    "case_id": "code2inv_133__13",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/13.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "130.c",
+    "case_id": "code2inv_133__130",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/130.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "131.c",
+    "case_id": "code2inv_133__131",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/131.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "132.c",
+    "case_id": "code2inv_133__132",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/132.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "133.c",
+    "case_id": "code2inv_133__133",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/133.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "14.c",
+    "case_id": "code2inv_133__14",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/14.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "15.c",
+    "case_id": "code2inv_133__15",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/15.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "16.c",
+    "case_id": "code2inv_133__16",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/16.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "17.c",
+    "case_id": "code2inv_133__17",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/17.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "18.c",
+    "case_id": "code2inv_133__18",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/18.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "19.c",
+    "case_id": "code2inv_133__19",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/19.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "2.c",
+    "case_id": "code2inv_133__2",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/2.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "20.c",
+    "case_id": "code2inv_133__20",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/20.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "21.c",
+    "case_id": "code2inv_133__21",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/21.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "22.c",
+    "case_id": "code2inv_133__22",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/22.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "23.c",
+    "case_id": "code2inv_133__23",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/23.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "24.c",
+    "case_id": "code2inv_133__24",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/24.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "25.c",
+    "case_id": "code2inv_133__25",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/25.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "26.c",
+    "case_id": "code2inv_133__26",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/26.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "27.c",
+    "case_id": "code2inv_133__27",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/27.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "28.c",
+    "case_id": "code2inv_133__28",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/28.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "29.c",
+    "case_id": "code2inv_133__29",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/29.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "3.c",
+    "case_id": "code2inv_133__3",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/3.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "30.c",
+    "case_id": "code2inv_133__30",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/30.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "31.c",
+    "case_id": "code2inv_133__31",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/31.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "32.c",
+    "case_id": "code2inv_133__32",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/32.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "33.c",
+    "case_id": "code2inv_133__33",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/33.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "34.c",
+    "case_id": "code2inv_133__34",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/34.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "35.c",
+    "case_id": "code2inv_133__35",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/35.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "36.c",
+    "case_id": "code2inv_133__36",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/36.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "37.c",
+    "case_id": "code2inv_133__37",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/37.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "38.c",
+    "case_id": "code2inv_133__38",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/38.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "39.c",
+    "case_id": "code2inv_133__39",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/39.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "4.c",
+    "case_id": "code2inv_133__4",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/4.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "40.c",
+    "case_id": "code2inv_133__40",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/40.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "41.c",
+    "case_id": "code2inv_133__41",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/41.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "42.c",
+    "case_id": "code2inv_133__42",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/42.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "43.c",
+    "case_id": "code2inv_133__43",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/43.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "44.c",
+    "case_id": "code2inv_133__44",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/44.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "45.c",
+    "case_id": "code2inv_133__45",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/45.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "46.c",
+    "case_id": "code2inv_133__46",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/46.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "47.c",
+    "case_id": "code2inv_133__47",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/47.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "48.c",
+    "case_id": "code2inv_133__48",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/48.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "49.c",
+    "case_id": "code2inv_133__49",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/49.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "5.c",
+    "case_id": "code2inv_133__5",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/5.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "50.c",
+    "case_id": "code2inv_133__50",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/50.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "51.c",
+    "case_id": "code2inv_133__51",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/51.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "52.c",
+    "case_id": "code2inv_133__52",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/52.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "53.c",
+    "case_id": "code2inv_133__53",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/53.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "54.c",
+    "case_id": "code2inv_133__54",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/54.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "55.c",
+    "case_id": "code2inv_133__55",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/55.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "56.c",
+    "case_id": "code2inv_133__56",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/56.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "57.c",
+    "case_id": "code2inv_133__57",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/57.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "58.c",
+    "case_id": "code2inv_133__58",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/58.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "59.c",
+    "case_id": "code2inv_133__59",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/59.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "6.c",
+    "case_id": "code2inv_133__6",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/6.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "60.c",
+    "case_id": "code2inv_133__60",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/60.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "61.c",
+    "case_id": "code2inv_133__61",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/61.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "62.c",
+    "case_id": "code2inv_133__62",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/62.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "63.c",
+    "case_id": "code2inv_133__63",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/63.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "64.c",
+    "case_id": "code2inv_133__64",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/64.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "65.c",
+    "case_id": "code2inv_133__65",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/65.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "66.c",
+    "case_id": "code2inv_133__66",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/66.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "67.c",
+    "case_id": "code2inv_133__67",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/67.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "68.c",
+    "case_id": "code2inv_133__68",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/68.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "69.c",
+    "case_id": "code2inv_133__69",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/69.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "7.c",
+    "case_id": "code2inv_133__7",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/7.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "70.c",
+    "case_id": "code2inv_133__70",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/70.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "71.c",
+    "case_id": "code2inv_133__71",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/71.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "72.c",
+    "case_id": "code2inv_133__72",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/72.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "73.c",
+    "case_id": "code2inv_133__73",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/73.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "74.c",
+    "case_id": "code2inv_133__74",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/74.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "75.c",
+    "case_id": "code2inv_133__75",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/75.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "76.c",
+    "case_id": "code2inv_133__76",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/76.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "77.c",
+    "case_id": "code2inv_133__77",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/77.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "78.c",
+    "case_id": "code2inv_133__78",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/78.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "79.c",
+    "case_id": "code2inv_133__79",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/79.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "8.c",
+    "case_id": "code2inv_133__8",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/8.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "80.c",
+    "case_id": "code2inv_133__80",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/80.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "81.c",
+    "case_id": "code2inv_133__81",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/81.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "82.c",
+    "case_id": "code2inv_133__82",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/82.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "83.c",
+    "case_id": "code2inv_133__83",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/83.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "84.c",
+    "case_id": "code2inv_133__84",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/84.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "85.c",
+    "case_id": "code2inv_133__85",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/85.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "86.c",
+    "case_id": "code2inv_133__86",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/86.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "87.c",
+    "case_id": "code2inv_133__87",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/87.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "88.c",
+    "case_id": "code2inv_133__88",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/88.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "89.c",
+    "case_id": "code2inv_133__89",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/89.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "9.c",
+    "case_id": "code2inv_133__9",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/9.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "90.c",
+    "case_id": "code2inv_133__90",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/90.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "91.c",
+    "case_id": "code2inv_133__91",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/91.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "92.c",
+    "case_id": "code2inv_133__92",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/92.c",
+    "entry": "main"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "93.c",
+    "case_id": "code2inv_133__93",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/93.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "94.c",
+    "case_id": "code2inv_133__94",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/94.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "95.c",
+    "case_id": "code2inv_133__95",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/95.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "96.c",
+    "case_id": "code2inv_133__96",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/96.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "97.c",
+    "case_id": "code2inv_133__97",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/97.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "98.c",
+    "case_id": "code2inv_133__98",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/98.c",
+    "entry": "foo"
+  },
+  {
+    "benchmark": "code2inv_133",
+    "family": "code2inv_133",
+    "relative_path": "99.c",
+    "case_id": "code2inv_133__99",
+    "source": "${AUTOSPEC_BENCHMARK_ROOT}/code2inv_133_benchmark/99.c",
+    "entry": "foo"
+  }
+]

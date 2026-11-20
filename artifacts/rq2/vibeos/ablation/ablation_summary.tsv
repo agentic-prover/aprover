@@ -1,0 +1,4 @@
+config	removes	findings	confirmed_recovered	conditional_recovered	known_fp_reemitted	unlabeled	stage2_no_caller	realism_filtered	refinements_accepted	llm_cost_usd	llm_calls	wall_s_sum
+full	nothing	16	6/11	1/6	2/9	6	18	9	0/20	33.45	1473	9411
+norealism	realism filter (triage decides)	9	2/11	0/6	0/9	7	19	0	0/19	36.36	1694	13100
+floor	config agent, realism, triage, feedback loop, refiner (LLM specs still on)	28	5/11	2/6	4/9	16	17	0	0/17	5.14	301	1595

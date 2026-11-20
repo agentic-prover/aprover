@@ -1,0 +1,12 @@
+project,domain,count
+u-boot,bootloader: filesystem / EFI parsers,32
+gpac,multimedia framework,10
+libbej,Redfish BEJ decoder,4
+jq,JSON processor,2
+libredwg,DWG/CAD reader,2
+libarchive,archive formats,1
+libmikmod,module-audio loaders,4
+libmodplug,module-audio loaders,2
+adplug,AdLib-audio loaders,3
+CCC,AI-generated Rust C compiler,7
+AWS Neuron,Trainium/Inferentia ioctl handler,1

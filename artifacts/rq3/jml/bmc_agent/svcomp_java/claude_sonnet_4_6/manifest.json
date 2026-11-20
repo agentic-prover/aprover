@@ -1,0 +1,1327 @@
+[
+  {
+    "name": "Ackermann",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Ackermann/Ackermann.java",
+    "oracle": ""
+  },
+  {
+    "name": "Addition",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Addition/Addition.java",
+    "oracle": ""
+  },
+  {
+    "name": "AlarmOutputs",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/AlarmOutputs/AlarmOutputs.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArithmeticException1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArithmeticException1/ArithmeticException1.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArithmeticException5",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArithmeticException5/ArithmeticException5.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArithmeticException6",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArithmeticException6/ArithmeticException6.java",
+    "oracle": ""
+  },
+  {
+    "name": "Array2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Array2/Array2.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArrayIndexOutOfBoundsException1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArrayIndexOutOfBoundsException1/ArrayIndexOutOfBoundsException1.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArrayIndexOutOfBoundsException2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArrayIndexOutOfBoundsException2/ArrayIndexOutOfBoundsException2.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArrayIndexOutOfBoundsException3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArrayIndexOutOfBoundsException3/ArrayIndexOutOfBoundsException3.java",
+    "oracle": ""
+  },
+  {
+    "name": "ArrayWhatNot",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ArrayWhatNot/ArrayWhatNot.java",
+    "oracle": ""
+  },
+  {
+    "name": "BellmanFord",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/BellmanFord/BellmanFord.java",
+    "oracle": ""
+  },
+  {
+    "name": "BinaryTree",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/BinaryTree/BinaryTree.java",
+    "oracle": ""
+  },
+  {
+    "name": "BufferedReaderReadLine",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/BufferedReaderReadLine/BufferedReaderReadLine.java",
+    "oracle": ""
+  },
+  {
+    "name": "BugTestGen095",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/BugTestGen095/BugTestGen095.java",
+    "oracle": ""
+  },
+  {
+    "name": "BugTestGen119",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/BugTestGen119/BugTestGen119.java",
+    "oracle": ""
+  },
+  {
+    "name": "BugTestGen1192",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/BugTestGen1192/BugTestGen1192.java",
+    "oracle": ""
+  },
+  {
+    "name": "CharSequenceBug",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/CharSequenceBug/CharSequenceBug.java",
+    "oracle": ""
+  },
+  {
+    "name": "CharSequenceToString",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/CharSequenceToString/CharSequenceToString.java",
+    "oracle": ""
+  },
+  {
+    "name": "ClassCastException1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ClassCastException1/ClassCastException1.java",
+    "oracle": ""
+  },
+  {
+    "name": "ClassCastException2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ClassCastException2/ClassCastException2.java",
+    "oracle": ""
+  },
+  {
+    "name": "ClassCastException3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ClassCastException3/ClassCastException3.java",
+    "oracle": ""
+  },
+  {
+    "name": "Class_method1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Class_method1/Class_method1.java",
+    "oracle": ""
+  },
+  {
+    "name": "Connection",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Connection/Connection.java",
+    "oracle": ""
+  },
+  {
+    "name": "Cookie",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Cookie/Cookie.java",
+    "oracle": ""
+  },
+  {
+    "name": "Divs32",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Divs32/Divs32.java",
+    "oracle": ""
+  },
+  {
+    "name": "DriverManager",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/DriverManager/DriverManager.java",
+    "oracle": ""
+  },
+  {
+    "name": "Environment",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Environment/Environment.java",
+    "oracle": ""
+  },
+  {
+    "name": "EvenOdd",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/EvenOdd/EvenOdd.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExDarko",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExDarko/ExDarko.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExException",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExException/ExException.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExGenSymExe",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExGenSymExe/ExGenSymExe.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExLazy",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExLazy/ExLazy.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExMIT",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExMIT/ExMIT.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe/ExSymExe.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe1/ExSymExe1.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe10",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe10/ExSymExe10.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe11",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe11/ExSymExe11.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe12",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe12/ExSymExe12.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe13",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe13/ExSymExe13.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe14",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe14/ExSymExe14.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe15",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe15/ExSymExe15.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe16",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe16/ExSymExe16.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe17",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe17/ExSymExe17.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe18",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe18/ExSymExe18.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe19",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe19/ExSymExe19.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe2/ExSymExe2.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe20",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe20/ExSymExe20.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe21",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe21/ExSymExe21.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe25",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe25/ExSymExe25.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe26",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe26/ExSymExe26.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe27",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe27/ExSymExe27.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe28",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe28/ExSymExe28.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe29",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe29/ExSymExe29.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe3/ExSymExe3.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe4",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe4/ExSymExe4.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe5",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe5/ExSymExe5.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe6",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe6/ExSymExe6.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe7",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe7/ExSymExe7.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe8",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe8/ExSymExe8.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExe9",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExe9/ExSymExe9.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeArrays",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeArrays/ExSymExeArrays.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeBool",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeBool/ExSymExeBool.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeComplexMath",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeComplexMath/ExSymExeComplexMath.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeD2I",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeD2I/ExSymExeD2I.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeD2L",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeD2L/ExSymExeD2L.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeF2I",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeF2I/ExSymExeF2I.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeF2L",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeF2L/ExSymExeF2L.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeFNEG",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeFNEG/ExSymExeFNEG.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeGetStatic",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeGetStatic/ExSymExeGetStatic.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeI2D",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeI2D/ExSymExeI2D.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeI2F",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeI2F/ExSymExeI2F.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeLCMP",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeLCMP/ExSymExeLCMP.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeLongBytecodes",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeLongBytecodes/ExSymExeLongBytecodes.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeResearch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeResearch/ExSymExeResearch.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeSimple",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeSimple/ExSymExeSimple.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeSuzette",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeSuzette/ExSymExeSuzette.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeSwitch",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeSwitch/ExSymExeSwitch.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeTestAssignments",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeTestAssignments/ExSymExeTestAssignments.java",
+    "oracle": ""
+  },
+  {
+    "name": "ExSymExeTestClassFields",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ExSymExeTestClassFields/ExSymExeTestClassFields.java",
+    "oracle": ""
+  },
+  {
+    "name": "Fibonacci",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Fibonacci/Fibonacci.java",
+    "oracle": ""
+  },
+  {
+    "name": "Float",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Float/Float.java",
+    "oracle": ""
+  },
+  {
+    "name": "GCD",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/GCD/GCD.java",
+    "oracle": ""
+  },
+  {
+    "name": "Hanoi",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Hanoi/Hanoi.java",
+    "oracle": ""
+  },
+  {
+    "name": "HttpServletRequest",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/HttpServletRequest/HttpServletRequest.java",
+    "oracle": ""
+  },
+  {
+    "name": "HttpServletResponse",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/HttpServletResponse/HttpServletResponse.java",
+    "oracle": ""
+  },
+  {
+    "name": "HttpSession",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/HttpSession/HttpSession.java",
+    "oracle": ""
+  },
+  {
+    "name": "IO",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/IO/IO.java",
+    "oracle": ""
+  },
+  {
+    "name": "InfiniteLoop",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/InfiniteLoop/InfiniteLoop.java",
+    "oracle": ""
+  },
+  {
+    "name": "Inheritance1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Inheritance1/Inheritance1.java",
+    "oracle": ""
+  },
+  {
+    "name": "InsertionSort",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/InsertionSort/InsertionSort.java",
+    "oracle": ""
+  },
+  {
+    "name": "Mccarthy91",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Mccarthy91/Mccarthy91.java",
+    "oracle": ""
+  },
+  {
+    "name": "MergeSortIterative",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/MergeSortIterative/MergeSortIterative.java",
+    "oracle": ""
+  },
+  {
+    "name": "MinePump",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/MinePump/MinePump.java",
+    "oracle": ""
+  },
+  {
+    "name": "MultCommutative",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/MultCommutative/MultCommutative.java",
+    "oracle": ""
+  },
+  {
+    "name": "NegativeArraySizeException1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/NegativeArraySizeException1/NegativeArraySizeException1.java",
+    "oracle": ""
+  },
+  {
+    "name": "NegativeArraySizeException2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/NegativeArraySizeException2/NegativeArraySizeException2.java",
+    "oracle": ""
+  },
+  {
+    "name": "NullPointerException1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/NullPointerException1/NullPointerException1.java",
+    "oracle": ""
+  },
+  {
+    "name": "NullPointerException2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/NullPointerException2/NullPointerException2.java",
+    "oracle": ""
+  },
+  {
+    "name": "NullPointerException3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/NullPointerException3/NullPointerException3.java",
+    "oracle": ""
+  },
+  {
+    "name": "NullPointerException4",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/NullPointerException4/NullPointerException4.java",
+    "oracle": ""
+  },
+  {
+    "name": "OverapproximationString01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/OverapproximationString01/OverapproximationString01.java",
+    "oracle": ""
+  },
+  {
+    "name": "Primes",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Primes/Primes.java",
+    "oracle": ""
+  },
+  {
+    "name": "RegexMatches01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/RegexMatches01/RegexMatches01.java",
+    "oracle": ""
+  },
+  {
+    "name": "RegexMatches02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/RegexMatches02/RegexMatches02.java",
+    "oracle": ""
+  },
+  {
+    "name": "SortedListInsert",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/SortedListInsert/SortedListInsert.java",
+    "oracle": ""
+  },
+  {
+    "name": "Statement",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Statement/Statement.java",
+    "oracle": ""
+  },
+  {
+    "name": "StaticCharMethods01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StaticCharMethods01/StaticCharMethods01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StaticCharMethods02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StaticCharMethods02/StaticCharMethods02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StaticCharMethods03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StaticCharMethods03/StaticCharMethods03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StaticCharMethods04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StaticCharMethods04/StaticCharMethods04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StaticCharMethods05",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StaticCharMethods05/StaticCharMethods05.java",
+    "oracle": ""
+  },
+  {
+    "name": "StaticCharMethods06",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StaticCharMethods06/StaticCharMethods06.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderAppend01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderAppend01/StringBuilderAppend01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderAppend02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderAppend02/StringBuilderAppend02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderCapLen01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderCapLen01/StringBuilderCapLen01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderCapLen02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderCapLen02/StringBuilderCapLen02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderCapLen03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderCapLen03/StringBuilderCapLen03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderCapLen04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderCapLen04/StringBuilderCapLen04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderChars01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderChars01/StringBuilderChars01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderChars02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderChars02/StringBuilderChars02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderChars03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderChars03/StringBuilderChars03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderChars04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderChars04/StringBuilderChars04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderChars05",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderChars05/StringBuilderChars05.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringBuilderChars06",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringBuilderChars06/StringBuilderChars06.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringCompare01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringCompare01/StringCompare01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringCompare02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringCompare02/StringCompare02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringCompare03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringCompare03/StringCompare03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringCompare04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringCompare04/StringCompare04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringCompare05",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringCompare05/StringCompare05.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConcatenation01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConcatenation01/StringConcatenation01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConcatenation02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConcatenation02/StringConcatenation02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConcatenation03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConcatenation03/StringConcatenation03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConcatenation04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConcatenation04/StringConcatenation04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConstructors01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConstructors01/StringConstructors01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConstructors02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConstructors02/StringConstructors02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConstructors03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConstructors03/StringConstructors03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConstructors04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConstructors04/StringConstructors04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringConstructors05",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringConstructors05/StringConstructors05.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringContains01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringContains01/StringContains01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringContains02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringContains02/StringContains02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringIndexMethods01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringIndexMethods01/StringIndexMethods01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringIndexMethods02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringIndexMethods02/StringIndexMethods02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringIndexMethods03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringIndexMethods03/StringIndexMethods03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringIndexMethods04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringIndexMethods04/StringIndexMethods04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringIndexMethods05",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringIndexMethods05/StringIndexMethods05.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringMiscellaneous01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringMiscellaneous01/StringMiscellaneous01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringMiscellaneous02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringMiscellaneous02/StringMiscellaneous02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringMiscellaneous03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringMiscellaneous03/StringMiscellaneous03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringMiscellaneous04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringMiscellaneous04/StringMiscellaneous04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringStartEnd01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringStartEnd01/StringStartEnd01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringStartEnd02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringStartEnd02/StringStartEnd02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringStartEnd03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringStartEnd03/StringStartEnd03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf01/StringValueOf01.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf02/StringValueOf02.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf03/StringValueOf03.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf04",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf04/StringValueOf04.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf05",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf05/StringValueOf05.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf06",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf06/StringValueOf06.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf07",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf07/StringValueOf07.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf08",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf08/StringValueOf08.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf09",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf09/StringValueOf09.java",
+    "oracle": ""
+  },
+  {
+    "name": "StringValueOf10",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StringValueOf10/StringValueOf10.java",
+    "oracle": ""
+  },
+  {
+    "name": "StripLeadingAndTrailingQuotes",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StripLeadingAndTrailingQuotes/StripLeadingAndTrailingQuotes.java",
+    "oracle": ""
+  },
+  {
+    "name": "StripLeadingHyphens",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/StripLeadingHyphens/StripLeadingHyphens.java",
+    "oracle": ""
+  },
+  {
+    "name": "SubString01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/SubString01/SubString01.java",
+    "oracle": ""
+  },
+  {
+    "name": "SubString02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/SubString02/SubString02.java",
+    "oracle": ""
+  },
+  {
+    "name": "SubString03",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/SubString03/SubString03.java",
+    "oracle": ""
+  },
+  {
+    "name": "TestLazy",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/TestLazy/TestLazy.java",
+    "oracle": ""
+  },
+  {
+    "name": "TokenTest01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/TokenTest01/TokenTest01.java",
+    "oracle": ""
+  },
+  {
+    "name": "TokenTest02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/TokenTest02/TokenTest02.java",
+    "oracle": ""
+  },
+  {
+    "name": "Trie",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Trie/Trie.java",
+    "oracle": ""
+  },
+  {
+    "name": "TspSolver",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/TspSolver/TspSolver.java",
+    "oracle": ""
+  },
+  {
+    "name": "URLDecoder01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/URLDecoder01/URLDecoder01.java",
+    "oracle": ""
+  },
+  {
+    "name": "URLDecoder02",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/URLDecoder02/URLDecoder02.java",
+    "oracle": ""
+  },
+  {
+    "name": "ValidateInput01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ValidateInput01/ValidateInput01.java",
+    "oracle": ""
+  },
+  {
+    "name": "Verifier",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/Verifier/Verifier.java",
+    "oracle": ""
+  },
+  {
+    "name": "WBS",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/WBS/WBS.java",
+    "oracle": ""
+  },
+  {
+    "name": "aastore_aaload1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/aastore_aaload1/aastore_aaload1.java",
+    "oracle": ""
+  },
+  {
+    "name": "addition01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/addition01/addition01.java",
+    "oracle": ""
+  },
+  {
+    "name": "array_iteration01",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/array_iteration01/array_iteration01.java",
+    "oracle": ""
+  },
+  {
+    "name": "arraylength1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/arraylength1/arraylength1.java",
+    "oracle": ""
+  },
+  {
+    "name": "arrayread1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/arrayread1/arrayread1.java",
+    "oracle": ""
+  },
+  {
+    "name": "assert1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/assert1/assert1.java",
+    "oracle": ""
+  },
+  {
+    "name": "assert2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/assert2/assert2.java",
+    "oracle": ""
+  },
+  {
+    "name": "assert3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/assert3/assert3.java",
+    "oracle": ""
+  },
+  {
+    "name": "assert4",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/assert4/assert4.java",
+    "oracle": ""
+  },
+  {
+    "name": "assert5",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/assert5/assert5.java",
+    "oracle": ""
+  },
+  {
+    "name": "assert6",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/assert6/assert6.java",
+    "oracle": ""
+  },
+  {
+    "name": "astore_aload1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/astore_aload1/astore_aload1.java",
+    "oracle": ""
+  },
+  {
+    "name": "athrow1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/athrow1/athrow1.java",
+    "oracle": ""
+  },
+  {
+    "name": "basic1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/basic1/basic1.java",
+    "oracle": ""
+  },
+  {
+    "name": "bitwise1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/bitwise1/bitwise1.java",
+    "oracle": ""
+  },
+  {
+    "name": "boolean1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/boolean1/boolean1.java",
+    "oracle": ""
+  },
+  {
+    "name": "boolean2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/boolean2/boolean2.java",
+    "oracle": ""
+  },
+  {
+    "name": "boundcheck100",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/boundcheck100/boundcheck100.java",
+    "oracle": ""
+  },
+  {
+    "name": "boundcheck200",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/boundcheck200/boundcheck200.java",
+    "oracle": ""
+  },
+  {
+    "name": "boundcheck30",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/boundcheck30/boundcheck30.java",
+    "oracle": ""
+  },
+  {
+    "name": "calc",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/calc/calc.java",
+    "oracle": ""
+  },
+  {
+    "name": "cast1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/cast1/cast1.java",
+    "oracle": ""
+  },
+  {
+    "name": "catch1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/catch1/catch1.java",
+    "oracle": ""
+  },
+  {
+    "name": "char1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/char1/char1.java",
+    "oracle": ""
+  },
+  {
+    "name": "charArray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/charArray/charArray.java",
+    "oracle": ""
+  },
+  {
+    "name": "classtest1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/classtest1/classtest1.java",
+    "oracle": ""
+  },
+  {
+    "name": "const1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/const1/const1.java",
+    "oracle": ""
+  },
+  {
+    "name": "constructor1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/constructor1/constructor1.java",
+    "oracle": ""
+  },
+  {
+    "name": "double2long",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/double2long/double2long.java",
+    "oracle": ""
+  },
+  {
+    "name": "enum1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/enum1/enum1.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions1/exceptions1.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions10",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions10/exceptions10.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions11",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions11/exceptions11.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions12",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions12/exceptions12.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions13",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions13/exceptions13.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions14",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions14/exceptions14.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions15",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions15/exceptions15.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions16",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions16/exceptions16.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions18",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions18/exceptions18.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions2/exceptions2.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions3/exceptions3.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions4",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions4/exceptions4.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions5",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions5/exceptions5.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions6",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions6/exceptions6.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions7",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions7/exceptions7.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions8",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions8/exceptions8.java",
+    "oracle": ""
+  },
+  {
+    "name": "exceptions9",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/exceptions9/exceptions9.java",
+    "oracle": ""
+  },
+  {
+    "name": "fcmpx_dcmpx1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/fcmpx_dcmpx1/fcmpx_dcmpx1.java",
+    "oracle": ""
+  },
+  {
+    "name": "iarith1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/iarith1/iarith1.java",
+    "oracle": ""
+  },
+  {
+    "name": "iarith2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/iarith2/iarith2.java",
+    "oracle": ""
+  },
+  {
+    "name": "if_acmp1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/if_acmp1/if_acmp1.java",
+    "oracle": ""
+  },
+  {
+    "name": "if_expr1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/if_expr1/if_expr1.java",
+    "oracle": ""
+  },
+  {
+    "name": "if_icmp1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/if_icmp1/if_icmp1.java",
+    "oracle": ""
+  },
+  {
+    "name": "ifxx1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/ifxx1/ifxx1.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof1/instanceof1.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof2/instanceof2.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof3/instanceof3.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof4",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof4/instanceof4.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof5",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof5/instanceof5.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof6",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof6/instanceof6.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof7",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof7/instanceof7.java",
+    "oracle": ""
+  },
+  {
+    "name": "instanceof8",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/instanceof8/instanceof8.java",
+    "oracle": ""
+  },
+  {
+    "name": "interface1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/interface1/interface1.java",
+    "oracle": ""
+  },
+  {
+    "name": "java_append_char",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/java_append_char/java_append_char.java",
+    "oracle": ""
+  },
+  {
+    "name": "lazyloading4",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/lazyloading4/lazyloading4.java",
+    "oracle": ""
+  },
+  {
+    "name": "list1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/list1/list1.java",
+    "oracle": ""
+  },
+  {
+    "name": "list2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/list2/list2.java",
+    "oracle": ""
+  },
+  {
+    "name": "long1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/long1/long1.java",
+    "oracle": ""
+  },
+  {
+    "name": "lookupswitch1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/lookupswitch1/lookupswitch1.java",
+    "oracle": ""
+  },
+  {
+    "name": "multinewarray",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/multinewarray/multinewarray.java",
+    "oracle": ""
+  },
+  {
+    "name": "overloading1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/overloading1/overloading1.java",
+    "oracle": ""
+  },
+  {
+    "name": "package1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/package1/package1.java",
+    "oracle": ""
+  },
+  {
+    "name": "putfield_getfield1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/putfield_getfield1/putfield_getfield1.java",
+    "oracle": ""
+  },
+  {
+    "name": "putstatic_getstatic1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/putstatic_getstatic1/putstatic_getstatic1.java",
+    "oracle": ""
+  },
+  {
+    "name": "radians",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/radians/radians.java",
+    "oracle": ""
+  },
+  {
+    "name": "recursion2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/recursion2/recursion2.java",
+    "oracle": ""
+  },
+  {
+    "name": "return1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/return1/return1.java",
+    "oracle": ""
+  },
+  {
+    "name": "return2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/return2/return2.java",
+    "oracle": ""
+  },
+  {
+    "name": "shifting",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/shifting/shifting.java",
+    "oracle": ""
+  },
+  {
+    "name": "shifting2",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/shifting2/shifting2.java",
+    "oracle": ""
+  },
+  {
+    "name": "shifting3",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/shifting3/shifting3.java",
+    "oracle": ""
+  },
+  {
+    "name": "startswith",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/startswith/startswith.java",
+    "oracle": ""
+  },
+  {
+    "name": "store_load1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/store_load1/store_load1.java",
+    "oracle": ""
+  },
+  {
+    "name": "swap1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/swap1/swap1.java",
+    "oracle": ""
+  },
+  {
+    "name": "tableswitch1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/tableswitch1/tableswitch1.java",
+    "oracle": ""
+  },
+  {
+    "name": "uninitialised1",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/uninitialised1/uninitialised1.java",
+    "oracle": ""
+  },
+  {
+    "name": "virtual_function_unwinding",
+    "source": "${SPECGEN_ARTIFACT_ROOT}/benchmark/SVCOMP/virtual_function_unwinding/virtual_function_unwinding.java",
+    "oracle": ""
+  }
+]

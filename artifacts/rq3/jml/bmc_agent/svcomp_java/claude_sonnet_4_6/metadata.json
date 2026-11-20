@@ -1,0 +1,18 @@
+{
+  "method": "bmc_agent",
+  "benchmark": "svcomp_java",
+  "model": "claude_sonnet_4_6",
+  "model_label": "Claude 4.6",
+  "temperature": "0.4",
+  "cases_passed": 227,
+  "cases_total": 265,
+  "trial_passes": 2172,
+  "trial_total": 2650,
+  "success_probability": 0.819622641509434,
+  "source_artifact_dir": "${APROVER_ROOT}/artifacts/svcomp_java_bmc_jml_claude46_temp04_10trial_20260623",
+  "copied_files": [
+    "report.json",
+    "summary.md",
+    "manifest.json"
+  ]
+}

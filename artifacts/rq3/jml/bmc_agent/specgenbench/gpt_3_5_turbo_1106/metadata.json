@@ -1,0 +1,18 @@
+{
+  "method": "bmc_agent",
+  "benchmark": "specgenbench",
+  "model": "gpt_3_5_turbo_1106",
+  "model_label": "GPT-3.5",
+  "temperature": "0.4",
+  "cases_passed": 103,
+  "cases_total": 120,
+  "trial_passes": 960,
+  "trial_total": 1200,
+  "success_probability": 0.8,
+  "source_artifact_dir": "${APROVER_ROOT}/artifacts/specgenbench_bmc_jml_gpt35_temp04_10trial_20260623",
+  "copied_files": [
+    "report.json",
+    "summary.md",
+    "manifest.json"
+  ]
+}

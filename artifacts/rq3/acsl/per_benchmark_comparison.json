@@ -1,0 +1,67 @@
+[
+  {
+    "benchmark": "frama-c-problems",
+    "cases_total": 51,
+    "autospec_published_pass": 31,
+    "autospec_claude_pass": 36,
+    "bmc_agent_claude_pass": 33,
+    "delta_bmc_minus_autospec_published": 2,
+    "delta_bmc_minus_autospec_claude": -3,
+    "autospec_claude_trial_passes": 176,
+    "autospec_claude_trial_total": 255,
+    "bmc_trial_passes": 157,
+    "bmc_trial_total": 255
+  },
+  {
+    "benchmark": "fib_46",
+    "cases_total": 46,
+    "autospec_published_pass": 38,
+    "autospec_claude_pass": 43,
+    "bmc_agent_claude_pass": 38,
+    "delta_bmc_minus_autospec_published": 0,
+    "delta_bmc_minus_autospec_claude": -5,
+    "autospec_claude_trial_passes": 197,
+    "autospec_claude_trial_total": 230,
+    "bmc_trial_passes": 173,
+    "bmc_trial_total": 230
+  },
+  {
+    "benchmark": "svcomp",
+    "cases_total": 21,
+    "autospec_published_pass": 16,
+    "autospec_claude_pass": 19,
+    "bmc_agent_claude_pass": 17,
+    "delta_bmc_minus_autospec_published": 1,
+    "delta_bmc_minus_autospec_claude": -2,
+    "autospec_claude_trial_passes": 87,
+    "autospec_claude_trial_total": 105,
+    "bmc_trial_passes": 73,
+    "bmc_trial_total": 105
+  },
+  {
+    "benchmark": "code2inv_133",
+    "cases_total": 133,
+    "autospec_published_pass": 114,
+    "autospec_claude_pass": 121,
+    "bmc_agent_claude_pass": 121,
+    "delta_bmc_minus_autospec_published": 7,
+    "delta_bmc_minus_autospec_claude": 0,
+    "autospec_claude_trial_passes": 576,
+    "autospec_claude_trial_total": 665,
+    "bmc_trial_passes": 587,
+    "bmc_trial_total": 665
+  },
+  {
+    "benchmark": "total",
+    "cases_total": 251,
+    "autospec_published_pass": 199,
+    "autospec_claude_pass": 219,
+    "bmc_agent_claude_pass": 209,
+    "delta_bmc_minus_autospec_published": 10,
+    "delta_bmc_minus_autospec_claude": -10,
+    "autospec_claude_trial_passes": 1036,
+    "autospec_claude_trial_total": 1255,
+    "bmc_trial_passes": 990,
+    "bmc_trial_total": 1255
+  }
+]

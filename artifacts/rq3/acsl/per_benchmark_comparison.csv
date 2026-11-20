@@ -1,0 +1,6 @@
+benchmark,cases_total,autospec_published_pass,autospec_claude_pass,bmc_agent_claude_pass,delta_bmc_minus_autospec_published,delta_bmc_minus_autospec_claude,autospec_claude_trial_passes,autospec_claude_trial_total,bmc_trial_passes,bmc_trial_total
+frama-c-problems,51,31,36,33,2,-3,176,255,157,255
+fib_46,46,38,43,38,0,-5,197,230,173,230
+svcomp,21,16,19,17,1,-2,87,105,73,105
+code2inv_133,133,114,121,121,7,0,576,665,587,665
+total,251,199,219,209,10,-10,1036,1255,990,1255

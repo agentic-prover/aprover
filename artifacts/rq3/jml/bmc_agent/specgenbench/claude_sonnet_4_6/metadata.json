@@ -1,0 +1,18 @@
+{
+  "method": "bmc_agent",
+  "benchmark": "specgenbench",
+  "model": "claude_sonnet_4_6",
+  "model_label": "Claude 4.6",
+  "temperature": "0.4",
+  "cases_passed": 112,
+  "cases_total": 120,
+  "trial_passes": 1057,
+  "trial_total": 1200,
+  "success_probability": 0.8808333333333334,
+  "source_artifact_dir": "${APROVER_ROOT}/artifacts/specgenbench_bmc_jml_claude46_temp04_10trial_20260623",
+  "copied_files": [
+    "report.json",
+    "summary.md",
+    "manifest.json"
+  ]
+}

@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Record the effective CBMC argv, then exec the pinned binary unchanged.
+
+Exec preserves the solver PID and subprocess timeout behavior. No environment
+or model credentials are written to the invocation log.
+"""
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+real = Path(os.environ["PAPER_REPRO_CBMC_REAL"]).resolve()
+if real == Path(__file__).resolve():
+    raise SystemExit("CBMC recorder cannot wrap itself")
+log = Path(os.environ["PAPER_REPRO_CBMC_LOG"])
+log.parent.mkdir(parents=True, exist_ok=True)
+source = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+row = {"started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+       "pid": os.getpid(), "command": [str(real), *sys.argv[1:]],
+       "harness_sha256": hashlib.sha256(source.read_bytes()).hexdigest()
+       if source is not None and source.is_file() else None}
+with log.open("a") as stream:
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    stream.write(json.dumps(row) + "\n")
+    stream.flush()
+    fcntl.flock(stream, fcntl.LOCK_UN)
+os.execv(str(real), [str(real), *sys.argv[1:]])
