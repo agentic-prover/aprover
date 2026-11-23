@@ -16,8 +16,8 @@ currently uses whole-program verification.
 
 ## Linux fixes accepted upstream
 
-**13 BMC-Agent-assisted Linux driver fixes have been accepted upstream:
-8 in mainline and 5 in linux-next**, as verified on **October 20, 2026**.
+**BMC-Agent-assisted analysis contributed 14 Linux driver fixes across seven
+subsystems.** All 14 were merged into mainline by [Linux v7.4-rc4](https://github.com/torvalds/linux/tree/v7.4-rc4).
 The findings were reviewed and the fixes submitted by Jiawen Liu, with
 revisions following maintainer feedback.
 
@@ -25,14 +25,15 @@ Selected fixes:
 
 | Driver | Fix | Status | Commit |
 | --- | --- | --- | --- |
+| TI OMAP GPIO | Disable hardware debounce if its clock cannot be prepared | Mainline | [9df982f1f283](https://github.com/torvalds/linux/commit/9df982f1f283d2f2a9aad764dff92e36ed764e16) |
 | Hisilicon hix5hd2 GMAC | Remove premature, redundant NAPI deletion during teardown | Mainline | [f307a7dc3209](https://github.com/torvalds/linux/commit/f307a7dc32097c11413178fca437a10d20890bc2) |
 | NXP/Freescale DSPI | Unwind failed suspend and resume operations | Mainline | [2543355f3da5](https://github.com/torvalds/linux/commit/2543355f3da56a297e3803ccb5d29f4dce5f18f1) |
-| StarFive crypto | Handle clock-enable failures during probe | linux-next | [5358248961ae](https://github.com/external-mirrors/linux-next/commit/5358248961ae23f7253d010ddfde1cfd2556ce22) |
-| Exynos FIMD | Release the bus clock when resume fails | linux-next | [d04392ce52d3](https://github.com/external-mirrors/linux-next/commit/d04392ce52d33bce4d532bd8b965151ed4ce8670) |
-| Amphion VPU | Remove an extra runtime-PM put on probe failure | linux-next | [0cabf27cf1e6](https://github.com/external-mirrors/linux-next/commit/0cabf27cf1e6f7ee5f3c5893c0f1930814d949af) |
+| StarFive crypto | Handle clock-enable failures during probe | Mainline | [5358248961ae](https://github.com/torvalds/linux/commit/5358248961ae23f7253d010ddfde1cfd2556ce22) |
+| Exynos FIMD | Release the bus clock when resume fails | Mainline | [d04392ce52d3](https://github.com/torvalds/linux/commit/d04392ce52d33bce4d532bd8b965151ed4ce8670) |
+| Amphion VPU | Remove an extra runtime-PM put on probe failure | Mainline | [0cabf27cf1e6](https://github.com/torvalds/linux/commit/0cabf27cf1e6f7ee5f3c5893c0f1930814d949af) |
 
 <details>
-<summary><strong>View all 13 accepted fixes</strong></summary>
+<summary><strong>View all 14 mainline fixes</strong></summary>
 
 | Subsystem | Driver | Fix | Status | Commit |
 | --- | --- | --- | --- | --- |
@@ -44,16 +45,12 @@ Selected fixes:
 | SPI | [fsl-dspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-fsl-dspi-pm-unwind_finding.md) | Unwind failed suspend and resume operations | Mainline | [2543355f3da5](https://github.com/torvalds/linux/commit/2543355f3da56a297e3803ccb5d29f4dce5f18f1) |
 | SPI | [nxp-fspi](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/spi-nxp-fspi-probe-pm_finding.md) | Disable runtime PM and balance probe-failure cleanup | Mainline | [5d14285d60ba](https://github.com/torvalds/linux/commit/5d14285d60ba95561609a293064654a0c7d7d928) |
 | Networking | [hix5hd2_gmac](https://github.com/agentic-prover/aprover/blob/main/findings/linux_drivers/hix5hd2-gmac-napi-teardown_finding.md) | Remove premature, redundant NAPI deletion during teardown | Mainline | [f307a7dc3209](https://github.com/torvalds/linux/commit/f307a7dc32097c11413178fca437a10d20890bc2) |
-| Crypto | StarFive jh7110-cryp | Handle clock-enable failures and unwind partial acquisition | linux-next | [5358248961ae](https://github.com/external-mirrors/linux-next/commit/5358248961ae23f7253d010ddfde1cfd2556ce22) |
-| DRM | Exynos FIMD | Release the bus clock when LCD-clock enable fails during resume | linux-next | [d04392ce52d3](https://github.com/external-mirrors/linux-next/commit/d04392ce52d33bce4d532bd8b965151ed4ce8670) |
-| Memory | Exynos5422 DMC | Check clock-enable failures and release the first clock if the second fails | linux-next | [cce46902ea9f](https://github.com/external-mirrors/linux-next/commit/cce46902ea9fcd585cd200fffa3166f63bc571f1) |
-| SPI | Rockchip SFC | Add runtime-PM teardown to the remove callback | linux-next | [34e32e9ade58](https://github.com/external-mirrors/linux-next/commit/34e32e9ade58e32daf933974c9b697d066fc5aaa) |
-| Media | Amphion VPU | Remove an extra runtime-PM put after failed resume-and-get in probe | linux-next | [0cabf27cf1e6](https://github.com/external-mirrors/linux-next/commit/0cabf27cf1e6f7ee5f3c5893c0f1930814d949af) |
-
-### Status definitions
-
-- **Mainline:** the fix is in Linus Torvalds’s Linux history. This does not by itself identify the first released kernel containing it.
-- **linux-next:** the fix has been accepted into a subsystem tree and appears in linux-next; it is tracked separately from mainline. Commit links use the public linux-next mirror.
+| Crypto | StarFive jh7110-cryp | Handle clock-enable failures and unwind partial acquisition | Mainline | [5358248961ae](https://github.com/torvalds/linux/commit/5358248961ae23f7253d010ddfde1cfd2556ce22) |
+| DRM | Exynos FIMD | Release the bus clock when LCD-clock enable fails during resume | Mainline | [d04392ce52d3](https://github.com/torvalds/linux/commit/d04392ce52d33bce4d532bd8b965151ed4ce8670) |
+| Memory | Exynos5422 DMC | Check clock-enable failures and release the first clock if the second fails | Mainline | [cce46902ea9f](https://github.com/torvalds/linux/commit/cce46902ea9fcd585cd200fffa3166f63bc571f1) |
+| SPI | Rockchip SFC | Add runtime-PM teardown to the remove callback | Mainline | [34e32e9ade58](https://github.com/torvalds/linux/commit/34e32e9ade58e32daf933974c9b697d066fc5aaa) |
+| Media | Amphion VPU | Remove an extra runtime-PM put after failed resume-and-get in probe | Mainline | [0cabf27cf1e6](https://github.com/torvalds/linux/commit/0cabf27cf1e6f7ee5f3c5893c0f1930814d949af) |
+| GPIO | TI OMAP (gpio-omap) | Disable hardware debounce if its clock cannot be prepared | Mainline | [9df982f1f283](https://github.com/torvalds/linux/commit/9df982f1f283d2f2a9aad764dff92e36ed764e16) |
 
 The table records upstream acceptance. Individual findings distinguish solver evidence, source review, and runtime reproduction.
 
