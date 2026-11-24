@@ -1,0 +1,248 @@
+"""Assertion-driven spec synthesis — deterministic helpers."""
+from bmc_agent.assert_driven_specs import (
+    extract_asserts, called_functions, _failing_asserts,
+    callee_lhs_map, attribute_assert, extract_goals, synthesize, SynthResult,
+    _resolve_entry, _function_has_goal,
+)
+
+
+class _FakeParsed:
+    def __init__(self, bodies): self.function_bodies = bodies
+
+
+def test_resolve_entry_picks_goal_bearing_function():
+    # default entry 'main' doesn't exist; asserts live in foo -> resolve to foo
+    p = _FakeParsed({
+        "max": "{ if (x>=y) return x; return y; }",
+        "foo": "{ int s=max(34,45); //@ assert s==45; }",
+    })
+    assert _resolve_entry(p, "main") == "foo"
+    # explicit entry that already bears a goal is respected
+    assert _resolve_entry(p, "foo") == "foo"
+
+
+def test_resolve_entry_keeps_entry_when_it_has_goals():
+    p = _FakeParsed({"g": "{ return x; }",
+                     "main": "{ int v=g(3); //@ assert v==3; }"})
+    assert _resolve_entry(p, "main") == "main"
+
+
+def test_resolve_entry_no_switch_when_ambiguous():
+    # two goal-bearing functions, entry has none -> don't guess, keep entry
+    p = _FakeParsed({"a": "{ //@ assert 1; }", "b": "{ assert(2); }",
+                     "main": "{ return 0; }"})
+    assert _resolve_entry(p, "main") == "main"
+
+
+def test_function_has_goal_forms():
+    assert _function_has_goal("{ //@ assert x==1; }")
+    assert _function_has_goal("{ __VERIFIER_assert(p); }")
+    assert _function_has_goal("{ static_assert(q, \"m\"); }")
+    assert not _function_has_goal("{ int t = a + b; return t; }")
+
+
+def test_synthesize_no_specifiable_function_is_na(tmp_path):
+    # No verification goal AND nothing to specify (the program is only a driver):
+    # there is genuinely nothing to prove, so it must be N/A — NOT a vacuous pass.
+    # This path is reached BEFORE any LLM call (the target set is empty), so it runs
+    # with llm=None.
+    src = "int main(){ int s = 0; return s; }\n"
+    f = tmp_path / "driver_only.c"; f.write_text(src)
+    from bmc_agent.config import Config
+    r = synthesize(str(f), Config.from_env(), llm=None, entry="main")
+    assert isinstance(r, SynthResult)
+    assert r.no_goals is True
+    assert r.ok is False          # never counted as SATISFIED
+    assert r.iterations == 0
+
+
+def test_split_conjuncts_top_level_only():
+    # Goal-free contract mining keeps the sound conjuncts and drops over-claims, so
+    # the splitter must cut on TOP-LEVEL && only (paren/ternary aware).
+    from bmc_agent.assert_driven_specs import _split_conjuncts
+    assert _split_conjuncts("result == p*n*r/100 && result >= 0") == \
+        ["result == p*n*r/100", "result >= 0"]
+    assert _split_conjuncts("a && (b && c) || d") == ["a", "(b && c) || d"]
+    assert _split_conjuncts("result == (x && y ? 1 : 0)") == \
+        ["result == (x && y ? 1 : 0)"]
+    assert _split_conjuncts("  x >= 0  ") == ["x >= 0"]
+
+
+def test_extract_goals_all_forms():
+    src = (
+        "int main(){\n"
+        "  assert(x >= y);\n"
+        "  static_assert(y >= 1, \"y positive\");\n"
+        "  __VERIFIER_assert(A[1023] == 1023);\n"
+        "  //@ assert z == 0 ;\n"
+        "}\n"
+    )
+    goals = extract_goals(src)
+    assert "x >= y" in goals
+    assert "y >= 1" in goals                 # static_assert message dropped
+    assert "A[1023] == 1023" in goals
+    assert "z == 0" in goals                 # ACSL comment form
+
+
+def test_extract_goals_nested_parens_and_dedup():
+    src = ("int main(){ assert(f(a, b) == g(c)); assert(f(a, b) == g(c)); "
+           "__VERIFIER_assert(p && (q || r)); }")
+    goals = extract_goals(src)
+    assert goals.count("f(a, b) == g(c)") == 1      # de-duplicated
+    assert "p && (q || r)" in goals                  # balanced parens, no truncation
+
+
+def test_extract_goals_static_assert_without_message():
+    # no trailing string literal -> keep the whole condition
+    assert "n > 0" in extract_goals("_Static_assert(n > 0);")
+
+
+def test_extract_asserts():
+    src = ("int main(){ int x=add();\n"
+           "//@ assert x == a + b ;\n"
+           "//@ assert x == 56 ;\n}")
+    assert extract_asserts(src) == ["x == a + b", "x == 56"]
+
+
+def test_called_functions_detects_real_calls_not_defs():
+    src = ("int add(int*p,int*q){ return *p+*q; }\n"
+           "int main(){ int x = add(&a,&b); return 0; }\n")
+    # 'add' is both defined and called; 'main' defined but here we ask for callees
+    got = called_functions(src, ["add", "main", "unused"])
+    assert "add" in got
+    assert "unused" not in got
+
+
+def test_failing_asserts_recovers_expr_from_description():
+    class CE:
+        def __init__(self, prop, desc):
+            self.failing_property, self.description = prop, desc
+            self.variable_assignments, self.trace, self.failure_location = {}, [], {}
+    class R:
+        counterexamples = [CE("main.assertion.1", "assert: x == 57"),
+                           CE("main.bounds.1", "array bounds")]
+    assert _failing_asserts(R()) == ["x == 57"]
+
+
+def test_callee_lhs_map_traces_assignments():
+    entry = ("int main(){ int s = sum(a,n); int m = maxv(a,n);\n"
+             "  s = sum(b,n);  /* second call site, same lhs */\n"
+             "  //@ assert m >= s ; }")
+    m = callee_lhs_map(entry, ["sum", "maxv", "noret"])
+    assert m["sum"] == ["s"]          # de-duped across both call sites
+    assert m["maxv"] == ["m"]
+    assert "noret" not in m           # never assigned -> absent
+
+
+def test_attribute_assert_implicated_callee_first():
+    lhs_map = {"sum": ["s"], "maxv": ["m"]}
+    callees = ["sum", "maxv"]
+    # assert mentions only `m` -> maxv implicated first, sum as fallback
+    assert attribute_assert("m >= s_unrelated_token", lhs_map, callees) == ["maxv", "sum"]
+    # assert mentions `s` -> sum first
+    assert attribute_assert("s == a + b", lhs_map, callees) == ["sum", "maxv"]
+
+
+def test_attribute_assert_falls_back_to_all_when_no_match():
+    lhs_map = {"sum": ["s"], "maxv": ["m"]}
+    # nothing matches -> preserve source order so refinement still progresses
+    assert attribute_assert("z == 0", lhs_map, ["sum", "maxv"]) == ["sum", "maxv"]
+
+
+def test_attribute_assert_substring_not_falsely_matched():
+    # lhs 's' must match as a whole identifier, not inside 'sum' or 'samples'
+    lhs_map = {"sum": ["s"]}
+    assert attribute_assert("samples == sum_total", lhs_map, ["sum"]) == ["sum"]  # fallback, no real hit
+    assert attribute_assert("s == 0", lhs_map, ["sum"]) == ["sum"]               # real hit
+
+
+# --- #2 behavioral-strengthening helpers -------------------------------------
+from bmc_agent.assert_driven_specs import _clean_expr
+
+
+def test_clean_expr_strips_code_fence_and_keyword():
+    # the model wraps the line in a fence despite the "bare line" instruction
+    assert _clean_expr("```c\nresult == (a > b ? a : b)\n```") == "result == (a > b ? a : b)"
+    # leading 'ensures' keyword and trailing semicolon are removed
+    assert _clean_expr("ensures result >= 0;") == "result >= 0"
+    # bare line passes through
+    assert _clean_expr("(result == 1) == (x > 0)") == "(result == 1) == (x > 0)"
+    # empty / fence-only replies yield empty (caller treats as "no candidate")
+    assert _clean_expr("```\n```") == ""
+    assert _clean_expr("") == ""
+
+
+def test_clean_expr_skips_comment_only_first_line():
+    assert _clean_expr("// here is the spec\nresult == x") == "result == x"
+
+
+# --- verification-gated overflow precondition --------------------------------
+from bmc_agent.assert_driven_specs import (
+    overflow_preconditions, _has_signed_arith, _return_type_of,
+    _overflow_precondition_from_cbmc_failures,
+)
+
+
+def test_has_signed_arith_distinguishes_binary_op_from_deref():
+    assert _has_signed_arith("*p + *q")      # binary +
+    assert _has_signed_arith("a * b")        # binary *
+    assert _has_signed_arith("x - 1")        # binary -
+    assert not _has_signed_arith("*p")       # unary deref, not arithmetic
+    assert not _has_signed_arith("x")        # bare var
+    assert not _has_signed_arith("a[i]")     # index, no arithmetic
+
+
+def test_overflow_preconditions_for_result_eq_arith():
+    src = "int add(int *p, int *q) { return *p + *q; }"
+    out = overflow_preconditions(src, {"add": "result == *p + *q"})
+    assert out == {"add": "INT_MIN <= *p + *q <= INT_MAX"}
+
+
+def test_overflow_preconditions_skips_non_arith_and_unsigned():
+    # not a `result == E` arithmetic shape -> no precondition
+    assert overflow_preconditions("int f(int*p){return *p;}",
+                                  {"f": "result == *p"}) == {}
+    assert overflow_preconditions("int g(int a){return a>0;}",
+                                  {"g": "result == 1"}) == {}
+    # unsigned return wraps by definition (no UB) -> skipped
+    assert overflow_preconditions("unsigned u(unsigned a, unsigned b){return a+b;}",
+                                  {"u": "result == a + b"}) == {}
+
+
+def test_overflow_preconditions_type_aware_bounds():
+    src = "long s(long *p, long *q){ return *p + *q; }"
+    out = overflow_preconditions(src, {"s": "result == *p + *q"})
+    assert out == {"s": "LONG_MIN <= *p + *q <= LONG_MAX"}
+
+
+def test_overflow_precondition_from_cbmc_failures_only_repairs_overflow():
+    class CE:
+        def __init__(self, prop, desc):
+            self.failing_property = prop
+            self.description = desc
+
+    class R:
+        counterexamples = [
+            CE("validts.overflow.1", "arithmetic overflow on signed + in a + b"),
+            CE("validts.overflow.2", "arithmetic overflow on signed + in a + c"),
+            CE("main.overflow.1", "arithmetic overflow on signed + in a + b"),
+        ]
+
+    src = "int validts(int a, int b, int c) { return a + b > c; }"
+    pre = _overflow_precondition_from_cbmc_failures(R(), src, "validts")
+    assert "(-2147483647LL - 1LL) <= ((1LL * a) + (1LL * b))" in pre
+    assert "((1LL * a) + (1LL * c)) <= 2147483647LL" in pre
+    assert pre.count("(1LL * a) + (1LL * b)") == 2   # de-duplicated bound pair
+
+    class Mixed:
+        counterexamples = [
+            CE("validts.overflow.1", "arithmetic overflow on signed + in a + b"),
+            CE("validts.assertion.1", "postcondition violated"),
+        ]
+
+    assert _overflow_precondition_from_cbmc_failures(Mixed(), src, "validts") == ""
+
+
+def test_return_type_of_handles_pointer_and_qualifiers():
+    assert _return_type_of("int *add(int*p){return p;}", "add") == "int"
+    assert _return_type_of("unsigned long f(void){return 0;}", "f") == "unsigned long"

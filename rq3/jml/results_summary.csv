@@ -1,0 +1,9 @@
+method,benchmark,model,model_label,temperature,cases_passed,cases_total,trial_passes,trial_total,success_probability,source_artifact_dir
+specgen,specgenbench,claude_sonnet_4_6,Claude 4.6,0.4,116,120,1019,1200,0.8491666666666666,${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_specgenbench_claude46_10trial_20260620_035707
+specgen,specgenbench,gpt_3_5_turbo_1106,GPT-3.5,0.4,109,120,834,1200,0.695,${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_specgenbench_gpt35_10trial_20260620_035707
+specgen,svcomp_java,claude_sonnet_4_6,Claude 4.6,0.4,245,265,2068,2650,0.780377358490566,${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_svcomp_claude46_10trial_20260620_035707
+specgen,svcomp_java,gpt_3_5_turbo_1106,GPT-3.5,0.4,212,265,1349,2650,0.5090566037735849,${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_svcomp_gpt35_10trial_20260620_035707
+bmc_agent,specgenbench,claude_sonnet_4_6,Claude 4.6,0.4,112,120,1057,1200,0.8808333333333334,${APROVER_ROOT}/artifacts/specgenbench_bmc_jml_claude46_temp04_10trial_20260623
+bmc_agent,specgenbench,gpt_3_5_turbo_1106,GPT-3.5,0.4,103,120,960,1200,0.8,${APROVER_ROOT}/artifacts/specgenbench_bmc_jml_gpt35_temp04_10trial_20260623
+bmc_agent,svcomp_java,claude_sonnet_4_6,Claude 4.6,0.4,227,265,2172,2650,0.819622641509434,${APROVER_ROOT}/artifacts/svcomp_java_bmc_jml_claude46_temp04_10trial_20260623
+bmc_agent,svcomp_java,gpt_3_5_turbo_1106,GPT-3.5,0.4,202,265,1839,2650,0.6939622641509434,${APROVER_ROOT}/artifacts/svcomp_java_bmc_jml_gpt35_temp04_10trial_20260623

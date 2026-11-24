@@ -1,0 +1,9 @@
+tool	primary_class	confirmed_reports	distinct_functions	functions
+fmagent	Numeric/range	11	11	fat32_file_size;fat32_init;fat32_read_file_offset;read32;do_request;vfs_read;mouse_set_pos;calloc;malloc;fb_draw_char;fb_fill_rect
+bmcagent	Numeric/range	13	9	elf_calc_size;elf_process_relocations;elf_load_at;fb_draw_char;fb_draw_string;malloc;dns_resolve;vfs_write;vfs_append
+fmagent	Object-bound/pointer	2	2	vfs_readdir;vfs_lookup
+bmcagent	Object-bound/pointer	7	6	elf_process_relocations;elf_load_at;fb_draw_char;process_create;readdir_callback;vfs_readdir
+fmagent	API contract / ordering	6	6	virtio_sound_play_pcm;vfs_rename;vfs_mkdir;vfs_create;icmp_send_echo_request;kapi_delete_dir
+bmcagent	API contract / ordering	0	0	""
+fmagent	Protocol / format	1	1	ip_handle
+bmcagent	Protocol / format	1	1	ip_handle

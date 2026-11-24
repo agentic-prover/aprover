@@ -1,0 +1,3 @@
+advisory	url	fixed_in
+GHSA-ggc9-rpv2-xgpm	https://github.com/jqlang/jq/security/advisories/GHSA-ggc9-rpv2-xgpm	1.8.2
+GHSA-gvwx-xj9r-3frq	https://github.com/jqlang/jq/security/advisories/GHSA-gvwx-xj9r-3frq	1.8.2

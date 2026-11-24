@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Record the effective ESBMC argv, then exec the pinned binary unchanged.
+
+Exec preserves the solver PID and subprocess timeout behavior. No environment
+or model credentials are written to the invocation log.
+"""
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+real = Path(os.environ["PAPER_REPRO_ESBMC_REAL"]).resolve()
+if real == Path(__file__).resolve():
+    raise SystemExit("ESBMC recorder cannot wrap itself")
+log = Path(os.environ["PAPER_REPRO_ESBMC_LOG"])
+log.parent.mkdir(parents=True, exist_ok=True)
+# Verification puts the source first; the agentic frontend puts its mode first.
+source_index = 2 if sys.argv[1:2] == ["--goto-functions-only"] else 1
+source = Path(sys.argv[source_index]) if len(sys.argv) > source_index else None
+row = {"started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+       "pid": os.getpid(), "command": [str(real), *sys.argv[1:]],
+       "harness_sha256": hashlib.sha256(source.read_bytes()).hexdigest()
+       if source is not None and source.is_file() else None}
+with log.open("a") as stream:
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    stream.write(json.dumps(row) + "\n")
+    stream.flush()
+    fcntl.flock(stream, fcntl.LOCK_UN)
+os.execv(str(real), [str(real), *sys.argv[1:]])

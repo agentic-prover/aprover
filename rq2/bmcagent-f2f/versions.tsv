@@ -1,0 +1,11 @@
+scope	component	revision	role
+rq2-main	bmc_agent	f2f31711e5d0317ff21d16fd03cd912b152ea202	frozen RQ2 implementation
+rq2-main	vibeos	866bfb9b7fc554b5b8e0939b4626bcf0416b8b19	RQ2 kernel source
+rq2-main	cbmc	5.95.1	BMC backend
+rq2-main	llm	claude-sonnet-4-6	RQ2 model
+pipeline-compare	bmc_agent	f2f31711e5d0317ff21d16fd03cd912b152ea202	June VibeOS sweep source
+pipeline-compare	bmc_agent	b9314c704c1142d195ae43abde4ad9e03f84aaa8	September ablation source
+pipeline-compare	bmc_agent	8c1c50cb7f61e19bd6bbed9872bc7e988112d99b	paper-artifacts release source
+pipeline-compare	vibeos	866bfb9b7fc554b5b8e0939b4626bcf0416b8b19	representative-function source
+pipeline-compare	cbmc	5.95.1	BMC backend
+pipeline-compare	llm	deepseek-flash	low-reasoning comparison model

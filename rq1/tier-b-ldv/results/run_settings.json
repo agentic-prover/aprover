@@ -1,0 +1,71 @@
+{
+  "benchmark_data_model": "LP64",
+  "run_data_model": "ILP32",
+  "property": "unreach-call",
+  "task_count": 29,
+  "agent": {
+    "model": "anthropic/claude-sonnet-4.5",
+    "initial_solver_timeout_s": 900,
+    "task_timeout_s": 2700,
+    "function_budget_s": 2700,
+    "memory_kib": 42000000,
+    "configuration": "shared saved configuration",
+    "environment": {
+      "BMC_AGENT_CBMC_TIMEOUT": "900",
+      "BMC_AGENT_CBMC_UNWIND": "1",
+      "BMC_AGENT_C_PROMPT_EXAMPLES": "4",
+      "BMC_AGENT_ENABLE_BMC_CONFIG_AGENT": "true",
+      "BMC_AGENT_ENABLE_FLAG_SELECTION": "true",
+      "BMC_AGENT_ENABLE_PHASE_3E_TRIAGE": "false",
+      "BMC_AGENT_ENABLE_REALISM_CHECK": "true",
+      "BMC_AGENT_LLM_DEFAULT_MODEL": "anthropic/claude-sonnet-4.5",
+      "BMC_AGENT_LLM_DEFAULT_PROVIDER": "openai",
+      "BMC_AGENT_PER_FUNCTION_TIME_BUDGET_S": "2700",
+      "BMC_AGENT_PRESERVE_LDV_PROPERTY": "true",
+      "BMC_AGENT_RESPECT_INLINE_DECISIONS": "true",
+      "BMC_AGENT_STRICT_EVIDENCE_GRADING": "true",
+      "BMC_BUGHUNT": "1",
+      "BMC_FAITHFUL_MAIN": "0",
+      "BMC_FRAME_HAVOC": "1",
+      "SVCOMP_ARCH": "ILP32",
+      "SVCOMP_PROP": "unreach",
+      "SVCOMP_TIMEOUT": "0",
+      "SVCOMP_UNWIND": "0"
+    },
+    "backends": {
+      "cbmc": {
+        "pipeline_commit": "b765c14d09d5d023921fa27a1f15344b73e60555",
+        "solver_version": "5.95.1 (cbmc-5.95.1)",
+        "workers": 3
+      },
+      "esbmc": {
+        "pipeline_commit": "d0cc3dfa4458d574e7703e3ee4fe8605637386f8",
+        "solver_version": "ESBMC version 8.3.0 64-bit x86_64 linux",
+        "workers": 3
+      }
+    }
+  },
+  "standalone": {
+    "cbmc": {
+      "solver_version": "5.95.1 (cbmc-5.95.1)",
+      "solver_sha256": "b73dfa5f6aba9e6910ac0d5822b74ad7ec468d85d0aa169b01476f17cda1c73e",
+      "unwind": 1,
+      "target_property_id": "reach_error.assertion.1",
+      "task_timeout_s": 600,
+      "memory_kib": 32000000,
+      "workers": 12
+    },
+    "esbmc": {
+      "solver_version": "8.3.0",
+      "mode": "k-induction",
+      "task_timeout_s": 600,
+      "memory_kib": 32000000
+    },
+    "cpachecker": {
+      "solver_version": "4.2.2",
+      "configuration": "svcomp26",
+      "task_timeout_s": 600,
+      "memory_kib": 32000000
+    }
+  }
+}

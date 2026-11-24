@@ -1,0 +1,14 @@
+<svg viewBox="0 0 360 130" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>AProver</title>
+<desc>AProver full logo: iceberg-A icon with Prover wordmark</desc>
+<g transform="translate(5, 5)">
+  <!-- Iceberg-A: single polygon — traces both legs without a continuous base edge -->
+  <path d="M 60 10 L 10 120 L 26.2 120 L 60 50 L 93.8 120 L 110 120 Z" fill="#1e40af"/>
+  <!-- Light-blue ice cap (the visible-above-waterline portion) -->
+  <path d="M 28 80 L 60 10 L 82 58 L 50 95 Z M 41.2 89 L 60 50 L 70.4 71.5 L 50 95 Z" fill="#bae6fd" fill-rule="evenodd"/>
+  <!-- Teal checkmark -->
+  <path d="M 28 80 L 50 95 L 82 58" stroke="#10b981" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- "Prover" wordmark -->
+  <text x="128" y="90" font-family="-apple-system, 'system-ui', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="74" font-weight="600" fill="#141413" letter-spacing="-2">Prover</text>
+</g>
+</svg>

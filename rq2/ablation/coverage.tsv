@@ -1,0 +1,5 @@
+configuration	cbmc_verified	functions
+Full (RQ2)	6	47
+No dynamic replay	7	47
+No realism audit	7	47
+Fixed BMC config	5	47

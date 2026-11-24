@@ -1,0 +1,36 @@
+arm	module	function	property	confidence	dynamic_outcome	realism	manual_label	match_type
+no_dynamic	elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_system_entry		realistic	confirmed	exact
+no_dynamic	elf	elf_process_relocations	elf_process_relocations.pointer_arithmetic.5	confirmed_system_entry		realistic	confirmed	exact
+no_dynamic	elf	elf_process_relocations	elf_process_relocations.overflow.1	confirmed_system_entry		realistic	confirmed	exact
+no_dynamic	elf	elf_calc_size	elf_calc_size.overflow.2	confirmed_system_entry		realistic	confirmed	loose
+no_dynamic	elf	elf_validate	elf_validate.pointer_dereference.1	confirmed_system_entry		realistic		unlabeled
+no_dynamic	elf	elf_validate	elf_validate.array_bounds.1	confirmed_system_entry		realistic		unlabeled
+no_dynamic	elf	elf_validate	elf_validate.pointer_dereference.1	confirmed_system_entry		realistic		unlabeled
+no_dynamic	elf	elf_load	elf_load.pointer_arithmetic.1	confirmed_system_entry		realistic		unlabeled
+no_dynamic	elf	elf_validate	elf_validate.array_bounds.1	confirmed_system_entry		realistic		unlabeled
+no_dynamic	elf	elf_validate	elf_validate.pointer_dereference.1	confirmed_system_entry		realistic		unlabeled
+no_dynamic	fb	fb_init	fb_init.overflow.1	confirmed_system_entry		realistic	conditional	loose
+no_dynamic	fb	fb_draw_char	fb_draw_char.overflow.1	confirmed_system_entry		realistic	confirmed	loose
+no_dynamic	fb	fb_draw_string	fb_draw_string.overflow.1	confirmed_system_entry		realistic	confirmed	exact
+no_dynamic	memory	malloc	malloc.overflow.1	confirmed_system_entry		realistic	confirmed	exact
+no_dynamic	string	memset	memset.pointer_dereference.1	confirmed_system_entry		realistic	not_counted	exact
+no_dynamic	string	memset	memset.pointer_arithmetic.1	confirmed_system_entry		realistic	not_counted	exact
+no_dynamic	string	strcat	strcat.pointer_dereference.17	confirmed_system_entry		realistic		unlabeled
+no_dynamic	string	memset32	memset32.pointer_dereference.1	confirmed_system_entry		realistic	not_counted	exact
+no_realism	elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_system_entry	not_triggered		confirmed	exact
+no_realism	elf	main	main.pointer_arithmetic.2	confirmed_system_entry	not_triggered			unlabeled
+no_realism	fb	fb_init	fb_init.pointer_dereference.1	confirmed_dynamic	confirmed			unlabeled
+no_realism	memory	malloc	malloc.pointer_dereference.1	confirmed_dynamic	confirmed			unlabeled
+no_realism	memory	calloc	calloc.pointer_arithmetic.5	confirmed_system_entry	not_triggered			unlabeled
+no_realism	memory	calloc	calloc.pointer_dereference.5	confirmed_dynamic	confirmed			unlabeled
+no_realism	string	strcat	strcat.pointer_dereference.17	confirmed_dynamic	confirmed			unlabeled
+no_realism	string	strcat	strcat.pointer_arithmetic.11	confirmed_dynamic	confirmed			unlabeled
+no_realism	string	strncpy	strncpy.pointer_dereference.23	confirmed_dynamic	confirmed			unlabeled
+no_realism	string	strrchr	strrchr.overflow.1	confirmed_system_entry	not_triggered			unlabeled
+no_realism	string	strdup	strdup.overflow.1	confirmed_system_entry	not_triggered			unlabeled
+fixed_config	elf	elf_entry	elf_entry.pointer_dereference.1	confirmed_dynamic	confirmed	realistic	conditional	exact
+fixed_config	elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_system_entry	not_triggered	realistic	confirmed	exact
+fixed_config	elf	elf_validate	elf_validate.array_bounds.1	confirmed_dynamic	confirmed	realistic		unlabeled
+fixed_config	elf	elf_validate	elf_validate.pointer_dereference.1	confirmed_dynamic	confirmed	realistic		unlabeled
+fixed_config	fb	fb_draw_char	fb_draw_char.pointer_dereference.7	confirmed_dynamic	confirmed	realistic	confirmed	exact
+fixed_config	string	memset	memset.pointer_dereference.1	confirmed_dynamic	confirmed	realistic	not_counted	exact

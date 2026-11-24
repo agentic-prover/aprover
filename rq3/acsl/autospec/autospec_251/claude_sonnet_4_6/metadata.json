@@ -1,0 +1,21 @@
+{
+  "method": "autospec",
+  "benchmark": "autospec_251",
+  "model": "anthropic/claude-sonnet-4.6",
+  "model_label": "Claude Sonnet 4.6",
+  "trials": 5,
+  "workers": 4,
+  "cases_passed": 219,
+  "cases_total": 251,
+  "trial_passes": 1036,
+  "trial_total": 1255,
+  "success_probability": 0.8254980079681274,
+  "source_artifact_dir": "${AUTOSPEC_CLAUDE_RUN_DIR}",
+  "status": "main_local_rerun",
+  "note": "This is the path-fixed local AutoSpec+Claude full 251-case rerun. It supersedes the broken after_regfix diagnostic artifact.",
+  "copied_files": [
+    "manifest.json",
+    "report.json",
+    "summary.md"
+  ]
+}

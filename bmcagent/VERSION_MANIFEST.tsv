@@ -1,0 +1,4 @@
+scope	source_commit	notes
+paper-artifacts	single-root-commit	current public code and artifact snapshot
+rq2-full	f2f31711e5d0317ff21d16fd03cd912b152ea202	frozen BMC-Agent revision for the June VibeOS sweep and RQ2 reference
+rq2-ablation	f2f31711e5d0317ff21d16fd03cd912b152ea202	frozen BMC-Agent revision used by the three current ablation configurations

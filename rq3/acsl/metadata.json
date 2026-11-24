@@ -1,0 +1,36 @@
+{
+  "artifact": "rq3_acsl_autospec",
+  "benchmark": "AutoSpec 251 C/ACSL programs",
+  "verifier": "Frama-C/WP",
+  "methods": [
+    {
+      "method": "autospec",
+      "benchmark": "autospec_251",
+      "model": "claude_sonnet_4_6",
+      "path": "autospec/autospec_251/claude_sonnet_4_6",
+      "cases_passed": 219,
+      "cases_total": 251,
+      "trial_passes": 1036,
+      "trial_total": 1255
+    },
+    {
+      "method": "bmc_agent",
+      "benchmark": "autospec_251",
+      "model": "claude_sonnet_4_6",
+      "path": "bmc_agent/autospec_251/claude_sonnet_4_6",
+      "cases_passed": 209,
+      "cases_total": 251,
+      "trial_passes": 990,
+      "trial_total": 1255
+    }
+  ],
+  "published_baseline": {
+    "method": "autospec",
+    "benchmark": "autospec_251",
+    "source": "AutoSpec paper Table 2",
+    "model_reported_by_paper": "gpt-3.5-turbo-0613",
+    "local_rerun_available": false,
+    "cases_passed": 199,
+    "cases_total": 251
+  }
+}

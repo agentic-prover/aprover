@@ -1,0 +1,57 @@
+{
+  "rq1-aws": {
+    "kind": "rq1", "suite": "aws-c-common", "tasks": 27,
+    "model": "anthropic/claude-sonnet-4.5", "trials": 1,
+    "arch": "LP64", "unwind": 64, "config_unwind": 4, "solver_timeout": 400,
+    "solver_timeout_semantics": "minimum per solver call; bounded by the hard case timeout",
+    "case_timeout": 800, "memory_kib": 28000000,
+    "strategy": "faithful_main"
+  },
+  "rq1-ldv": {
+    "kind": "rq1", "suite": "ldv-linux-3.4-simple", "tasks": 29,
+    "model": "anthropic/claude-sonnet-4.5", "trials": 1,
+    "arch": "ILP32", "unwind": 1, "config_unwind": 1, "solver_timeout": 300,
+    "solver_timeout_semantics": "minimum per solver call; bounded by the hard case timeout",
+    "case_timeout": 900, "memory_kib": 42000000,
+    "strategy": "public_ldv_fallback"
+  },
+  "rq3-acsl": {
+    "kind": "acsl", "tasks": 251, "trials": 5,
+    "model": "anthropic/claude-sonnet-4.6", "case_timeout": 900,
+    "postcheck_timeout": 180, "canonicalize_spec_buffer_extents": false,
+    "dsl_filter_policy": "2026-06-22",
+    "c_harness_policy": "2026-06-22"
+  },
+  "rq3-jml-specgen-claude": {
+    "kind": "jml", "suite": "SpecGenBench", "tasks": 120, "trials": 10,
+    "model": "anthropic/claude-sonnet-4.6", "temperature": 0.4,
+    "max_iterations": 10, "openjml_timeout": 200
+  },
+  "rq3-jml-specgen-gpt35": {
+    "kind": "jml", "suite": "SpecGenBench", "tasks": 120, "trials": 10,
+    "model": "openai/gpt-3.5-turbo-1106", "temperature": 0.4,
+    "max_iterations": 10, "openjml_timeout": 200
+  },
+  "rq3-jml-svcomp-claude": {
+    "kind": "jml", "suite": "SVCOMP", "tasks": 265, "trials": 10,
+    "model": "anthropic/claude-sonnet-4.6", "temperature": 0.4,
+    "max_iterations": 10, "openjml_timeout": 200
+  },
+  "rq1-ldv-guarded": {
+    "kind": "rq1", "suite": "ldv-linux-3.4-simple", "tasks": 29,
+    "model": "deepseek-flash", "base_url": "https://api.deepseek.com/v1",
+    "deepseek_thinking": "disabled", "trials": 1,
+    "arch": "ILP32", "unwind": 1, "config_unwind": 1, "solver_timeout": 300,
+    "solver_timeout_semantics": "default per solver call; the agent may override it per function",
+    "case_timeout": 900, "memory_kib": 42000000,
+    "strategy": "ldv_property_guard", "input_lock": "rq1-ldv",
+    "unwind_policy": "agent_may_override", "config_output_tokens": 4096,
+    "unwind_semantics": "default unwind 1; the configuration agent may raise it per function; no SV-COMP floor, no cap; the feasibility recheck inherits the value the function actually ran with",
+    "guard": "LDV property/model-state preservation plus strict evidence grading; same production pipeline as the paper, LDV-specific parameters only"
+  },
+  "rq3-jml-svcomp-gpt35": {
+    "kind": "jml", "suite": "SVCOMP", "tasks": 265, "trials": 10,
+    "model": "openai/gpt-3.5-turbo-1106", "temperature": 0.4,
+    "max_iterations": 10, "openjml_timeout": 200
+  }
+}

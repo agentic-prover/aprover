@@ -1,0 +1,16 @@
+method,benchmark,model,model_label,trials,cases_passed,cases_total,trial_passes,trial_total,success_probability,source_artifact_dir
+autospec_published,frama-c-problems,gpt-3.5-turbo-0613,GPT-3.5 Turbo 0613 (published),,31,51,,,,published AutoSpec paper Table 2
+autospec_published,fib_46,gpt-3.5-turbo-0613,GPT-3.5 Turbo 0613 (published),,38,46,,,,published AutoSpec paper Table 2
+autospec_published,svcomp,gpt-3.5-turbo-0613,GPT-3.5 Turbo 0613 (published),,16,21,,,,published AutoSpec paper Table 2
+autospec_published,code2inv_133,gpt-3.5-turbo-0613,GPT-3.5 Turbo 0613 (published),,114,133,,,,published AutoSpec paper Table 2
+autospec_claude,frama-c-problems,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,36,51,176,255,0.6901960784313725,${AUTOSPEC_CLAUDE_RUN_DIR}
+autospec_claude,fib_46,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,43,46,197,230,0.8565217391304348,${AUTOSPEC_CLAUDE_RUN_DIR}
+autospec_claude,svcomp,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,19,21,87,105,0.8285714285714286,${AUTOSPEC_CLAUDE_RUN_DIR}
+autospec_claude,code2inv_133,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,121,133,576,665,0.8661654135338346,${AUTOSPEC_CLAUDE_RUN_DIR}
+bmc_agent,frama-c-problems,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,33,51,157,255,0.615686274509804,${BMC_AGENT_AUTOSPEC_RUN_DIR}
+bmc_agent,fib_46,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,38,46,173,230,0.7521739130434782,${BMC_AGENT_AUTOSPEC_RUN_DIR}
+bmc_agent,svcomp,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,17,21,73,105,0.6952380952380952,${BMC_AGENT_AUTOSPEC_RUN_DIR}
+bmc_agent,code2inv_133,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,121,133,587,665,0.8827067669172932,${BMC_AGENT_AUTOSPEC_RUN_DIR}
+autospec_published,total,gpt-3.5-turbo-0613,GPT-3.5 Turbo 0613 (published),,199,251,,,,published AutoSpec paper Table 2
+autospec_claude,total,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,219,251,1036,1255,0.8254980079681274,${AUTOSPEC_CLAUDE_RUN_DIR}
+bmc_agent,total,anthropic/claude-sonnet-4.6,Claude Sonnet 4.6,5,209,251,990,1255,0.7888446215139442,${BMC_AGENT_AUTOSPEC_RUN_DIR}

@@ -1,0 +1,46 @@
+VibeOS kernel sweep, 25 modules, canonical runs only
+  functions with specs generated  608
+  functions with a BMC verdict    600
+
+HARNESS COMPILATION
+  needed agentic repair           54
+  repair resolved the build error 53
+  repair produced no clean harness3
+  compiled before repair          91.0%  (546/600)
+  compiled after repair           99.8%  (599/600)
+
+COUNTEREXAMPLE FUNNEL
+  dedup input  (raw witnesses)    3670   [-1 dedup events]
+  dedup output                    785
+  CBMC verdict cex total          5280
+  entered validation              1799
+  reached the realism audit       161
+  realistic                       48
+  unrealistic                     152
+
+REFINEMENT
+  iterations                      611
+  ended without a proposal        509
+  reached the guard               85
+  guard rejected                  95
+
+LLM USAGE  (1107 recorded calls)
+  anthropic.cache_w            494411
+  anthropic.in                7937342
+  anthropic.out                849009
+
+AGENT TELEMETRY  (per-role call counts, from each run's end-of-run table)
+  cbmc_driver            calls=600    wall_s=4869
+  dynamic_repro          calls=715    wall_s=24742
+  feedback_distill       calls=149    wall_s=1729
+  harness_gen            calls=79     wall_s=3075
+  realism                calls=319    wall_s=10231
+  refinement             calls=273    wall_s=6802
+  spec_gen               calls=451    wall_s=1976
+  TOTAL                  calls=2586
+  recorded-usage coverage 42.8% (1107 usage lines / 2586 telemetry calls)
+
+COST FROM RECORDED TOKENS  $38.40  at in/out/cw/cr = 3.00/15.00/3.75/0.30 USD per Mtok
+  this is a LOWER BOUND: only 1107 of 2586 agent calls recorded a usage line
+  EXTRAPOLATED to all telemetry calls  $89.71  (assumes the unrecorded calls
+  have the same mean token cost as the recorded ones, which is unverified)

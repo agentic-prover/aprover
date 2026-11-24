@@ -1,0 +1,13 @@
+arm	module	reported_status	valid	pipeline_complete	calls	invalid	model_ok	provider_ok	denials	cost_usd	wall_s
+no_dynamic	elf	0	true	true	539	0	true	true	false	14.833185	4988
+no_dynamic	fb	0	true	true	235	0	true	true	false	5.926146	2071
+no_dynamic	memory	0	true	true	243	0	true	true	false	6.472290	2437
+no_dynamic	string	0	true	true	639	0	true	true	false	15.267405	5636
+no_realism	elf	0	true	true	828	0	true	true	false	20.072685	6433
+no_realism	fb	0	true	true	347	0	true	true	false	6.783870	2368
+no_realism	memory	0	true	true	172	0	true	true	false	3.781452	1484
+no_realism	string	0	true	true	597	0	true	true	false	11.959236	4447
+fixed_config	elf	0	true	true	303	0	true	true	false	7.821705	2695
+fixed_config	fb	0	true	true	95	0	true	true	false	2.284311	860
+fixed_config	memory	0	true	true	64	0	true	true	false	1.784898	698
+fixed_config	string	0	true	true	248	0	true	true	false	5.561109	2350

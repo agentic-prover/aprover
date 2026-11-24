@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+.uv/
+
+# Artifacts (CBMC runs, bug reports, harnesses)
+artifacts/
+
+# Paper (never publish to git)
+paper/
+main.tex
+*.tex
+*.bib
+*.aux
+*.bbl
+*.blg
+*.out
+*.pdf
+pipeline.svg
+
+# Proposals and reports (kept locally)
+PROPOSAL.md
+PROPOSAL_v2.md
+PROPOSAL_AMC.md
+PROPOSAL_AMC_v3.md
+REPORT_AMC.md
+REPORT_AMC_with_figure.md
+
+# Test/editor noise
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code harness state
+.claude/
+
+# Logs
+*.log
+amc.log
+
+# Env / secrets (defense-in-depth: never push API keys)
+.env
+.env.*
+*.env
+*_keys.env
+*_secret*
+*.secret
+**/secrets.json
+**/credentials.json
+bmcagent/examples/vibeos/repo/
+
+# Probed candidate crates (cloned to project root by exploration scripts)
+/iddqd
+findings/cbmc_leaf_oracle/

@@ -1,0 +1,11 @@
+study	experiment	code_revision	configuration	results	raw_archive
+RQ1	AWS C Common	b80281c55d5c;d0cc3dfa4458	rq1/tier-a-aws	rq1/tier-a-aws/scoreboard.tsv	rq1/agent-runs/rq1-aws-cbmc-20261104.tar.gz;rq1/agent-runs/rq1-aws-esbmc-20261123.tar.gz;rq1/tier-a-aws/raw/baselines_raw.tar.gz
+RQ1	LDV ILP32	70c03013c520	rq1/tier-b-ldv/results/agent_configurations.json	rq1/tier-b-ldv/results/agent_results.tsv	rq1/agent-runs/rq1-ldv-cbmc-20261113.tar.gz;rq1/agent-runs/rq1-ldv-esbmc-20261113.tar.gz;rq1/tier-b-ldv/raw/baselines_raw.tar.gz
+RQ2	BMC-Agent vs FM-Agent	f2f31711e5d03	rq2/main	rq2/main/confirmed-findings-by-class.tsv	rq2/source-vibeos-866bfb9.tar.gz;rq2/intermediate/raw/sweep_run_logs.tar.gz
+RQ2	Frozen f2f pipeline	f2f31711e5d03	rq2/bmcagent-f2f/versions.tsv	rq2/bmcagent-f2f/RESULTS.md	rq2/bmcagent-f2f/source-f2f31711e.tar.gz;rq2/bmcagent-f2f/pipeline-compare-20261121.tar.gz;rq2/bmcagent-f2f/pipeline-b9314c7-20261121.tar.gz
+RQ2	Intermediate statistics	f2f31711e5d03	rq2/intermediate/README.md	rq2/intermediate/results/sweep_totals.json	rq2/intermediate/raw/sweep_run_logs.tar.gz
+RQ2	Component ablation	f2f31711e5d03	rq2/ablation/README.md	rq2/ablation/table-vii.tsv	rq2/ablation/source-ablation-openrouter-20261123.tar.gz
+RQ3	C/ACSL	1528d0dcd9fa;b80281c55d5c	rq3/acsl/metadata.json	rq3/acsl/results_summary.csv	rq3/accepted-proofs-20261104.tar.gz
+RQ3	Java/JML	not recorded;b80281c55d5c	rq3/jml	rq3/jml/results_summary.csv	rq3/accepted-proofs-20261104.tar.gz
+RQ4	Real-world findings	multiple	rq4/README.md	rq4/source-audited-counts.csv	not applicable
+RQ4	Linux mainline fixes	multiple	not applicable	rq4/linux-mainline-fixes.tsv	not applicable

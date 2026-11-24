@@ -1,0 +1,19 @@
+{
+  "method": "specgen",
+  "benchmark": "svcomp_java",
+  "model": "gpt_3_5_turbo_1106",
+  "model_label": "GPT-3.5",
+  "temperature": "0.4",
+  "cases_passed": 212,
+  "cases_total": 265,
+  "trial_passes": 1349,
+  "trial_total": 2650,
+  "success_probability": 0.5090566037735849,
+  "source_artifact_dir": "${SPECGEN_ARTIFACT_ROOT}/artifacts/specgen_original_svcomp_gpt35_10trial_20260620_035707",
+  "copied_files": [
+    "report.json",
+    "summary.md",
+    "manifest.json",
+    "trial_report.json"
+  ]
+}

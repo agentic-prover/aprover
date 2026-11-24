@@ -1,0 +1,18 @@
+{
+  "method": "bmc_agent",
+  "benchmark": "svcomp_java",
+  "model": "gpt_3_5_turbo_1106",
+  "model_label": "GPT-3.5",
+  "temperature": "0.4",
+  "cases_passed": 202,
+  "cases_total": 265,
+  "trial_passes": 1839,
+  "trial_total": 2650,
+  "success_probability": 0.6939622641509434,
+  "source_artifact_dir": "${APROVER_ROOT}/artifacts/svcomp_java_bmc_jml_gpt35_temp04_10trial_20260623",
+  "copied_files": [
+    "report.json",
+    "summary.md",
+    "manifest.json"
+  ]
+}

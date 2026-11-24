@@ -1,0 +1,2742 @@
+[
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--gpu--drm--vmwgfx--vmwgfx.ko-ldv_main3_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "ce4c8b860dc48ce8ed7ea24ad5ea061c13917a4b157440de8bd00207bac4f4c1",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion checks needed as main is a simple test harness dispatcher with no arithmetic on external data; unbounded verification loop requires null unwind; inlined only examined simple wrappers and predicates under 20 LoC with no loops"
+      },
+      "inline_overrides": {
+        "vmw_unlocked_ioctl": {
+          "inline": false,
+          "reason": "60 LoC validation function with multiple conditionals, keep stubbed to avoid complexity"
+        },
+        "vmw_driver_unload": {
+          "inline": false,
+          "reason": "Large complex function with many callees and resource cleanup logic"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "10 LoC simple assertion check with no loops or side effects"
+        },
+        "vmw_pm_prepare": {
+          "inline": false,
+          "reason": "50 LoC with multiple conditionals and external calls, borderline complexity"
+        },
+        "vmw_pm_suspend": {
+          "inline": true,
+          "reason": "15 LoC simple wrapper that calls vmw_pci_suspend"
+        },
+        "vmw_lastclose": {
+          "inline": false,
+          "reason": "Large function with loops iterating over CRTC list"
+        },
+        "vmw_preclose": {
+          "inline": true,
+          "reason": "15 LoC simple function with no loops, just calls two helpers"
+        },
+        "vmwgfx_init": {
+          "inline": true,
+          "reason": "10 LoC simple wrapper calling drm_pci_init"
+        },
+        "vmwgfx_exit": {
+          "inline": true,
+          "reason": "5 LoC simple wrapper calling drm_pci_exit"
+        },
+        "vmw_probe": {
+          "inline": true,
+          "reason": "5 LoC simple wrapper calling drm_get_pci_dev"
+        },
+        "vmw_pm_resume": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub to avoid risk"
+        },
+        "vmw_driver_load": {
+          "inline": false,
+          "reason": "Unexamined driver load function, likely complex with allocations"
+        },
+        "vmw_master_drop": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "vmw_master_destroy": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "vmw_pm_complete": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "vmw_driver_open": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "ldv_initialize": {
+          "inline": false,
+          "reason": "Unexamined LDV initialization function, conservative stub"
+        },
+        "vmw_postclose": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "vmw_firstopen": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "vmw_remove": {
+          "inline": false,
+          "reason": "Unexamined driver remove function, likely complex"
+        },
+        "ldv_check_return_value": {
+          "inline": false,
+          "reason": "Unexamined LDV check function, conservative stub"
+        },
+        "vmw_master_set": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        },
+        "vmw_master_create": {
+          "inline": false,
+          "reason": "Unexamined, conservative stub"
+        }
+      },
+      "reasoning": "No overflow/shift/conversion checks needed as main is a simple test harness dispatcher with no arithmetic on external data; unbounded verification loop requires null unwind; inlined only examined simple wrappers and predicates under 20 LoC with no loops"
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--input--mouse--synaptics_usb.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "e6c1635c428312f1e348ff3f54d9303096ed1e380a30e08e077e6c22b529b9ce",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/cast checks needed (no arithmetic on external data); unbounded while(1) loop requires default unwind; inlined ldv_check_final_state, ldv_check_return_value (trivial predicates), and synusb_reset_resume (trivial wrapper)."
+      },
+      "inline_overrides": {
+        "synusb_post_reset": {
+          "inline": false,
+          "reason": "Calls multiple USB/mutex functions with side effects"
+        },
+        "synusb_pre_reset": {
+          "inline": false,
+          "reason": "Calls mutex_lock and usb_kill_urb with side effects"
+        },
+        "synusb_suspend": {
+          "inline": false,
+          "reason": "Calls mutex operations and usb_kill_urb with side effects"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Trivial 10-LoC verification predicate checking ldv_mutex state"
+        },
+        "synusb_disconnect": {
+          "inline": false,
+          "reason": "50+ LoC with kfree, usb_free_urb, and input_unregister_device side effects"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty no-op function body"
+        },
+        "synusb_probe": {
+          "inline": false,
+          "reason": "Large 200+ LoC function with allocations and complex initialization"
+        },
+        "synusb_resume": {
+          "inline": false,
+          "reason": "Calls usb_submit_urb and mutex operations with side effects"
+        },
+        "synusb_reset_resume": {
+          "inline": true,
+          "reason": "Trivial 5-LoC wrapper that just calls synusb_resume"
+        },
+        "ldv_initialize": {
+          "inline": false,
+          "reason": "LDV initialization function with unknown side effects"
+        }
+      },
+      "reasoning": "No overflow/shift/cast checks needed (no arithmetic on external data); unbounded while(1) loop requires default unwind; inlined ldv_check_final_state, ldv_check_return_value (trivial predicates), and synusb_reset_resume (trivial wrapper)."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--input--mousedev.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "e8196ac2b700b6eea4bc5460694276298eceb6d8cab35cfa10c964db63e0fc81",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/cast operations on external data in main harness; unbounded loop requires null unwind; inline only trivial LDV verification helpers (empty or single-check predicates); keep all driver operations stubbed due to complexity, allocations, and side effects."
+      },
+      "inline_overrides": {
+        "mousedev_exit": {
+          "inline": false,
+          "reason": "Calls multiple functions with side effects (misc_deregister, input_unregister_handler, mousedev_destroy)."
+        },
+        "mousedev_init": {
+          "inline": false,
+          "reason": "Complex initialization with multiple function calls and error handling paths."
+        },
+        "mousedev_fasync": {
+          "inline": false,
+          "reason": "Driver operation likely with side effects and external calls."
+        },
+        "mousedev_connect": {
+          "inline": false,
+          "reason": "Driver connection handler likely complex with allocations and registrations."
+        },
+        "mousedev_event": {
+          "inline": false,
+          "reason": "Event handler likely with state updates and external calls."
+        },
+        "mousedev_release": {
+          "inline": false,
+          "reason": "Calls kfree and device management functions with side effects."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Trivial verification predicate checking one global variable."
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function body, just returns immediately."
+        },
+        "mousedev_poll": {
+          "inline": false,
+          "reason": "Calls poll_wait which is an external kernel function."
+        },
+        "mousedev_disconnect": {
+          "inline": false,
+          "reason": "Driver disconnection handler likely with cleanup and side effects."
+        },
+        "mousedev_write": {
+          "inline": false,
+          "reason": "Large function with loops and user-space data handling."
+        },
+        "mousedev_open": {
+          "inline": false,
+          "reason": "Complex function with allocation (kzalloc), mutex operations, and error paths."
+        },
+        "mousedev_read": {
+          "inline": false,
+          "reason": "Large function with loops, wait queues, and user-space data copying."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function body, just returns immediately."
+        }
+      },
+      "reasoning": "No overflow/shift/cast operations on external data in main harness; unbounded loop requires null unwind; inline only trivial LDV verification helpers (empty or single-check predicates); keep all driver operations stubbed due to complexity, allocations, and side effects."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--isdn--capi--kernelcapi.ko-ldv_main3_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "a7b912081d7d063cf0fa57d676ac6045c288ba4a7d2e37c40bdd01a3eaf06f30",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/cast flags needed (no arithmetic on external data); unbounded while(1) loop requires null unwind; large 25-case state machine with many callees justifies 450s timeout; inline simple iterators/stops and LDV framework functions, stub complex show/open functions."
+      },
+      "inline_overrides": {
+        "controller_start": {
+          "inline": true,
+          "reason": "Simple 15-LoC seq iterator with one mutex call and array indexing, no loops."
+        },
+        "controller_next": {
+          "inline": true,
+          "reason": "Simple 10-LoC seq iterator with array indexing, no loops or calls."
+        },
+        "controller_stop": {
+          "inline": true,
+          "reason": "Trivial 3-LoC function with single mutex_unlock call."
+        },
+        "controller_show": {
+          "inline": false,
+          "reason": "40+ LoC with function pointer call and multiple callees, too complex."
+        },
+        "applications_start": {
+          "inline": true,
+          "reason": "Simple 15-LoC seq iterator with one mutex call and array indexing, no loops."
+        },
+        "applications_next": {
+          "inline": true,
+          "reason": "Simple 10-LoC seq iterator with array indexing, no loops or calls."
+        },
+        "applications_stop": {
+          "inline": true,
+          "reason": "Trivial 3-LoC function with single mutex_unlock call."
+        },
+        "applications_show": {
+          "inline": true,
+          "reason": "Simple 20-LoC function with single seq_printf call, no loops."
+        },
+        "capi_driver_start": {
+          "inline": false,
+          "reason": "Calls seq_list_start which may have complex implementation."
+        },
+        "capi_driver_next": {
+          "inline": false,
+          "reason": "Calls seq_list_next which may have complex implementation."
+        },
+        "capi_driver_stop": {
+          "inline": false,
+          "reason": "Likely calls mutex_unlock but not examined; keep stubbed."
+        },
+        "capi_driver_show": {
+          "inline": false,
+          "reason": "Not examined; keep stubbed by default."
+        },
+        "contrstats_show": {
+          "inline": false,
+          "reason": "Not examined; keep stubbed by default."
+        },
+        "applstats_show": {
+          "inline": false,
+          "reason": "Not examined; keep stubbed by default."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "LDV verification framework function that must be inlined for correct semantics."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "LDV verification framework function that must be inlined for correct semantics."
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "LDV verification framework function that must be inlined for correct semantics."
+        },
+        "seq_controller_open": {
+          "inline": false,
+          "reason": "Not examined; likely calls seq_open which is complex."
+        },
+        "seq_contrstats_open": {
+          "inline": false,
+          "reason": "Not examined; likely calls seq_open which is complex."
+        },
+        "seq_applications_open": {
+          "inline": false,
+          "reason": "Not examined; likely calls seq_open which is complex."
+        },
+        "seq_applstats_open": {
+          "inline": false,
+          "reason": "Not examined; likely calls seq_open which is complex."
+        },
+        "seq_capi_driver_open": {
+          "inline": false,
+          "reason": "Not examined; likely calls seq_open which is complex."
+        }
+      },
+      "reasoning": "No overflow/shift/cast flags needed (no arithmetic on external data); unbounded while(1) loop requires null unwind; large 25-case state machine with many callees justifies 450s timeout; inline simple iterators/stops and LDV framework functions, stub complex show/open functions."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--media--dvb--dvb-usb--dvb-usb-dib0700.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "aba64112049e56ee107fd646a7e64a4870b3ae0603aea0d14c68e8a4b8c5941d",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/conversion/shift checks needed as this is a simple LDV test harness with no arithmetic on external data; unbounded while loop requires null unwind; inline only trivial LDV helpers and constant getter, stub the actual driver functions."
+      },
+      "inline_overrides": {
+        "dib0700_i2c_func": {
+          "inline": true,
+          "reason": "Trivial getter returning constant value 1"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Small verification predicate checking mutex state with simple control flow"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function body with no operations"
+        },
+        "dib0700_probe": {
+          "inline": false,
+          "reason": "Large function with loops, multiple callees, and complex initialization logic"
+        },
+        "dib0700_i2c_xfer": {
+          "inline": false,
+          "reason": "Calls other complex functions and has conditional branching to legacy/new implementations"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function body with no operations"
+        }
+      },
+      "reasoning": "No overflow/conversion/shift checks needed as this is a simple LDV test harness with no arithmetic on external data; unbounded while loop requires null unwind; inline only trivial LDV helpers and constant getter, stub the actual driver functions."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--media--video--cpia2--cpia2.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "ef50b2e15d3132139a7b21ef5d8d0f4dc8e22d6b0964b12911761ae9359c257b",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion checks needed (no arithmetic on external data); unbounded loop requires null unwind; standard timeout; inline only trivial predicates and small deterministic helpers (ldv_*, cpia2_g_input, cpia2_s_input, cpia2_enum_input, cpia2_enum_fmt_vid_cap, cpia2_g_fmt_vid_cap)."
+      },
+      "inline_overrides": {
+        "cpia2_g_fmt_vid_cap": {
+          "inline": true,
+          "reason": "Simple 40-LoC field assignment function with no loops or allocations."
+        },
+        "cpia2_v4l_poll": {
+          "inline": false,
+          "reason": "Likely complex poll implementation with potential side effects."
+        },
+        "cpia2_g_input": {
+          "inline": true,
+          "reason": "Trivial 2-line setter function."
+        },
+        "cpia2_open": {
+          "inline": false,
+          "reason": "Device open likely has complex initialization and resource allocation."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple predicate checking global state variable."
+        },
+        "cpia2_init": {
+          "inline": false,
+          "reason": "Module initialization likely has complex setup and allocations."
+        },
+        "cpia2_s_ctrl": {
+          "inline": false,
+          "reason": "Control setting likely has complex device interaction."
+        },
+        "cpia2_dqbuf": {
+          "inline": false,
+          "reason": "Buffer dequeue likely has complex queue management."
+        },
+        "cpia2_enum_fmt_vid_cap": {
+          "inline": true,
+          "reason": "60-LoC switch statement with no loops or allocations."
+        },
+        "cpia2_try_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Format validation likely has complex logic."
+        },
+        "cpia2_cropcap": {
+          "inline": false,
+          "reason": "Crop capability query likely has complex calculations."
+        },
+        "cpia2_qbuf": {
+          "inline": false,
+          "reason": "Buffer enqueue likely has complex queue management."
+        },
+        "cpia2_enum_input": {
+          "inline": true,
+          "reason": "Small function with one strcpy and simple validation."
+        },
+        "cpia2_s_input": {
+          "inline": true,
+          "reason": "Trivial 3-line validation predicate."
+        },
+        "cpia2_streamon": {
+          "inline": false,
+          "reason": "Stream start likely has complex state machine and device control."
+        },
+        "cpia2_s_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Format setting likely has complex device configuration."
+        },
+        "cpia2_streamoff": {
+          "inline": false,
+          "reason": "Stream stop likely has complex state machine and device control."
+        },
+        "cpia2_v4l_read": {
+          "inline": false,
+          "reason": "Read operation likely has complex buffer management and blocking."
+        },
+        "cpia2_reqbufs": {
+          "inline": false,
+          "reason": "Buffer request likely has memory allocation and management."
+        },
+        "cpia2_exit": {
+          "inline": false,
+          "reason": "Module cleanup likely has complex teardown and deallocation."
+        },
+        "cpia2_queryctrl": {
+          "inline": false,
+          "reason": "Control query likely has complex lookup and validation."
+        },
+        "cpia2_g_ctrl": {
+          "inline": false,
+          "reason": "Control get likely has device interaction."
+        },
+        "cpia2_querymenu": {
+          "inline": false,
+          "reason": "Menu query likely has complex lookup logic."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Trivial empty function."
+        },
+        "cpia2_g_priority": {
+          "inline": false,
+          "reason": "Priority get likely has locking and state access."
+        },
+        "cpia2_close": {
+          "inline": false,
+          "reason": "Device close likely has complex cleanup and resource release."
+        },
+        "cpia2_default": {
+          "inline": false,
+          "reason": "Default ioctl handler likely has complex command processing."
+        },
+        "cpia2_g_jpegcomp": {
+          "inline": false,
+          "reason": "JPEG compression get likely has device state access."
+        },
+        "cpia2_s_priority": {
+          "inline": false,
+          "reason": "Priority set likely has locking and state modification."
+        },
+        "cpia2_querybuf": {
+          "inline": false,
+          "reason": "Buffer query likely has complex buffer state lookup."
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Trivial empty function."
+        },
+        "cpia2_s_jpegcomp": {
+          "inline": false,
+          "reason": "JPEG compression set likely has device configuration."
+        },
+        "cpia2_mmap": {
+          "inline": false,
+          "reason": "Memory mapping likely has complex VM operations."
+        },
+        "cpia2_querycap": {
+          "inline": false,
+          "reason": "Capability query has multiple string operations and device access."
+        }
+      },
+      "reasoning": "No overflow/shift/conversion checks needed (no arithmetic on external data); unbounded loop requires null unwind; standard timeout; inline only trivial predicates and small deterministic helpers (ldv_*, cpia2_g_input, cpia2_s_input, cpia2_enum_input, cpia2_enum_fmt_vid_cap, cpia2_g_fmt_vid_cap)."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--media--video--mem2mem_testdev.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "93eb79c34c9ac7bf17d9461b07cc5c8a0d879487f59181d0c14c8ffcd208ea9e",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion operations on external data; unbounded while(1) loop requires null unwind; large switch (34 cases) with complex state machines justifies 450s timeout; all callees kept stubbed due to transitive call costs or complexity."
+      },
+      "inline_overrides": {
+        "vidioc_s_fmt_vid_out": {
+          "inline": false,
+          "reason": "Calls other functions (vidioc_try_fmt_vid_out, vidioc_s_fmt) creating transitive inlining cost."
+        },
+        "vidioc_streamoff": {
+          "inline": false,
+          "reason": "Not examined but likely calls v4l2_m2m infrastructure with transitive cost."
+        },
+        "m2mtest_probe": {
+          "inline": false,
+          "reason": "Probe functions are typically complex with allocations and initialization."
+        },
+        "job_ready": {
+          "inline": false,
+          "reason": "Job scheduling callback, likely has state checks."
+        },
+        "ldv_check_final_state": {
+          "inline": false,
+          "reason": "LDV verification infrastructure should remain stubbed."
+        },
+        "m2mtest_buf_prepare": {
+          "inline": false,
+          "reason": "Buffer preparation likely involves validation and setup logic."
+        },
+        "vidioc_enum_fmt_vid_out": {
+          "inline": false,
+          "reason": "Calls enum_fmt helper, transitive cost."
+        },
+        "vidioc_queryctrl": {
+          "inline": false,
+          "reason": "Control query handler, likely has switch/case logic."
+        },
+        "vidioc_try_fmt_vid_out": {
+          "inline": false,
+          "reason": "Calls find_format, printk, vidioc_try_fmt with transitive cost."
+        },
+        "vidioc_qbuf": {
+          "inline": false,
+          "reason": "Buffer queue operation, likely calls v4l2_m2m infrastructure."
+        },
+        "m2mtest_init": {
+          "inline": false,
+          "reason": "Module init function with device registration and allocation."
+        },
+        "vidioc_s_ctrl": {
+          "inline": false,
+          "reason": "Control set handler, likely has switch/case logic."
+        },
+        "m2mtest_wait_prepare": {
+          "inline": false,
+          "reason": "Wait queue preparation, likely has locking logic."
+        },
+        "m2mtest_wait_finish": {
+          "inline": false,
+          "reason": "Wait queue finish, likely has locking logic."
+        },
+        "vidioc_streamon": {
+          "inline": false,
+          "reason": "Stream start operation, likely calls v4l2_m2m infrastructure."
+        },
+        "m2mtest_lock": {
+          "inline": false,
+          "reason": "Locking primitive, should remain stubbed."
+        },
+        "m2mtest_mmap": {
+          "inline": false,
+          "reason": "Memory mapping operation, complex with address calculations."
+        },
+        "m2mtest_remove": {
+          "inline": false,
+          "reason": "Module remove function with cleanup and deallocation."
+        },
+        "vidioc_s_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Calls vidioc_try_fmt_vid_cap and vidioc_s_fmt with transitive cost."
+        },
+        "vidioc_g_fmt_vid_out": {
+          "inline": false,
+          "reason": "Calls vidioc_g_fmt helper, transitive cost."
+        },
+        "vidioc_reqbufs": {
+          "inline": false,
+          "reason": "Calls v4l2_m2m_reqbufs infrastructure with transitive cost."
+        },
+        "m2mtest_unlock": {
+          "inline": false,
+          "reason": "Unlocking primitive, should remain stubbed."
+        },
+        "m2mtest_exit": {
+          "inline": false,
+          "reason": "Module exit function with cleanup and deregistration."
+        },
+        "device_run": {
+          "inline": false,
+          "reason": "Device execution callback, likely has DMA and processing logic."
+        },
+        "vidioc_querybuf": {
+          "inline": false,
+          "reason": "Buffer query operation, likely calls v4l2_m2m infrastructure."
+        },
+        "vidioc_g_ctrl": {
+          "inline": false,
+          "reason": "Control get handler, likely has switch/case logic."
+        },
+        "vidioc_dqbuf": {
+          "inline": false,
+          "reason": "Buffer dequeue operation, likely calls v4l2_m2m infrastructure."
+        },
+        "m2mtest_buf_queue": {
+          "inline": false,
+          "reason": "Buffer queue callback, likely has queue management logic."
+        },
+        "ldv_initialize": {
+          "inline": false,
+          "reason": "LDV verification infrastructure should remain stubbed."
+        },
+        "m2mtest_open": {
+          "inline": false,
+          "reason": "File open operation with context allocation and initialization."
+        },
+        "m2mtest_release": {
+          "inline": false,
+          "reason": "File release operation with cleanup and deallocation."
+        },
+        "vidioc_try_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Calls find_format, printk, vidioc_try_fmt with transitive cost."
+        },
+        "vidioc_querycap": {
+          "inline": false,
+          "reason": "Calls strncpy multiple times, simple but has external calls."
+        },
+        "job_abort": {
+          "inline": false,
+          "reason": "Job abort callback, likely has state cleanup logic."
+        },
+        "vidioc_enum_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Calls enum_fmt helper, transitive cost."
+        },
+        "m2mtest_poll": {
+          "inline": false,
+          "reason": "Poll operation, likely calls v4l2_m2m infrastructure."
+        },
+        "ldv_check_return_value": {
+          "inline": false,
+          "reason": "LDV verification infrastructure should remain stubbed."
+        },
+        "vidioc_g_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Calls vidioc_g_fmt helper, transitive cost."
+        },
+        "m2mtest_dev_release": {
+          "inline": false,
+          "reason": "Device release callback with cleanup logic."
+        }
+      },
+      "reasoning": "No overflow/shift/conversion operations on external data; unbounded while(1) loop requires null unwind; large switch (34 cases) with complex state machines justifies 450s timeout; all callees kept stubbed due to transitive call costs or complexity."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--media--video--vivi.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "7574d41b86e2634a405bacc321f1e66c289fff73afcf078f2a32fc47a0443d08",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion checks needed as this is a test harness with no arithmetic on external data; unbounded loop requires null unwind; only ldv_initialize, ldv_check_final_state, and ldv_malloc are simple enough to inline (empty/assertion/small wrapper), all driver functions kept stubbed due to complexity."
+      },
+      "inline_overrides": {
+        "vivi_poll": {
+          "inline": false,
+          "reason": "Driver function likely has complex implementation with I/O operations"
+        },
+        "vidioc_streamoff": {
+          "inline": false,
+          "reason": "V4L2 ioctl handler likely has complex state management"
+        },
+        "vivi_init": {
+          "inline": false,
+          "reason": "Has loop and calls multiple initialization functions"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple assertion predicate with single conditional check"
+        },
+        "buffer_init": {
+          "inline": false,
+          "reason": "Has while loop with inline assembly and complex control flow"
+        },
+        "vivi_read": {
+          "inline": false,
+          "reason": "File operation handler likely has complex buffer management"
+        },
+        "buffer_cleanup": {
+          "inline": false,
+          "reason": "Has while loop with debug printing logic"
+        },
+        "vidioc_qbuf": {
+          "inline": false,
+          "reason": "V4L2 buffer queue handler with complex state management"
+        },
+        "vivi_g_volatile_ctrl": {
+          "inline": false,
+          "reason": "Control getter likely has switch/case logic over control types"
+        },
+        "vidioc_streamon": {
+          "inline": false,
+          "reason": "V4L2 stream start handler with complex state transitions"
+        },
+        "vidioc_enum_input": {
+          "inline": false,
+          "reason": "V4L2 input enumeration handler with validation logic"
+        },
+        "buffer_queue": {
+          "inline": false,
+          "reason": "Buffer queue management with complex state handling"
+        },
+        "ldv_malloc": {
+          "inline": true,
+          "reason": "Small allocation wrapper with simple conditional and no loops"
+        },
+        "vivi_mmap": {
+          "inline": false,
+          "reason": "Memory mapping handler with complex address space operations"
+        },
+        "vivi_exit": {
+          "inline": false,
+          "reason": "Cleanup function that calls vivi_release"
+        },
+        "vidioc_s_fmt_vid_cap": {
+          "inline": false,
+          "reason": "V4L2 format setter with validation and state updates"
+        },
+        "vidioc_reqbufs": {
+          "inline": false,
+          "reason": "V4L2 buffer request handler with allocation logic"
+        },
+        "buffer_prepare": {
+          "inline": false,
+          "reason": "Has loops and calls precalculate functions"
+        },
+        "vidioc_querybuf": {
+          "inline": false,
+          "reason": "V4L2 buffer query handler with validation"
+        },
+        "vidioc_dqbuf": {
+          "inline": false,
+          "reason": "V4L2 buffer dequeue handler with complex synchronization"
+        },
+        "vidioc_s_std": {
+          "inline": false,
+          "reason": "V4L2 standard setter with validation logic"
+        },
+        "vivi_lock": {
+          "inline": false,
+          "reason": "Locking primitive likely wraps mutex operations"
+        },
+        "buffer_finish": {
+          "inline": false,
+          "reason": "Has while loop with debug printing"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function with just return statement"
+        },
+        "vivi_unlock": {
+          "inline": false,
+          "reason": "Unlocking primitive likely wraps mutex operations"
+        },
+        "vidioc_try_fmt_vid_cap": {
+          "inline": false,
+          "reason": "V4L2 format validation with complex checks"
+        },
+        "vidioc_querycap": {
+          "inline": false,
+          "reason": "V4L2 capability query with struct population"
+        },
+        "stop_streaming": {
+          "inline": false,
+          "reason": "Stream stop handler with state cleanup"
+        },
+        "vivi_s_ctrl": {
+          "inline": false,
+          "reason": "Control setter likely has switch/case over control types"
+        },
+        "vidioc_enum_fmt_vid_cap": {
+          "inline": false,
+          "reason": "V4L2 format enumeration with validation"
+        },
+        "vivi_close": {
+          "inline": false,
+          "reason": "File close handler with resource cleanup"
+        },
+        "vidioc_g_input": {
+          "inline": false,
+          "reason": "V4L2 input getter with validation"
+        },
+        "vidioc_s_input": {
+          "inline": false,
+          "reason": "V4L2 input setter with validation and state updates"
+        },
+        "start_streaming": {
+          "inline": false,
+          "reason": "Stream start handler with complex initialization"
+        },
+        "vidioc_g_fmt_vid_cap": {
+          "inline": false,
+          "reason": "V4L2 format getter with struct population"
+        }
+      },
+      "reasoning": "No overflow/shift/conversion checks needed as this is a test harness with no arithmetic on external data; unbounded loop requires null unwind; only ldv_initialize, ldv_check_final_state, and ldv_malloc are simple enough to inline (empty/assertion/small wrapper), all driver functions kept stubbed due to complexity."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--mtd--chips--cfi_cmdset_0001.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "d0872daa9b407b9b15a00757e6f13c6cf8cf828c12f9fb11592e884d24e4782d",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion checks needed as main is a simple test harness with no arithmetic on external data; unbounded loop requires default unwind; inlined ldv helpers are trivial predicates while cfi_intelext_destroy has loops and side effects."
+      },
+      "inline_overrides": {
+        "cfi_intelext_destroy": {
+          "inline": false,
+          "reason": "Complex function with loops, memory deallocation, and transitive callees including cfi_intelext_reset which has nested loops."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple predicate checking global state variable ldv_mutex with deterministic control flow."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Trivial empty function that just returns."
+        }
+      },
+      "reasoning": "No overflow/shift/conversion checks needed as main is a simple test harness with no arithmetic on external data; unbounded loop requires default unwind; inlined ldv helpers are trivial predicates while cfi_intelext_destroy has loops and side effects."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--net--phy--dp83640.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "b0b440cbf58d14bb0cdb1b8ebb1ef5da8aa71b873e09d2725948cf2311c3323e",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "LDV harness with unbounded loop (no unwind override), no arithmetic/pointer/shift operations on external data (all flags off), simple verification helpers and small wrappers inlined, complex functions with loops/side-effects kept stubbed."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function body, trivial no-op."
+        },
+        "dp83640_remove": {
+          "inline": false,
+          "reason": "Complex function with multiple while loops and side effects."
+        },
+        "dp83640_exit": {
+          "inline": true,
+          "reason": "Simple 5-LoC wrapper calling two cleanup functions."
+        },
+        "dp83640_txtstamp": {
+          "inline": true,
+          "reason": "50-LoC switch statement with no loops or allocations."
+        },
+        "dp83640_hwtstamp": {
+          "inline": false,
+          "reason": "Complex function >100 LoC with mutex operations and user-space copies."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple 5-LoC predicate checking verification state."
+        },
+        "dp83640_rxtstamp": {
+          "inline": true,
+          "reason": "40-LoC function with no loops or allocations."
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function body, trivial no-op."
+        },
+        "dp83640_init": {
+          "inline": true,
+          "reason": "Simple 4-LoC wrapper calling phy_driver_register."
+        },
+        "dp83640_probe": {
+          "inline": false,
+          "reason": "Likely complex initialization function, keep stubbed for safety."
+        }
+      },
+      "reasoning": "LDV harness with unbounded loop (no unwind override), no arithmetic/pointer/shift operations on external data (all flags off), simple verification helpers and small wrappers inlined, complex functions with loops/side-effects kept stubbed."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--net--wireless--p54--p54usb.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "7fbd4c03794867e6ec778b3002c4bd6e4c6733a31a38395b37cad475eb81975c",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": 1,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion checks needed as main is a pure state-machine harness with no arithmetic on external data; unwind=8 covers the 6-state cycle plus margin; all stub candidates except p54u_probe are small helpers suitable for inlining."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function body, trivial no-op."
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function body, trivial no-op."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple predicate checking one global variable, essential for verification."
+        },
+        "p54u_suspend": {
+          "inline": true,
+          "reason": "Tiny 3-line wrapper that just forwards to p54u_pre_reset."
+        },
+        "p54u_pre_reset": {
+          "inline": true,
+          "reason": "Small 15-line function with no loops, simple null check and one call."
+        },
+        "p54u_post_reset": {
+          "inline": true,
+          "reason": "Small 25-line function with no loops, simple error handling."
+        },
+        "p54u_resume": {
+          "inline": true,
+          "reason": "40-line function with no loops, simple conditional logic and one function pointer call."
+        },
+        "p54u_disconnect": {
+          "inline": true,
+          "reason": "30-line cleanup function with no loops, straightforward sequential calls."
+        },
+        "p54u_probe": {
+          "inline": false,
+          "reason": "Large complex initialization function with truncated body indicating substantial size and complexity."
+        }
+      },
+      "reasoning": "No overflow/shift/conversion checks needed as main is a pure state-machine harness with no arithmetic on external data; unwind=8 covers the 6-state cycle plus margin; all stub candidates except p54u_probe are small helpers suitable for inlining."
+    },
+    "flag_overrides": {
+      "timeout_override": 900,
+      "unwind_override": 1
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--scsi--libfc--libfc.ko-ldv_main5_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "e644133395dbe32e88e8462ae969d382507e938c39566ee01b5acb8f834c4a03",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/cast flags needed as main is a simple LDV verification harness with no arithmetic; unbounded verification loop requires null unwind; inlining trivial helpers (fc_lport_els_prli, ldv_initialize, ldv_check_final_state) while stubbing complex functions with side effects."
+      },
+      "inline_overrides": {
+        "fc_lport_els_prli": {
+          "inline": true,
+          "reason": "Trivial 3-line function returning constant 8"
+        },
+        "fc_lport_recv_els_req": {
+          "inline": false,
+          "reason": "Complex function with mutex locks, function pointers, and switch statement"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple 6-line verification state checker"
+        },
+        "fc_lport_rport_callback": {
+          "inline": false,
+          "reason": "Large function with loops, mutex operations, and complex control flow"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function with no body"
+        }
+      },
+      "reasoning": "No overflow/shift/cast flags needed as main is a simple LDV verification harness with no arithmetic; unbounded verification loop requires null unwind; inlining trivial helpers (fc_lport_els_prli, ldv_initialize, ldv_check_final_state) while stubbing complex functions with side effects."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--staging--keucr--keucr.ko-ldv_main1_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "a0df74fdb6393f25c23dc209b2f7f643e24bf62dd145c863c0cf2cfecbea35c9",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "Test harness dispatcher with unbounded loop (no concrete unwind), no arithmetic on external values (no overflow checks needed); inlined only trivial getters/predicates (host_info, ldv_initialize, ldv_check_final_state) while stubbing all functions with side effects or external calls"
+      },
+      "inline_overrides": {
+        "slave_alloc": {
+          "inline": false,
+          "reason": "Calls external functions blk_queue_update_dma_alignment with side effects"
+        },
+        "command_abort": {
+          "inline": false,
+          "reason": "Complex function with many callees including locks and wait_for_completion"
+        },
+        "host_info": {
+          "inline": true,
+          "reason": "Trivial getter returning constant string literal"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Small predicate with simple assertion check, no loops or allocations"
+        },
+        "proc_info": {
+          "inline": false,
+          "reason": "Large function (body truncated) with many variables and sprintf calls"
+        },
+        "device_reset": {
+          "inline": false,
+          "reason": "Has mutex locks/unlocks and indirect function call with side effects"
+        },
+        "slave_configure": {
+          "inline": false,
+          "reason": "Large function (body truncated) with complex control flow"
+        },
+        "bus_reset": {
+          "inline": false,
+          "reason": "Calls usb_stor_port_reset which has external side effects"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function with just return statement"
+        }
+      },
+      "reasoning": "Test harness dispatcher with unbounded loop (no concrete unwind), no arithmetic on external values (no overflow checks needed); inlined only trivial getters/predicates (host_info, ldv_initialize, ldv_check_final_state) while stubbing all functions with side effects or external calls"
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--usb--image--microtek.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "da9285d62bfd60817e8026741794d48d65ccd83185fb5f3e9ca7ec8c944c4c33",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "LDV test harness with unbounded loop requires no flags (no arithmetic/casts/shifts on external data); no concrete unwind bound available; inlined 5 trivial LDV helpers and simple accessors, kept 4 complex driver functions stubbed due to loops/allocations/side-effects."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function body with no operations"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function body with no operations"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Small predicate checking a single global variable condition"
+        },
+        "mts_slave_alloc": {
+          "inline": true,
+          "reason": "Trivial 4-line accessor that sets one struct field to a constant"
+        },
+        "mts_slave_configure": {
+          "inline": true,
+          "reason": "Simple 3-line wrapper calling one function with no control flow"
+        },
+        "mts_scsi_abort": {
+          "inline": false,
+          "reason": "Contains a while loop and calls other complex functions"
+        },
+        "mts_scsi_host_reset": {
+          "inline": false,
+          "reason": "Contains a while loop and complex USB device reset logic"
+        },
+        "mts_usb_disconnect": {
+          "inline": false,
+          "reason": "Calls multiple external USB/SCSI functions with side effects"
+        },
+        "mts_usb_probe": {
+          "inline": false,
+          "reason": "Large complex function with many callees and allocations"
+        }
+      },
+      "reasoning": "LDV test harness with unbounded loop requires no flags (no arithmetic/casts/shifts on external data); no concrete unwind bound available; inlined 5 trivial LDV helpers and simple accessors, kept 4 complex driver functions stubbed due to loops/allocations/side-effects."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--usb--storage--usb-storage.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "c2322d6b8f9c291a4ce1ef4f003bf8a4366a9aa2965cbb2bcaadd683fbd9638c",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "Verification harness with unbounded loop (no unwind override needed); no arithmetic/pointer/shift operations on external data (all flags disabled); inlined small getters/helpers (slave_alloc, target_alloc, host_info, ldv_check_final_state, ldv_initialize) while stubbing complex functions with side effects."
+      },
+      "inline_overrides": {
+        "slave_alloc": {
+          "inline": true,
+          "reason": "Small helper (15 LoC) with no loops, simple field assignments and one queue call."
+        },
+        "target_alloc": {
+          "inline": true,
+          "reason": "Small helper (25 LoC) with no loops, simple field assignments and predicates."
+        },
+        "command_abort": {
+          "inline": false,
+          "reason": "Large complex function (80+ LoC) with locks, waits, and multiple side effects."
+        },
+        "host_info": {
+          "inline": true,
+          "reason": "Trivial getter returning a struct field pointer."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Tiny verification helper (8 LoC) with simple assertion check."
+        },
+        "proc_info": {
+          "inline": false,
+          "reason": "Large function with many sprintf calls and complex formatting logic."
+        },
+        "device_reset": {
+          "inline": false,
+          "reason": "Calls mutex operations and indirect function pointer with side effects."
+        },
+        "slave_configure": {
+          "inline": false,
+          "reason": "Large function with many field accesses and queue configuration calls."
+        },
+        "bus_reset": {
+          "inline": false,
+          "reason": "Calls external usb_stor_port_reset with side effects."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Verification initialization helper, likely simple setup code."
+        }
+      },
+      "reasoning": "Verification harness with unbounded loop (no unwind override needed); no arithmetic/pointer/shift operations on external data (all flags disabled); inlined small getters/helpers (slave_alloc, target_alloc, host_info, ldv_check_final_state, ldv_initialize) while stubbing complex functions with side effects."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--vhost--vhost_net.ko-ldv_main1_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "4e061d8af1df0cd28cf04891b79a8eedb7e575db48cbc1bf67d2ad032ab1ba5b",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/cast checks needed as main is a simple state-machine harness with no arithmetic on external data; unbounded while(1) loop requires global default unwind; three trivial LDV helpers inlined (empty or simple predicate), all vhost_net functions stubbed due to allocations/I/O/external calls."
+      },
+      "inline_overrides": {
+        "vhost_net_exit": {
+          "inline": false,
+          "reason": "Calls external misc_deregister, has side effects"
+        },
+        "vhost_net_init": {
+          "inline": false,
+          "reason": "Calls external misc_register and vhost_enable_zcopy, has side effects"
+        },
+        "vhost_net_open": {
+          "inline": false,
+          "reason": "Performs memory allocation via kmalloc and calls multiple external functions"
+        },
+        "vhost_net_release": {
+          "inline": false,
+          "reason": "Performs memory deallocation and calls multiple external cleanup functions"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple 6-LoC predicate checking a global variable against constant"
+        },
+        "vhost_net_compat_ioctl": {
+          "inline": false,
+          "reason": "Calls vhost_net_ioctl which is complex with I/O operations"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function that just returns, trivial"
+        },
+        "vhost_net_ioctl": {
+          "inline": false,
+          "reason": "Large complex function with mutex operations and copy_from_user I/O"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function that just returns, trivial"
+        }
+      },
+      "reasoning": "No overflow/shift/cast checks needed as main is a simple state-machine harness with no arithmetic on external data; unbounded while(1) loop requires global default unwind; three trivial LDV helpers inlined (empty or simple predicate), all vhost_net functions stubbed due to allocations/I/O/external calls."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cilled_const_ok_linux-32_1-drivers--video--aty--atyfb.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "f478c69dfc8cab64c49c092ef3884803c08068be99411978ea82e48b2972e539",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "LDV test harness with unbounded while(1) loop (no unwind override possible); no arithmetic/cast/shift operations on external data (all flags disabled); inline only trivial LDV helpers and simple atyfb_open accessor, stub all complex driver functions with side effects."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function with just return statement, trivial to inline"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Small assertion checker (~5 LoC) with no loops or allocations"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function with just return statement, trivial to inline"
+        },
+        "atyfb_init": {
+          "inline": false,
+          "reason": "Calls external registration functions with side effects"
+        },
+        "atyfb_exit": {
+          "inline": false,
+          "reason": "Calls external unregistration functions with side effects"
+        },
+        "atyfb_open": {
+          "inline": true,
+          "reason": "Simple counter increment accessor (~15 LoC, no loops, no allocations)"
+        },
+        "atyfb_release": {
+          "inline": false,
+          "reason": "Calls wait_for_idle and other functions with side effects"
+        },
+        "atyfb_check_var": {
+          "inline": false,
+          "reason": "Large complex function with function pointer calls and validation logic"
+        },
+        "atyfb_set_par": {
+          "inline": false,
+          "reason": "Large complex function with function pointer calls and hardware programming"
+        },
+        "atyfb_setcolreg": {
+          "inline": false,
+          "reason": "Complex driver function for color register programming"
+        },
+        "atyfb_pan_display": {
+          "inline": false,
+          "reason": "Complex driver function for display panning"
+        },
+        "atyfb_blank": {
+          "inline": false,
+          "reason": "Complex driver function for blanking control"
+        },
+        "atyfb_ioctl": {
+          "inline": false,
+          "reason": "Complex driver ioctl handler with multiple cases"
+        },
+        "atyfb_sync": {
+          "inline": false,
+          "reason": "Complex driver synchronization function"
+        },
+        "atyfb_pci_probe": {
+          "inline": false,
+          "reason": "Complex PCI probe function with device initialization"
+        },
+        "atyfb_pci_suspend": {
+          "inline": false,
+          "reason": "Complex power management suspend function"
+        },
+        "atyfb_pci_resume": {
+          "inline": false,
+          "reason": "Complex power management resume function"
+        },
+        "atyfb_reboot_notify": {
+          "inline": false,
+          "reason": "Complex reboot notification handler"
+        },
+        "aty_irq": {
+          "inline": false,
+          "reason": "Interrupt handler with hardware interaction"
+        },
+        "aty_bl_get_brightness": {
+          "inline": false,
+          "reason": "Backlight brightness getter with hardware access"
+        },
+        "aty_bl_update_status": {
+          "inline": false,
+          "reason": "Backlight status update with hardware access"
+        }
+      },
+      "reasoning": "LDV test harness with unbounded while(1) loop (no unwind override possible); no arithmetic/cast/shift operations on external data (all flags disabled); inline only trivial LDV helpers and simple atyfb_open accessor, stub all complex driver functions with side effects."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cpp_single_drivers-mtd-chips-cfi_cmdset_0001.cil.out",
+    "input_sha256": "a86869506480956e3642922ff110a9c4ff917496c811125f0d768745ed076f16",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "LDV harness with unbounded nondeterministic loop (no concrete bound), no arithmetic/conversion/shift operations on external data so no overflow checks needed; ldv_initialize and ldv_check_final_state are trivial verification helpers suitable for inlining, but cfi_intelext_destroy has loops and transitive complexity."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function body with just a return statement, trivial to inline."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Single-line assertion predicate checking ldv_mutex state, simple verification helper."
+        },
+        "cfi_intelext_destroy": {
+          "inline": false,
+          "reason": "Contains loop over mtd->numeraseregions and calls complex functions including cfi_intelext_reset which has its own loops."
+        }
+      },
+      "reasoning": "LDV harness with unbounded nondeterministic loop (no concrete bound), no arithmetic/conversion/shift operations on external data so no overflow checks needed; ldv_initialize and ldv_check_final_state are trivial verification helpers suitable for inlining, but cfi_intelext_destroy has loops and transitive complexity."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cpp_single_drivers-net-phy-dp83640.cil.out",
+    "input_sha256": "c533e3d7b032deafcf419d82a00f7e049b06079a3cf17f3bde998146309f147a",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/conversion/shift checks needed (no external arithmetic or casts); unbounded loop requires default unwind; wide call graph with complex driver operations warrants 450s timeout; only trivial empty functions and simple assertion inlined, all substantial driver operations stubbed."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function with just return statement"
+        },
+        "dp83640_remove": {
+          "inline": false,
+          "reason": "Has loops (while for skb dequeue, for over list) and many function calls"
+        },
+        "dp83640_exit": {
+          "inline": false,
+          "reason": "Calls cleanup functions with side effects"
+        },
+        "dp83640_txtstamp": {
+          "inline": false,
+          "reason": "Calls schedule_work and skb operations with side effects"
+        },
+        "dp83640_hwtstamp": {
+          "inline": false,
+          "reason": "Large function >80 LoC with complex switch logic and mutex operations"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple assertion check with no loops or allocations"
+        },
+        "dp83640_rxtstamp": {
+          "inline": false,
+          "reason": "Calls decode_status_frame and schedule_work with side effects"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function with just return statement"
+        },
+        "dp83640_init": {
+          "inline": false,
+          "reason": "Initialization function likely has allocations and setup logic"
+        },
+        "dp83640_probe": {
+          "inline": false,
+          "reason": "Large function >80 LoC with loops, allocations, and complex initialization"
+        }
+      },
+      "reasoning": "No overflow/conversion/shift checks needed (no external arithmetic or casts); unbounded loop requires default unwind; wide call graph with complex driver operations warrants 450s timeout; only trivial empty functions and simple assertion inlined, all substantial driver operations stubbed."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cpp_single_drivers-net-wireless-mwl8k.cil.out",
+    "input_sha256": "e81a29124c5010daf3b3fca1b1a76b37c82635c4b6a279a704423ca0bc3c0983",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "LDV test harness with unbounded nondeterministic loop, no arithmetic on external data so no overflow/conversion/shift checks needed; inlined simple LDV helpers and trivial struct setters (<10 LoC, no loops), kept complex driver operations stubbed."
+      },
+      "inline_overrides": {
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function, trivial no-op"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function taking one parameter, trivial no-op"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Single assertion check, simple predicate"
+        },
+        "mwl8k_init": {
+          "inline": true,
+          "reason": "Simple wrapper calling __pci_register_driver, no loops or complexity"
+        },
+        "mwl8k_exit": {
+          "inline": true,
+          "reason": "Simple wrapper calling pci_unregister_driver, no loops or complexity"
+        },
+        "mwl8k_rxd_8366_ap_init": {
+          "inline": true,
+          "reason": "Simple struct field setter, 4 lines, no loops"
+        },
+        "mwl8k_rxd_sta_init": {
+          "inline": true,
+          "reason": "Simple struct field setter, 4 lines, no loops"
+        },
+        "mwl8k_rxd_8366_ap_refill": {
+          "inline": true,
+          "reason": "Simple struct field setter with memory barrier, 6 lines, no loops"
+        },
+        "mwl8k_rxd_sta_refill": {
+          "inline": true,
+          "reason": "Simple struct field setter with memory barrier, 6 lines, no loops"
+        },
+        "mwl8k_rxd_8366_ap_process": {
+          "inline": false,
+          "reason": "Likely complex processing function, keep stubbed"
+        },
+        "mwl8k_rxd_sta_process": {
+          "inline": false,
+          "reason": "Likely complex processing function, keep stubbed"
+        },
+        "mwl8k_tx": {
+          "inline": false,
+          "reason": "Complex driver transmit operation, keep stubbed"
+        },
+        "mwl8k_start": {
+          "inline": false,
+          "reason": "Complex driver start operation, keep stubbed"
+        },
+        "mwl8k_stop": {
+          "inline": false,
+          "reason": "Complex driver stop operation, keep stubbed"
+        },
+        "mwl8k_add_interface": {
+          "inline": false,
+          "reason": "Complex driver interface management, keep stubbed"
+        },
+        "mwl8k_remove_interface": {
+          "inline": false,
+          "reason": "Complex driver interface management, keep stubbed"
+        },
+        "mwl8k_config": {
+          "inline": false,
+          "reason": "Complex driver configuration operation, keep stubbed"
+        },
+        "mwl8k_bss_info_changed": {
+          "inline": false,
+          "reason": "Complex driver BSS info handler, keep stubbed"
+        },
+        "mwl8k_prepare_multicast": {
+          "inline": false,
+          "reason": "Complex multicast preparation, keep stubbed"
+        },
+        "mwl8k_configure_filter": {
+          "inline": false,
+          "reason": "Complex filter configuration, keep stubbed"
+        },
+        "mwl8k_set_key": {
+          "inline": false,
+          "reason": "Complex key management operation, keep stubbed"
+        },
+        "mwl8k_set_rts_threshold": {
+          "inline": false,
+          "reason": "Complex threshold configuration, keep stubbed"
+        },
+        "mwl8k_sta_add": {
+          "inline": false,
+          "reason": "Complex station management, keep stubbed"
+        },
+        "mwl8k_sta_remove": {
+          "inline": false,
+          "reason": "Complex station management, keep stubbed"
+        },
+        "mwl8k_conf_tx": {
+          "inline": false,
+          "reason": "Complex TX queue configuration, keep stubbed"
+        },
+        "mwl8k_get_stats": {
+          "inline": false,
+          "reason": "Complex statistics gathering, keep stubbed"
+        },
+        "mwl8k_get_survey": {
+          "inline": false,
+          "reason": "Complex survey operation, keep stubbed"
+        },
+        "mwl8k_ampdu_action": {
+          "inline": false,
+          "reason": "Complex AMPDU action handler, keep stubbed"
+        },
+        "mwl8k_probe": {
+          "inline": false,
+          "reason": "Complex driver probe operation, keep stubbed"
+        },
+        "mwl8k_interrupt": {
+          "inline": false,
+          "reason": "Complex interrupt handler, keep stubbed"
+        }
+      },
+      "reasoning": "LDV test harness with unbounded nondeterministic loop, no arithmetic on external data so no overflow/conversion/shift checks needed; inlined simple LDV helpers and trivial struct setters (<10 LoC, no loops), kept complex driver operations stubbed."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cpp_single_drivers-net-wireless-p54-p54usb.cil.out",
+    "input_sha256": "1a5298abd8607f23f8e737b5d7c840010f351462acfd5397094a0f65142eda29",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": 1,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/conversion/shift checks needed (no arithmetic on external data); unwind=8 covers the 6-state driver lifecycle state machine (0\u21925\u21920); inlined all small helpers and LDV scaffolding functions while keeping complex probe/disconnect stubbed."
+      },
+      "inline_overrides": {
+        "p54u_suspend": {
+          "inline": true,
+          "reason": "Trivial 1-line wrapper that just calls p54u_pre_reset"
+        },
+        "p54u_pre_reset": {
+          "inline": true,
+          "reason": "Small 6-LoC function with no loops, no allocations, simple conditional logic"
+        },
+        "p54u_probe": {
+          "inline": false,
+          "reason": "Large complex function >80 LoC with many callees, allocations, and side effects"
+        },
+        "p54u_disconnect": {
+          "inline": false,
+          "reason": "Medium function with multiple callees performing cleanup and side effects"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Small predicate function with single assertion check"
+        },
+        "p54u_resume": {
+          "inline": true,
+          "reason": "Small 9-LoC function with no loops, no allocations, simple conditional logic"
+        },
+        "p54u_post_reset": {
+          "inline": true,
+          "reason": "Small 11-LoC function with no loops, simple sequential logic"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty trivial function that just returns"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty trivial function that just returns"
+        }
+      },
+      "reasoning": "No overflow/conversion/shift checks needed (no arithmetic on external data); unwind=8 covers the 6-state driver lifecycle state machine (0\u21925\u21920); inlined all small helpers and LDV scaffolding functions while keeping complex probe/disconnect stubbed."
+    },
+    "flag_overrides": {
+      "timeout_override": 900,
+      "unwind_override": 1
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cpp_single_drivers-staging-media-dt3155v4l-dt3155v4l.cil.out",
+    "input_sha256": "851e2bd7821bc3ebe2bd8177c1cea799dfa0839d45177dd8dbeb63b8f6dd5876",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/conversion checks needed as harness has no arithmetic on external data; no unwind override as main loop is unbounded nondeterministic; inlined only pure predicates and simple format getters/setters with no external calls."
+      },
+      "inline_overrides": {
+        "dt3155_poll": {
+          "inline": false,
+          "reason": "Wrapper calling external vb2_poll function"
+        },
+        "dt3155_release": {
+          "inline": false,
+          "reason": "Complex cleanup with multiple allocations and external calls"
+        },
+        "dt3155_ioc_reqbufs": {
+          "inline": false,
+          "reason": "Wrapper calling external vb2_reqbufs function"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Tiny verification predicate with single assertion"
+        },
+        "dt3155_open": {
+          "inline": false,
+          "reason": "Complex initialization with kzalloc, request_irq, and multiple setup calls"
+        },
+        "dt3155_ioc_streamoff": {
+          "inline": false,
+          "reason": "Wrapper calling external vb2_streamoff function"
+        },
+        "dt3155_ioc_g_fmt_vid_cap": {
+          "inline": true,
+          "reason": "Pure computation setting format fields with no external calls"
+        },
+        "dt3155_ioc_s_parm": {
+          "inline": true,
+          "reason": "Pure computation setting parameter fields with no external calls"
+        },
+        "dt3155_read": {
+          "inline": false,
+          "reason": "Wrapper calling external vb2_read function"
+        },
+        "dt3155_ioc_querystd": {
+          "inline": true,
+          "reason": "Pure computation setting constant value with no external calls"
+        },
+        "dt3155_irq_handler_even": {
+          "inline": false,
+          "reason": "IRQ handler likely has complex state management"
+        },
+        "dt3155_stop_streaming": {
+          "inline": false,
+          "reason": "Streaming control likely has external calls"
+        },
+        "dt3155_ioc_qbuf": {
+          "inline": false,
+          "reason": "Buffer queue operation likely wraps external vb2 function"
+        },
+        "dt3155_ioc_querycap": {
+          "inline": false,
+          "reason": "Capability query may have external dependencies"
+        },
+        "dt3155_ioc_querybuf": {
+          "inline": false,
+          "reason": "Buffer query likely wraps external vb2 function"
+        },
+        "dt3155_buf_prepare": {
+          "inline": false,
+          "reason": "Buffer preparation likely has external calls"
+        },
+        "dt3155_ioc_g_input": {
+          "inline": false,
+          "reason": "Input getter may have external dependencies"
+        },
+        "dt3155_ioc_g_std": {
+          "inline": false,
+          "reason": "Standard getter may have external dependencies"
+        },
+        "dt3155_ioc_enum_input": {
+          "inline": false,
+          "reason": "Input enumeration may have external dependencies"
+        },
+        "dt3155_ioc_dqbuf": {
+          "inline": false,
+          "reason": "Buffer dequeue likely wraps external vb2 function"
+        },
+        "dt3155_wait_finish": {
+          "inline": false,
+          "reason": "Wait operation likely has synchronization primitives"
+        },
+        "dt3155_probe": {
+          "inline": false,
+          "reason": "PCI probe function has complex initialization"
+        },
+        "dt3155_wait_prepare": {
+          "inline": false,
+          "reason": "Wait operation likely has synchronization primitives"
+        },
+        "dt3155_buf_queue": {
+          "inline": false,
+          "reason": "Buffer queue operation likely has external calls"
+        },
+        "dt3155_ioc_s_input": {
+          "inline": false,
+          "reason": "Input setter may have external dependencies"
+        },
+        "dt3155_ioc_try_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Format validation may have external dependencies"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "LDV initialization is typically a simple state setter"
+        },
+        "dt3155_ioc_g_parm": {
+          "inline": false,
+          "reason": "Parameter getter may have external dependencies"
+        },
+        "dt3155_ioc_s_std": {
+          "inline": false,
+          "reason": "Standard setter may have external dependencies"
+        },
+        "dt3155_ioc_streamon": {
+          "inline": false,
+          "reason": "Stream start likely wraps external vb2 function"
+        },
+        "dt3155_ioc_enum_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Format enumeration may have external dependencies"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "LDV verification predicate is typically a simple assertion"
+        },
+        "dt3155_mmap": {
+          "inline": false,
+          "reason": "Memory mapping has complex external calls"
+        },
+        "dt3155_init_module": {
+          "inline": false,
+          "reason": "Module initialization has complex setup"
+        },
+        "dt3155_ioc_s_fmt_vid_cap": {
+          "inline": false,
+          "reason": "Format setter may have external dependencies"
+        },
+        "dt3155_exit_module": {
+          "inline": false,
+          "reason": "Module cleanup has complex teardown"
+        }
+      },
+      "reasoning": "No overflow/shift/conversion checks needed as harness has no arithmetic on external data; no unwind override as main loop is unbounded nondeterministic; inlined only pure predicates and simple format getters/setters with no external calls."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "32_7_cpp_single_drivers-usb-image-microtek.cil.out",
+    "input_sha256": "ac0456e3efff35bd70d7742bb1b76c7a5d6adeb4dc8bed074a8012727e43eaea",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/conversion/shift checks needed (no arithmetic on external data, no casts, no shifts); unbounded verification loop requires no unwind override; default timeout appropriate; inlined 7 trivial helpers/predicates, kept 2 complex functions stubbed."
+      },
+      "inline_overrides": {
+        "mts_scsi_host_reset": {
+          "inline": true,
+          "reason": "Small function (~10 LoC) with no loops, no allocations, straightforward control flow."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty function with just a return statement."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Simple assertion predicate checking mutex state."
+        },
+        "mts_usb_disconnect": {
+          "inline": false,
+          "reason": "Cleanup function with multiple side effects (kill urb, remove host, free memory)."
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty function with just a return statement."
+        },
+        "mts_slave_alloc": {
+          "inline": true,
+          "reason": "Trivial 2-line accessor setting a single struct field."
+        },
+        "mts_scsi_abort": {
+          "inline": true,
+          "reason": "Simple 3-line wrapper calling mts_urb_abort and returning constant."
+        },
+        "mts_slave_configure": {
+          "inline": true,
+          "reason": "Trivial 2-line function with single function call."
+        },
+        "mts_usb_probe": {
+          "inline": false,
+          "reason": "Complex ~100 LoC initialization with loop, multiple allocations, and error handling paths."
+        }
+      },
+      "reasoning": "No overflow/conversion/shift checks needed (no arithmetic on external data, no casts, no shifts); unbounded verification loop requires no unwind override; default timeout appropriate; inlined 7 trivial helpers/predicates, kept 2 complex functions stubbed."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "43_1a_cilled_ok_linux-43_1a-drivers--misc--sgi-xp--xpc.ko-ldv_main3_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "b2372d785d2b2f30f84d128997a1dd9022c937b65cb641bb76df3b69c1e45b85",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "Test harness with unbounded loop requires no flags (no external arithmetic/casts/shifts), no unwind override (unbounded), default timeout; inlined only trivial empty stubs and simple predicates."
+      },
+      "inline_overrides": {
+        "xpc_allow_hb_uv": {
+          "inline": true,
+          "reason": "Empty void function with no operations."
+        },
+        "xpc_teardown_partitions_uv": {
+          "inline": false,
+          "reason": "Complex teardown operation likely with loops or allocations."
+        },
+        "xpc_setup_partitions_uv": {
+          "inline": false,
+          "reason": "Complex setup operation likely with loops or allocations."
+        },
+        "xpc_setup_rsvd_page_uv": {
+          "inline": false,
+          "reason": "Complex setup operation with struct manipulation."
+        },
+        "xpc_send_chctl_opencomplete_uv": {
+          "inline": false,
+          "reason": "Complex send operation with side effects."
+        },
+        "xpc_increment_heartbeat_uv": {
+          "inline": true,
+          "reason": "Trivial increment operation on global variable."
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Empty LDV framework stub function."
+        },
+        "xpc_request_partition_reactivation_uv": {
+          "inline": false,
+          "reason": "Complex partition management operation."
+        },
+        "xpc_process_msg_chctl_flags_uv": {
+          "inline": false,
+          "reason": "Complex message processing with likely loops."
+        },
+        "xpc_notify_senders_of_disconnect_uv": {
+          "inline": false,
+          "reason": "Complex notification operation with side effects."
+        },
+        "xpc_disallow_hb_uv": {
+          "inline": true,
+          "reason": "Empty void function with no operations."
+        },
+        "xpc_send_chctl_closereply_uv": {
+          "inline": false,
+          "reason": "Complex send operation with side effects."
+        },
+        "xpc_heartbeat_exit_uv": {
+          "inline": false,
+          "reason": "Cleanup operation likely with side effects."
+        },
+        "xpc_cancel_partition_deactivation_request_uv": {
+          "inline": false,
+          "reason": "Complex partition management operation."
+        },
+        "xpc_handle_notify_IRQ_uv": {
+          "inline": false,
+          "reason": "IRQ handler with complex state management."
+        },
+        "xpc_received_payload_uv": {
+          "inline": false,
+          "reason": "Complex payload processing operation."
+        },
+        "xpc_get_partition_rsvd_page_pa_uv": {
+          "inline": false,
+          "reason": "Complex page address retrieval operation."
+        },
+        "xpc_teardown_ch_structures_uv": {
+          "inline": false,
+          "reason": "Complex teardown operation likely with loops."
+        },
+        "xpc_offline_heartbeat_uv": {
+          "inline": false,
+          "reason": "State management operation with side effects."
+        },
+        "xpc_assume_partition_disengaged_uv": {
+          "inline": false,
+          "reason": "Complex partition state management."
+        },
+        "xpc_send_chctl_closerequest_uv": {
+          "inline": false,
+          "reason": "Complex send operation with side effects."
+        },
+        "xpc_send_chctl_openrequest_uv": {
+          "inline": false,
+          "reason": "Complex send operation with side effects."
+        },
+        "xpc_any_partition_engaged_uv": {
+          "inline": true,
+          "reason": "Simple predicate with bounded loop checking partition flags."
+        },
+        "xpc_process_activate_IRQ_rcvd_uv": {
+          "inline": false,
+          "reason": "IRQ processing with complex state management."
+        },
+        "xpc_send_payload_uv": {
+          "inline": false,
+          "reason": "Complex payload send operation with side effects."
+        },
+        "xpc_teardown_msg_structures_uv": {
+          "inline": false,
+          "reason": "Complex teardown operation likely with loops."
+        },
+        "xpc_online_heartbeat_uv": {
+          "inline": false,
+          "reason": "State management operation with side effects."
+        },
+        "xpc_request_partition_activation_uv": {
+          "inline": false,
+          "reason": "Complex partition activation operation."
+        },
+        "xpc_send_chctl_openreply_uv": {
+          "inline": false,
+          "reason": "Complex send operation with side effects."
+        },
+        "xpc_get_deliverable_payload_uv": {
+          "inline": false,
+          "reason": "Calls other functions and has conditional logic."
+        },
+        "xpc_request_partition_deactivation_uv": {
+          "inline": false,
+          "reason": "Complex partition deactivation operation."
+        },
+        "xpc_get_chctl_all_flags_uv": {
+          "inline": false,
+          "reason": "Complex flag retrieval operation."
+        },
+        "xpc_setup_msg_structures_uv": {
+          "inline": false,
+          "reason": "Complex setup operation likely with allocations."
+        },
+        "xpc_n_of_deliverable_payloads_uv": {
+          "inline": false,
+          "reason": "Wrapper calling another function."
+        },
+        "xpc_indicate_partition_disengaged_uv": {
+          "inline": false,
+          "reason": "Complex partition state indication."
+        },
+        "xpc_make_first_contact_uv": {
+          "inline": false,
+          "reason": "Complex initialization operation."
+        },
+        "xpc_disallow_all_hbs_uv": {
+          "inline": false,
+          "reason": "Likely loops over partitions to disallow heartbeats."
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "Empty LDV framework stub function."
+        },
+        "xpc_handle_activate_IRQ_uv": {
+          "inline": false,
+          "reason": "IRQ handler with complex state management."
+        },
+        "xpc_heartbeat_init_uv": {
+          "inline": false,
+          "reason": "Initialization operation likely with allocations."
+        },
+        "xpc_save_remote_msgqueue_pa_uv": {
+          "inline": false,
+          "reason": "Complex message queue save operation."
+        },
+        "xpc_partition_engaged_uv": {
+          "inline": true,
+          "reason": "Simple predicate checking single struct field flag."
+        },
+        "xpc_indicate_partition_engaged_uv": {
+          "inline": false,
+          "reason": "Complex partition state indication."
+        },
+        "xpc_setup_ch_structures_uv": {
+          "inline": false,
+          "reason": "Complex setup operation likely with allocations."
+        },
+        "xpc_get_remote_heartbeat_uv": {
+          "inline": false,
+          "reason": "Complex remote heartbeat retrieval operation."
+        }
+      },
+      "reasoning": "Test harness with unbounded loop requires no flags (no external arithmetic/casts/shifts), no unwind override (unbounded), default timeout; inlined only trivial empty stubs and simple predicates."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "43_1a_cilled_ok_linux-43_1a-drivers--net--wireless--orinoco--orinoco_usb.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "dd29319b199d1428f8fc5032105efd02f3128b31172ad61a9aedf214bdb80255",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "Main is an unbounded LDV dispatch loop with no arithmetic/shifts/casts on external data, so all flags disabled and unwind null; promoted 8 small helpers (allocate, docmd_wait, doicmd_wait, read_ltv, write_ltv, read_pda, program_init, program_end) to inline as they are 25-40 LoC with no loops/allocs/recursion."
+      },
+      "inline_overrides": {
+        "ezusb_read_pda": {
+          "inline": true,
+          "reason": "40 LoC helper with no loops, calls only ezusb_alloc_ctx and ezusb_access_ltv"
+        },
+        "ldv_check_final_state": {
+          "inline": false,
+          "reason": "LDV verification function, keep stubbed"
+        },
+        "ezusb_docmd_wait": {
+          "inline": true,
+          "reason": "40 LoC helper with no loops, simple allocation and access pattern"
+        },
+        "ezusb_lock_irqsave": {
+          "inline": false,
+          "reason": "Lock primitive, should remain stubbed"
+        },
+        "ezusb_doicmd_wait": {
+          "inline": true,
+          "reason": "40 LoC helper with no loops, similar to ezusb_docmd_wait"
+        },
+        "ezusb_xmit": {
+          "inline": false,
+          "reason": "Network transmit function, likely complex with side effects"
+        },
+        "ezusb_allocate": {
+          "inline": true,
+          "reason": "Trivial 2-line getter that sets fid to constant"
+        },
+        "ezusb_bap_pread": {
+          "inline": false,
+          "reason": "Complex buffer access with multiple conditionals and memcpy operations"
+        },
+        "ezusb_unlock_irqrestore": {
+          "inline": false,
+          "reason": "Lock primitive, should remain stubbed"
+        },
+        "ezusb_init": {
+          "inline": false,
+          "reason": "Complex initialization with multiple calls including usb_kill_urb"
+        },
+        "ezusb_read_ltv": {
+          "inline": true,
+          "reason": "30 LoC helper with no loops, simple allocation and access pattern"
+        },
+        "ezusb_program": {
+          "inline": false,
+          "reason": "Not examined, default to stub"
+        },
+        "ezusb_lock_irq": {
+          "inline": false,
+          "reason": "Lock primitive, should remain stubbed"
+        },
+        "ezusb_probe": {
+          "inline": false,
+          "reason": "USB probe function, complex device initialization"
+        },
+        "ldv_initialize": {
+          "inline": false,
+          "reason": "LDV verification function, keep stubbed"
+        },
+        "ezusb_disconnect": {
+          "inline": false,
+          "reason": "USB disconnect function, complex cleanup"
+        },
+        "ezusb_program_init": {
+          "inline": true,
+          "reason": "30 LoC helper with no loops, simple allocation and access pattern"
+        },
+        "ezusb_program_end": {
+          "inline": true,
+          "reason": "25 LoC helper with no loops, simple allocation and access pattern"
+        },
+        "ezusb_unlock_irq": {
+          "inline": false,
+          "reason": "Lock primitive, should remain stubbed"
+        },
+        "ldv_check_return_value": {
+          "inline": false,
+          "reason": "LDV verification function, keep stubbed"
+        },
+        "ezusb_write_ltv": {
+          "inline": true,
+          "reason": "40 LoC helper with no loops, simple allocation and access pattern"
+        }
+      },
+      "reasoning": "Main is an unbounded LDV dispatch loop with no arithmetic/shifts/casts on external data, so all flags disabled and unwind null; promoted 8 small helpers (allocate, docmd_wait, doicmd_wait, read_ltv, write_ltv, read_pda, program_init, program_end) to inline as they are 25-40 LoC with no loops/allocs/recursion."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "43_1a_cilled_ok_linux-43_1a-drivers--scsi--dpt_i2o.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "da96160e11a7d72d2d274af6f14461f609b0fc484f7be1918d2fba3196a9a75d",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/conversion/shift flags needed (pure control-flow harness with no arithmetic on external data); no unwind override (unbounded verification loop); inline only simple helpers (<80 LoC, no loops/alloc) and LDV verification stubs."
+      },
+      "inline_overrides": {
+        "adpt_exit": {
+          "inline": false,
+          "reason": "Contains loops iterating over hba_chain"
+        },
+        "adpt_proc_info": {
+          "inline": false,
+          "reason": "Large function (>200 LoC based on truncation) with loops and complex logic"
+        },
+        "adpt_abort": {
+          "inline": false,
+          "reason": "Complex function with message handling and state management"
+        },
+        "adpt_init": {
+          "inline": false,
+          "reason": "Contains loops and multiple function calls"
+        },
+        "compat_adpt_ioctl": {
+          "inline": true,
+          "reason": "Simple 50-LoC switch statement with no loops or allocations"
+        },
+        "adpt_device_reset": {
+          "inline": false,
+          "reason": "Complex device reset logic with message handling"
+        },
+        "adpt_slave_configure": {
+          "inline": true,
+          "reason": "Simple 30-LoC conditional logic with one callee, no loops"
+        },
+        "adpt_open": {
+          "inline": true,
+          "reason": "40-LoC function with simple bounded loop over hba_chain, no allocation"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Empty verification helper function"
+        },
+        "adpt_unlocked_ioctl": {
+          "inline": false,
+          "reason": "Likely complex ioctl handler based on naming convention"
+        },
+        "adpt_bus_reset": {
+          "inline": false,
+          "reason": "Complex reset operation typical of SCSI drivers"
+        },
+        "adpt_reset": {
+          "inline": false,
+          "reason": "Complex reset operation typical of SCSI drivers"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "LDV verification helper, likely trivial assertion"
+        },
+        "adpt_isr": {
+          "inline": false,
+          "reason": "Interrupt service routine, typically complex"
+        },
+        "adpt_close": {
+          "inline": true,
+          "reason": "Likely simple cleanup counterpart to adpt_open"
+        },
+        "adpt_info": {
+          "inline": true,
+          "reason": "Likely simple info getter based on naming"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "LDV verification helper, likely simple initialization"
+        }
+      },
+      "reasoning": "No overflow/conversion/shift flags needed (pure control-flow harness with no arithmetic on external data); no unwind override (unbounded verification loop); inline only simple helpers (<80 LoC, no loops/alloc) and LDV verification stubs."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "43_1a_cilled_ok_linux-43_1a-drivers--scsi--megaraid--megaraid_mm.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "9829c56c8ee7d8def7990bbf0c4e3c90d4500f9b24b670462931b00b36a8b19c",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": 2,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/shift/cast checks needed (no arithmetic on external values); unbounded nondeterministic loop requires default unwind; all callees except ldv_initialize are small helpers (<30 LoC, no loops) suitable for inlining."
+      },
+      "inline_overrides": {
+        "mraid_mm_unlocked_ioctl": {
+          "inline": true,
+          "reason": "8-LoC mutex wrapper with no loops or allocations"
+        },
+        "lld_timedout": {
+          "inline": false,
+          "reason": "20-LoC simple field assignments and wake_up call with no loops"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Empty trivial function body"
+        },
+        "mraid_mm_open": {
+          "inline": false,
+          "reason": "10-LoC capability check predicate with no loops"
+        },
+        "mraid_mm_compat_ioctl": {
+          "inline": true,
+          "reason": "5-LoC thin wrapper with no loops"
+        },
+        "mraid_mm_init": {
+          "inline": false,
+          "reason": "25-LoC initialization with no loops or allocations"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "Empty trivial function body"
+        },
+        "mraid_mm_exit": {
+          "inline": false,
+          "reason": "10-LoC cleanup with no loops"
+        },
+        "assume_abort_if_not": {
+          "inline": true,
+          "reason": "2-LoC trivial conditional abort predicate"
+        },
+        "ldv_initialize": {
+          "inline": false,
+          "reason": "LDV framework function, keep stubbed for safety"
+        }
+      },
+      "reasoning": "No overflow/shift/cast checks needed (no arithmetic on external values); unbounded nondeterministic loop requires default unwind; all callees except ldv_initialize are small helpers (<30 LoC, no loops) suitable for inlining."
+    },
+    "flag_overrides": {
+      "timeout_override": 900,
+      "unwind_override": 2
+    },
+    "inline_overrides": {
+      "lld_timedout": false,
+      "mraid_mm_exit": false,
+      "mraid_mm_init": false,
+      "mraid_mm_open": false
+    }
+  },
+  {
+    "task_id": "43_1a_cilled_ok_linux-43_1a-drivers--usb--gadget--mv_udc.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "9eacfafe80833c3b8fbd6bc3fc81a5b3f9f756166eb742cb2107a01452ac4696",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "No overflow/conversion/shift flags needed as main is a test harness with no arithmetic on external data; unwind stays at default for unbounded nondet loop; timeout raised to 450s for wide call graph with 20 case branches; inlined 5 trivial helpers (empty, simple getters, wrappers) while stubbing complex driver functions."
+      },
+      "inline_overrides": {
+        "mv_udc_vbus_irq": {
+          "inline": true,
+          "reason": "Small IRQ handler (~20 LoC) with simple conditional and no loops"
+        },
+        "mv_ep_fifo_flush": {
+          "inline": false,
+          "reason": "Body truncated, likely has loops based on 'inter_loops' variable"
+        },
+        "mv_udc_stop": {
+          "inline": false,
+          "reason": "Complex function with multiple callees and state management"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Empty function body, trivial to inline"
+        },
+        "mv_free_request": {
+          "inline": true,
+          "reason": "Simple wrapper around kfree with null check, ~10 LoC"
+        },
+        "mv_udc_vbus_session": {
+          "inline": false,
+          "reason": "Body truncated, appears complex with multiple state transitions"
+        },
+        "mv_udc_probe": {
+          "inline": false,
+          "reason": "Large probe function with allocations, registrations, and error handling"
+        },
+        "mv_ep_disable": {
+          "inline": false,
+          "reason": "Body truncated, appears to have register manipulation and locking"
+        },
+        "mv_ep_set_wedge": {
+          "inline": true,
+          "reason": "Trivial wrapper calling single function mv_ep_set_halt_wedge"
+        },
+        "mv_udc_get_frame": {
+          "inline": true,
+          "reason": "Simple getter reading register value, ~15 LoC"
+        },
+        "mv_ep_enable": {
+          "inline": false,
+          "reason": "Not examined but likely complex endpoint configuration"
+        },
+        "mv_ep_dequeue": {
+          "inline": false,
+          "reason": "Not examined but likely involves queue manipulation"
+        },
+        "mv_udc_pullup": {
+          "inline": false,
+          "reason": "Not examined but likely involves hardware control"
+        },
+        "mv_ep_queue": {
+          "inline": false,
+          "reason": "Not examined but likely involves queue management"
+        },
+        "mv_udc_suspend": {
+          "inline": false,
+          "reason": "Not examined but likely involves power management state"
+        },
+        "mv_udc_irq": {
+          "inline": false,
+          "reason": "IRQ handler likely complex with multiple interrupt sources"
+        },
+        "mv_udc_wakeup": {
+          "inline": false,
+          "reason": "Not examined but likely involves hardware wakeup logic"
+        },
+        "ldv_initialize": {
+          "inline": false,
+          "reason": "LDV initialization function, keep as stub for verification framework"
+        },
+        "mv_ep_set_halt": {
+          "inline": false,
+          "reason": "Not examined but likely involves endpoint state management"
+        },
+        "mv_alloc_request": {
+          "inline": false,
+          "reason": "Not examined but likely involves memory allocation"
+        },
+        "mv_udc_shutdown": {
+          "inline": false,
+          "reason": "Not examined but likely involves cleanup and shutdown logic"
+        },
+        "ldv_check_return_value": {
+          "inline": false,
+          "reason": "LDV verification function, keep as stub for verification framework"
+        },
+        "mv_udc_resume": {
+          "inline": false,
+          "reason": "Not examined but likely involves power management state"
+        }
+      },
+      "reasoning": "No overflow/conversion/shift flags needed as main is a test harness with no arithmetic on external data; unwind stays at default for unbounded nondet loop; timeout raised to 450s for wide call graph with 20 case branches; inlined 5 trivial helpers (empty, simple getters, wrappers) while stubbing complex driver functions."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  },
+  {
+    "task_id": "43_1a_cilled_ok_linux-43_1a-drivers--usb--gadget--pch_udc.ko-ldv_main0_sequence_infinite_withcheck_stateful.cil.out",
+    "input_sha256": "4b672722febad0a9835b49326bdde7c23ffbe4af7069482e6d6e94ca3b257ec8",
+    "configuration": {
+      "flags": {
+        "unsigned_overflow_check": false,
+        "signed_overflow_check": false,
+        "conversion_check": false,
+        "pointer_overflow_check": false,
+        "undefined_shift_check": false,
+        "unwind_override": null,
+        "unwind_hard": null,
+        "timeout_override": 900,
+        "reasoning": "Test harness with unbounded loop and no arithmetic on external data requires no overflow checks; inlined small wrappers and LDV helpers while keeping complex driver functions stubbed."
+      },
+      "inline_overrides": {
+        "pch_udc_free_request": {
+          "inline": false,
+          "reason": "Complex function with list operations and DMA pool management"
+        },
+        "pch_udc_pcd_set_wedge": {
+          "inline": false,
+          "reason": "Complex function with list operations and spinlock logic"
+        },
+        "pch_udc_pcd_wakeup": {
+          "inline": true,
+          "reason": "Small wrapper (~15 LoC) with no loops, just spinlock and one call"
+        },
+        "pch_udc_pcd_dequeue": {
+          "inline": false,
+          "reason": "Complex function with list iteration and request completion logic"
+        },
+        "pch_vbus_gpio_irq": {
+          "inline": true,
+          "reason": "Small IRQ handler (~25 LoC) with simple conditional logic, no loops"
+        },
+        "ldv_check_final_state": {
+          "inline": true,
+          "reason": "Trivial empty function that just returns"
+        },
+        "pch_udc_shutdown": {
+          "inline": true,
+          "reason": "Small function (~10 LoC) with no loops, just calls 3-4 helper functions"
+        },
+        "pch_udc_pci_init": {
+          "inline": true,
+          "reason": "Tiny wrapper that just calls __pci_register_driver"
+        },
+        "pch_udc_isr": {
+          "inline": false,
+          "reason": "Large interrupt handler likely with complex state machine logic"
+        },
+        "pch_udc_pcd_pullup": {
+          "inline": true,
+          "reason": "Medium-sized function (~50 LoC) with no loops, just conditional logic"
+        },
+        "pch_udc_stop": {
+          "inline": true,
+          "reason": "Medium-sized function (~60 LoC) with no loops, function pointer calls"
+        },
+        "pch_udc_pcd_get_frame": {
+          "inline": false,
+          "reason": "Likely reads hardware registers, keep stubbed for abstraction"
+        },
+        "pch_udc_pcd_vbus_session": {
+          "inline": false,
+          "reason": "VBUS session management likely has complex state logic"
+        },
+        "pch_udc_resume": {
+          "inline": false,
+          "reason": "PM resume function likely has complex hardware reinitialization"
+        },
+        "pch_udc_pci_exit": {
+          "inline": true,
+          "reason": "Likely small wrapper for pci_unregister_driver"
+        },
+        "pch_udc_pcd_set_halt": {
+          "inline": false,
+          "reason": "Endpoint halt management likely has complex register operations"
+        },
+        "pch_udc_probe": {
+          "inline": false,
+          "reason": "Large probe function with device initialization, allocation, registration"
+        },
+        "pch_udc_pcd_ep_disable": {
+          "inline": false,
+          "reason": "Endpoint disable likely has complex cleanup and register operations"
+        },
+        "pch_udc_pcd_queue": {
+          "inline": false,
+          "reason": "Request queueing likely has complex DMA setup and list management"
+        },
+        "pch_udc_alloc_request": {
+          "inline": false,
+          "reason": "Allocation function likely uses kmalloc/dma_pool_alloc"
+        },
+        "pch_udc_pcd_vbus_draw": {
+          "inline": false,
+          "reason": "VBUS power management likely has hardware register operations"
+        },
+        "pch_udc_suspend": {
+          "inline": false,
+          "reason": "PM suspend function likely has complex state saving"
+        },
+        "pch_udc_pcd_fifo_flush": {
+          "inline": false,
+          "reason": "FIFO flush likely has hardware register operations and loops"
+        },
+        "ldv_initialize": {
+          "inline": true,
+          "reason": "LDV harness initialization likely trivial or small"
+        },
+        "pch_udc_remove": {
+          "inline": false,
+          "reason": "Large remove function with cleanup, deallocation, unregistration"
+        },
+        "pch_udc_pcd_selfpowered": {
+          "inline": false,
+          "reason": "Self-powered attribute management, keep stubbed"
+        },
+        "ldv_check_return_value": {
+          "inline": true,
+          "reason": "LDV verification helper likely trivial"
+        },
+        "pch_udc_pcd_ep_enable": {
+          "inline": false,
+          "reason": "Endpoint enable likely has complex descriptor parsing and register setup"
+        }
+      },
+      "reasoning": "Test harness with unbounded loop and no arithmetic on external data requires no overflow checks; inlined small wrappers and LDV helpers while keeping complex driver functions stubbed."
+    },
+    "flag_overrides": {
+      "timeout_override": 900
+    },
+    "inline_overrides": {}
+  }
+]

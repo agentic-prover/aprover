@@ -1,0 +1,56 @@
+arm	module	wall_s	calls	invalid	denials	cost_usd	verdicts	produced	failed_before_verdict	survivors	meaningful	realistic	unrealistic	dynamic	final_dynamic	manual_confirmed_exact	manual_confirmed_loose	manual_conditional	manual_fp	unlabeled
+no_dynamic	elf	4988	539	0	false	14.8332	6	6	0	10	10	10	16	0	0	3	1	0	0	6
+no_dynamic	fb	2071	235	0	false	5.9261	10	7	3	3	3	2	13	0	0	1	1	1	0	0
+no_dynamic	memory	2437	243	0	false	6.4723	11	4	7	1	1	0	16	0	0	1	0	0	0	0
+no_dynamic	string	5636	639	0	false	15.2674	20	20	0	4	4	5	21	0	0	0	0	0	3	1
+no_realism	elf	6433	828	0	false	20.0727	6	6	0	2	2	0	0	25	0	1	0	0	0	1
+no_realism	fb	2368	347	0	false	6.7839	10	8	2	2	1	0	0	21	1	0	0	0	0	1
+no_realism	memory	1484	172	0	false	3.7815	11	4	7	3	3	0	0	3	2	0	0	0	0	3
+no_realism	string	4447	597	0	false	11.9592	20	20	0	5	5	0	0	32	3	0	0	0	0	5
+fixed_config	elf	2695	303	0	false	7.8217	6	6	0	4	4	3	10	11	3	1	0	1	0	2
+fixed_config	fb	860	95	0	false	2.2843	10	4	6	1	1	1	6	6	1	1	0	0	0	0
+fixed_config	memory	698	64	0	false	1.7849	11	4	7	0	0	0	4	0	0	0	0	0	0	0
+fixed_config	string	2350	248	0	false	5.5611	20	20	0	1	1	1	8	8	1	0	0	0	1	0
+
+SURVIVING PROPERTIES
+
+no_dynamic (18)
+elf	elf_calc_size	elf_calc_size.overflow.2	confirmed_system_entry	None
+elf	elf_calc_size	elf_validate.pointer_dereference.1	confirmed_system_entry	None
+elf	elf_load	elf_load.pointer_arithmetic.1	confirmed_system_entry	None
+elf	elf_load	elf_validate.array_bounds.1	confirmed_system_entry	None
+elf	elf_load	elf_validate.pointer_dereference.1	confirmed_system_entry	None
+elf	elf_process_relocations	elf_process_relocations.overflow.1	confirmed_system_entry	None
+elf	elf_process_relocations	elf_process_relocations.pointer_arithmetic.5	confirmed_system_entry	None
+elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_system_entry	None
+elf	elf_validate	elf_validate.array_bounds.1	confirmed_system_entry	None
+elf	elf_validate	elf_validate.pointer_dereference.1	confirmed_system_entry	None
+fb	fb_draw_char	fb_draw_char.overflow.1	confirmed_system_entry	None
+fb	fb_draw_string	fb_draw_string.overflow.1	confirmed_system_entry	None
+fb	fb_init	fb_init.overflow.1	confirmed_system_entry	None
+memory	malloc	malloc.overflow.1	confirmed_system_entry	None
+string	memset	memset.pointer_arithmetic.1	confirmed_system_entry	None
+string	memset	memset.pointer_dereference.1	confirmed_system_entry	None
+string	memset32	memset32.pointer_dereference.1	confirmed_system_entry	None
+string	strcat	strcat.pointer_dereference.17	confirmed_system_entry	None
+
+no_realism (11)
+elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_system_entry	not_triggered
+elf	elf_process_relocations	main.pointer_arithmetic.2	confirmed_system_entry	not_triggered
+fb	fb_init	fb_init.pointer_dereference.1	confirmed_dynamic	confirmed
+memory	calloc	calloc.pointer_arithmetic.5	confirmed_system_entry	not_triggered
+memory	calloc	calloc.pointer_dereference.5	confirmed_dynamic	confirmed
+memory	malloc	malloc.pointer_dereference.1	confirmed_dynamic	confirmed
+string	strcat	strcat.pointer_arithmetic.11	confirmed_dynamic	confirmed
+string	strcat	strcat.pointer_dereference.17	confirmed_dynamic	confirmed
+string	strdup	strdup.overflow.1	confirmed_system_entry	not_triggered
+string	strncpy	strncpy.pointer_dereference.23	confirmed_dynamic	confirmed
+string	strrchr	strrchr.overflow.1	confirmed_system_entry	not_triggered
+
+fixed_config (6)
+elf	elf_entry	elf_entry.pointer_dereference.1	confirmed_dynamic	confirmed
+elf	elf_process_relocations	elf_process_relocations.pointer_dereference.5	confirmed_system_entry	not_triggered
+elf	elf_validate	elf_validate.array_bounds.1	confirmed_dynamic	confirmed
+elf	elf_validate	elf_validate.pointer_dereference.1	confirmed_dynamic	confirmed
+fb	fb_draw_char	fb_draw_char.pointer_dereference.7	confirmed_dynamic	confirmed
+string	memset	memset.pointer_dereference.1	confirmed_dynamic	confirmed

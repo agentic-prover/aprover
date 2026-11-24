@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aprover"
+version = "0.1.0"
+description = "AProver: Agentic Prover — a suite of LLM-driven formal verification agents"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40.0",
+    "tree-sitter>=0.21.0",
+    "tree-sitter-c>=0.21.0",
+    "tree-sitter-rust>=0.21.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[project.scripts]
+bmc-agent = "bmc_agent.cli:main"
+aprover = "aprover.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aprover", "bmc_agent"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

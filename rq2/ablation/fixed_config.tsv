@@ -1,0 +1,27 @@
+setting	value
+code_commit	f2f31711e5d0317ff21d16fd03cd912b152ea202
+code_status	-
+vibeos_commit	866bfb9b7fc554b5b8e0939b4626bcf0416b8b19
+cbmc_version	5.95.1 (cbmc-5.95.1)
+python	Python 3.12.13
+provider	OpenRouter Anthropic-native Messages API
+upstream_provider	Anthropic
+model	anthropic/claude-sonnet-4.6
+source_layout	complete vibeos/kernel source tree
+kernel_include_dir	/mnt/disk7/jw_bmc/vibeos/kernel
+libc_include_dir	/mnt/disk7/jw_bmc/vibeos/kernel/libc
+per_function_time_budget_s	180
+module_timeout_s	9000
+realism_thinking	off
+phase_3e_triage	off
+reproducer_agent	on
+feedback_loop	on
+spec_refiner	on
+spec_gen_tools	on
+realism_tools	on
+agentic_harness_repair	on
+concurrency	4
+per_module_llm_workers	1
+parallel_validation	0
+proxy_budget_per_run_usd	40
+proxy_max_calls_per_run	2000

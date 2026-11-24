@@ -1,0 +1,71 @@
+{
+ "totals": {
+  "specs": 608,
+  "verdicts": 600,
+  "cbmc_cex": 5280,
+  "dedup_raw": 3670,
+  "dedup_out": 785,
+  "validated": 1799,
+  "refine_iters": 611,
+  "refine_stall": 509,
+  "guard_ran": 85,
+  "guard_rejected": 95,
+  "usage_calls": 1107,
+  "harness_rebuilt": 54,
+  "harness_fixed": 53,
+  "harness_nofix": 3,
+  "realism_in": 161,
+  "realistic": 48,
+  "unrealistic": 152
+ },
+ "usage": {
+  "anthropic.in": 7937342,
+  "anthropic.out": 849009,
+  "anthropic.cache_w": 494411
+ },
+ "roles": {
+  "dynamic_repro": 715,
+  "realism": 319,
+  "cbmc_driver": 600,
+  "refinement": 273,
+  "feedback_distill": 149,
+  "spec_gen": 451,
+  "harness_gen": 79
+ },
+ "prices": {
+  "input": 3.0,
+  "output": 15.0,
+  "cache_write": 3.75,
+  "cache_read": 0.3
+ },
+ "cost_lower_bound_usd": 38.4,
+ "cost_extrapolated_usd": 89.71,
+ "telemetry_calls": 2586,
+ "modules": [
+  "console",
+  "cursor",
+  "elf",
+  "fat32",
+  "fb",
+  "initramfs",
+  "irq",
+  "kapi",
+  "kernel",
+  "keyboard",
+  "klog",
+  "memory",
+  "mouse",
+  "net",
+  "printf",
+  "process",
+  "rtc",
+  "shell",
+  "string",
+  "tls",
+  "ttf",
+  "vfs",
+  "virtio_blk",
+  "virtio_net",
+  "virtio_sound"
+ ]
+}
